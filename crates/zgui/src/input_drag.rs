@@ -124,7 +124,7 @@ impl InputDispatcher {
         self.update_drag(scene, x, y);
     }
     fn drag_hit(&self, scene: &Scene, x: f32, y: f32, preview: Option<NodeId>) -> Option<NodeId> {
-        for hit in scene.hit_test_all(x, y) {
+        'hits: for hit in scene.hit_test_all(x, y) {
             if preview.is_some_and(|preview| {
                 hit == preview || scene.ancestors(hit).any(|id| id == preview)
             }) {
@@ -132,6 +132,10 @@ impl InputDispatcher {
             }
             let mut node = Some(hit);
             while let Some(id) = node {
+                // `pointer_events = "none"`: drops land on what is under it.
+                if self.options(id).is_some_and(|options| options.pass_through) {
+                    continue 'hits;
+                }
                 if !self.enabled(scene, id) {
                     break;
                 }

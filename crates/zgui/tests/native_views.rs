@@ -523,3 +523,33 @@ fn a_layer_far_from_native_views_stays_on_the_base_plane() {
     assert!(later.keeps(&item, Plane::Base));
     assert!(!later.keeps(&item, Plane::Overlay));
 }
+
+#[test]
+fn a_painted_pointer_transparent_layer_leaves_the_page_its_input() {
+    // A tinted scrim over the page that lets the pointer through: it paints
+    // on the overlay plane, but the page still takes the pointer under it.
+    let mut ui = Ui::new(1000., 600.);
+    let natives = supported();
+    let web = WebView::new(&ui.runtime, WebViewOptions::default());
+    let view = ui.mount(provide(
+        natives.clone(),
+        browser(&web, false).child(
+            div()
+                .absolute()
+                .left(0.)
+                .top(0.)
+                .w(1000.)
+                .h(600.)
+                .bg(rgba(0x00000020))
+                .pointer_events(false),
+        ),
+    ));
+    ui.prepare_frame();
+    let page = view.find("page").unwrap();
+    let (split, _) = split(&ui, &natives, &PlaneSplit::default());
+    let scene = ui.scene.borrow();
+    assert_eq!(
+        split.route(&scene, &ui.input, 500., 350.),
+        PointerRoute::Native(page)
+    );
+}

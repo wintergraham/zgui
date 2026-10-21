@@ -661,3 +661,60 @@ fn container_focus_reaches_its_input_and_blur_clears_it() {
     assert_eq!(h.ui.input.focused(), None);
     assert!(h.host.error().with_untracked(|e| e.is_none()));
 }
+
+#[test]
+fn pointer_events_follow_a_state() {
+    let mut h = Harness::inline(
+        r##"local hits = ui.shared("hits", 0)
+        local through = ui.shared("through", "auto")
+        return ui.overlay { w = 200, h = 100,
+            ui.button { id = "under", w = 200, h = 100, on_click = function() hits:set(hits:peek() + 1) end, "Under" },
+            ui.div { id = "layer", absolute = true, top = 0, left = 0, right = 0, bottom = 0,
+                pointer_events = through, on_click = function() end },
+        }"##,
+    );
+    let hits = h.host.shared("hits", 0.);
+    let through = h.host.shared("through", "auto");
+    h.click("under");
+    assert_eq!(
+        hits.with_untracked(|v| v.as_f64()),
+        Some(0.),
+        "the layer takes it"
+    );
+    through.set(zgui_script::Value::Str("none".into()));
+    h.settle();
+    h.click("under");
+    assert_eq!(
+        hits.with_untracked(|v| v.as_f64()),
+        Some(1.),
+        "now it passes through"
+    );
+    through.set(zgui_script::Value::Bool(true));
+    h.settle();
+    h.click("under");
+    assert_eq!(
+        hits.with_untracked(|v| v.as_f64()),
+        Some(1.),
+        "and stops it again"
+    );
+}
+
+#[test]
+fn container_focus_skips_hidden_fields() {
+    let mut h = Harness::inline(
+        r##"local container = ui.ref()
+        local a, b = ui.state("a", ""), ui.state("b", "")
+        return ui.column {
+            ui.column { ref = container,
+                ui.input { id = "hidden_field", value = a, hidden = true },
+                ui.input { id = "field", value = b } },
+            ui.button { id = "take_focus", "Focus", on_click = function()
+                assert(container:peek():focus())
+            end },
+        }"##,
+    );
+    h.click("take_focus");
+    let focused = h.ui.input.focused().expect("a field takes focus");
+    let field = h.find("field").unwrap();
+    assert!(focused == field || h.ui.scene.borrow().ancestors(focused).any(|n| n == field));
+}

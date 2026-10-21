@@ -383,3 +383,33 @@ fn a_source_the_drop_removes_still_hears_the_drag_end() {
     assert!(!ui.input.is_dragging());
     assert_eq!(&*log.borrow(), &["end:true"]);
 }
+#[test]
+fn drops_land_under_a_pointer_transparent_layer() {
+    // A layer over the destination that lets the pointer through, inside a
+    // parent with listeners of its own: the drop still reaches the
+    // destination, as a press would.
+    let mut ui = Ui::new(400., 200.);
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let dropped = log.clone();
+    ui.mount(
+        row()
+            .gap(20.)
+            .child(div().id("source").size(100., 80.).on_drag(|| Card(7)))
+            .child(
+                overlay()
+                    .size(100., 80.)
+                    .on_click(|| {})
+                    .child(div().id("destination").size(100., 80.).on_drop(
+                        move |card: &Card, _| dropped.borrow_mut().push(format!("drop:{}", card.0)),
+                    ))
+                    .child(div().id("layer").size(100., 80.).pointer_events(false)),
+            ),
+    );
+    ui.prepare_frame();
+    down(&ui, 20., 20.);
+    moved(&ui, 35., 20.);
+    assert!(ui.input.is_dragging());
+    moved(&ui, 150., 20.);
+    up(&ui, 150., 20.);
+    assert_eq!(&*log.borrow(), &["drop:7"]);
+}

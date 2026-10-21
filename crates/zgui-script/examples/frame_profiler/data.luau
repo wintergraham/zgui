@@ -1,6 +1,63 @@
 -- Sample data, read from the pen design `zgui · Frame profiler` (MvwFD).
 local D = {}
 
+-- A frame's bar: its render, paint, layout and update heights (`r`, `p`,
+-- `l`, `u`), in the chart's points. Keyed by those letters.
+export type Frame = { [string]: number }
+-- A span of the trace: `x` and `w` in the trace's points.
+export type Span = {
+	id: string,
+	lane: number,
+	kind: string,
+	name: string,
+	x: number,
+	w: number,
+	label: string?,
+	title: string?,
+}
+export type Detail = { dur: string?, rows: { { string } } }
+export type Area = {
+	id: string,
+	name: string,
+	state: string,
+	nodes: { number | string },
+	bar: { number },
+	mpx: { string },
+	quiet: boolean?,
+}
+-- A label, this frame's value and the 1 s average.
+export type Counter = { [number]: string, warn: boolean? }
+export type SearchResult = {
+	kind: string,
+	swatch: string?,
+	icon: string?,
+	name: string,
+	mono: boolean?,
+	meta: string,
+	value: string,
+	span: string?,
+	area: number?,
+	keywords: string?,
+}
+-- A frame as the profiler shows it (app.luau's `info`): its number, bar,
+-- phase times in ms (`u`, `l`, `p`, `r`, `present`) and totals.
+export type FrameInfo = {
+	n: number,
+	f: Frame,
+	ms: { [string]: number },
+	cpu: number,
+	gpu: number,
+	over: number,
+	passes: number,
+	design: boolean,
+}
+-- The trace's zoom: how it fits ("frame", "vsync", "selection", "custom"),
+-- `k` times the frame across the track, scrolled `off` points.
+export type Zoom = { mode: string, k: number, off: number }
+-- Lists of a label and its values (budgets, lengths, speeds) mix strings
+-- and numbers: Luau types each item as the union.
+export type Row = { number | string }
+
 -- 120 frames, oldest first: render, paint, layout, update heights in the
 -- chart's points (120 points = 16.7 ms).
 local BARS = [[
@@ -16,10 +73,11 @@ local BARS = [[
 9 1 4 4|6 2 2 6|6 1 3 5|8 2 3 5|7 2 4 5|9 1 2 5|26 5 28 12|9 2 3 5|6 2 4 5|7 1 3 4|
 10 2 2 4|6 2 3 4|7 2 4 6|7 2 3 3|9 2 4 5|7 2 4 6|7 2 4 5|6 1 3 4|9 2 4 3|7 1 3 6|
 10 1 4 4|9 1 3 4|7 2 3 6|7 1 3 4|7 1 3 5|8 2 2 5|9 1 4 4|8 1 3 5|7 1 4 4|8 2 4 5]]
-D.frames = {}
+D.frames = {} :: { Frame }
 for entry in BARS:gsub("\n", ""):gmatch("[^|]+") do
 	local r, p, l, u = entry:match("(%d+) (%d+) (%d+) (%d+)")
-	table.insert(D.frames, { r = tonumber(r), p = tonumber(p), l = tonumber(l), u = tonumber(u) })
+	local frame: Frame = { r = tonumber(r) or 0, p = tonumber(p) or 0, l = tonumber(l) or 0, u = tonumber(u) or 0 }
+	table.insert(D.frames, frame)
 end
 D.first = 48117
 D.selected = 97 -- frame 48,213
@@ -33,7 +91,7 @@ D.colors = {
 	present = "#5A5850",
 	input = "#A3A199",
 	actions = "#A3A199",
-}
+} :: { [string]: string }
 -- A nested span's fill and border, and its fill when selected.
 D.dark = {
 	update = { "#4D4760", "#B9A6F280", "#6B5F8F" },
@@ -42,7 +100,7 @@ D.dark = {
 	paint = { "#5B533E", "#E2C98F80", "#7D7051" },
 	render = { "#583B32", "#D9826A80", "#8F594A" },
 	present = { "#2D2C29", "#5A585080", "#45443F" },
-}
+} :: { [string]: { string } }
 
 -- Frame 48,213's spans: x and width in the trace's points (73.15 per ms),
 -- the lane (0-2 main thread, 3 GPU queue), and whether the design labels it.
@@ -55,8 +113,17 @@ D.phases = {
 	{ kind = "render", from = 455, to = 720 },
 	{ kind = "present", from = 721, to = 834 },
 }
-local S = {}
-local function span(id, lane, kind, name, x, w, label, title)
+local S: { Span } = {}
+local function span(
+	id: string,
+	lane: number,
+	kind: string,
+	name: string,
+	x: number,
+	w: number,
+	label: string?,
+	title: string?
+)
 	table.insert(S, { id = id, lane = lane, kind = kind, name = name, x = x, w = w, label = label, title = title })
 end
 span("input", 0, "input", "Input", 0, 14)
@@ -104,7 +171,7 @@ D.details = {
 	pass1 = { rows = { { "dirty nodes", "46" }, { "measured", "Toasts × 3" }, { "cause", "wrapped text" } } },
 	layout = { rows = { { "passes", "3" }, { "nodes laid out", "212" }, { "longest", "pass 1" } } },
 	render = { rows = { { "draw calls", "46" }, { "instances", "1,284" }, { "layers", "6" } } },
-}
+} :: { [string]: Detail }
 
 D.areas = {
 	{
@@ -156,7 +223,7 @@ D.areas = {
 		mpx = { "0.03", "0.02" },
 		quiet = true,
 	},
-}
+} :: { Area }
 
 -- Renderer counters: this frame, then the 1 s average.
 D.counters = {
@@ -167,13 +234,13 @@ D.counters = {
 	{ "Glyph uploads", "188", "4", warn = true },
 	{ "Layer repaints · hits", "2 · 9", "1 · 10" },
 	{ "Damaged", "1.42 Mpx", "0.41" },
-}
+} :: { Counter }
 D.retained = {
 	{ "Glyph atlas", "16.0 MB" },
 	{ "Layers · 6", "21.4 MB" },
 	{ "Shaped text", "3.1 MB" },
 	{ "Device total", "142 MB" },
-}
+} :: { Counter }
 
 D.ranges = {
 	{ label = "1 s", meta = "120 frames · 1 s", ticks = { "−1.0 s", "−0.75 s", "−0.5 s", "−0.25 s", "now" } },
@@ -234,7 +301,7 @@ D.search = {
 		value = "42 words",
 		area = 1,
 	},
-}
+} :: { SearchResult }
 
 -- Frame budgets (pen XFJTT · Budget ▾), time-scale presets, buffer sizes.
 D.budgets = {
@@ -242,7 +309,7 @@ D.budgets = {
 	{ 11.1, "11.1 ms", "90 Hz" },
 	{ 16.7, "16.7 ms", "60 Hz" },
 	{ 33.3, "33.3 ms", "30 Hz" },
-}
+} :: { Row }
 D.scale_presets = { 0.1, 0.25, 0.5, 1, 2 }
 D.buffer_counts = { 1200, 3000, 6000, 12000 }
 D.cap_hz = { 120, 60, 30, 120 }
@@ -276,7 +343,7 @@ D.lengths = {
 	{ "15 seconds", "timer", 15 },
 	{ "30 seconds", "timer", 30 },
 	{ "Until stopped", "infinity" },
-}
+} :: { Row }
 D.starts = {
 	{ "Immediately", "zap" },
 	{ "After 3 s countdown", "hourglass" },
@@ -290,6 +357,6 @@ D.rec_states = {
 	{ "armed", "Armed · first input", "waits" },
 	{ "capturing", "Capturing", "set length" },
 }
-D.speeds = { { 0.25, "¼×" }, { 0.5, "½×" }, { 1, "1×" }, { 2, "2×" } }
+D.speeds = { { 0.25, "¼×" }, { 0.5, "½×" }, { 1, "1×" }, { 2, "2×" } } :: { Row }
 
 return D

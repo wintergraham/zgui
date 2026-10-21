@@ -41,8 +41,10 @@ pub(crate) struct Node {
     pub refs: Vec<Rc<Ref>>,
     pub events: Events,
     pub focusable: Option<bool>,
-    /// `pointer_events = "none"`: the pointer passes through.
-    pub pointer_events: Option<bool>,
+    /// `pointer_events = "none"`: the pointer passes through. A literal, a
+    /// state or a function (true or `"auto"` stops it, false or `"none"`
+    /// lets it through).
+    pub pointer_events: Option<Source>,
     pub disabled: Option<Source>,
     /// `layout = "height"`: the node's size follows its content, animated.
     pub layout: Option<LayoutAnim>,
@@ -1344,14 +1346,15 @@ fn fill(lua: &Lua, mut node: Node, table: Option<&Table>) -> mlua::Result<Node> 
             "window_drag" => node.window_drag = lua.unpack(value)?,
             "pointer_events" => {
                 node.pointer_events = Some(match &value {
-                    mlua::Value::Boolean(b) => *b,
-                    mlua::Value::String(s) if s.to_str()?.as_ref() as &str == "none" => false,
-                    mlua::Value::String(s) if s.to_str()?.as_ref() as &str == "auto" => true,
-                    _ => {
-                        return Err(mlua::Error::runtime(
-                            "`pointer_events` takes \"none\" or \"auto\"",
-                        ));
+                    mlua::Value::Boolean(_) | mlua::Value::String(_) => {
+                        let Some(enabled) = pointer_events(&lua.unpack::<Value>(value)?) else {
+                            return Err(mlua::Error::runtime(
+                                "`pointer_events` takes \"none\", \"auto\" or a boolean",
+                            ));
+                        };
+                        Source::Lit(Lit::Bool(enabled))
                     }
+                    _ => source(lua, Ty::Bool, "pointer_events", value)?,
                 })
             }
             "bg_shader" => {
@@ -1609,6 +1612,17 @@ fn fill(lua: &Lua, mut node: Node, table: Option<&Table>) -> mlua::Result<Node> 
     }
     node.children = kids;
     Ok(node)
+}
+
+/// What a `pointer_events` value says: whether the pointer stops at the
+/// node (`"auto"`, true) or passes through (`"none"`, false).
+pub(crate) fn pointer_events(value: &Value) -> Option<bool> {
+    match value {
+        Value::Bool(enabled) => Some(*enabled),
+        Value::Str(s) if &**s == "auto" => Some(true),
+        Value::Str(s) if &**s == "none" => Some(false),
+        _ => None,
+    }
 }
 
 /// Shorthands sort first (0), then an axis (1), then a single side (2).

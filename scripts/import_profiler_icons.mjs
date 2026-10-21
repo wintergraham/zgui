@@ -25,12 +25,12 @@ const names = {
   "mouse-pointer-click": "mouse-pointer-click", "chevrons-down": "chevrons-down", option: "option",
 };
 const attrs = (a) => Object.entries(a).map(([k, v]) => `${k}="${v}"`).join(" ");
-const lines = ["-- Lucide icons (see assets/Lucide-LICENSE), as SVG bodies stroked in white for `tint`.", "return {"];
+const lines = ["-- Lucide icons (see assets/Lucide-LICENSE), as SVG bodies stroked in white for `tint`.", "local icons: { [string]: string } = {"];
 for (const [name, file] of Object.entries(names)) {
   const { default: node } = await import(pathToFileURL(join(lucide, "dist/esm/icons", `${file}.js`)).href);
   lines.push(`\t["${name}"] = [[${node.map(([tag, a]) => `<${tag} ${attrs(a)}/>`).join("")}]],`);
 }
-lines.push("}", "");
+lines.push("}", "", "return icons", "");
 writeFileSync(join(target, "icons.luau"), lines.join("\n"));
 const license = readFileSync(join(lucide, "LICENSE"), "utf8").split("\n").map((l) => l.trimEnd()).join("\n");
 writeFileSync(join(target, "assets/Lucide-LICENSE"), license.endsWith("\n") ? license : license + "\n");

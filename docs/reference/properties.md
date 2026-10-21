@@ -139,7 +139,7 @@ The types: `Color` is `"#rgb"`, `"#rrggbb"`, `"#rrggbbaa"`, `"rgb(…)"`, `"rgba
 | `class` | `string` | | space-separated, for selectors (`".name"`) |
 | `ref` | `Ref \| { Ref }` | | see [State](state.md#refs) |
 | `focusable` | `boolean` | controls: `true` | takes keyboard focus |
-| `pointer_events` | `"none"`, `"auto"`, or `boolean` | `"auto"` | `"none"` or `false` lets the pointer pass through; descendants with their own handlers still receive input |
+| `pointer_events` | `"none"`, `"auto"`, `boolean`, or a state or function of one | `"auto"` | `"none"` or `false` lets the pointer pass through to what is under the node (presses, hover, the wheel, drops, and a web view or terminal, even where the node paints over it); descendants with their own handlers still receive input |
 
 ## Position
 

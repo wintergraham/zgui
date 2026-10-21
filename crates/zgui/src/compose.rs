@@ -277,7 +277,8 @@ pub struct View {
     pub(crate) context_menu_style: Option<Styles>,
     pub(crate) context_menu_below: Option<bool>,
     focusable: Option<bool>,
-    pointer_events: Option<bool>,
+    /// Whether the pointer stops at the view (`pointer_events`), followed.
+    pointer_events: Option<Box<dyn FnMut() -> bool>>,
     id: Option<String>,
     scrollbar: Option<bool>,
     follow_end: Option<bool>,
@@ -527,9 +528,14 @@ impl View {
     }
     /// CSS `pointer-events`: false lets the pointer through the view, and
     /// through descendants without listeners of their own, to what is under
-    /// it (a full-window layer that holds a popover).
-    pub fn pointer_events(mut self, enabled: bool) -> Self {
-        self.pointer_events = Some(enabled);
+    /// it (a full-window layer that holds a popover): presses, hover, the
+    /// wheel, drops, and a native view's input under it.
+    pub fn pointer_events(self, enabled: bool) -> Self {
+        self.pointer_events_when(move || enabled)
+    }
+    /// `pointer_events`, followed: it changes as what `enabled` reads does.
+    pub fn pointer_events_when(mut self, enabled: impl FnMut() -> bool + 'static) -> Self {
+        self.pointer_events = Some(Box::new(enabled));
         self
     }
     /// Override whether this root accepts focus and participates in Tab traversal.
@@ -2532,12 +2538,25 @@ fn mount_element(
     }
     let mut options = ui.input.options(root).unwrap_or_default();
     options.focusable = focusable;
-    if let Some(enabled) = view.pointer_events {
-        options.pass_through = !enabled;
-    }
-    if view.focusable.is_some() || view.pointer_events.is_some() || ui.input.options(root).is_some()
-    {
+    if view.focusable.is_some() || ui.input.options(root).is_some() {
         ui.input.set_options(root, options);
+    }
+    if let Some(mut enabled) = view.pointer_events {
+        let weak = ui.downgrade();
+        ui.bind(root, move || {
+            let pass_through = !enabled();
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            if !ui.scene.borrow().contains(root) {
+                return;
+            }
+            let mut options = ui.input.options(root).unwrap_or_default();
+            if options.pass_through != pass_through || ui.input.options(root).is_none() {
+                options.pass_through = pass_through;
+                ui.input.set_options(root, options);
+            }
+        });
     }
     update_button_labels(ui, root);
     for mounted in view.mounted {
@@ -3304,7 +3323,8 @@ impl NodeHandle {
         };
         let mut pending = vec![self.node];
         while let Some(node) = pending.pop() {
-            if !ui.scene.borrow().contains(node) {
+            // Hidden content takes no focus (an input in a closed panel).
+            if !ui.scene.borrow().contains(node) || !ui.scene.borrow().layout_visible(node) {
                 continue;
             }
             if ui.input.focused() == Some(node) || ui.input.focus(&ui.scene, Some(node)) {

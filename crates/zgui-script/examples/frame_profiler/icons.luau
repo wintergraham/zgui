@@ -1,5 +1,5 @@
 -- Lucide icons (see assets/Lucide-LICENSE), as SVG bodies stroked in white for `tint`.
-return {
+local icons: { [string]: string } = {
 	["activity"] = [[<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>]],
 	["layout"] = [[<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>]],
 	["cpu"] = [[<path d="M12 20v2"/><path d="M12 2v2"/><path d="M17 20v2"/><path d="M17 2v2"/><path d="M2 12h2"/><path d="M2 17h2"/><path d="M2 7h2"/><path d="M20 12h2"/><path d="M20 17h2"/><path d="M20 7h2"/><path d="M7 20v2"/><path d="M7 2v2"/><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8" rx="1"/>]],
@@ -60,3 +60,5 @@ return {
 	["chevrons-down"] = [[<path d="m7 6 5 5 5-5"/><path d="m7 13 5 5 5-5"/>]],
 	["option"] = [[<path d="M3 3h6l6 18h6"/><path d="M14 3h7"/>]],
 }
+
+return icons

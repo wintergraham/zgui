@@ -6,7 +6,103 @@
 -- that closes on a press, a dim for search, the open panel (scaling in
 -- from its anchor's corner, fading out), an open dropdown and the hover
 -- tooltip.
-return function(S, K, D)
+-- (Both are already loaded: these are the modules app.luau passes in, here
+-- for their types.)
+local Kit = require("./kit")
+local Data = require("./data")
+
+type Box = { x: number, y: number, w: number, h: number }
+-- Where a panel goes in the window, and the corner it scales from.
+type Where = { left: number?, top: number?, bottom: number?, origin: { number }? }
+-- A panel's props: a column's, and whether a field inside takes focus.
+type PanelProps = Merge<ContainerProps, { keep_focus: boolean? }>
+-- A menu list's entry: a header, a separator, a hint or an item (see `list`).
+type Entry = {
+	header: Text?,
+	sep: boolean?,
+	hint: string?,
+	icon: string?,
+	label: Text?,
+	mono: boolean?,
+	keys: { string }?,
+	right: Text?,
+	color: Color?,
+	check: (() -> boolean)?,
+	selected: (() -> boolean)?,
+	run: (() -> ())?,
+	hover: (() -> ())?,
+	submenu: boolean?,
+}
+-- The open panel's keyboard: item count, its highlight, how to run item i;
+-- More's Export submenu: the item that opens it, its count, how to run one.
+type Keys = {
+	count: number,
+	state: State<number>?,
+	run: ((i: number) -> ())?,
+	sub: number?,
+	sub_count: number?,
+	sub_run: ((i: number) -> ())?,
+}
+type Dropdown = { state: State<number>, options: { { string } }, w: number }
+type TipSpec = { label: string, glyph: string?, keys: string?, detail: string?, up: boolean? }
+
+-- What the menus read and call of the profiler's state (app.luau's `S`).
+export type Store = {
+	menu: State<string>,
+	hint: State<string>,
+	tab: State<number>,
+	range: State<number>,
+	frame: State<number>,
+	span: State<string>,
+	area: State<number>,
+	rec: State<string>,
+	cap_length: State<number>,
+	cap_start: State<number>,
+	overlays: State<{ boolean }>,
+	budget: State<number>,
+	follow_cap: State<boolean>,
+	zoom: State<Data.Zoom>,
+	keep_zoom: State<boolean>,
+	ctx: State<{ id: string, x: number, y: number }>,
+	query: State<string>,
+	target: State<number>,
+	backend: State<number>,
+	cap: State<number>,
+	buffer_size: State<number>,
+	when_full: State<number>,
+	on_top: State<boolean>,
+	switches: {
+		blur: State<boolean>,
+		scroll: State<boolean>,
+		damage: State<boolean>,
+		gpu: State<boolean>,
+		trace: State<boolean>,
+		reload: State<boolean>,
+	},
+	viewport: State<{ w: number, h: number }>,
+	anchors: { [string]: Element },
+	anchor_tick: State<number>,
+	current: State<Data.FrameInfo>,
+	hint_hover: ((name: string, inside: boolean) -> ())?,
+	comma: (n: number) -> string,
+	open: (name: string) -> (),
+	target_meta: () -> string,
+	flip_overlay: (i: number) -> (),
+	reset_runtime: () -> (),
+	step: (d: number) -> (),
+	preview: (r: string) -> (),
+	clear: () -> (),
+	span_by_id: (id: string) -> Data.Span?,
+	zoom_to: (mode: string) -> (),
+	zoom_by: (f: number) -> (),
+	buffer_fill: () -> number,
+	buffer_frames_text: () -> string,
+	buffer_bytes: () -> string,
+	buffer_eta: () -> string,
+	buffer_drop: () -> string,
+}
+
+return function(S: Store, K: typeof(Kit), D: typeof(Data))
 	local C, icon, text, mono, spacer = K.C, K.icon, K.text, K.mono, K.spacer
 	local M = {}
 	local hi = ui.state("menu_hi", 0)
@@ -16,7 +112,7 @@ return function(S, K, D)
 	local drop = ui.state("dropdown", "")
 	local dropHi = ui.state("dropdown_hi", 0)
 	-- The open panel's keyboard: item count, its highlight, how to run item i.
-	local keys = { count = 0 }
+	local keys: Keys = { count = 0 }
 	local function close()
 		S.menu:set("")
 	end
@@ -28,19 +124,19 @@ return function(S, K, D)
 		S.hint:set("")
 	end)
 
-	local function viewport()
+	local function viewport(): { w: number, h: number }
 		return S.viewport:peek()
 	end
-	local function anchorBox(name)
+	local function anchorBox(name: string): Box
 		local a = S.anchors[name]
 		if a and a.mounted then
-			return { x = a.x, y = a.y, w = a.width, h = a.height }
+			return { x = a.x or 0, y = a.y or 0, w = a.width or 0, h = a.height or 0 }
 		end
 		return { x = 0, y = 0, w = 0, h = 0 }
 	end
 	-- Where a panel `w` wide goes: under its anchor, from its left ("start")
 	-- or right ("end") edge, or above it ("up", "up-end").
-	local function place(name, w, how)
+	local function place(name: string, w: number, how: string): Where
 		local a, v = anchorBox(name), viewport()
 		if how == "up" then
 			return { left = math.clamp(a.x, 8, v.w - w - 8), bottom = v.h - a.y + 6, origin = { 0, 1 } }
@@ -52,13 +148,17 @@ return function(S, K, D)
 		return { left = math.clamp(a.x, 8, v.w - w - 8), top = a.y + a.h + 4, origin = { 0, 0 } }
 	end
 
-	local SHADOW = { { y = 12, blur = 28, color = "#00000066" }, { y = 2, blur = 6, color = "#00000040" } }
+	local SHADOW: { ShadowSpec } =
+		{ { y = 12, blur = 28, color = "#00000066" }, { y = 2, blur = 6, color = "#00000040" } }
 	-- A panel: menus are 10-rounded with 4 points of padding, popovers 12.
 	-- It scales in from its `origin` (its anchor's corner) as it mounts and
 	-- takes keyboard focus, unless `keep_focus` (a field inside takes it).
-	local function panel(props, where)
-		for k, v in where or {} do
-			props[k] = v
+	local function panel(props: PanelProps, where: Where?): Node
+		if where then
+			props.left = where.left or props.left
+			props.top = where.top or props.top
+			props.bottom = where.bottom or props.bottom
+			props.origin = where.origin or props.origin
 		end
 		local keep = props.keep_focus
 		props.keep_focus = nil
@@ -70,7 +170,7 @@ return function(S, K, D)
 		props.shadow = SHADOW
 		props.focusable = true
 		props.opacity = 0
-		props.on_mount = function(el)
+		props.on_mount = function(el: Element)
 			anime.animate(el, { opacity = 1, scale = { 0.96, 1 }, duration = 200, ease = "outExpo" })
 			if not keep then
 				el:focus()
@@ -78,7 +178,7 @@ return function(S, K, D)
 		end
 		return ui.column(props)
 	end
-	local function highlight(state, offsets, h, inset)
+	local function highlight(state: State<number>, offsets: { number }, h: number, inset: number?): Node
 		return ui.div {
 			absolute = true,
 			left = inset or 0,
@@ -106,8 +206,8 @@ return function(S, K, D)
 	-- { icon, label, mono, keys, right, color, check, selected, run, hover,
 	-- submenu }. `check` swaps the icon for a check; `selected` (a choice
 	-- in a group) fills the row and puts a check at its end.
-	local function list(id, entries, state)
-		local nodes, offsets, runs = {}, {}, {}
+	local function list(id: string, entries: { Entry }, state: State<number>): (Node, number, { Entry }, { number })
+		local nodes: { Node }, offsets: { number }, runs: { Entry } = {}, {}, {}
 		local y, n = 0, 0
 		for _, e in entries do
 			if e.header then
@@ -178,10 +278,10 @@ return function(S, K, D)
 								end),
 								{ stiffness = 700, damping = 30 }
 							),
-						}) or icon(e.icon, 14, on and function()
+						}) or icon(e.icon or "", 14, on and function()
 							return on() and C.text or C.tertiary
 						end or (e.color or C.tertiary)),
-						e.mono and mono(e.label, 11.5, fg) or text(e.label, 12.5, fg),
+						e.mono and mono(e.label or "", 11.5, fg) or text(e.label or "", 12.5, fg),
 						spacer(),
 						e.keys and K.keys(e.keys) or nil,
 						e.right and mono(e.right, 10.5, C.muted) or nil,
@@ -209,15 +309,16 @@ return function(S, K, D)
 			ui.overlay { w_full = true, highlight(state, offsets, 30), ui.column { w_full = true, gap = 1, nodes } }
 		return body, n, runs, offsets
 	end
-	local function bind(n, runs, state)
+	local function bind(n: number, runs: { Entry }, state: State<number>)
 		keys.count, keys.state = n, state
-		keys.run = function(i)
-			if runs[i] and runs[i].run then
-				runs[i].run()
+		keys.run = function(i: number)
+			local entry = runs[i]
+			if entry and entry.run then
+				entry.run()
 			end
 		end
 	end
-	local function menu(id, w, where, entries)
+	local function menu(id: string, w: number, where: Where, entries: { Entry }): Node
 		local body, n, runs = list(id .. "_item", entries, hi)
 		bind(n, runs, hi)
 		return panel({
@@ -232,7 +333,7 @@ return function(S, K, D)
 			body,
 		}, where)
 	end
-	local function run(f)
+	local function run(f: () -> ()): () -> ()
 		return function()
 			f()
 			close()
@@ -240,7 +341,7 @@ return function(S, K, D)
 	end
 
 	-- Popover pieces: a titled header, a ruled footer, a text button.
-	local function head(title, meta)
+	local function head(title: string, meta: string): Node
 		return ui.row {
 			w_full = true,
 			gap = 8,
@@ -252,7 +353,7 @@ return function(S, K, D)
 			mono(meta, 10, C.muted),
 		}
 	end
-	local function foot(children)
+	local function foot(children: { Node }): Node
 		return ui.row {
 			w_full = true,
 			h = 38,
@@ -265,7 +366,7 @@ return function(S, K, D)
 			children,
 		}
 	end
-	local function link(id, label, color, on_click)
+	local function link(id: string, label: string, color: Color?, on_click: () -> ()): Node
 		return ui.button {
 			id = id,
 			p = 0,
@@ -283,14 +384,14 @@ return function(S, K, D)
 	-- Dropdowns (pen XFJTT · size / when full open): a select that opens a
 	-- list of options, each a label over a description, under its right
 	-- edge. Options: { { label, description } }; `state` holds the index.
-	local DROPS = {}
-	local function dropdown(id, state, options, w)
+	local DROPS: { [string]: Dropdown } = {}
+	local function dropdown(id: string, state: State<number>, options: { { string } }, w: number?): Node
 		DROPS[id] = { state = state, options = options, w = w or 240 }
 		local open = function()
 			return drop:get() == id
 		end
 		return ui.div {
-			on_resize = function(_, el)
+			on_resize = function(_, el: Element)
 				S.anchors[id] = el
 			end,
 			K.button({
@@ -323,10 +424,10 @@ return function(S, K, D)
 			}, 0.96),
 		}
 	end
-	local function dropPanel(id)
+	local function dropPanel(id: string): Node
 		local d = DROPS[id]
 		local a, v = anchorBox(id), viewport()
-		local rows = {}
+		local rows: { Node } = {}
 		for i, o in d.options do
 			rows[i] = ui.column {
 				id = id .. "_option_" .. i,
@@ -357,15 +458,16 @@ return function(S, K, D)
 		end
 		local w = d.w
 		local below = a.y + a.h + 6
-		local where = below + 220 < v.h and { top = below, origin = { 1, 0 } }
-			or { bottom = v.h - a.y + 6, origin = { 1, 1 } }
+		local where: Where = if below + 220 < v.h
+			then { top = below, origin = { 1, 0 } }
+			else { bottom = v.h - a.y + 6, origin = { 1, 1 } }
 		where.left = math.clamp(a.x + a.w - w, 8, v.w - w - 8)
 		return panel({ id = id .. "_list", w = w, p = 4, gap = 1, keep_focus = true, rows }, where)
 	end
 
 	-- Target: processes, opening upward from the status bar.
-	local function targetPanel()
-		local entries = { {
+	local function targetPanel(): Node
+		local entries: { Entry } = { {
 			header = function()
 				return S.target_meta()
 			end,
@@ -393,8 +495,8 @@ return function(S, K, D)
 	end
 
 	-- More, with Export opening to its left.
-	local function morePanel()
-		local entries = {
+	local function morePanel(): Node
+		local entries: { Entry } = {
 			{ header = "Capture" },
 			{
 				icon = "skip-forward",
@@ -460,9 +562,10 @@ return function(S, K, D)
 			{ icon = "clipboard", label = "Copy summary", keys = { "command", "arrow-up", "C" }, run = close },
 		}, subHi)
 		keys.sub_count = subN
-		keys.sub_run = function(i)
-			if subRuns[i] and subRuns[i].run then
-				subRuns[i].run()
+		keys.sub_run = function(i: number)
+			local entry = subRuns[i]
+			if entry and entry.run then
+				entry.run()
 			end
 		end
 		return panel({
@@ -518,7 +621,7 @@ return function(S, K, D)
 
 	-- Runtime settings, from More: renderer and development flags.
 	local copied = ui.state("copied", false)
-	local function section(label, children)
+	local function section(label: string, children: { Node }): Node
 		return ui.column {
 			w_full = true,
 			pt = 4,
@@ -531,10 +634,10 @@ return function(S, K, D)
 			children,
 		}
 	end
-	local function setting(label, control)
+	local function setting(label: string, control: Node): Node
 		return ui.row { w_full = true, h = 34, gap = 10, items = "center", text(label, 12.5, C.text), spacer(), control }
 	end
-	local function runtimePanel()
+	local function runtimePanel(): Node
 		keys.count = 0
 		local sw = S.switches
 		return panel({
@@ -573,7 +676,7 @@ return function(S, K, D)
 							end,
 						}
 					end,
-					ui.presence(copied, function(done)
+					ui.presence(copied, function(done: boolean)
 						return ui.row {
 							gap = 7,
 							items = "center",
@@ -594,11 +697,12 @@ return function(S, K, D)
 	end
 
 	-- Capture options, from the stopped record control's chevron.
-	local function capturePanel()
-		local entries = { { header = "Length" } }
+	local function capturePanel(): Node
+		local entries: { Entry } = { { header = "Length" } }
+		-- A length is { label, icon, seconds? }.
 		for i, l in D.lengths do
 			table.insert(entries, {
-				icon = l[2],
+				icon = l[2] :: string,
 				label = l[1],
 				selected = function()
 					return S.cap_length:get() == i
@@ -627,8 +731,8 @@ return function(S, K, D)
 	end
 
 	-- Right-click on the record control: jump to any of its six states.
-	local function recStatesPanel()
-		local entries = { { header = "Preview state" } }
+	local function recStatesPanel(): Node
+		local entries: { Entry } = { { header = "Preview state" } }
 		for _, st in D.rec_states do
 			table.insert(entries, {
 				label = st[2],
@@ -645,8 +749,9 @@ return function(S, K, D)
 	end
 
 	-- Frame budget, from the Frames legend: sets the red line.
-	local function budgetPanel()
-		local entries = { { header = "Frame budget" } }
+	local function budgetPanel(): Node
+		local entries: { Entry } = { { header = "Frame budget" } }
+		-- A budget is { ms, label, rate }.
 		for _, b in D.budgets do
 			table.insert(entries, {
 				mono = true,
@@ -657,7 +762,7 @@ return function(S, K, D)
 				end,
 				run = run(function()
 					S.follow_cap:set(false)
-					S.budget:set(b[1])
+					S.budget:set(b[1] :: number)
 				end),
 			})
 		end
@@ -673,8 +778,8 @@ return function(S, K, D)
 	end
 
 	-- Trace zoom, from the Frame trace header.
-	local function zoomPanel()
-		local function mode(m)
+	local function zoomPanel(): Node
+		local function mode(m: string): () -> boolean
 			return function()
 				return S.zoom:get().mode == m
 			end
@@ -733,7 +838,7 @@ return function(S, K, D)
 	end
 
 	-- Right-click on a span, at the pointer.
-	local function spanPanel()
+	local function spanPanel(): Node
 		local ctx = S.ctx:peek()
 		local s = S.span_by_id(ctx.id) or D.spans[1]
 		local name = s.title or s.name
@@ -776,8 +881,8 @@ return function(S, K, D)
 	end
 
 	-- Overlays: six toggles, ⌥1–6, and Hide all.
-	local function overlaysPanel()
-		local rows, offsets = {}, {}
+	local function overlaysPanel(): Node
+		local rows: { Node }, offsets: { number } = {}, {}
 		for i, o in D.overlays do
 			offsets[i] = (i - 1) * 46
 			local on = function()
@@ -892,7 +997,7 @@ return function(S, K, D)
 	end
 
 	-- Status bar: Logs & checks.
-	local function logRow(id, label, env, value)
+	local function logRow(id: string, label: string, env: string, value: State<boolean>): Node
 		return ui.row {
 			w_full = true,
 			gap = 10,
@@ -909,7 +1014,7 @@ return function(S, K, D)
 			K.toggle(id, value),
 		}
 	end
-	local function logsPanel()
+	local function logsPanel(): Node
 		keys.count = 0
 		local sw = S.switches
 		return panel({
@@ -939,7 +1044,7 @@ return function(S, K, D)
 	end
 
 	-- Status bar: Capture buffer.
-	local function bufferPanel()
+	local function bufferPanel(): Node
 		keys.count = 0
 		return panel({
 			id = "buffer_menu",
@@ -1017,11 +1122,11 @@ return function(S, K, D)
 	-- Search: filters the frame's spans, areas and nodes.
 	local query = S.query
 	local kind = ui.state("search_kind", 1)
-	local KINDS = { { "All", nil }, { "Spans", "spans" }, { "Areas", "areas" }, { "Nodes", "nodes" } }
+	local KINDS: { { string? } } = { { "All", nil }, { "Spans", "spans" }, { "Areas", "areas" }, { "Nodes", "nodes" } }
 	local DESIGN_COUNTS = { 14, 9, 2, 3 }
-	local function matches(k)
+	local function matches(k: string?): { Data.SearchResult }
 		local q = query:get():lower()
-		local out = {}
+		local out: { Data.SearchResult } = {}
 		for _, r in D.search do
 			local hay = r.name:lower() .. " " .. r.meta:lower() .. " " .. (r.keywords or "")
 			if (k == nil or r.kind == k) and (q == "" or hay:find(q, 1, true)) then
@@ -1033,13 +1138,13 @@ return function(S, K, D)
 	local results = ui.computed(function()
 		return matches(KINDS[kind:get()][2])
 	end)
-	local function count(i)
+	local function count(i: number): number
 		if query:get() == "glyph" then
 			return DESIGN_COUNTS[i]
 		end
 		return #matches(KINDS[i][2])
 	end
-	local function jump(r)
+	local function jump(r: Data.SearchResult?)
 		if not r then
 			return
 		end
@@ -1057,7 +1162,7 @@ return function(S, K, D)
 		end)
 	end
 	-- The design's Shortcut · Keycap: outlined, an icon and/or a key.
-	local function keycap(glyph, key)
+	local function keycap(glyph: string?, key: string?): Node
 		return ui.row {
 			h = 20,
 			px = 6,
@@ -1070,8 +1175,8 @@ return function(S, K, D)
 			key and mono(key, 10.5, C.secondary) or nil,
 		}
 	end
-	local function resultRows()
-		local nodes, offsets, y, last = {}, {}, 0, nil
+	local function resultRows(): Node
+		local nodes: { Node }, offsets: { number }, y, last: string? = {}, {}, 0, nil
 		for i, r in results:peek() do
 			if r.kind ~= last then
 				last = r.kind
@@ -1115,7 +1220,7 @@ return function(S, K, D)
 						items = "center",
 						justify = "center",
 						r.swatch and ui.div { w = 8, h = 8, rounded = 2, bg = r.swatch }
-							or icon(r.icon, 14, C.tertiary),
+							or icon(r.icon or "", 14, C.tertiary),
 					},
 					r.mono and mono(r.name, 11.5, C.text) or text(r.name, 12.5, C.text, {
 						weight = function()
@@ -1160,10 +1265,10 @@ return function(S, K, D)
 			ui.column { w_full = true, nodes },
 		}
 	end
-	local function searchPanel()
+	local function searchPanel(): Node
 		keys.count = 0
 		local v = viewport()
-		local function move(d)
+		local function move(d: number)
 			local n = #results:peek()
 			if n > 0 then
 				hi:set((math.max(hi:peek(), 1) - 1 + d) % n + 1)
@@ -1173,7 +1278,7 @@ return function(S, K, D)
 			results:get()
 			hi:set(#results:peek() > 0 and 1 or 0)
 		end)
-		local function hint(glyph, label)
+		local function hint(glyph: string, label: string): Node
 			return ui.row { gap = 6, items = "center", keycap(glyph), text(label, 11.5, C.tertiary) }
 		end
 		return panel({
@@ -1251,10 +1356,10 @@ return function(S, K, D)
 				w_full = true,
 				px = 10,
 				py = 8,
-				K.segmented("search_kind", kind, 4, function(i, active)
+				K.segmented("search_kind", kind, 4, function(i: number, active: () -> boolean): Child
 					return {
 						ui.text {
-							KINDS[i][1],
+							KINDS[i][1] or "",
 							text_size = 12,
 							color = function()
 								return active() and C.text or C.tertiary
@@ -1306,7 +1411,7 @@ return function(S, K, D)
 	-- Tooltips: a dark callout under (or over) its trigger, after 500 ms, or
 	-- at once while another has just been showing. It slides out of its
 	-- trigger, straight down (or up).
-	local TIPS = {
+	local TIPS: { [string]: () -> TipSpec } = {
 		record = function()
 			local r = S.rec:get()
 			if r == "recording" then
@@ -1338,8 +1443,8 @@ return function(S, K, D)
 		end,
 	}
 	local warm = false
-	local timer, cool
-	function S.hint_hover(name, inside)
+	local timer: Animation?, cool: Animation? = nil, nil
+	function S.hint_hover(name: string, inside: boolean)
 		if timer then
 			timer:cancel()
 			timer = nil
@@ -1376,18 +1481,18 @@ return function(S, K, D)
 	-- The design's tooltip: a borderless dark body 4 points from its trigger.
 	-- Its content follows its spec (the record control's changes as it
 	-- changes state), and it stays centred on a trigger that resizes.
-	local function tooltip(name)
+	local function tooltip(name: string): Node
 		local spec = ui.computed(TIPS[name])
 		local first = TIPS[name]()
 		local up = first.up
 		local w = 300
-		local function centre()
+		local function centre(): number
 			S.anchor_tick:get()
 			local a, v = anchorBox(name), viewport()
 			return math.clamp(a.x + a.w / 2 - w / 2, 4 - w / 2 + 60, v.w - w / 2 - 64)
 		end
 		local a, v = anchorBox(name), viewport()
-		local function glyph(g)
+		local function glyph(g: string): Node
 			return icon(g, 11.5, C.secondary, {
 				hidden = function()
 					return spec:get().glyph ~= g
@@ -1449,14 +1554,14 @@ return function(S, K, D)
 			left = centre,
 			top = not up and a.y + a.h + 4 or nil,
 			bottom = up and v.h - a.y + 4 or nil,
-			on_mount = function(el)
+			on_mount = function(el: Element)
 				anime.animate(el, { opacity = 1, y = { up and 4 or -4, 0 }, duration = 160, ease = "outQuad" })
 			end,
 			body,
 		}
 	end
 
-	local BUILD = {
+	local BUILD: { [string]: () -> Node } = {
 		target = targetPanel,
 		more = morePanel,
 		overlays = overlaysPanel,
@@ -1470,9 +1575,14 @@ return function(S, K, D)
 		logs = logsPanel,
 		buffer = bufferPanel,
 	}
-	local function fill(props)
+	-- Fills the window: the layer and its parts, and its presences' boxes.
+	local function fill(props: ContainerProps): ContainerProps
 		props.absolute, props.top, props.left, props.right, props.bottom = true, 0, 0, 0, 0
 		return props
+	end
+	local function fillOptions(opts: PresenceOptions): PresenceOptions
+		opts.absolute, opts.top, opts.left, opts.right, opts.bottom = true, 0, 0, 0, 0
+		return opts
 	end
 	-- Presences fade out what leaves; what enters animates itself as it
 	-- mounts, from its own corner (a presence's wrapper fills the window,
@@ -1501,9 +1611,9 @@ return function(S, K, D)
 		ui.presence(function()
 			local m = S.menu:get()
 			return m ~= "" and m or nil
-		end, function(m)
+		end, function(m: string)
 			return BUILD[m]()
-		end, fill { pointer_events = "none", exit = { opacity = 0, duration = 120, ease = "inQuad" } }),
+		end, fillOptions { pointer_events = "none", exit = { opacity = 0, duration = 120, ease = "inQuad" } }),
 		ui.div(fill {
 			id = "dropdown_catcher",
 			hidden = function()
@@ -1516,14 +1626,14 @@ return function(S, K, D)
 		ui.presence(function()
 			local d = drop:get()
 			return d ~= "" and d or nil
-		end, dropPanel, fill { pointer_events = "none", exit = { opacity = 0, duration = 90, ease = "inQuad" } }),
+		end, dropPanel, fillOptions { pointer_events = "none", exit = { opacity = 0, duration = 90, ease = "inQuad" } }),
 		ui.presence(function()
 			local h = S.hint:get()
 			return h ~= "" and h or nil
-		end, tooltip, fill { pointer_events = "none", exit = { opacity = 0, duration = 80 } }),
+		end, tooltip, fillOptions { pointer_events = "none", exit = { opacity = 0, duration = 80 } }),
 	})
 
-	function M.on_key(e)
+	function M.on_key(e: KeyEvent): boolean
 		local m = S.menu:peek()
 		local d = drop:peek()
 		if d ~= "" then
@@ -1556,11 +1666,14 @@ return function(S, K, D)
 			end
 			return true
 		end
-		local state, count = keys.state, keys.count
+		local state: State<number>?, count: number? = keys.state, keys.count
 		if sub:peek() then
 			state, count = subHi, keys.sub_count
 		end
-		if not count or count == 0 or not state then
+		if not count or count == 0 then
+			return false
+		end
+		if not state then
 			return false
 		end
 		if e.key == "ArrowDown" or e.key == "ArrowUp" then
@@ -1582,8 +1695,10 @@ return function(S, K, D)
 			local i = state:peek()
 			if i > 0 then
 				if sub:peek() then
-					keys.sub_run(i)
-				else
+					if keys.sub_run then
+						keys.sub_run(i)
+					end
+				elseif keys.run then
 					keys.run(i)
 				end
 			end

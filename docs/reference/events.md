@@ -171,7 +171,7 @@ end
 | `id`, `tag` | its `id`, and its kind as selectors name it (`"column"`, `"button"`, `"text"`, `"input"`…) |
 | `mounted` | whether it is in the interface now |
 | `width`, `height`, `x`, `y` | its laid-out box, in points from the window's top left; nil while it is not in a scene |
-| `focus()` | keyboard focus to it or its first focusable descendant; whether it took |
+| `focus()` | keyboard focus to it or its first shown focusable descendant; whether it took |
 | `blur()` | clears keyboard focus when it is on the element or inside it |
 | `has_class(class)` | whether its `class` names `class` |
 | `select_all()`, `set_selection(a, b)` | an input's selection, in characters (Unicode code points from 0, as `utf8.len` counts them); `b` defaults to `a`, a caret. False for other elements |

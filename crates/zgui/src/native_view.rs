@@ -978,7 +978,25 @@ impl PlaneSplit {
             return PointerRoute::Ui;
         }
         let root = scene.root();
-        for hit in scene.hit_test_all(x, y) {
+        'hits: for hit in scene.hit_test_all(x, y) {
+            // Content the pointer passes through (`pointer_events = "none"`,
+            // up to the first node with listeners) is not there for input,
+            // even painted over the native view.
+            let mut node = Some(hit);
+            while let Some(id) = node {
+                match input.try_options(id) {
+                    None => return PointerRoute::Ui,
+                    Some(Some(options)) if options.pass_through => continue 'hits,
+                    _ => {}
+                }
+                if id == root || self.native_nodes.contains(&id) {
+                    break;
+                }
+                match input.try_has_listeners(id) {
+                    Some(false) => node = scene.parent(id),
+                    _ => break,
+                }
+            }
             if self.overlay.contains_key(&hit) {
                 return PointerRoute::Ui;
             }

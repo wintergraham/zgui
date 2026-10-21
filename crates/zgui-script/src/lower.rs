@@ -897,8 +897,28 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
     if node.window_drag {
         view = view.window_drag();
     }
-    if let Some(enabled) = node.pointer_events {
-        view = view.pointer_events(enabled);
+    match &node.pointer_events {
+        Some(Source::Lit(Lit::Bool(enabled))) => view = view.pointer_events(*enabled),
+        Some(source) => {
+            // Followed: a state or a function (`"none"`, `"auto"` or a boolean).
+            let (source, vm) = (resolve_owned(source), vm.clone());
+            view = view.pointer_events_when(move || {
+                let value = match &source {
+                    Owned::State(s) => s.with(|v| v.clone()),
+                    Owned::Computed(f) => match vm.call::<Value>(f, ()) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            vm.report(error);
+                            return true;
+                        }
+                    },
+                    Owned::Lit(Lit::Bool(enabled)) => return *enabled,
+                    _ => return true,
+                };
+                crate::node::pointer_events(&value).unwrap_or(true)
+            });
+        }
+        None => {}
     }
     if let Some(handler) = &node.events.click {
         let (handler, vm, actions) = (handler.clone(), vm.clone(), low.actions.clone());

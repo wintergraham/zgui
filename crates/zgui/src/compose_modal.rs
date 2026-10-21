@@ -165,6 +165,7 @@ pub(crate) fn activate(
             overlay,
             NodeInput {
                 disabled: !desired,
+                pass_through: ui.input.options(overlay).is_some_and(|o| o.pass_through),
                 ..Default::default()
             },
         );

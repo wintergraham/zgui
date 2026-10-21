@@ -386,7 +386,8 @@ declare extern type Element with
 	height: number?
 	x: number?
 	y: number?
-	-- Keyboard focus to the element (an input, a button); whether it took.
+	-- Keyboard focus to the element or its first focusable descendant
+	-- (shown ones only); whether it took.
 	function focus(self): boolean
 	function has_class(self, class: string): boolean
 	-- An input's selection, in characters (Unicode code points from 0, as
@@ -396,6 +397,8 @@ declare extern type Element with
 	function set_selection(self, a: number, b: number?): boolean
 	-- The anchor and the focus (where the caret is).
 	function selection(self): (number?, number?)
+	-- Clear keyboard focus if it is on the element or inside it.
+	function blur(self): ()
 end
 
 -- `ref = r` on a node. Reading it in an effect or computed follows it: the
@@ -855,6 +858,7 @@ export type StyleProps = {
 }
 
 -- What every element takes besides its styles.
+export type PointerEvents = "none" | "auto" | boolean
 export type NodeProps = {
 	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -867,6 +871,10 @@ export type NodeProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,

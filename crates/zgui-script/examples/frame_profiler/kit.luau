@@ -2,6 +2,29 @@
 local icons = require("./icons")
 local K = {}
 
+-- What `segmented` selects through: a number state, or an object with the
+-- same `get` and `set` (the status bar's speed picker). `self` is `any`:
+-- `State<number>`'s methods take a `State<number>`, the picker's take
+-- nothing, and only `any` is a subtype of both.
+export type Choice = {
+	get: (self: any) -> number,
+	set: (self: any, value: number) -> (),
+}
+-- `segmented`'s look: option height, padding and gaps, radii, fills.
+export type SegmentedStyle = {
+	h: number,
+	w: Reactive<Length>?,
+	px: Length?,
+	gap: Num?,
+	r: number?,
+	p: number?,
+	outer: number?,
+	spacing: Num?,
+	bg: Color?,
+	pill: Color?,
+	plain: boolean?,
+}
+
 K.SANS, K.MONO = "Geist", "Geist Mono"
 K.C = {
 	window = "#121211",
@@ -31,12 +54,12 @@ local C = K.C
 
 -- Motion: the design system's springs and fades, in ms.
 K.FAST, K.FADE, K.MOVE = 120, 160, 220
-function K.spring(stiffness, damping)
+function K.spring(stiffness: number?, damping: number?): AnimeEase
 	return anime.createSpring { stiffness = stiffness or 520, damping = damping or 34 }
 end
 
-local svgs = {}
-function K.icon(name, size, color, props)
+local svgs: { [string]: string } = {}
+function K.icon(name: string, size: number, color: Reactive<Color>?, props: SvgProps?): Node
 	local code = svgs[name]
 	if not code then
 		assert(icons[name], "missing icon " .. name)
@@ -46,53 +69,77 @@ function K.icon(name, size, color, props)
 			.. "</svg>"
 		svgs[name] = code
 	end
-	local node = { code = code, w = size, h = size, tint = color, shrink = 0 }
-	for k, v in props or {} do
-		node[k] = v
+	-- `props` win over the defaults.
+	local node: SvgProps = if props then table.clone(props) else {}
+	if node.code == nil then
+		node.code = code
+	end
+	if node.w == nil then
+		node.w = size
+	end
+	if node.h == nil then
+		node.h = size
+	end
+	if node.tint == nil then
+		node.tint = color
+	end
+	if node.shrink == nil then
+		node.shrink = 0
 	end
 	return ui.svg(node)
 end
 
-local function textNode(font, content, size, color, props)
-	local node: { [any]: any } = { content, font = font, text_size = size, color = color }
-	for k, v in props or {} do
-		node[k] = v
+local function textNode(font: Font, content: Text, size: number, color: Reactive<Color>, props: TextProps?): Node
+	-- `props` win over the defaults.
+	local node: TextProps = if props then table.clone(props) else {}
+	if node[1] == nil then
+		node[1] = content
+	end
+	if node.font == nil then
+		node.font = font
+	end
+	if node.text_size == nil then
+		node.text_size = size
+	end
+	if node.color == nil then
+		node.color = color
 	end
 	return ui.text(node)
 end
-function K.text(content, size, color, props)
+function K.text(content: Text, size: number, color: Reactive<Color>?, props: TextProps?): Node
 	return textNode(K.SANS, content, size, color or C.text, props)
 end
-function K.mono(content, size, color, props)
+function K.mono(content: Text, size: number, color: Reactive<Color>?, props: TextProps?): Node
 	return textNode(K.MONO, content, size, color or C.muted, props)
 end
-function K.spacer()
+function K.spacer(): Node
 	return ui.div { grow = 1, shrink = 1, min_w = 0 }
 end
 
 -- Press feedback: a quick dip, then a spring back.
-function K.press(props, scale)
+function K.press(props: ContainerProps, scale: number?): ContainerProps
 	local ref = ui.ref()
 	props.ref = ref
 	props.cursor = props.cursor or "pointer"
 	local press, release = props.on_press, props.on_release
-	props.on_press = function()
+	-- The handlers wrapped are the script's functions (not actions).
+	props.on_press = function(e: PointerEvent)
 		anime.animate(ref, { scale = scale or 0.95, duration = 70, ease = "outQuad" })
-		if press then
-			press()
+		if type(press) == "function" then
+			press(e)
 		end
 	end
-	props.on_release = function()
+	props.on_release = function(e: PointerEvent)
 		anime.animate(ref, { scale = 1, duration = 380, ease = K.spring(600, 28) })
-		if release then
-			release()
+		if type(release) == "function" then
+			release(e)
 		end
 	end
 	return props
 end
 
 -- A plain button: no default padding or fill, a hover wash.
-function K.button(props, scale)
+function K.button(props: ContainerProps, scale: number?): Node
 	props.p = props.p or 0
 	props.bg = props.bg or C.clear
 	props.border = props.border or 0
@@ -104,7 +151,7 @@ function K.button(props, scale)
 	return ui.button(K.press(props, scale))
 end
 
-function K.icon_button(id, name, size, on_click, active)
+function K.icon_button(id: string, name: string, size: number?, on_click: Handler?, active: (() -> boolean)?): Node
 	return K.button {
 		id = id,
 		w = 28,
@@ -121,21 +168,27 @@ end
 
 -- A row of options over a pill that slides (and resizes) to the selected one.
 -- `build(i, active)` returns option i's contents; `active()` is reactive.
-function K.segmented(id, selected, count, build, style)
-	local geom = ui.state(id .. "_geom", {})
-	local row
-	local items = {}
+function K.segmented(
+	id: string,
+	selected: Choice,
+	count: number,
+	build: (i: number, active: () -> boolean) -> Child,
+	style: SegmentedStyle
+): Node
+	local geom = ui.state(id .. "_geom", {} :: { { [string]: number } })
+	local row: Element? = nil
+	local items: { Element } = {}
 	local function measure()
 		if not row then
 			return
 		end
-		local g = {}
+		local g: { { [string]: number } } = {}
 		for i, el in items do
-			g[i] = { x = el.x - row.x, w = el.width }
+			g[i] = { x = (el.x or 0) - (row.x or 0), w = el.width or 0 }
 		end
 		geom:set(g)
 	end
-	local function at(field)
+	local function at(field: string): Binding
 		return ui.spring(
 			ui.computed(function()
 				local g = geom:get()[selected:get()]
@@ -144,7 +197,7 @@ function K.segmented(id, selected, count, build, style)
 			{ stiffness = 420, damping = 34 }
 		)
 	end
-	local options = {}
+	local options: { Node } = {}
 	for i = 1, count do
 		local active = function()
 			return selected:get() == i
@@ -162,7 +215,7 @@ function K.segmented(id, selected, count, build, style)
 			on_click = function()
 				selected:set(i)
 			end,
-			on_resize = function(_, el)
+			on_resize = function(_, el: Element)
 				items[i] = el
 				measure()
 			end,
@@ -175,7 +228,7 @@ function K.segmented(id, selected, count, build, style)
 		p = style.p or 2,
 		bg = style.bg,
 		rounded = style.outer or 7,
-		on_resize = function(_, el)
+		on_resize = function(_, el: Element)
 			row = el
 			measure()
 		end,
@@ -197,7 +250,7 @@ function K.segmented(id, selected, count, build, style)
 end
 
 -- The design's switch: 32×18, a dark knob on a light track when on.
-function K.toggle(id, value)
+function K.toggle(id: string, value: State<boolean>): Node
 	local knob = ui.spring(
 		ui.computed(function()
 			return value:get() and 14 or 0
@@ -241,7 +294,7 @@ function K.toggle(id, value)
 end
 
 -- A bordered key, as tooltips and hints show shortcuts.
-function K.kbd(label)
+function K.kbd(label: string): Node
 	return ui.row {
 		h = 18,
 		px = 5,
@@ -254,8 +307,8 @@ function K.kbd(label)
 end
 
 -- A small key cap: icons and/or text.
-function K.keys(parts, color)
-	local nodes = {}
+function K.keys(parts: { string }, color: Color?): Node
+	local nodes: { Node } = {}
 	for _, part in parts do
 		if icons[part] then
 			table.insert(nodes, K.icon(part, 11, color or C.muted))

@@ -386,7 +386,8 @@ declare extern type Element with
 	height: number?
 	x: number?
 	y: number?
-	-- Keyboard focus to the element or its first focusable descendant; whether it took.
+	-- Keyboard focus to the element or its first focusable descendant
+	-- (shown ones only); whether it took.
 	function focus(self): boolean
 	function has_class(self, class: string): boolean
 	-- An input's selection, in characters (Unicode code points from 0, as
@@ -396,6 +397,7 @@ declare extern type Element with
 	function set_selection(self, a: number, b: number?): boolean
 	-- The anchor and the focus (where the caret is).
 	function selection(self): (number?, number?)
+	-- Clear keyboard focus if it is on the element or inside it.
 	function blur(self): ()
 end
 
@@ -863,6 +865,7 @@ export type StyleProps = {
 }
 
 -- What every element takes besides its styles.
+export type PointerEvents = "none" | "auto" | boolean
 export type NodeProps = {
 	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -873,11 +876,12 @@ export type NodeProps = {
 	class: string?,
 	ref: (Ref | { Ref })?,
 	focusable: boolean?,
-	-- CSS pointer-events: "none" lets the pointer through to what is under
-	-- the node (descendants with handlers still take it).
-	pointer_events: ("none" | "auto" | boolean)?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -1075,6 +1079,10 @@ export type Props = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -1270,6 +1278,10 @@ export type ContainerProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -1464,6 +1476,10 @@ export type ScrollProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -1663,6 +1679,10 @@ export type TextProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -1873,6 +1893,10 @@ export type RichProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -2067,6 +2091,10 @@ export type ImageProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -2266,6 +2294,10 @@ export type SvgProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -2463,6 +2495,10 @@ export type CanvasProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -2659,6 +2695,10 @@ export type CheckboxProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -2855,6 +2895,10 @@ export type InputProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -3059,6 +3103,10 @@ export type ProgressProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -3255,6 +3303,10 @@ export type SliderProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -3455,6 +3507,10 @@ export type ListProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -3657,6 +3713,10 @@ export type ModalProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -3853,6 +3913,10 @@ export type PopoverProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -4052,6 +4116,10 @@ export type MenuItemProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -4247,6 +4315,10 @@ export type SubmenuProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -4443,6 +4515,10 @@ export type WebViewProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -4659,6 +4735,10 @@ export type TerminalProps = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -4859,6 +4939,10 @@ export type EachOptions = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
@@ -5063,6 +5147,10 @@ export type PresenceOptions = {
 	focusable: boolean?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- A condition (true disables), or the styles it shows while disabled.
 	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,

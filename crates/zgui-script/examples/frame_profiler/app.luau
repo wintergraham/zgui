@@ -29,7 +29,7 @@ local S = {
 	cap_length = ui.state("cap_length", 4),
 	cap_start = ui.state("cap_start", 3),
 	logs_unread = ui.state("logs_unread", 3),
-	overlays = ui.state("overlays", { true, false, true, false, false, false }),
+	overlays = ui.state("overlays", { true, false, true, false, false, false } :: { boolean }),
 	time_scale = ui.state("time_scale", 1),
 	budget = ui.state("budget", 8.33),
 	follow_cap = ui.state("follow_cap", false),
@@ -52,31 +52,33 @@ local S = {
 		reload = ui.state("sw_reload", false),
 	},
 	viewport = ui.state("viewport", { w = 1132, h = 1028 }),
-	anchors = {},
+	anchors = {} :: { [string]: Element },
+	-- Set by menus.luau.
+	hint_hover = nil :: ((name: string, inside: boolean) -> ())?,
 }
 S.BACKENDS = { "wgpu · Metal", "wgpu · Vulkan", "Software" }
 S.CAPS = { "120 Hz", "60 Hz", "30 Hz", "Uncapped" }
 
 -- A number without trailing zeros: 2, 0.5, 0.25.
-local function num(v)
+local function num(v: number): string
 	if math.abs(v - math.floor(v + 0.5)) < 0.005 then
 		return tostring(math.floor(v + 0.5))
 	end
 	return (string.format("%.2f", v):gsub("0+$", ""):gsub("%.$", ""))
 end
-local function comma(n)
+local function comma(n: number): string
 	local s = tostring(math.floor(n))
 	return (s:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", ""))
 end
 S.comma = comma
-function S.open(name)
+function S.open(name: string)
 	S.hint:set("")
 	S.menu:set(S.menu:peek() == name and "" or name)
 end
-function S.target_meta()
+function S.target_meta(): string
 	return "pid 48211 · " .. S.BACKENDS[S.backend:get()] .. " · " .. S.CAPS[S.cap:get()]
 end
-function S.flip_overlay(i)
+function S.flip_overlay(i: number)
 	local l = table.clone(S.overlays:peek())
 	l[i] = not l[i]
 	S.overlays:set(l)
@@ -97,14 +99,15 @@ function S.reset_runtime()
 end
 
 -- Speed: the target's time scale, from the status bar.
-function S.step_scale(d)
+function S.step_scale(d: number)
 	local s, best = S.time_scale:peek(), 1
+	-- A speed is { scale, label }.
 	for i, p in D.speeds do
-		if math.abs(p[1] - s) < math.abs(D.speeds[best][1] - s) then
+		if math.abs(p[1] :: number - s) < math.abs(D.speeds[best][1] :: number - s) then
 			best = i
 		end
 	end
-	S.time_scale:set(D.speeds[math.clamp(best + d, 1, #D.speeds)][1])
+	S.time_scale:set(D.speeds[math.clamp(best + d, 1, #D.speeds)][1] :: number)
 end
 
 -- Recording (pen XFJTT · Recording control): the clock runs at 20 fps
@@ -116,17 +119,17 @@ local ticker = anime.createTimer {
 	duration = 1e9,
 	frameRate = 20,
 	autoplay = false,
-	onUpdate = function(t)
+	onUpdate = function(t: Animation)
 		S.clock:set(clockBase + t.currentTime / 1000)
 	end,
 }
-local pending
+local pending: Animation? = nil
 -- The capture's progress line scales across the control on the compositor,
 -- every display frame, in one animation (its width at the clock's 20 fps
 -- stepped visibly).
 local progressRef = ui.ref()
-local progress
-local function setRec(r)
+local progress: Animation? = nil
+local function setRec(r: string)
 	if pending then
 		pending:cancel()
 		pending = nil
@@ -137,8 +140,9 @@ local function setRec(r)
 	end
 	S.rec:set(r)
 end
-local function begin(length)
-	length = length or D.lengths[S.cap_length:peek()][3]
+local function begin(length: number?)
+	-- A length is { label, icon, seconds? }.
+	length = length or D.lengths[S.cap_length:peek()][3] :: number?
 	if not length then
 		setRec("recording")
 		return
@@ -181,11 +185,11 @@ function S.start()
 	end
 end
 -- Any of the six states at once, from the record control's context menu.
-function S.preview(r)
+function S.preview(r: string)
 	if r == "countdown" then
 		countdown()
 	elseif r == "capturing" then
-		begin(D.lengths[S.cap_length:peek()][3] or 5)
+		begin(D.lengths[S.cap_length:peek()][3] :: number? or 5)
 	else
 		setRec(r)
 	end
@@ -226,22 +230,22 @@ ui.effect(function()
 end)
 
 -- Capture buffer: 120 frames a second of clock, in a ring.
-local function bufferFrames()
+local function bufferFrames(): number
 	return math.min(D.buffer_counts[S.buffer_size:get()], math.floor(S.clock:get() * 120))
 end
-function S.buffer_fill()
+function S.buffer_fill(): number
 	return bufferFrames() / D.buffer_counts[S.buffer_size:get()]
 end
-function S.buffer_frames_text()
+function S.buffer_frames_text(): string
 	return comma(bufferFrames()) .. " / " .. comma(D.buffer_counts[S.buffer_size:get()]) .. " frames"
 end
-function S.buffer_bytes()
+function S.buffer_bytes(): string
 	return string.format("%.1f MB", bufferFrames() * 0.00365)
 end
-local function untilFull()
+local function untilFull(): number
 	return math.max(0, (D.buffer_counts[S.buffer_size:get()] - bufferFrames()) / 120)
 end
-function S.buffer_eta()
+function S.buffer_eta(): string
 	local full = untilFull()
 	return string.format("≈ %d s at 120 Hz · ", bufferFrames() // 120)
 		.. (
@@ -249,7 +253,7 @@ function S.buffer_eta()
 			or (S.when_full:get() == 1 and "dropping oldest" or "stopped")
 		)
 end
-function S.buffer_drop()
+function S.buffer_drop(): string
 	local full = untilFull()
 	return full > 0 and string.format("oldest frames drop in %d s", math.ceil(full)) or "dropping oldest frames"
 end
@@ -257,8 +261,8 @@ end
 -- Frames ----------------------------------------------------------------
 
 local STEP = { 1, 5, 30 }
-local ranged = {}
-local function rangeFrames(r)
+local ranged: { [number]: { D.Frame } } = {}
+local function rangeFrames(r: number): { D.Frame }
 	if r == 1 then
 		return D.frames
 	end
@@ -267,7 +271,7 @@ local function rangeFrames(r)
 	end
 	-- Longer windows: each bar is the worst of its frames, so spikes stack up.
 	local random = anime.utils.createSeededRandom(r * 97)
-	local out = {}
+	local out: { D.Frame } = {}
 	for i = 1, 120 do
 		local f = D.frames[(i * (r == 2 and 7 or 13)) % 120 + 1]
 		local k = 1 + random(0, 45) / 100
@@ -285,12 +289,13 @@ local budget = ui.computed(function()
 	return S.follow_cap:get() and math.floor(10000 / D.cap_hz[S.cap:get()] + 0.5) / 10 or S.budget:get()
 end)
 S.effective_budget = budget
-local function info(i, r)
+local function info(i: number, r: number): D.FrameInfo
 	local f = rangeFrames(r)[i]
 	local k = D.ms_per_point
 	local design = r == 1 and i == D.selected
-	local ms = design and { u = 0.62, l = 3.86, p = 0.74, r = 3.64, present = 1 }
-		or { u = f.u * k, l = f.l * k, p = f.p * k, r = f.r * k, present = 1 }
+	local ms: { [string]: number } = if design
+		then { u = 0.62, l = 3.86, p = 0.74, r = 3.64, present = 1 }
+		else { u = f.u * k, l = f.l * k, p = f.p * k, r = f.r * k, present = 1 }
 	local cpu = design and 9.86 or ms.u + ms.l + ms.p + ms.r + ms.present
 	return {
 		n = 48236 - (120 - i) * STEP[r],
@@ -307,13 +312,13 @@ local current = ui.computed(function()
 	return info(S.frame:get(), S.range:get())
 end)
 S.current = current
-function S.step(d)
+function S.step(d: number)
 	S.frame:set(math.clamp(S.frame:peek() + d, 1, 120))
 end
 
 -- The selected frame's spans: the design's, or its phases stretched to
 -- another frame's update, layout, paint and render times.
-local PHASE = {
+local PHASE: { [string]: string } = {
 	input = "input",
 	actions = "input",
 	update = "update",
@@ -322,13 +327,13 @@ local PHASE = {
 	render = "render",
 	present = "present",
 }
-local function traceFor(i, r)
+local function traceFor(i: number, r: number): { D.Span }
 	local x = info(i, r)
 	if x.design then
 		return D.spans
 	end
 	local base = D.frames[D.selected]
-	local ratio = {
+	local ratio: { [string]: number } = {
 		input = 1,
 		present = 1,
 		update = x.f.u / base.u,
@@ -336,14 +341,14 @@ local function traceFor(i, r)
 		paint = x.f.p / base.p,
 		render = x.f.r / base.r,
 	}
-	local map, cursor = {}, 0
+	local map: { [string]: { from: number, to: number, k: number, w: number } }, cursor = {}, 0
 	for _, ph in D.phases do
 		local w = math.max(2, (ph.to - ph.from) * ratio[ph.kind])
 		map[ph.kind] = { from = ph.from, to = cursor, k = ratio[ph.kind], w = w }
 		cursor += w + 1
 	end
 	local shift = map.render.to + map.render.w - 720
-	local out = {}
+	local out: { D.Span } = {}
 	for _, s in D.spans do
 		local m = map[PHASE[s.kind]]
 		local copy = table.clone(s)
@@ -363,22 +368,23 @@ end
 local trace = ui.computed(function()
 	return traceFor(S.frame:get(), S.range:get())
 end)
-function S.span_by_id(id)
+function S.span_by_id(id: string): D.Span?
 	for _, s in trace:peek() do
 		if s.id == id then
 			return s
 		end
 	end
+	return nil
 end
 
 -- Trace zoom: `k` times the frame's 14 ms across 1024 points, scrolled `off`.
 local TRACK = 1024
-local function setZoom(mode, k, center)
+local function setZoom(mode: string, k: number, center: number)
 	k = math.clamp(k, 1, 12)
 	local off = math.clamp(center * k - TRACK / 2, 0, TRACK * k - TRACK)
 	S.zoom:set { mode = mode, k = k, off = off }
 end
-function S.zoom_to(mode)
+function S.zoom_to(mode: string)
 	if mode == "vsync" then
 		setZoom(mode, 14 / 8.33, 0)
 	elseif mode == "selection" then
@@ -391,7 +397,7 @@ function S.zoom_to(mode)
 		setZoom("frame", 1, 0)
 	end
 end
-function S.zoom_by(f)
+function S.zoom_by(f: number)
 	local z = S.zoom:peek()
 	setZoom("custom", z.k * f, (TRACK / 2 + z.off) / z.k)
 end
@@ -407,20 +413,23 @@ ui.effect(function()
 end)
 
 -- Hover hints: the menus module provides S.hint_hover.
-local function hint(name, props, stays)
+-- The handlers wrapped are the script's functions (not actions).
+local function hint(name: string, props: ContainerProps, stays: boolean?): ContainerProps
 	local hover = props.on_hover
-	props.on_hover = function(inside)
-		if hover then
+	props.on_hover = function(inside: boolean)
+		if type(hover) == "function" then
 			hover(inside)
 		end
-		S.hint_hover(name, inside)
+		if S.hint_hover then
+			S.hint_hover(name, inside)
+		end
 	end
 	if not stays then
 		local press = props.on_press
-		props.on_press = function()
+		props.on_press = function(e: PointerEvent)
 			S.hint:set("")
-			if press then
-				press()
+			if type(press) == "function" then
+				press(e)
 			end
 		end
 	end
@@ -429,13 +438,13 @@ end
 -- Anchors: the elements menus and tooltips open from. A resize bumps
 -- `anchor_tick`, so a tooltip follows a trigger that changes width.
 S.anchor_tick = ui.state("anchor_tick", 0)
-local function anchor(name)
+local function anchor(name: string): (size: Size, el: Element) -> ()
 	return function(_, el)
 		S.anchors[name] = el
 		S.anchor_tick:set(S.anchor_tick:peek() + 1)
 	end
 end
-local function menuActive(name)
+local function menuActive(name: string): () -> string
 	return function()
 		return S.menu:get() == name and C.selected or C.clear
 	end
@@ -450,7 +459,7 @@ local TABS = {
 	{ "database", "Memory" },
 	{ "list", "Events", "1.2k" },
 }
-local tabs = K.segmented("tabs", S.tab, #TABS, function(i, active)
+local tabs = K.segmented("tabs", S.tab, #TABS, function(i: number, active: () -> boolean): Child
 	local t = TABS[i]
 	return {
 		icon(t[1], 13, function()
@@ -467,7 +476,7 @@ local tabs = K.segmented("tabs", S.tab, #TABS, function(i, active)
 	}
 end, { h = 28, px = 10, r = 7, p = 0, outer = 7 })
 
-local swatches = {}
+local swatches: { Node } = {}
 for i, o in D.overlays do
 	local on = ui.computed(function()
 		return S.overlays:get()[i]
@@ -503,7 +512,8 @@ end
 -- width (so the button resizes rather than swapping), and the leading
 -- glyph and the action icon change in place. Right-click previews any state.
 -- Only the stopped (ready) control has an outline, as in the design.
-local REC = {
+type RecLook = { fill: string, border: string, fg: string, rule: string, glyph: string, action: string }
+local REC: { [string]: RecLook } = {
 	recording = {
 		fill = "#E8A89824",
 		border = "#4A2C2500",
@@ -539,7 +549,7 @@ local REC = {
 	},
 	stopped = { fill = C.selected, border = C.line, fg = C.text, rule = C.line, glyph = "dot", action = "chevron-down" },
 }
-local function recLabel()
+local function recLabel(): string
 	local r = S.rec:get()
 	if r == "stopped" then
 		return "Record"
@@ -571,7 +581,7 @@ ui.effect(function()
 	anime.animate(labelRef, { color = t.fg, duration = ease.duration, ease = ease.ease })
 	anime.animate(ruleRef, { bg = t.rule, duration = ease.duration, ease = ease.ease })
 end)
-local pulse
+local pulse: Animation? = nil
 ui.effect(function()
 	local r = S.rec:get()
 	if pulse then
@@ -589,7 +599,7 @@ ui.effect(function()
 end)
 -- A part shown in some states: it fades and scales in place, centred in
 -- its slot (a row: an overlay stacks its children at the top left).
-local function showIn(test, node)
+local function showIn(test: (r: string) -> boolean, node: Node): Node
 	local on = ui.computed(function()
 		return test(S.rec:get())
 	end)
@@ -617,12 +627,12 @@ local function showIn(test, node)
 		node,
 	}
 end
-local function glyphIs(kind)
+local function glyphIs(kind: string): (r: string) -> boolean
 	return function(r)
 		return REC[r].glyph == kind
 	end
 end
-local function actionIs(kind)
+local function actionIs(kind: string): (r: string) -> boolean
 	return function(r)
 		return REC[r].action == kind
 	end
@@ -630,7 +640,7 @@ end
 local stopped = function()
 	return S.rec:get() == "stopped"
 end
-local spring = { stiffness = 460, damping = 38 }
+local spring: SpringOptions = { stiffness = 460, damping = 38 }
 local record = ui.row(hint("record", {
 	id = "record",
 	ref = pillRef,
@@ -659,8 +669,8 @@ local record = ui.row(hint("record", {
 		direction = "row",
 		gap = 7,
 		items = "center",
-		cursor = function()
-			return stopped() and "pointer" or "default"
+		cursor = function(): Cursor
+			return if stopped() then "pointer" else "default"
 		end,
 		on_click = function()
 			if S.rec:peek() == "stopped" then
@@ -805,7 +815,7 @@ local record = ui.row(hint("record", {
 	},
 }, true))
 
-local function action(id, glyph, size, name)
+local function action(id: string, glyph: string, size: number, name: string): Node
 	return ui.div {
 		on_resize = anchor(name),
 		K.button(hint(name, {
@@ -862,7 +872,15 @@ local titleBar = ui.row {
 
 -- Summary -------------------------------------------------------------------
 
-local function metric(first, label, value, unit, sub, tone, warn)
+local function metric(
+	first: boolean,
+	label: string,
+	value: Text,
+	unit: string,
+	sub: string,
+	tone: Color?,
+	warn: boolean?
+): Node
 	return ui.column {
 		grow = 1,
 		basis = 0,
@@ -908,15 +926,15 @@ local summary = ui.row {
 local grow = ui.state("chart_grow", 0)
 local chartMax = ui.state("chart_max", 16.7)
 local plotW = ui.state("plot_w", 1040)
-local function barW()
+local function barW(): number
 	return (plotW:get() - 119) / 120
 end
-local function yOf(ms)
+local function yOf(ms: number): number
 	return 126 - ms / chartMax:get() * 120
 end
 local SEGMENTS =
 	{ { "u", D.colors.update }, { "l", D.colors.layout }, { "p", D.colors.paint }, { "r", D.colors.render } }
-local function drawBars(c, w, h)
+local function drawBars(c: Canvas, w: number, h: number)
 	local frames = rangeFrames(S.range:get())
 	local g = grow:get()
 	local scale = 16.7 / chartMax:get()
@@ -928,21 +946,22 @@ local function drawBars(c, w, h)
 		t = (1 - (1 - t) ^ 3) * scale
 		if t > 0 then
 			local x, y = (i - 1) * (bw + 1), 126
-			local top
+			-- The top segment's y, height and colour.
+			local topY: number?, topH, topColor = nil, 0, ""
 			for _, seg in SEGMENTS do
 				local v = f[seg[1]]
 				if v > 0 then
 					local hh = v * t
 					y -= hh
 					c:rect(x, y, bw, hh, seg[2])
-					top = { y, hh, seg[2] }
+					topY, topH, topColor = y, hh, seg[2]
 					y -= 1
 				end
 			end
-			if top and top[2] > 2 then
-				c:rect(x, top[1], bw, top[2], C.body)
-				c:rect(x, top[1], bw, top[2], top[3], 2)
-				c:rect(x, top[1] + 2, bw, top[2] - 2, top[3])
+			if topY and topH > 2 then
+				c:rect(x, topY, bw, topH, C.body)
+				c:rect(x, topY, bw, topH, topColor, 2)
+				c:rect(x, topY + 2, bw, topH - 2, topColor)
 			end
 		end
 	end
@@ -968,7 +987,7 @@ ui.effect(function()
 	end
 end)
 
-local function column(state, color, stiff)
+local function column(state: State<number>, color: Color, stiff: number): Node
 	return ui.div {
 		absolute = true,
 		top = 6,
@@ -994,7 +1013,7 @@ local function column(state, color, stiff)
 		),
 	}
 end
-local plotEl, bodyEl
+local plotEl: Element?, bodyEl: Element? = nil, nil
 local plot = ui.overlay {
 	id = "plot",
 	grow = 1,
@@ -1024,7 +1043,7 @@ local plot = ui.overlay {
 	ui.canvas { w_full = true, h = 132, draw = drawBars, on_mount = growBars, pointer_events = "none" },
 }
 
-local function legend(color, label)
+local function legend(color: Color, label: string): Node
 	return ui.row {
 		gap = 6,
 		items = "center",
@@ -1032,7 +1051,7 @@ local function legend(color, label)
 		text(label, 11.5, C.secondary),
 	}
 end
-local function fmtMs(v)
+local function fmtMs(v: number): string
 	return (string.format("%.2f", v):gsub("0$", ""))
 end
 local framesSection = ui.column {
@@ -1076,7 +1095,7 @@ local framesSection = ui.column {
 				},
 			},
 		},
-		K.segmented("range", S.range, 3, function(i, active)
+		K.segmented("range", S.range, 3, function(i: number, active: () -> boolean): Child
 			return mono(D.ranges[i].label, 10.5, function()
 				return active() and C.text or C.tertiary
 			end)
@@ -1143,13 +1162,13 @@ local PHASES = {
 	{ "r", "render", D.colors.render },
 	{ "present", "present", "#8C8A82" },
 }
-local function hv(f, fallback)
+local function hv<T>(f: (x: D.FrameInfo) -> T, fallback: T): () -> T
 	return function()
 		local x = hovered:get()
-		return x and f(x) or fallback
+		return if x then f(x) else fallback
 	end
 end
-local phaseBar, phaseRows = {}, {}
+local phaseBar: { Node }, phaseRows: { Node } = {}, {}
 for i, ph in PHASES do
 	phaseBar[i] = ui.div {
 		h = 6,
@@ -1237,16 +1256,17 @@ local frameCard = ui.column {
 	mono("click opens it in the trace", 10, C.faint),
 }
 ui.effect(function()
-	local h = S.hover_frame:get()
+	-- Locals: Luau refines them, not upvalues.
+	local h, plotEl, bodyEl = S.hover_frame:get(), plotEl, bodyEl
 	if h == 0 or not plotEl or not bodyEl then
 		return
 	end
-	local bx = plotEl.x - bodyEl.x + (h - 1) * (barW() + 1)
+	local bx = (plotEl.x or 0) - (bodyEl.x or 0) + (h - 1) * (barW() + 1)
 	local x = bx + barW() + 10
-	if x + 236 > bodyEl.width - 16 then
+	if x + 236 > (bodyEl.width or 0) - 16 then
 		x = bx - 10 - 236
 	end
-	local y = plotEl.y - bodyEl.y - 14
+	local y = (plotEl.y or 0) - (bodyEl.y or 0) - 14
 	if cardShown then
 		anime.animate(cardRef, { x = x, y = y, duration = 260, ease = K.spring(700, 40) })
 	else
@@ -1262,9 +1282,16 @@ end)
 
 -- Frame trace -------------------------------------------------------------------
 
-local LANE_Y = { [0] = 0, 26, 52, 90 }
-local LANES = { [0] = "Main · UI thread", "Main · UI thread", "Main · UI thread", "GPU queue" }
-local function badge(id, content, fg, bg, border, hidden)
+local LANE_Y: { [number]: number } = { [0] = 0, 26, 52, 90 }
+local LANES: { [number]: string } = { [0] = "Main · UI thread", "Main · UI thread", "Main · UI thread", "GPU queue" }
+local function badge(
+	id: string,
+	content: Text,
+	fg: Reactive<Color>,
+	bg: Reactive<Color>,
+	border: Reactive<Color>,
+	hidden: Reactive<boolean>?
+): Node
 	return ui.row {
 		id = id,
 		h = 22,
@@ -1276,7 +1303,7 @@ local function badge(id, content, fg, bg, border, hidden)
 		mono(content, 10.5, fg),
 	}
 end
-local function overTone(field)
+local function overTone(field: string): () -> string
 	return function()
 		local over = current:get().over > 0
 		if field == "fg" then
@@ -1288,12 +1315,12 @@ local function overTone(field)
 		return over and "#4A2C25" or "#3A4232"
 	end
 end
-local function zx(x)
+local function zx(x: number): number
 	local z = S.zoom:get()
 	return x * z.k - z.off
 end
 
-local function spanView(s)
+local function spanView(s: D.Span): Node
 	local top = s.lane == 0
 	local dark = D.dark[s.kind]
 	local selected = function()
@@ -1307,7 +1334,7 @@ local function spanView(s)
 		return need and s.w * S.zoom:get().k >= need
 	end
 	local fg = (top and s.kind ~= "present") and C.window or C.text
-	local spring = { stiffness = 420, damping = 40 }
+	local spring: SpringOptions = { stiffness = 420, damping = 40 }
 	return ui.row {
 		id = "span_" .. s.id,
 		absolute = true,
@@ -1366,21 +1393,24 @@ local function spanView(s)
 	}
 end
 
-local spansEl
+local spansEl: Element? = nil
 local tipRef = ui.ref()
-local tip = ui.state("tip", { id = "" })
+type Tip = { id: string, color: string?, title: string?, dur: string?, rows: { { string } }? }
+local tip = ui.state("tip", { id = "" } :: Tip)
 local tipPlaced = false
 local function placeTip()
 	local id = S.hover_span:peek() ~= "" and S.hover_span:peek() or S.span:peek()
 	local s = id ~= "" and S.span_by_id(id)
+	-- Locals: Luau refines them, not upvalues.
+	local spansEl, bodyEl = spansEl, bodyEl
 	if not s or not spansEl or not bodyEl or not spansEl.mounted then
 		tip:set { id = "" }
 		return
 	end
 	local z = S.zoom:peek()
 	local right = math.clamp((s.x + s.w) * z.k - z.off, 228, TRACK)
-	local x = spansEl.x - bodyEl.x + right - 228
-	local y = spansEl.y - bodyEl.y + LANE_Y[s.lane] + 28
+	local x = (spansEl.x or 0) - (bodyEl.x or 0) + right - 228
+	local y = (spansEl.y or 0) - (bodyEl.y or 0) + LANE_Y[s.lane] + 28
 	local detail = current:peek().design and D.details[s.id] or nil
 	local rows = detail and detail.rows
 		or {
@@ -1411,7 +1441,7 @@ ui.effect(function()
 	placeTip()
 end)
 
-local function tipRow(i)
+local function tipRow(i: number): Node
 	return ui.row {
 		w_full = true,
 		justify = "between",
@@ -1471,10 +1501,10 @@ local tooltip = ui.column {
 }
 
 -- Ruler and grid for the zoom: ticks every 2 ms at 1×, finer as it zooms.
-local function gridFor(z)
+local function gridFor(z: D.Zoom): ({ Node }, { Node })
 	local ppm = D.px_per_ms * z.k
 	local step = ({ 2, 1, 0.5, 0.25 })[math.clamp(math.floor(math.log(z.k * 1.2, 2)) + 1, 1, 4)]
-	local lines, ticks = {}, {}
+	local lines: { Node }, ticks: { Node } = {}, {}
 	local first = math.floor(z.off / ppm / step) * step
 	local ms = first
 	while ms * ppm - z.off <= TRACK do
@@ -1668,7 +1698,7 @@ local traceSection = ui.column {
 				ui.presence(function()
 					return S.range:get() * 1000 + S.frame:get()
 				end, function()
-					local nodes = {}
+					local nodes: { Node } = {}
 					for _, s in trace:peek() do
 						table.insert(nodes, spanView(s))
 					end
@@ -1703,11 +1733,11 @@ ui.effect(function()
 		anime.animate(".scoped", { opacity = { 0.2, 1 }, duration = 260, ease = "outQuad" })
 	end
 end)
-local function areaRow(i, a)
+local function areaRow(i: number, a: D.Area): Node
 	local selected = function()
 		return S.area:get() == i
 	end
-	local segments = {}
+	local segments: { Node } = {}
 	local colors = { D.colors.layout, D.colors.paint, D.colors.render }
 	for k = 1, 3 do
 		segments[k] = ui.div {
@@ -1798,14 +1828,19 @@ local function areaRow(i, a)
 		},
 	}
 end
-local rows = {}
+local rows: { Node } = {}
 for i, a in D.areas do
 	rows[i] = areaRow(i, a)
 end
-local function header(label, w, right)
-	return ui.row { w = w, grow = w and 0 or 1, justify = right and "end" or "start", text(label, 11, C.muted) }
+local function header(label: string, w: number?, right: boolean?): Node
+	return ui.row {
+		w = w,
+		grow = w and 0 or 1,
+		justify = if right then "end" else "start",
+		text(label, 11, C.muted),
+	}
 end
-local function finding(id, glyph, color, body, link, act)
+local function finding(id: string, glyph: string, color: Color, body: string, link: string, act: () -> ()): Node
 	return ui.row {
 		id = id,
 		grow = 1,
@@ -1853,7 +1888,7 @@ local work = ui.column {
 			return "dirty nodes · frame " .. comma(current:get().n)
 		end, 10.5, C.muted),
 		spacer(),
-		K.segmented("scope", S.scope, 2, function(i, active)
+		K.segmented("scope", S.scope, 2, function(i: number, active: () -> boolean): Child
 			return text(i == 1 and "Frame" or "1 s avg", 11.5, function()
 				return active() and C.text or C.tertiary
 			end)
@@ -1930,7 +1965,7 @@ local work = ui.column {
 		},
 	},
 }
-local function counter(row, avg)
+local function counter(row: D.Counter, avg: boolean): Node
 	return ui.row {
 		w_full = true,
 		h = 24,
@@ -1942,8 +1977,8 @@ local function counter(row, avg)
 		avg and ui.row { w = 44, justify = "end", mono(row[3], 10.5, C.muted) } or nil,
 	}
 end
-local function group(label, avg, list)
-	local items = {
+local function group(label: string, avg: boolean, list: { D.Counter }): Node
+	local items: { Node } = {
 		ui.row {
 			w_full = true,
 			h = 26,
@@ -2014,7 +2049,7 @@ local placeholder = ui.column {
 	end,
 	ui.presence(function()
 		return S.tab:get() ~= 1 and S.tab:get() or nil
-	end, function(t)
+	end, function(t: number)
 		return ui.column {
 			items = "center",
 			gap = 10,
@@ -2072,7 +2107,7 @@ local body = ui.scroll {
 
 -- The status bar's chips sit on the body's colour and brighten on hover;
 -- its end chips round their outer bottom corners with the window's.
-local function chipStyle(name, props)
+local function chipStyle(name: string, props: ContainerProps): ContainerProps
 	props.bg = function()
 		return S.menu:get() == name and C.selected or C.body
 	end
@@ -2082,17 +2117,17 @@ local function chipStyle(name, props)
 	end
 	return props
 end
-local speedIndex = {
+local speedIndex: K.Choice = {
 	get = function()
 		for i, sp in D.speeds do
-			if math.abs(sp[1] - S.time_scale:get()) < 0.001 then
+			if math.abs(sp[1] :: number - S.time_scale:get()) < 0.001 then
 				return i
 			end
 		end
 		return 0
 	end,
 	set = function(_, i)
-		S.time_scale:set(D.speeds[i][1])
+		S.time_scale:set(D.speeds[i][1] :: number)
 	end,
 }
 ui.effect(function()
@@ -2135,7 +2170,7 @@ local statusBar = ui.row {
 			0.96
 		),
 	},
-	K.segmented("speed", speedIndex, #D.speeds, function(i, active)
+	K.segmented("speed", speedIndex, #D.speeds, function(i: number, active: () -> boolean): Child
 		return mono(D.speeds[i][2], 10.5, function()
 			return active() and C.text or C.tertiary
 		end)
@@ -2187,7 +2222,7 @@ local statusBar = ui.row {
 				text("Logs", 11.5, C.secondary, { weight = 500 }),
 				ui.presence(function()
 					return S.logs_unread:get() > 0 and S.logs_unread:get() or nil
-				end, function(n)
+				end, function(n: number)
 					return ui.row {
 						h = 14,
 						px = 4,
@@ -2210,7 +2245,7 @@ local statusBar = ui.row {
 -- Keys: ⌘F searches, ⌘R records, ←/→ step frames, space pauses, ⌥1–6
 -- flip overlays, ⌥[ / ⌥] step the speed. Armed, any key starts recording.
 local menus = require("./menus")(S, K, D)
-local function onKey(e)
+local function onKey(e: KeyEvent): boolean
 	if menus.on_key(e) then
 		return true
 	end

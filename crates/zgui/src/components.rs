@@ -303,6 +303,7 @@ impl Dialog {
                 NodeInput {
                     focusable: true,
                     disabled: !visible,
+                    pass_through: input.options(root).is_some_and(|o| o.pass_through),
                     ..NodeInput::default()
                 },
             );
