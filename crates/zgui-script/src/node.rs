@@ -41,6 +41,8 @@ pub(crate) struct Node {
     pub refs: Vec<Rc<Ref>>,
     pub events: Events,
     pub focusable: Option<bool>,
+    /// `pointer_events = "none"`: the pointer passes through.
+    pub pointer_events: Option<bool>,
     pub disabled: Option<Source>,
     /// `layout = "height"`: the node's size follows its content, animated.
     pub layout: Option<LayoutAnim>,
@@ -343,6 +345,7 @@ impl Node {
             refs: Vec::new(),
             events: Events::default(),
             focusable: None,
+            pointer_events: None,
             disabled: None,
             layout: None,
             layout_id: None,
@@ -1339,6 +1342,18 @@ fn fill(lua: &Lua, mut node: Node, table: Option<&Table>) -> mlua::Result<Node> 
             },
             "focusable" => node.focusable = Some(lua.unpack(value)?),
             "window_drag" => node.window_drag = lua.unpack(value)?,
+            "pointer_events" => {
+                node.pointer_events = Some(match &value {
+                    mlua::Value::Boolean(b) => *b,
+                    mlua::Value::String(s) if s.to_str()?.as_ref() as &str == "none" => false,
+                    mlua::Value::String(s) if s.to_str()?.as_ref() as &str == "auto" => true,
+                    _ => {
+                        return Err(mlua::Error::runtime(
+                            "`pointer_events` takes \"none\" or \"auto\"",
+                        ));
+                    }
+                })
+            }
             "bg_shader" => {
                 let mlua::Value::UserData(ud) = &value else {
                     return Err(mlua::Error::runtime("`bg_shader` takes a ui.shader"));
@@ -1559,6 +1574,7 @@ fn fill(lua: &Lua, mut node: Node, table: Option<&Table>) -> mlua::Result<Node> 
                     };
                     lits.push((prop, lit));
                 }
+                lits.sort_by_key(|(prop, _)| specificity(*prop));
                 node.pseudo.push((pseudo, lits.into()));
             }
             name if WIDGET_FIELDS.contains(&name) => {}
@@ -1579,6 +1595,10 @@ fn fill(lua: &Lua, mut node: Node, table: Option<&Table>) -> mlua::Result<Node> 
         layout.height = false;
         layout.position = true;
     }
+    // Table order is arbitrary, so shorthands apply before what refines
+    // them: `p = 0, px = 8` pads the sides, and `border = 1,
+    // border_sides = …` keeps the per-side widths `border` would reset.
+    node.props.sort_by_key(|(prop, _)| specificity(*prop));
     let mut kids = Vec::new();
     children(lua, &node.owner, table, &mut kids)?;
     if !kids.is_empty() && !node.kind.takes_children() {
@@ -1589,6 +1609,20 @@ fn fill(lua: &Lua, mut node: Node, table: Option<&Table>) -> mlua::Result<Node> 
     }
     node.children = kids;
     Ok(node)
+}
+
+/// Shorthands sort first (0), then an axis (1), then a single side (2).
+fn specificity(prop: Prop) -> u8 {
+    match prop {
+        Prop::Px | Prop::Py | Prop::Mx | Prop::My | Prop::GapX | Prop::GapY | Prop::Corners => 1,
+        Prop::Pt | Prop::Pr | Prop::Pb | Prop::Pl | Prop::Mt | Prop::Mr | Prop::Mb | Prop::Ml => 2,
+        Prop::RoundedTl
+        | Prop::RoundedTr
+        | Prop::RoundedBr
+        | Prop::RoundedBl
+        | Prop::BorderSides => 2,
+        _ => 0,
+    }
 }
 
 fn owner(lua: &Lua) -> mlua::Result<Weak<Vm>> {

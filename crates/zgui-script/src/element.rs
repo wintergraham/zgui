@@ -861,7 +861,7 @@ impl UserData for ElementUd {
         fields.add_field_method_get("y", |_, e| Ok(e.0.read(|s, id| s.bounds(id).y)));
     }
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        // Keyboard focus to the node (an input, a button); whether it took.
+        // Keyboard focus to the node or its first focusable descendant.
         methods.add_method("focus", |_, e, ()| {
             Ok(e.0.handle.get().is_some_and(NodeHandle::focus))
         });
@@ -898,6 +898,12 @@ impl UserData for ElementUd {
         });
         methods.add_method("has_class", |_, e, class: String| {
             Ok(e.0.classes.iter().any(|c| **c == *class))
+        });
+        methods.add_method("blur", |_, e, ()| {
+            if let Some(handle) = e.0.handle.get() {
+                handle.blur();
+            }
+            Ok(())
         });
     }
 }

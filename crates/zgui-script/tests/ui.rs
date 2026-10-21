@@ -571,3 +571,93 @@ fn web_views_load_their_source_and_report_page_events() {
     h.settle();
     assert!(h.text("log").ends_with("eval 42 b;"), "{}", h.text("log"));
 }
+
+#[test]
+fn longhand_properties_refine_their_shorthand_in_any_table_order() {
+    // Lua tables have no order: `p = 0, px = 20` must pad the sides
+    // whatever order the keys come out in, so vary the keys around them.
+    let mut h = Harness::inline(
+        r##"local rows = {}
+        for i = 1, 24 do
+            local props = { id = "row" .. i, p = 0, px = 20, py = 3, ui.div { id = "cell" .. i, w = 10, h = 10 } }
+            props["h"] = 16 + i % 3
+            if i % 2 == 0 then props.gap = i end
+            if i % 3 == 0 then props.rounded = i end
+            table.insert(rows, ui.row(props))
+        end
+        return ui.column { rows }"##,
+    );
+    for i in 1..=24 {
+        let row = h.find(&format!("row{i}")).unwrap();
+        let cell = h.find(&format!("cell{i}")).unwrap();
+        let scene = h.ui.scene.borrow();
+        let (r, c) = (scene.bounds(row), scene.bounds(cell));
+        assert_eq!(c.x - r.x, 20., "row {i}: px refines p");
+        assert_eq!(c.y - r.y, 3., "row {i}: py refines p");
+    }
+}
+
+#[test]
+fn pointer_events_none_lets_presses_through_to_what_is_under() {
+    let mut h = Harness::inline(
+        r##"local hits = ui.shared("hits", 0)
+        return ui.overlay { w = 200, h = 100, on_key = function() return false end,
+            ui.button { id = "under", w = 200, h = 100, on_click = function() hits:set(hits:peek() + 1) end, "Under" },
+            ui.div { id = "layer", absolute = true, top = 0, left = 0, right = 0, bottom = 0, pointer_events = "none",
+                ui.div { w = 10, h = 10 } },
+        }"##,
+    );
+    let hits = h.host.shared("hits", 0.);
+    h.click("under");
+    assert_eq!(
+        hits.with_untracked(|v| v.as_f64()),
+        Some(1.),
+        "the layer passes the press through"
+    );
+}
+
+#[test]
+fn elements_can_take_keyboard_focus() {
+    let mut h = Harness::inline(
+        r##"local focused = ui.shared("focused", false)
+        local text = ui.state("text", "")
+        return ui.column {
+            ui.input { id = "field", label = "Field", value = text, on_focus = function() focused:set(true) end,
+                on_mount = function(el) el:focus() end },
+        }"##,
+    );
+    let focused = h.host.shared("focused", false);
+    h.settle();
+    assert_eq!(
+        focused.with_untracked(|v| v.clone()),
+        zgui_script::Value::Bool(true)
+    );
+    let _ = h.find("field");
+}
+
+#[test]
+fn container_focus_reaches_its_input_and_blur_clears_it() {
+    let mut h = Harness::inline(
+        r##"local container = ui.ref()
+        local text = ui.state("text", "")
+        return ui.column {
+            ui.column { ref = container,
+                ui.input { id = "field", value = text } },
+            ui.button { id = "take_focus", "Focus", on_click = function()
+                assert(container:peek():focus())
+                assert(container:peek():focus())
+            end },
+            ui.button { id = "clear_focus", "Blur", on_click = function()
+                assert(container:peek():focus())
+                container:peek():blur()
+            end },
+        }"##,
+    );
+    h.click("take_focus");
+    let focused = h.ui.input.focused().expect("the input takes focus");
+    let field = h.find("field").unwrap();
+    assert!(focused == field || h.ui.scene.borrow().ancestors(focused).any(|n| n == field));
+    h.click("clear_focus");
+    assert_eq!(h.ui.input.focused(), None);
+    assert!(h.host.error().with_untracked(|e| e.is_none()));
+}

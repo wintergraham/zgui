@@ -264,6 +264,10 @@ impl EventContext {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NodeInput {
     pub focusable: bool,
+    /// CSS `pointer-events: none`: the pointer passes through the node, and
+    /// through descendants that have no listeners of their own, to what is
+    /// under it.
+    pub pass_through: bool,
     pub disabled: bool,
     pub tab_index: i32,
 }
@@ -1241,10 +1245,14 @@ impl InputDispatcher {
     }
     fn hit_target(&self, scene: &Scene, x: f32, y: f32) -> Option<NodeId> {
         let mut fallback = None;
-        for hit in scene.hit_test_all(x, y) {
+        'hits: for hit in scene.hit_test_all(x, y) {
             let mut node = Some(hit);
             while let Some(id) = node {
-                if self.options(id).is_some_and(|options| options.disabled) {
+                let options = self.options(id);
+                if options.is_some_and(|options| options.pass_through) {
+                    continue 'hits;
+                }
+                if options.is_some_and(|options| options.disabled) {
                     return None;
                 }
                 if self.has_listeners(id) {

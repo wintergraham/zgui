@@ -386,7 +386,7 @@ declare extern type Element with
 	height: number?
 	x: number?
 	y: number?
-	-- Keyboard focus to the element (an input, a button); whether it took.
+	-- Keyboard focus to the element or its first focusable descendant; whether it took.
 	function focus(self): boolean
 	function has_class(self, class: string): boolean
 	-- An input's selection, in characters (Unicode code points from 0, as
@@ -396,6 +396,7 @@ declare extern type Element with
 	function set_selection(self, a: number, b: number?): boolean
 	-- The anchor and the focus (where the caret is).
 	function selection(self): (number?, number?)
+	function blur(self): ()
 end
 
 -- `ref = r` on a node. Reading it in an effect or computed follows it: the
@@ -872,6 +873,9 @@ export type NodeProps = {
 	class: string?,
 	ref: (Ref | { Ref })?,
 	focusable: boolean?,
+	-- CSS pointer-events: "none" lets the pointer through to what is under
+	-- the node (descendants with handlers still take it).
+	pointer_events: ("none" | "auto" | boolean)?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
 	window_drag: boolean?,
