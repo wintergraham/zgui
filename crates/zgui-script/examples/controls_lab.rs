@@ -1,0 +1,47 @@
+//! Ask Motion Lab's Controls page, rendered by native zgui nodes.
+//! Run: cargo run --release -p zgui-script --example controls_lab
+#[cfg(target_os = "macos")]
+#[path = "../../zgui-desktop/examples/support/glass.rs"]
+mod glass;
+
+use std::{path::Path, time::Duration};
+use zgui_desktop::{Application, WindowOptions};
+use zgui_gpu::text::FontData;
+use zgui_script::ScriptHost;
+
+const TITLE: &str = "Ask · Controls";
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/controls_lab/app.luau");
+    Application::new()
+        .font(FontData::new(
+            &include_bytes!("controls_lab/assets/Geist.ttf")[..],
+        )?)
+        .font(FontData::new(
+            &include_bytes!("controls_lab/assets/GeistMono.ttf")[..],
+        )?)
+        .window(WindowOptions {
+            title: TITLE.into(),
+            width: 1180.,
+            height: 900.,
+            transparent: true,
+            decorations: cfg!(target_os = "macos"),
+            min_size: Some((620., 460.)),
+            ..Default::default()
+        })
+        .run(move |cx| {
+            #[cfg(target_os = "macos")]
+            cx.tasks.spawn(async {
+                zgui::timer::sleep(Duration::from_millis(1)).await;
+                glass::inset_titlebar(TITLE);
+            });
+            let host = ScriptHost::new(&cx.ui.runtime, script);
+            let window = cx.window.clone();
+            host.action("drag_window", move |_| window.drag_window());
+            if let Err(error) = host.reload() {
+                eprintln!("controls_lab: {error}");
+            }
+            cx.tasks.spawn(host.watch(Duration::from_millis(250)));
+            cx.render(host.view());
+        })
+}
