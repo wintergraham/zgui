@@ -1,0 +1,34 @@
+{
+  "passed": true,
+  "backend": "owned X11/Xvfb/Openbox",
+  "reports": {
+    "initial": {
+      "accepted": 0,
+      "rejected": 0
+    },
+    "space_held": {
+      "accepted": 0,
+      "rejected": 0
+    },
+    "space_released": {
+      "accepted": 1,
+      "rejected": 0
+    },
+    "Return_held": {
+      "accepted": 1,
+      "rejected": 0
+    },
+    "Return_released": {
+      "accepted": 2,
+      "rejected": 0
+    },
+    "focus_lost": {
+      "accepted": 2,
+      "rejected": 0
+    },
+    "prevented": {
+      "accepted": 2,
+      "rejected": 0
+    }
+  }
+}

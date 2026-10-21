@@ -1,0 +1,74 @@
+{
+  "result": "pass",
+  "backend": "native Wayland text-input-v3 / Sway / Fcitx5 Pinyin",
+  "client_display_unset": true,
+  "checks": [
+    "native preedit",
+    "Unicode commits",
+    "Escape cancellation",
+    "focus switch cancellation",
+    "separate editor models"
+  ],
+  "snapshots": [
+    {
+      "stage": 1,
+      "first": "",
+      "second": "",
+      "display_first": "ni hao",
+      "display_second": ""
+    },
+    {
+      "stage": 2,
+      "first": "\u4f60\u597d",
+      "second": "",
+      "display_first": "\u4f60\u597d",
+      "display_second": ""
+    },
+    {
+      "stage": 3,
+      "first": "\u4f60\u597d",
+      "second": "",
+      "display_first": "\u4f60\u597dzhong",
+      "display_second": ""
+    },
+    {
+      "stage": 4,
+      "first": "\u4f60\u597d",
+      "second": "",
+      "display_first": "\u4f60\u597d",
+      "display_second": ""
+    },
+    {
+      "stage": 5,
+      "first": "\u4f60\u597d",
+      "second": "",
+      "display_first": "\u4f60\u597dwo",
+      "display_second": ""
+    },
+    {
+      "stage": 6,
+      "first": "\u4f60\u597d",
+      "second": "",
+      "display_first": "\u4f60\u597d",
+      "display_second": ""
+    },
+    {
+      "stage": 7,
+      "first": "\u4f60\u597d",
+      "second": "",
+      "display_first": "\u4f60\u597d",
+      "display_second": "shi jie"
+    },
+    {
+      "stage": 8,
+      "first": "\u4f60\u597d",
+      "second": "\u4e16\u754c",
+      "display_first": "\u4f60\u597d",
+      "display_second": "\u4e16\u754c"
+    }
+  ],
+  "limitations": [
+    "Does not test external model replacement or read-only changes.",
+    "Does not test rapid-input delivery, delayed stale done serials, or guarantee serial-based cancellation."
+  ]
+}

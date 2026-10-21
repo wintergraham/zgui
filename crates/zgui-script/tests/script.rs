@@ -1,0 +1,446 @@
+mod common;
+
+use common::Harness;
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    time::{Duration, Instant},
+};
+use zgui::{
+    input::{InputEvent, PointerButton},
+    reactive::Runtime,
+};
+use zgui_script::{Limits, ScriptHost, Value};
+
+const COUNTER: &str = r#"
+local count = ui.state("count", 0)
+return ui.column {
+    p = 24, gap = 12,
+    ui.text { "Count: {count}", id = "label" },
+    ui.button { id = "inc", on_click = ui.add(count), w = 120, h = 40, "Increment" },
+    ui.button { id = "double", w = 120, h = 40, "Double",
+        on_click = function() count:update(function(n) return n * 2 end) end },
+}
+"#;
+
+#[test]
+fn templates_bind_identifiers_and_leave_other_braces_alone() {
+    let mut h = Harness::inline(
+        r#"local n = ui.state("n", 7)
+        return ui.column {
+            ui.text { "{n} of {{n}} in { braces } and {1} and {", id = "t" },
+        }"#,
+    );
+    assert_eq!(h.text("t"), "7 of {n} in { braces } and {1} and {");
+    let error = ScriptHost::inline(&Runtime::new(), "app", "return ui.text '{missing}'")
+        .reload()
+        .unwrap_err();
+    assert!(error.contains("unknown state `missing`"), "{error}");
+}
+
+#[test]
+fn template_text_and_handlers_update_rust_state() {
+    let mut h = Harness::inline(COUNTER);
+    assert_eq!(h.text("label"), "Count: 0");
+    h.click("inc");
+    h.click("inc");
+    assert_eq!(h.text("label"), "Count: 2");
+    h.click("double");
+    assert_eq!(h.text("label"), "Count: 4");
+}
+
+fn temp_script(name: &str, code: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("zgui-script-{}-{name}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("app.luau");
+    std::fs::write(&path, code).unwrap();
+    path
+}
+/// Rewrites a script with a later modification time than the last load saw.
+fn rewrite(path: &std::path::Path, code: &str) {
+    std::fs::write(path, code).unwrap();
+    let later = std::time::SystemTime::now() + Duration::from_secs(5);
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+}
+
+#[test]
+fn hot_reload_keeps_state_and_a_failed_reload_keeps_the_interface() {
+    let path = temp_script("reload", COUNTER);
+    let mut h = Harness::new(|runtime| ScriptHost::new(runtime, &path));
+    h.click("inc");
+    h.click("inc");
+    h.click("inc");
+    assert!(!h.host.reload_if_changed(), "nothing changed yet");
+
+    rewrite(
+        &path,
+        &COUNTER.replace("Count: {count}", "Clicks so far: {count}"),
+    );
+    assert!(h.host.reload_if_changed());
+    h.settle();
+    assert_eq!(
+        h.text("label"),
+        "Clicks so far: 3",
+        "state survives the reload"
+    );
+    assert_eq!(h.host.error().get(), None);
+
+    rewrite(
+        &path,
+        "return ui.column { ui.text { 'oops', nonsense = 1 } }",
+    );
+    assert!(h.host.reload_if_changed());
+    let error = h.host.error().get().expect("the failed load is reported");
+    assert!(error.contains("unknown property `nonsense`"), "{error}");
+    assert!(
+        error.starts_with("app.luau: "),
+        "names the file, not its path: {error}"
+    );
+    assert!(
+        error.contains("app.luau:1"),
+        "keeps the script's own frames: {error}"
+    );
+    assert!(!error.contains("[C]"), "drops Rust frames: {error}");
+    assert_eq!(
+        h.text("label"),
+        "Clicks so far: 3",
+        "the previous interface stays mounted"
+    );
+    h.click("inc");
+    assert_eq!(h.text("label"), "Clicks so far: 4", "and keeps working");
+
+    rewrite(&path, COUNTER);
+    assert!(h.host.reload_if_changed());
+    assert_eq!(h.host.error().get(), None, "a good load clears the error");
+    assert_eq!(h.text("label"), "Count: 4");
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn runaway_scripts_hit_their_time_budget() {
+    let runtime = Runtime::new();
+    let limits = Limits {
+        load: Duration::from_millis(30),
+        ..Limits::default()
+    };
+    let host = ScriptHost::inline(&runtime, "spin", "while true do end").limits(limits);
+    let started = Instant::now();
+    let error = host.reload().unwrap_err();
+    assert!(error.contains("time budget"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(2));
+
+    // A handler that spins is stopped too, and the interface keeps running.
+    let mut h = Harness::inline(
+        r#"local n = ui.state("n", 0)
+        return ui.column {
+            ui.button { id = "spin", w = 80, h = 30, on_click = function() n:set(1); while true do end end },
+            ui.text { "{n}", id = "n" },
+        }"#,
+    );
+    h.click("spin");
+    let error = h.host.error().get().unwrap();
+    assert!(error.contains("time budget"), "{error}");
+    assert_eq!(h.text("n"), "1", "writes before the error stand");
+}
+
+#[test]
+fn scripts_are_sandboxed() {
+    let runtime = Runtime::new();
+    for code in [
+        "ui.text = nil return ui.div {}",
+        "string.len = nil return ui.div {}",
+    ] {
+        let error = ScriptHost::inline(&runtime, "app", code)
+            .reload()
+            .unwrap_err();
+        assert!(error.contains("readonly"), "{code}: {error}");
+    }
+}
+
+#[test]
+fn tweens_run_in_rust_and_stop_requesting_frames_at_rest() {
+    let mut h = Harness::inline(
+        r#"local open = ui.state("open", false)
+        return ui.column {
+            ui.button { id = "toggle", w = 80, h = 30, on_click = ui.toggle(open) },
+            ui.div { id = "panel", w = 50, h = 50, opacity = ui.tween(open, { duration = 0.1, from = 0.2, to = 1 }) },
+        }"#,
+    );
+    assert!((h.opacity("panel") - 0.2).abs() < 1e-6, "starts at rest");
+    assert!(!h.clock.wants_frame());
+
+    h.click("toggle");
+    assert!(h.clock.wants_frame(), "a change starts the animation");
+    let mut seen = Vec::new();
+    for _ in 0..10 {
+        h.frame();
+        seen.push(h.opacity("panel"));
+    }
+    assert!(seen.windows(2).all(|w| w[0] <= w[1]), "{seen:?}");
+    assert!(seen[1] > 0.2 && seen[1] < 1., "{seen:?}");
+    assert_eq!(*seen.last().unwrap(), 1.);
+    assert!(
+        !h.clock.wants_frame(),
+        "settled animations request no frames"
+    );
+}
+
+#[test]
+fn springs_settle_on_their_target() {
+    let mut h = Harness::inline(
+        r#"local x = ui.state("x", 0)
+        return ui.column {
+            ui.button { id = "go", w = 80, h = 30, on_click = ui.set(x, 100) },
+            ui.div { id = "dot", w = 10, h = 10, opacity = ui.spring(x, { from = 0, to = 1 }) },
+        }"#,
+    );
+    h.click("go");
+    let mut frames = 0;
+    while h.clock.wants_frame() {
+        h.frame();
+        frames += 1;
+        assert!(frames < 600, "spring never settled");
+    }
+    assert!(frames > 5);
+    // Opacity clamps at 1; the spring's scalar settled at 100.
+    assert_eq!(h.opacity("dot"), 1.);
+}
+
+#[test]
+fn plugins_contribute_to_slots_and_read_shared_state() {
+    let mut h = Harness::new(|runtime| {
+        let host = ScriptHost::inline(
+            runtime,
+            "app",
+            r#"return ui.column { ui.text { "app", id = "app" }, ui.slot("toolbar", { id = "toolbar" }) }"#,
+        )
+        .plugin(
+            "greeter",
+            r#"ui.contribute("toolbar", ui.text { "Hello, {user}", id = "greeting" })"#,
+        );
+        host.shared("user", "Ada");
+        host
+    });
+    assert_eq!(h.text("greeting"), "Hello, Ada");
+    h.host.shared("user", Value::Nil).set("Grace".into());
+    assert_eq!(
+        h.text("greeting"),
+        "Hello, Grace",
+        "Rust writes reach plugin templates"
+    );
+}
+
+#[test]
+fn host_actions_and_lists() {
+    let mut h = Harness::inline(
+        r#"local items = ui.state("items", {})
+        local draft = ui.state("draft", "")
+        return ui.column {
+            ui.button { id = "add", w = 80, h = 30, on_click = function()
+                items:push("item " .. (items:len() + 1))
+            end },
+            ui.button { id = "save", w = 80, h = 30, on_click = ui.action("save", "now") },
+            ui.text { function() return items:len() .. " items" end, id = "count" },
+            ui.each(items, function(item, i) return ui.text { item, id = "row" .. i } end, { id = "list" }),
+        }"#,
+    );
+    let saved = Rc::new(RefCell::new(Vec::new()));
+    {
+        let saved = saved.clone();
+        h.host
+            .action("save", move |arg| saved.borrow_mut().push(arg));
+    }
+    assert_eq!(h.text("count"), "0 items");
+    h.click("add");
+    h.click("add");
+    assert_eq!(h.text("count"), "2 items");
+    assert_eq!(h.text("row2"), "item 2");
+    h.click("save");
+    assert_eq!(*saved.borrow(), [Value::from("now")]);
+}
+
+#[test]
+fn the_hot_reload_example_loads() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hot_reload");
+    let mut h = Harness::new(|runtime| {
+        let host = ScriptHost::new(runtime, dir.join("app.luau")).plugins(dir.join("plugins"));
+        host.shared("window", "820×560");
+        host
+    });
+    assert_eq!(h.host.error().get(), None);
+    assert!(h.find("missing").is_none());
+    assert!(
+        h.ui.scene.borrow().len() > 40,
+        "the app and both plugins mounted"
+    );
+}
+
+#[test]
+fn errors_show_in_a_banner_inside_the_window() {
+    let mut h = Harness::inline(COUNTER);
+    h.click("inc");
+    let error = h.host.error();
+    error.set(Some("app: something broke".into()));
+    let node = h.find("script-error").expect("banner text mounted");
+    let scene = h.ui.scene.borrow();
+    let b = scene.bounds(node);
+    eprintln!("banner text bounds {b:?}");
+    assert!(b.width > 100. && b.height > 5., "{b:?}");
+    assert!(b.y > 0. && b.y + b.height <= 300., "{b:?}");
+}
+
+#[test]
+fn scroll_offsets_bind_to_state_and_report_clamping() {
+    let mut h = Harness::inline(
+        r#"local offset = ui.state("offset", 0)
+        local rows = {}
+        for i = 1, 40 do rows[i] = ui.div { h = 20, w = 100 } end
+        return ui.column {
+            ui.scroll { offset = offset, h = 100, w = 200, id = "list", ui.column { rows } },
+            ui.button { id = "end", w = 80, h = 30, on_click = ui.set(offset, 1e9) },
+            ui.text { "{offset}", id = "at" },
+        }"#,
+    );
+    assert_eq!(h.text("at"), "0");
+    h.click("end");
+    h.ui.prepare_frame();
+    let at: f64 = h.text("at").parse().unwrap();
+    assert!(
+        (at - 700.).abs() < 1.,
+        "clamped to content (800) minus viewport (100): {at}"
+    );
+}
+
+#[test]
+fn on_press_runs_on_pointer_down_before_release() {
+    let mut h = Harness::inline(
+        r#"local pressed = ui.state("pressed", 0)
+        return ui.column {
+            ui.div { id = "strip", w = 200, h = 40, fade = { 8, 8 }, on_press = ui.add(pressed) },
+            ui.text { "{pressed}", id = "n" },
+        }"#,
+    );
+    let node = h.find("strip").unwrap();
+    let b = h.ui.scene.borrow().bounds(node);
+    let (x, y) = (b.x + 10., b.y + 10.);
+    h.ui.dispatch(InputEvent::PointerDown {
+        x,
+        y,
+        button: PointerButton::Primary,
+    });
+    assert_eq!(h.text("n"), "1", "before release");
+    h.ui.dispatch(InputEvent::PointerUp {
+        x,
+        y,
+        button: PointerButton::Primary,
+    });
+    assert_eq!(h.text("n"), "1", "release does not run it again");
+}
+
+#[test]
+fn scripts_require_modules_and_reload_when_they_change() {
+    let dir = std::env::temp_dir().join(format!("zgui-require-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("lib")).unwrap();
+    std::fs::write(dir.join("lib/theme.luau"), r#"return { label = "first" }"#).unwrap();
+    std::fs::write(
+        dir.join("app.luau"),
+        r#"local theme = require("lib/theme")
+        assert(require("lib/theme") == theme, "a module runs once")
+        return ui.text { theme.label, id = "t" }"#,
+    )
+    .unwrap();
+    let path = dir.join("app.luau");
+    let mut h = common::Harness::new(|runtime| zgui_script::ScriptHost::new(runtime, path));
+    assert_eq!(h.text("t"), "first");
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    std::fs::write(dir.join("lib/theme.luau"), r#"return { label = "second" }"#).unwrap();
+    assert!(
+        h.host.reload_if_changed(),
+        "a required file's change reloads"
+    );
+    h.settle();
+    assert_eq!(h.text("t"), "second");
+    std::fs::write(
+        dir.join("app.luau"),
+        r#"return ui.text { require("../escape"), id = "t" }"#,
+    )
+    .unwrap();
+    assert!(
+        h.host.reload().is_err(),
+        "modules stay inside the script's directory"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn shader_compile_errors_are_script_errors() {
+    let runtime = zgui::reactive::Runtime::new();
+    let host = ScriptHost::inline(
+        &runtime,
+        "app",
+        "local s = ui.shader(\"fn fill(input: FillInput) -> vec4<f32> {\\n  let from = 1.0;\\n  return vec4(from);\\n}\")\nreturn ui.div { bg_shader = s }",
+    );
+    let error = host.reload().unwrap_err();
+    assert!(
+        error.contains("ui.shader") && error.contains("line 2"),
+        "{error}"
+    );
+}
+
+#[test]
+fn modules_resolve_like_luau_and_keep_their_own_state() {
+    let dir = std::env::temp_dir().join(format!("zgui-modules-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("ui/components")).unwrap();
+    std::fs::create_dir_all(dir.join("ui/lib")).unwrap();
+    let write = |path: &str, code: &str| std::fs::write(dir.join(path), code).unwrap();
+    write(
+        ".luaurc",
+        r##"{ "aliases": { "components": "./ui/components" } }"##,
+    );
+    write(
+        "ui/components/theme.luau",
+        r##"return { accent = "#8b7cf6" }"##,
+    );
+    write(
+        "ui/components/card.luau",
+        r##"local theme = require("./theme")
+        assert(require("@self/theme") == theme, "@self is the module's directory")
+        local open = ui.state("open", "card")
+        return function(label) return ui.text { label .. " " .. open:get() .. " " .. theme.accent, id = "card" } end"##,
+    );
+    write(
+        "ui/lib/init.luau",
+        r##"local open = ui.state("open", "lib") return { open = open }"##,
+    );
+    write(
+        "app.luau",
+        r##"local card = require("@components/card")
+        local lib = require("./ui/lib")
+        local open = ui.state("open", "app")
+        return ui.column {
+            card("hi"),
+            ui.text { open:get() .. " " .. lib.open:get(), id = "keys" },
+        }"##,
+    );
+    let path = dir.join("app.luau");
+    let mut h = common::Harness::new(|runtime| zgui_script::ScriptHost::new(runtime, path));
+    assert_eq!(
+        h.text("card"),
+        "hi card #8b7cf6",
+        "a module's own state and a sibling module"
+    );
+    assert_eq!(h.text("keys"), "app lib", "each module's `open` is its own");
+    write(
+        "app.luau",
+        r##"return ui.text { tostring(require("../outside")), id = "t" }"##,
+    );
+    let error = h.host.reload().unwrap_err();
+    assert!(error.contains("directory or below"), "{error}");
+    std::fs::remove_dir_all(&dir).ok();
+}

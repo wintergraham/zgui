@@ -1,0 +1,14 @@
+   Compiling zgui-desktop v0.1.0 (/home/ubuntu/GitHub/zgui/crates/zgui-desktop)
+    Finished `test` profile [unoptimized] target(s) in 2.93s
+     Running unittests src/lib.rs (/tmp/zgui-target/debug/deps/zgui_desktop-0797ae698a0c537b)
+
+running 6 tests
+test app_menu::tests::disabled_and_unknown_commands_cannot_dispatch ... ok
+test app_menu::tests::duplicate_nested_actions_are_rejected_before_mount_or_native_creation ... ok
+test app_menu::dynamic_tests::updates_preserve_shortcut_and_reject_ambiguous_accelerators ... ok
+test app_menu::dynamic_tests::replacement_unregisters_shortcuts_and_focused_action_can_override ... ok
+test app_menu::dynamic_tests::checked_menu_items_publish_accessible_controlled_state ... ok
+test app_menu::tests::rendered_menu_keyboard_dispatches_shared_identifier_and_skips_disabled ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 58 filtered out; finished in 0.00s
+

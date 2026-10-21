@@ -1,0 +1,60 @@
+{
+  "captured_utc": "2026-09-22T14:30:44.576562+00:00",
+  "build": [
+    "cargo",
+    "build",
+    "-p",
+    "zgui-desktop",
+    "--example",
+    "read_only",
+    "--example",
+    "model_text",
+    "--example",
+    "virtual_keyboard",
+    "--locked"
+  ],
+  "runs": [
+    {
+      "command": [
+        "/usr/bin/python3",
+        "scripts/read_only_smoke.py",
+        "/tmp/zgui-target/debug/examples/read_only",
+        "--output",
+        "/home/ubuntu/GitHub/zgui/docs/platform-validation/initialization/read_only"
+      ],
+      "binary_sha256": "a16312f8ab832395cc8b36a598d430567e9b5940e25c687b823985f11724a692"
+    },
+    {
+      "command": [
+        "/usr/bin/python3",
+        "scripts/model_text_smoke.py",
+        "/tmp/zgui-target/debug/examples/model_text",
+        "--output",
+        "/home/ubuntu/GitHub/zgui/docs/platform-validation/initialization/model_text"
+      ],
+      "binary_sha256": "690382bdf0e9f14c56e24e27232a0a766a4bea2e60927bf75a9d11cda7ea6b73"
+    },
+    {
+      "command": [
+        "/usr/bin/python3",
+        "scripts/virtual_keyboard_smoke.py",
+        "/tmp/zgui-target/debug/examples/virtual_keyboard",
+        "--output",
+        "/home/ubuntu/GitHub/zgui/docs/platform-validation/initialization/virtual_keyboard"
+      ],
+      "binary_sha256": "8ed3384703e678145ed54477a257f71ca41a9eccc718cef43bcf56e81cd4272f"
+    }
+  ],
+  "source_archive_sha256": "5fb16c1919ad93700015469d0891810613423b13fc10034135ca71e314c3e454",
+  "source_inputs": 155,
+  "source_unchanged": true,
+  "backend": "owned Xvfb/Openbox, private services, Mesa llvmpipe Vulkan",
+  "environment": {
+    "CARGO_TARGET_DIR": "/tmp/zgui-target",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0",
+    "LD_LIBRARY_PATH": "/tmp/zgui-ci-loader-check/build/loader",
+    "CARGO_BUILD_JOBS": "1"
+  },
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)"
+}

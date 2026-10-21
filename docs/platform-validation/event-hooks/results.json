@@ -1,0 +1,11 @@
+{
+  "passed": true,
+  "backend": "X11",
+  "checks": [
+    "prevented printable x does not insert",
+    "intercepted clipboard shortcuts do not copy/cut/paste",
+    "Space still inserts",
+    "ordinary clipboard copy/cut/paste works",
+    "ordinary text follows paste"
+  ]
+}

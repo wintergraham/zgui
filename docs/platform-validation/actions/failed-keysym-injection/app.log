@@ -1,0 +1,42 @@
+ACTION_EVENT PointerEnter
+ACTION_EVENT PointerMove { x: 140.0, y: 80.0 }
+ACTION_EVENT PointerDown { x: 140.0, y: 80.0, button: Primary }
+ACTION_EVENT Focus
+ACTION_EVENT PointerUp { x: 140.0, y: 80.0, button: Primary }
+ACTION_EVENT Activate
+ACTION_EVENT KeyDown { key: Character("a"), modifiers: Modifiers { shift: false, control: true, alt: false, meta: false }, repeat: false }
+ACTION_EVENT KeyUp { key: Character("a"), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false } }
+ACTION_EVENT KeyDown { key: Character("b"), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false }, repeat: false }
+ACTION_EVENT Text("b")
+ACTION_EVENT KeyUp { key: Character("b"), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false } }
+ACTION_EVENT KeyDown { key: Character("a"), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false }, repeat: false }
+ACTION_EVENT Text("a")
+ACTION_EVENT KeyUp { key: Character("a"), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false } }
+ACTION_EVENT KeyDown { key: Character("s"), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false }, repeat: false }
+ACTION_EVENT Text("s")
+ACTION_EVENT KeyUp { key: Character("s"), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false } }
+ACTION_EVENT KeyDown { key: Character("e"), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false }, repeat: false }
+ACTION_EVENT Text("e")
+ACTION_EVENT KeyUp { key: Character("e"), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false } }
+ACTION_EVENT KeyDown { key: Function(5), modifiers: Modifiers { shift: false, control: false, alt: true, meta: false }, repeat: false }
+ACTION_EVENT KeyUp { key: Function(5), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false } }
+ACTION_EVENT KeyDown { key: Character("x"), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false }, repeat: false }
+ACTION_EVENT Text("x")
+ACTION_EVENT KeyUp { key: Character("x"), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false } }
+ACTION_EVENT KeyDown { key: Function(5), modifiers: Modifiers { shift: false, control: false, alt: true, meta: false }, repeat: false }
+ACTION_EVENT KeyUp { key: Function(5), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false } }
+ACTION_EVENT Action(Action("actions::Save"))
+ACTION_SAVE "basex"
+ACTION_EVENT KeyUp { key: Character("y"), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false } }
+ACTION_EVENT KeyDown { key: Function(1), modifiers: Modifiers { shift: false, control: false, alt: true, meta: false }, repeat: false }
+ACTION_EVENT KeyUp { key: Function(1), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false } }
+ACTION_EVENT KeyDown { key: Function(2), modifiers: Modifiers { shift: false, control: false, alt: true, meta: false }, repeat: false }
+ACTION_EVENT KeyUp { key: Function(2), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false } }
+ACTION_EVENT KeyDown { key: Character("x"), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false }, repeat: false }
+ACTION_EVENT Text("x")
+ACTION_EVENT KeyUp { key: Character("x"), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false } }
+ACTION_EVENT KeyDown { key: Character("z"), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false }, repeat: false }
+ACTION_EVENT Text("z")
+ACTION_EVENT KeyUp { key: Character("z"), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false } }
+ACTION_EVENT KeyDown { key: Function(5), modifiers: Modifiers { shift: false, control: false, alt: true, meta: false }, repeat: false }
+ACTION_EVENT KeyUp { key: Function(5), modifiers: Modifiers { shift: false, control: false, alt: false, meta: false } }

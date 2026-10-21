@@ -1,0 +1,4 @@
+SNAPSHOT 1 offset=176.000 focused=Some(7)
+SNAPSHOT 2 offset=0.000 focused=Some(0)
+SNAPSHOT 3 offset=112.000 focused=Some(0)
+FOCUS_SCROLL offset=112.000 reports=3

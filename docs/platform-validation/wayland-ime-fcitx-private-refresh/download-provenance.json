@@ -1,0 +1,16 @@
+{
+  "upstream": "https://github.com/fcitx/fcitx5/archive/refs/tags/5.1.19.tar.gz",
+  "yoga_commit": "042f5013152eb81c1552dec945b88f7b95ca350f",
+  "deb_packages": {
+    "libarchive13t64_3.8.5-1ubuntu2.2_amd64.deb": "3e069924c6d18381485c9cfa148f290dc3e8c8f31720aee8f1943c704116a361",
+    "extra-cmake-modules_6.24.0-0ubuntu1_amd64.deb": "3ea14a8e6fd9a0a2ba1f9e188fa210a2ba3d1c56591dcdc839f17110e4093b81",
+    "nlohmann-json3-dev_3.12.0.really.3.12.0.really.3.11.3-3build1_all.deb": "d074e6107bef659ccfa169cb1d9e2e0daa9bcecfea84ce13c45812ff9cd58e9d",
+    "librhash1_1.4.6-1.1_amd64.deb": "cb935821161fdfdbd30afdbcb8ceeab736f9a4df84f02df883a41d911951e398",
+    "libjsoncpp26_1.9.6-5_amd64.deb": "2b42b79a81f9407d0ae9650541dca2e416b76b6ad9f7794737bac8c6d6f56823",
+    "gettext-base_0.23.2-1_amd64.deb": "5a1a4cd407a868e766626f551646b00880fc1534db5e6d47208310a17252f306",
+    "gettext_0.23.2-1_amd64.deb": "6fb2dd68379bf9578af5ead58203ab322e3b1cf3a6f9562a1e4d12c18e923bfc",
+    "cmake-data_4.2.3-2ubuntu2_all.deb": "9f4cc6f77e7c09929f80fc5534b638b95d257a90d6bf43c59d2232514759eb9d",
+    "cmake_4.2.3-2ubuntu2_amd64.deb": "87c496f1e37b64bc0b4ad9c5fe0e75c09655f5399ed39695b876afba55becc61"
+  },
+  "system_packages_installed": false
+}

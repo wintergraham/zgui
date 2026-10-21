@@ -1,0 +1,9 @@
+SNAPSHOT 1 value=75.127 disabled=false wide=false
+SNAPSHOT 2 value=1.000 disabled=false wide=false
+SNAPSHOT 3 value=99.000 disabled=false wide=false
+SNAPSHOT 4 value=75.090 disabled=false wide=true
+SNAPSHOT 5 value=75.090 disabled=true wide=true
+SNAPSHOT 6 value=25.000 disabled=true wide=true
+SLIDER value=25.000 disabled=true wide=true snapshots=6
+BOUNDS slider Rect { x: 24.0, y: 68.0, width: 580.0, height: 44.0 }
+SEMANTICS Some(SemanticNode { role: Slider, label: "Volume", value: None, checked: None, disabled: true, min: Some(0.0), max: Some(100.0), numeric_value: Some(25.0) })

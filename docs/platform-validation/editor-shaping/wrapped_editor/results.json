@@ -1,0 +1,51 @@
+{
+  "passed": true,
+  "backend": "X11",
+  "stages": [
+    {
+      "stage": 1,
+      "width": 620.0,
+      "height": 276.0,
+      "anchor": 71,
+      "focus": 144,
+      "caret_y": 108.0,
+      "model": "Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. "
+    },
+    {
+      "stage": 2,
+      "width": 620.0,
+      "height": 276.0,
+      "anchor": 857,
+      "focus": 857,
+      "caret_y": 183.0,
+      "model": "Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. !"
+    },
+    {
+      "stage": 3,
+      "width": 380.0,
+      "height": 483.0,
+      "anchor": 857,
+      "focus": 857,
+      "caret_y": 183.0,
+      "model": "Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. !"
+    },
+    {
+      "stage": 4,
+      "width": 380.0,
+      "height": 483.0,
+      "anchor": 47,
+      "focus": 47,
+      "caret_y": 85.0,
+      "model": "Wrapped text follows the available width wCLICKhile preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. Wrapped text follows the available width while preserving selection, Unicode input and the original model. !"
+    },
+    {
+      "stage": 5,
+      "width": 380.0,
+      "height": 23.0,
+      "anchor": 18,
+      "focus": 18,
+      "caret_y": 62.0,
+      "model": "Short wrapped text"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+IME Preedit("n", Some((0, 1))) elapsed=0.816505
+RECT x=54 y=80 width=1 height=24 elapsed=0.816554
+IME Preedit("ni ha", Some((0, 5))) elapsed=0.829624
+RECT x=110 y=80 width=1 height=24 elapsed=0.829668
+IME Preedit("ni hao", Some((0, 6))) elapsed=0.871319
+RECT x=124 y=80 width=1 height=24 elapsed=0.871364

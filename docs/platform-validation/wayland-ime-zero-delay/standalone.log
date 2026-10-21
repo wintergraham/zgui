@@ -1,0 +1,17 @@
+moving delay=0ms session 1: cold=delivered, warm=delivery_failure
+{
+  "moving-delay0": {
+    "cold": {
+      "trials": 1,
+      "full_preedit": 1,
+      "unicode_commit": 1,
+      "delivery_failures": 0
+    },
+    "warm": {
+      "trials": 1,
+      "full_preedit": 0,
+      "unicode_commit": 1,
+      "delivery_failures": 1
+    }
+  }
+}

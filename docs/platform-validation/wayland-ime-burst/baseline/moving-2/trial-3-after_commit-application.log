@@ -1,0 +1,14 @@
+IME Preedit("n", Some((0, 1))) elapsed=7.736735
+RECT x=54 y=80 width=1 height=24 elapsed=7.736776
+IME Preedit("ni", Some((0, 2))) elapsed=7.781867
+RECT x=68 y=80 width=1 height=24 elapsed=7.781920
+IME Preedit("ni h", Some((0, 4))) elapsed=7.828263
+RECT x=96 y=80 width=1 height=24 elapsed=7.828311
+IME Preedit("ni ha", Some((0, 5))) elapsed=7.875799
+RECT x=110 y=80 width=1 height=24 elapsed=7.875861
+IME Preedit("ni hao", Some((0, 6))) elapsed=7.921682
+RECT x=124 y=80 width=1 height=24 elapsed=7.921739
+IME Preedit("", None) elapsed=9.966064
+RECT x=40 y=80 width=1 height=24 elapsed=9.966105
+IME Commit("你好") elapsed=9.966108
+IME Preedit("", None) elapsed=9.966112

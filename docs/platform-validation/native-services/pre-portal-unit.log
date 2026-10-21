@@ -1,0 +1,69 @@
+   Compiling zgui-gpu v0.1.0 (/home/ubuntu/GitHub/zgui/crates/zgui-gpu)
+   Compiling zgui-desktop v0.1.0 (/home/ubuntu/GitHub/zgui/crates/zgui-desktop)
+    Finished `test` profile [unoptimized] target(s) in 3.54s
+     Running unittests src/lib.rs (/tmp/zgui-target/debug/deps/zgui_desktop-9c876ebdde359ec6)
+
+running 60 tests
+test application::tests::host_suspend_recreates_native_resources_and_retains_editor_state ... ignored, requires an owned X11 display and GPU; run alone with --test-threads=1
+test accessibility::projection_key_tests::replacing_semantics_instance_cannot_reuse_coincident_node_revisions ... ok
+test app_menu::tests::disabled_and_unknown_commands_cannot_dispatch ... ok
+test app_menu::tests::duplicate_nested_actions_are_rejected_before_mount_or_native_creation ... ok
+test accessibility::editor_text_tests::equal_value_role_change_from_nontext_creates_text_runs ... ok
+test accessibility::projection_key_tests::children_visibility_and_reconnect_invalidate_projection_revisions ... ok
+test accessibility::editor_text_tests::read_only_projection_preserves_text_selection_and_focus_actions ... ok
+test application::tests::keyboard_space_encodings_and_unicode_are_preserved ... ok
+test application::tests::native_cursor_roles_distinguish_editable_and_actionable_controls ... ok
+test accessibility::editor_text_tests::static_label_value_and_text_content_update_for_native_names ... ok
+test application::tests::requested_window_size_rejects_nonfinite_and_unrepresentable_dimensions ... ok
+test application::tests::retained_window_factory_releases_native_clipboard_after_manager_shutdown ... ignored, requires an owned X11 display; run alone with --test-threads=1
+test application::tests::resized_and_scaled_geometry_persists_for_native_recreation ... ok
+test application::tests::wheel_down_is_positive_in_logical_scene_coordinates ... ok
+test accessibility::scroll_tests::horizontal_native_actions_use_width_and_reject_vertical_requests ... ok
+test application::tests::window_commands_preserve_recreation_options ... ok
+test application::tests::window_handles_can_close_from_worker_threads ... ok
+test accessibility::editor_text_tests::long_lines_split_bounded_metadata_without_changing_text_or_line_linkage ... ok
+test accessibility::scroll_tests::native_scroll_actions_page_clamp_and_respect_disabled ... ok
+test file_dialog::tests::invalid_filter_does_not_reach_native_cstring_conversion ... ok
+test accessibility::editor_text_tests::mixed_owner_selections_are_rejected_and_oversized_graphemes_keep_value ... ok
+test native_events::tests::application_ids_are_valid_bus_names_and_paths ... ok
+test focus_memory::tests::activation_consumes_memory_and_does_not_replay_focus ... ok
+test focus_memory::tests::deactivation_cancels_pressed_controls_before_blurring ... ok
+test focus_memory::tests::repeated_deactivation_preserves_focus_and_sends_blur_once ... ok
+test focus_memory::tests::removed_or_disabled_targets_are_not_restored ... ok
+test accessibility::editor_text_tests::native_text_reads_unicode_lines_and_maps_selection_without_byte_truncation ... ok
+test accessibility::projection_key_tests::unchanged_editor_skips_unrelated_updates_but_tracks_ancestor_and_geometry ... ok
+test native_ime::tests::rapid_read_only_toggle_keeps_native_reset_boundary ... ok
+test presentation_retry::tests::occlusion_preserves_new_damage_until_visibility_returns ... ok
+test presentation::tests::repairs_recycled_buffers_using_their_age ... ok
+test presentation_retry::tests::timeout_retries_retained_frame_without_new_damage_then_sleeps ... ok
+test native_ime::tests::prevented_accessible_selection_does_not_restart_composition ... ok
+test native_ime::tests::accessible_value_cancellation_uses_same_reset_policy ... ok
+test presentation_retry::visibility_tests::invisible_surfaces_cancel_retry_deadlines_but_keep_pending_frame ... ok
+test native_ime::tests::late_composition_after_native_blur_cannot_edit_remembered_focus ... ok
+test presentation_retry::visibility_tests::redraw_cannot_override_platform_occlusion ... ok
+test native_ime::tests::prevented_preedit_tracks_actual_editor_state ... ok
+test native_ime::tests::accessible_selection_restarts_composition_and_rejects_old_native_text ... ok
+test native_ime::tests::read_only_editor_rejects_ime_without_losing_logical_focus ... ok
+test native_ime::tests::cancellation_revision_does_not_restart_native_empty_preedit_commit_or_new_owner ... ok
+test scoped_task::tests::cancel_before_executor_poll_releases_captures ... ok
+test scoped_task::tests::completed_future_destructor_can_reenter_its_cancellation_state ... ok
+test native_ime::tests::external_model_and_direct_selection_cancellation_restart_observed_session ... ok
+test native_ime::tests::stale_session_cannot_deliver_to_a_different_or_removed_editor ... ok
+test scoped_task::tests::self_cancellation_during_poll_is_safe ... ok
+test file_dialog::tests::cancelled_receiver_releases_worker_owned_resources_after_completion ... ok
+test scoped_task::tests::view_disposal_wakes_sleeping_task_and_drops_capture_immediately ... ok
+test scoped_task::tests::window_executor_drop_cancels_even_when_guard_survives ... ok
+test url::tests::urls_require_schemes_and_reject_command_options_and_controls ... ok
+test presentation_retry::visibility_tests::hidden_updates_preserve_damage_until_restoration ... ok
+test app_menu::tests::rendered_menu_keyboard_dispatches_shared_identifier_and_skips_disabled ... ok
+test raster::tests::blur_and_edge_fade_change_pixels_and_stay_stable ... ok
+test raster::tests::panel_background_border_and_children_have_correct_paint_order ... ok
+test raster::extended_tests::shadow_damage_and_clipped_images_match_full_repaint ... ok
+test raster::isolation_tests::opacity_is_applied_once_to_overlapping_children ... ok
+test raster::tests::incremental_matches_full_after_move_opacity_and_removal ... ok
+test raster::hidden_effect_tests::transparent_subtrees_do_not_blur_backdrop_or_rasterize_text ... ok
+test raster::letter_spacing_tests::tracking_changes_repair_old_glyphs_and_distinguish_cached_font_keys ... ok
+test raster::line_height_tests::changing_line_pitch_repairs_old_pixels_and_keys_software_shapes ... ok
+
+test result: ok. 58 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.01s
+

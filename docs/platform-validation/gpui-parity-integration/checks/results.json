@@ -1,0 +1,100 @@
+[
+  {
+    "name": "format",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "exit_code": 0,
+    "seconds": 1.1581442588940263,
+    "completed_utc": "2026-09-22T22:25:46.514291+00:00"
+  },
+  {
+    "name": "workspace-tests",
+    "command": [
+      "cargo",
+      "test",
+      "--workspace",
+      "--all-targets",
+      "--locked",
+      "--",
+      "--test-threads=4"
+    ],
+    "exit_code": 0,
+    "seconds": 95.35684484057128,
+    "completed_utc": "2026-09-22T22:27:21.871360+00:00"
+  },
+  {
+    "name": "doctests",
+    "command": [
+      "cargo",
+      "test",
+      "--workspace",
+      "--doc",
+      "--locked"
+    ],
+    "exit_code": 0,
+    "seconds": 2.308744667097926,
+    "completed_utc": "2026-09-22T22:27:24.180292+00:00"
+  },
+  {
+    "name": "clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--workspace",
+      "--all-targets",
+      "--locked",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 101,
+    "seconds": 22.215743091888726,
+    "completed_utc": "2026-09-22T22:27:46.396198+00:00"
+  },
+  {
+    "name": "clippy-retry",
+    "command": [
+      "cargo",
+      "clippy",
+      "--workspace",
+      "--all-targets",
+      "--locked",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "macos-clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--workspace",
+      "--all-targets",
+      "--locked",
+      "--target",
+      "aarch64-apple-darwin",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "format-final",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "exit_code": 0
+  }
+]

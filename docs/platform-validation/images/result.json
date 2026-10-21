@@ -1,0 +1,68 @@
+{
+  "platform": "X11/Xvfb",
+  "scale": 1,
+  "result": "pass",
+  "checks": [
+    "static and reactive sources",
+    "same-size source replacement",
+    "intrinsic source resizing",
+    "allocated image stretching",
+    "padding pixels",
+    "revert cached source",
+    "image semantics",
+    "automatic close"
+  ],
+  "pixel_samples": [
+    {
+      "stage": 0,
+      "source_size": [
+        80,
+        40
+      ],
+      "allocated_width": 200,
+      "intrinsic_fill_width": 80,
+      "allocated_fill_width": 192
+    },
+    {
+      "stage": 1,
+      "source_size": [
+        80,
+        40
+      ],
+      "allocated_width": 200,
+      "intrinsic_fill_width": 80,
+      "allocated_fill_width": 192
+    },
+    {
+      "stage": 2,
+      "source_size": [
+        120,
+        60
+      ],
+      "allocated_width": 200,
+      "intrinsic_fill_width": 120,
+      "allocated_fill_width": 192
+    },
+    {
+      "stage": 3,
+      "source_size": [
+        120,
+        60
+      ],
+      "allocated_width": 300,
+      "intrinsic_fill_width": 120,
+      "allocated_fill_width": 292
+    },
+    {
+      "stage": 4,
+      "source_size": [
+        80,
+        40
+      ],
+      "allocated_width": 200,
+      "intrinsic_fill_width": 80,
+      "allocated_fill_width": 192
+    }
+  ],
+  "limitations": "Software rendering; does not validate macOS or hardware GPUs."
+}

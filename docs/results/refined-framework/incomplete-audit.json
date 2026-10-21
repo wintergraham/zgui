@@ -1,0 +1,15 @@
+{
+  "complete": false,
+  "accepted_for_comparison": false,
+  "completed_trials": 17,
+  "expected_trials": 36,
+  "recomputed_completed_samples": 5092,
+  "failed_trial": "zgui/stream/1",
+  "failed_trial_exit_code": 101,
+  "failed_trial_raw_samples_available": false,
+  "active_ticks_per_requested_second": {
+    "min": 27.0,
+    "max": 59.95
+  },
+  "limitations": "Only completed trial summaries recomputed. Failed-trial samples were discarded by the archived sampler; no failure cause established."
+}

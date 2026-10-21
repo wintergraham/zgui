@@ -1,0 +1,6 @@
+{
+  "native_binary_sha256": "89d70c52c1a0c2b1908caaf7bab6739646757dfd1262de6f07a8d3aaf26b40bb",
+  "standalone_binary_sha256": "808133205f3d051b51bfb69dbb600c28d7a7bb6777882295e90da03f5738a218",
+  "native_build_archive": "../wayland-ime-native-burst",
+  "standalone_build_archive": "../wayland-ime-blocking"
+}

@@ -1,0 +1,5 @@
+{
+  "date": "2026-09-22",
+  "scope": "Native X11 GTK/XTest events on owned Xvfb; not macOS or Wayland runtime validation",
+  "source_archive": "Not a complete source archive; concurrent workspace snapshot not frozen"
+}

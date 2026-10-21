@@ -1,0 +1,11 @@
+IME Preedit("n", Some((0, 1))) elapsed=0.806095
+RECT_REQUEST x=54 delay_ms=0 elapsed=0.806110
+RECT x=54 y=80 width=1 height=24 elapsed=0.806154
+IME Preedit("ni hao", Some((0, 6))) elapsed=0.843707
+RECT_REQUEST x=124 delay_ms=0 elapsed=0.843721
+RECT x=124 y=80 width=1 height=24 elapsed=0.843766
+IME Preedit("", None) elapsed=2.890440
+RECT_REQUEST x=40 delay_ms=0 elapsed=2.890453
+RECT x=40 y=80 width=1 height=24 elapsed=2.890494
+IME Commit("你好") elapsed=2.890496
+IME Preedit("", None) elapsed=2.890501

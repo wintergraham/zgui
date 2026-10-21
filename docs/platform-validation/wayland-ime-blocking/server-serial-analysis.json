@@ -1,0 +1,776 @@
+{
+  "after-80/fixed-delay0-1/sway.log": {
+    "transactions": [
+      {
+        "line": 486,
+        "timestamp_ms": 366887.854,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "n"
+      },
+      {
+        "line": 506,
+        "timestamp_ms": 366896.662,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni"
+      },
+      {
+        "line": 521,
+        "timestamp_ms": 366896.754,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni h"
+      },
+      {
+        "line": 526,
+        "timestamp_ms": 366896.776,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni ha"
+      },
+      {
+        "line": 551,
+        "timestamp_ms": 366930.903,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni hao"
+      },
+      {
+        "line": 598,
+        "timestamp_ms": 368977.964,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "commit_string": "你好"
+      },
+      {
+        "line": 601,
+        "timestamp_ms": 368977.987,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true
+      },
+      {
+        "line": 655,
+        "timestamp_ms": 370128.616,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "n"
+      },
+      {
+        "line": 687,
+        "timestamp_ms": 370172.442,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni"
+      },
+      {
+        "line": 714,
+        "timestamp_ms": 370220.093,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni h"
+      },
+      {
+        "line": 737,
+        "timestamp_ms": 370262.841,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni ha"
+      },
+      {
+        "line": 764,
+        "timestamp_ms": 370307.275,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni hao"
+      },
+      {
+        "line": 799,
+        "timestamp_ms": 372357.062,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "commit_string": "你好"
+      },
+      {
+        "line": 802,
+        "timestamp_ms": 372357.078,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true
+      }
+    ],
+    "serial_mismatches": 0
+  },
+  "after-80/moving-delay0-1/sway.log": {
+    "transactions": [
+      {
+        "line": 486,
+        "timestamp_ms": 358722.324,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "n"
+      },
+      {
+        "line": 506,
+        "timestamp_ms": 358736.789,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni"
+      },
+      {
+        "line": 521,
+        "timestamp_ms": 358737.418,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni h"
+      },
+      {
+        "line": 526,
+        "timestamp_ms": 358737.495,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni ha"
+      },
+      {
+        "line": 551,
+        "timestamp_ms": 358768.913,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni hao"
+      },
+      {
+        "line": 628,
+        "timestamp_ms": 360815.854,
+        "object_id": "16",
+        "serial": 7,
+        "issued_done_count": 7,
+        "serial_matches": true,
+        "commit_string": "你好"
+      },
+      {
+        "line": 631,
+        "timestamp_ms": 360815.869,
+        "object_id": "16",
+        "serial": 7,
+        "issued_done_count": 7,
+        "serial_matches": true
+      },
+      {
+        "line": 690,
+        "timestamp_ms": 361965.995,
+        "object_id": "16",
+        "serial": 8,
+        "issued_done_count": 8,
+        "serial_matches": true,
+        "set_preedit_string": "n"
+      },
+      {
+        "line": 722,
+        "timestamp_ms": 362010.978,
+        "object_id": "16",
+        "serial": 8,
+        "issued_done_count": 8,
+        "serial_matches": true,
+        "set_preedit_string": "ni"
+      },
+      {
+        "line": 755,
+        "timestamp_ms": 362058.604,
+        "object_id": "16",
+        "serial": 9,
+        "issued_done_count": 9,
+        "serial_matches": true,
+        "set_preedit_string": "ni h"
+      },
+      {
+        "line": 778,
+        "timestamp_ms": 362102.687,
+        "object_id": "16",
+        "serial": 9,
+        "issued_done_count": 9,
+        "serial_matches": true,
+        "set_preedit_string": "ni ha"
+      },
+      {
+        "line": 811,
+        "timestamp_ms": 362146.538,
+        "object_id": "16",
+        "serial": 10,
+        "issued_done_count": 10,
+        "serial_matches": true,
+        "set_preedit_string": "ni hao"
+      },
+      {
+        "line": 864,
+        "timestamp_ms": 364194.396,
+        "object_id": "16",
+        "serial": 13,
+        "issued_done_count": 13,
+        "serial_matches": true,
+        "commit_string": "你好"
+      },
+      {
+        "line": 867,
+        "timestamp_ms": 364194.412,
+        "object_id": "16",
+        "serial": 13,
+        "issued_done_count": 13,
+        "serial_matches": true
+      }
+    ],
+    "serial_mismatches": 0
+  },
+  "baseline-0/fixed-delay0-1/sway.log": {
+    "transactions": [
+      {
+        "line": 485,
+        "timestamp_ms": 334083.107,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "n"
+      },
+      {
+        "line": 514,
+        "timestamp_ms": 334091.116,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni"
+      },
+      {
+        "line": 529,
+        "timestamp_ms": 334091.228,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni h"
+      },
+      {
+        "line": 538,
+        "timestamp_ms": 334093.743,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni ha"
+      },
+      {
+        "line": 571,
+        "timestamp_ms": 334137.224,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni hao"
+      },
+      {
+        "line": 598,
+        "timestamp_ms": 336184.353,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "commit_string": "你好"
+      },
+      {
+        "line": 601,
+        "timestamp_ms": 336184.369,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true
+      },
+      {
+        "line": 655,
+        "timestamp_ms": 337338.035,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "n"
+      },
+      {
+        "line": 691,
+        "timestamp_ms": 337382.606,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni"
+      },
+      {
+        "line": 718,
+        "timestamp_ms": 337430.764,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni h"
+      },
+      {
+        "line": 745,
+        "timestamp_ms": 337472.807,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni ha"
+      },
+      {
+        "line": 772,
+        "timestamp_ms": 337518.936,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni hao"
+      },
+      {
+        "line": 799,
+        "timestamp_ms": 339566.946,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "commit_string": "你好"
+      },
+      {
+        "line": 802,
+        "timestamp_ms": 339566.96,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true
+      }
+    ],
+    "serial_mismatches": 0
+  },
+  "baseline-0/moving-delay0-1/sway.log": {
+    "transactions": [
+      {
+        "line": 486,
+        "timestamp_ms": 325935.646,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "n"
+      },
+      {
+        "line": 520,
+        "timestamp_ms": 325944.474,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 3,
+        "serial_matches": false,
+        "set_preedit_string": "ni"
+      },
+      {
+        "line": 533,
+        "timestamp_ms": 325944.56,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 3,
+        "serial_matches": false,
+        "set_preedit_string": "ni h"
+      },
+      {
+        "line": 536,
+        "timestamp_ms": 325944.577,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 3,
+        "serial_matches": false,
+        "set_preedit_string": "ni ha"
+      },
+      {
+        "line": 559,
+        "timestamp_ms": 325972.991,
+        "object_id": "16",
+        "serial": 3,
+        "issued_done_count": 3,
+        "serial_matches": true,
+        "set_preedit_string": "ni hao"
+      },
+      {
+        "line": 592,
+        "timestamp_ms": 328019.777,
+        "object_id": "16",
+        "serial": 4,
+        "issued_done_count": 4,
+        "serial_matches": true,
+        "commit_string": "你好"
+      },
+      {
+        "line": 595,
+        "timestamp_ms": 328019.793,
+        "object_id": "16",
+        "serial": 4,
+        "issued_done_count": 4,
+        "serial_matches": true
+      },
+      {
+        "line": 654,
+        "timestamp_ms": 329182.016,
+        "object_id": "16",
+        "serial": 5,
+        "issued_done_count": 5,
+        "serial_matches": true,
+        "set_preedit_string": "n"
+      },
+      {
+        "line": 696,
+        "timestamp_ms": 329227.153,
+        "object_id": "16",
+        "serial": 6,
+        "issued_done_count": 6,
+        "serial_matches": true,
+        "set_preedit_string": "ni"
+      },
+      {
+        "line": 729,
+        "timestamp_ms": 329273.484,
+        "object_id": "16",
+        "serial": 7,
+        "issued_done_count": 7,
+        "serial_matches": true,
+        "set_preedit_string": "ni h"
+      },
+      {
+        "line": 762,
+        "timestamp_ms": 329317.615,
+        "object_id": "16",
+        "serial": 8,
+        "issued_done_count": 8,
+        "serial_matches": true,
+        "set_preedit_string": "ni ha"
+      },
+      {
+        "line": 795,
+        "timestamp_ms": 329362.503,
+        "object_id": "16",
+        "serial": 9,
+        "issued_done_count": 9,
+        "serial_matches": true,
+        "set_preedit_string": "ni hao"
+      },
+      {
+        "line": 828,
+        "timestamp_ms": 331409.168,
+        "object_id": "16",
+        "serial": 10,
+        "issued_done_count": 10,
+        "serial_matches": true,
+        "commit_string": "你好"
+      },
+      {
+        "line": 831,
+        "timestamp_ms": 331409.186,
+        "object_id": "16",
+        "serial": 10,
+        "issued_done_count": 10,
+        "serial_matches": true
+      }
+    ],
+    "serial_mismatches": 3
+  },
+  "before-80/fixed-delay0-1/sway.log": {
+    "transactions": [
+      {
+        "line": 485,
+        "timestamp_ms": 350463.93,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "n"
+      },
+      {
+        "line": 505,
+        "timestamp_ms": 350470.986,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni"
+      },
+      {
+        "line": 520,
+        "timestamp_ms": 350471.079,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni h"
+      },
+      {
+        "line": 540,
+        "timestamp_ms": 350475.869,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni ha"
+      },
+      {
+        "line": 567,
+        "timestamp_ms": 350520.105,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni hao"
+      },
+      {
+        "line": 614,
+        "timestamp_ms": 352567.77,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "commit_string": "你好"
+      },
+      {
+        "line": 617,
+        "timestamp_ms": 352567.789,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true
+      },
+      {
+        "line": 671,
+        "timestamp_ms": 353721.399,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "n"
+      },
+      {
+        "line": 703,
+        "timestamp_ms": 353765.304,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni"
+      },
+      {
+        "line": 730,
+        "timestamp_ms": 353813.029,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni h"
+      },
+      {
+        "line": 753,
+        "timestamp_ms": 353856.004,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni ha"
+      },
+      {
+        "line": 780,
+        "timestamp_ms": 353901.733,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni hao"
+      },
+      {
+        "line": 815,
+        "timestamp_ms": 355948.657,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "commit_string": "你好"
+      },
+      {
+        "line": 818,
+        "timestamp_ms": 355948.682,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true
+      }
+    ],
+    "serial_mismatches": 0
+  },
+  "before-80/moving-delay0-1/sway.log": {
+    "transactions": [
+      {
+        "line": 486,
+        "timestamp_ms": 342326.653,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "n"
+      },
+      {
+        "line": 506,
+        "timestamp_ms": 342336.178,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni"
+      },
+      {
+        "line": 521,
+        "timestamp_ms": 342336.323,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni h"
+      },
+      {
+        "line": 526,
+        "timestamp_ms": 342336.36,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni ha"
+      },
+      {
+        "line": 551,
+        "timestamp_ms": 342367.324,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni hao"
+      },
+      {
+        "line": 628,
+        "timestamp_ms": 344414.818,
+        "object_id": "16",
+        "serial": 7,
+        "issued_done_count": 7,
+        "serial_matches": true,
+        "commit_string": "你好"
+      },
+      {
+        "line": 631,
+        "timestamp_ms": 344414.833,
+        "object_id": "16",
+        "serial": 7,
+        "issued_done_count": 7,
+        "serial_matches": true
+      },
+      {
+        "line": 690,
+        "timestamp_ms": 345565.302,
+        "object_id": "16",
+        "serial": 8,
+        "issued_done_count": 8,
+        "serial_matches": true,
+        "set_preedit_string": "n"
+      },
+      {
+        "line": 722,
+        "timestamp_ms": 345609.407,
+        "object_id": "16",
+        "serial": 8,
+        "issued_done_count": 8,
+        "serial_matches": true,
+        "set_preedit_string": "ni"
+      },
+      {
+        "line": 755,
+        "timestamp_ms": 345656.761,
+        "object_id": "16",
+        "serial": 9,
+        "issued_done_count": 9,
+        "serial_matches": true,
+        "set_preedit_string": "ni h"
+      },
+      {
+        "line": 778,
+        "timestamp_ms": 345700.103,
+        "object_id": "16",
+        "serial": 9,
+        "issued_done_count": 9,
+        "serial_matches": true,
+        "set_preedit_string": "ni ha"
+      },
+      {
+        "line": 811,
+        "timestamp_ms": 345746.367,
+        "object_id": "16",
+        "serial": 10,
+        "issued_done_count": 10,
+        "serial_matches": true,
+        "set_preedit_string": "ni hao"
+      },
+      {
+        "line": 864,
+        "timestamp_ms": 347793.162,
+        "object_id": "16",
+        "serial": 13,
+        "issued_done_count": 13,
+        "serial_matches": true,
+        "commit_string": "你好"
+      },
+      {
+        "line": 867,
+        "timestamp_ms": 347793.177,
+        "object_id": "16",
+        "serial": 13,
+        "issued_done_count": 13,
+        "serial_matches": true
+      }
+    ],
+    "serial_mismatches": 0
+  }
+}

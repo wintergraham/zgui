@@ -1,0 +1,9 @@
+# Covered Wayland window presentation fix
+
+The original two-window menu replacement hung the UI thread while one native surface was fully covered. `failed-present-stack/backtrace.log` proves the main thread waits in libvulkan_lvp's wl_display_dispatch_queue from vkQueuePresentKHR, via wgpu SurfaceTexture::present and Host::draw. Acquisition was not the blocker; wgpu-core already uses a one-second acquire timeout.
+
+The host now defers Wayland GPU rendering/presentation until winit emits RedrawRequested. Immediately before an acquired frame is presented, the renderer invokes the host's pre_present_notify callback. winit then withholds further redraw grants until the compositor frame callback arrives. This prevents filling a covered surface's FIFO and blocking all windows. A skipped acquisition does not arm a callback for a commit that never occurred. Pending scene damage is retained as a full repaint while model/timer/layout work continues. X11/macOS presentation eligibility is unchanged.
+
+The exact previously failing menu case passes twice with overlapping windows, including native focus transitions that uncover each updated surface. The independent two-window updater completes 24 timer/model updates for each window and exits through the live event loop. That slow updater also passed before the fix and is explicitly not represented as an independent baseline failure. Native X11 and Wayland fullscreen restoration/minimum-size/custom-titlebar-drag/reopen tests pass after the fix; seven existing bounded surface-recovery tests pass.
+
+Sources are snapshots of the owned changes while the wider workspace develops concurrently, not a hermetic full-workspace build claim. The captured stack uses a diagnostic child-local ptrace permission to allow same-user gdb; no system ptrace policy was changed. `native_menu_smoke.py --wayland --overlap-debug` recreates the original condition. `covered_windows_probe.py --wayland` exercises timer progress separately.

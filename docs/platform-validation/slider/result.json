@@ -1,0 +1,15 @@
+{
+  "platform": "X11/Xvfb",
+  "scale": 1,
+  "result": "pass",
+  "checks": [
+    "pointer drag",
+    "Home/End/arrows",
+    "reactive width pointer mapping",
+    "disabled input suppressed",
+    "external model write",
+    "slider semantics",
+    "automatic close"
+  ],
+  "limitations": "Software rendering; does not validate macOS or hardware GPUs."
+}

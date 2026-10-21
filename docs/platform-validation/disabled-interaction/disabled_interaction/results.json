@@ -1,0 +1,76 @@
+{
+  "passed": true,
+  "backend": "owned X11/Xvfb/Openbox",
+  "reports": {
+    "initial": {
+      "disabled": false,
+      "accepted": 0,
+      "amount": 10.0,
+      "focus": true,
+      "capture": false
+    },
+    "space_disabled": {
+      "disabled": true,
+      "accepted": 0,
+      "amount": 10.0,
+      "focus": false,
+      "capture": false
+    },
+    "space_enabled": {
+      "disabled": false,
+      "accepted": 0,
+      "amount": 10.0,
+      "focus": false,
+      "capture": false
+    },
+    "fresh_click": {
+      "disabled": false,
+      "accepted": 1,
+      "amount": 10.0,
+      "focus": true,
+      "capture": false
+    },
+    "pointer_disabled": {
+      "disabled": true,
+      "accepted": 1,
+      "amount": 10.0,
+      "focus": false,
+      "capture": false
+    },
+    "pointer_enabled": {
+      "disabled": false,
+      "accepted": 1,
+      "amount": 10.0,
+      "focus": false,
+      "capture": false
+    },
+    "slider_held": {
+      "disabled": false,
+      "accepted": 1,
+      "amount": 17.005075,
+      "focus": true,
+      "capture": true
+    },
+    "slider_disabled": {
+      "disabled": true,
+      "accepted": 1,
+      "amount": 17.005075,
+      "focus": false,
+      "capture": false
+    },
+    "slider_enabled": {
+      "disabled": false,
+      "accepted": 1,
+      "amount": 17.005075,
+      "focus": false,
+      "capture": false
+    },
+    "fresh_slider": {
+      "disabled": false,
+      "accepted": 1,
+      "amount": 90.60914,
+      "focus": true,
+      "capture": false
+    }
+  }
+}

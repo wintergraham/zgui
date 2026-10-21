@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized] target(s) in 0.15s
+     Running unittests src/lib.rs (/tmp/zgui-target/debug/deps/zgui_desktop-fc5b67b08eede3c2)
+
+running 1 test
+test application::tests::host_suspend_recreates_native_resources_and_retains_editor_state ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 52 filtered out; finished in 0.14s
+

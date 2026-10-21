@@ -1,0 +1,52 @@
+{
+  "platform": "X11/Xvfb",
+  "scale": 1,
+  "result": "pass",
+  "checks": [
+    "End navigates to unmounted millionth row",
+    "PageUp across virtual rows",
+    "Home returns first",
+    "ArrowDown selects next",
+    "bounded live and total builds",
+    "automatic close"
+  ],
+  "samples": [
+    {
+      "stage": 1,
+      "visible_focus_rows": 32,
+      "visible_marker_rows": 32,
+      "offset": 31999840,
+      "position": 1000000,
+      "live_rows": 6,
+      "total_built": 12
+    },
+    {
+      "stage": 2,
+      "visible_focus_rows": 32,
+      "visible_marker_rows": 32,
+      "offset": 31999808,
+      "position": 999995,
+      "live_rows": 7,
+      "total_built": 13
+    },
+    {
+      "stage": 3,
+      "visible_focus_rows": 32,
+      "visible_marker_rows": 32,
+      "offset": 0,
+      "position": 1,
+      "live_rows": 6,
+      "total_built": 19
+    },
+    {
+      "stage": 4,
+      "visible_focus_rows": 32,
+      "visible_marker_rows": 32,
+      "offset": 0,
+      "position": 2,
+      "live_rows": 6,
+      "total_built": 19
+    }
+  ],
+  "limitations": "Software rendering; does not validate macOS or hardware GPUs."
+}

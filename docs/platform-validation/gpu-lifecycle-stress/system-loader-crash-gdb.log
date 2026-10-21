@@ -1,0 +1,1074 @@
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+independent device stress: 24 workers, 10 iterations each
+
+Thread 12 "independent_dev" received signal SIGSEGV, Segmentation fault.
+[Switching to Thread 0x7ffff67f56c0 (LWP 3686893)]
+0x00007ffff49576dc in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan.so.1
+#0  0x00007ffff49576dc in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan.so.1
+#1  0x00007ffff495034b in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan.so.1
+#2  0x00007ffff494ff88 in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan.so.1
+#3  0x00005555565dcbaa in <ash::extensions_generated::ext::debug_utils::Device>::set_debug_utils_object_name ()
+#4  0x000055555650722a in <wgpu_hal::vulkan::DeviceShared>::set_object_name::<ash::vk::definitions::Pipeline> ()
+#5  0x00005555565288d4 in <wgpu_hal::vulkan::Device as wgpu_hal::Device>::create_compute_pipeline ()
+#6  0x00005555564fe5f7 in <wgpu_hal::vulkan::Device as wgpu_hal::dynamic::device::DynDevice>::create_compute_pipeline ()
+#7  0x00005555564c60ef in wgpu_core::indirect_validation::draw::create_validation_pipeline ()
+#8  0x00005555564bc7fb in <wgpu_core::indirect_validation::draw::Draw>::new ()
+#9  0x000055555627fde7 in <wgpu_core::indirect_validation::IndirectValidation>::new ()
+#10 0x00005555563be9d8 in <wgpu_core::device::resource::Device>::new ()
+#11 0x00005555564ec324 in <wgpu_core::instance::Adapter>::create_device_and_queue_from_hal ()
+#12 0x00005555564ebe6a in <wgpu_core::instance::Adapter>::create_device_and_queue ()
+#13 0x00005555564eee29 in <wgpu_core::global::Global>::adapter_request_device ()
+#14 0x00005555561fe238 in <wgpu::backend::wgpu_core::CoreAdapter as wgpu::dispatch::AdapterInterface>::request_device ()
+#15 0x000055555624e590 in <wgpu::api::adapter::Adapter>::request_device ()
+#16 0x0000555555e0bd16 in <zgui_gpu::GpuContext>::create ()
+#17 0x0000555555e0b731 in <zgui_gpu::GpuContext>::new ()
+#18 0x0000555555e15d84 in <zgui_gpu::GpuRenderer>::new ()
+#19 0x0000555555d96b2c in pixels::exercise_independent_devices::{closure#0}::{closure#0} ()
+#20 0x0000555555d955f6 in std::sys::backtrace::__rust_begin_short_backtrace::<pixels::exercise_independent_devices::{closure#0}::{closure#0}, ()> ()
+#21 0x0000555555d9b3ea in std::thread::lifecycle::spawn_unchecked::<pixels::exercise_independent_devices::{closure#0}::{closure#0}, ()>::{closure#1}::{closure#0} ()
+#22 0x0000555555d9fcc0 in <core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<pixels::exercise_independent_devices::{closure#0}::{closure#0}, ()>::{closure#1}::{closure#0}> as core::ops::function::FnOnce<()>>::call_once ()
+#23 0x0000555555d8a4ac in std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<pixels::exercise_independent_devices::{closure#0}::{closure#0}, ()>::{closure#1}::{closure#0}>, ()> ()
+#24 0x0000555555d9b47b in __rust_try ()
+#25 0x0000555555d9b0e2 in std::thread::lifecycle::spawn_unchecked::<pixels::exercise_independent_devices::{closure#0}::{closure#0}, ()>::{closure#1} ()
+#26 0x0000555555da86f6 in <std::thread::lifecycle::spawn_unchecked<pixels::exercise_independent_devices::{closure#0}::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0} ()
+#27 0x0000555556fe50cf in <std::sys::thread::unix::Thread>::new::thread_start ()
+#28 0x00007ffff7ca3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#29 0x00007ffff7d375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 11926 (Thread 0x7ffd38ff96c0 (LWP 3720290) "pixels-:disk$0"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736652092848, a2=<optimized out>, a3=a3@entry=0, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffce27a5b0, expected=0, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11925 (Thread 0x7ffd397fa6c0 (LWP 3720288) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=964664622, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=964664622, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11924 (Thread 0x7ffd39ffb6c0 (LWP 3720287) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=973057326, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=973057326, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11923 (Thread 0x7ffd3a7fc6c0 (LWP 3720285) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=981450030, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=981450030, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11922 (Thread 0x7ffd3affd6c0 (LWP 3720284) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=989842734, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=989842734, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11921 (Thread 0x7ffd3b7fe6c0 (LWP 3720283) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=998235438, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=998235438, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11920 (Thread 0x7ffd3bfff6c0 (LWP 3720282) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=1006628142, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=1006628142, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11919 (Thread 0x7ffd68ff96c0 (LWP 3720281) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=1761578286, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=1761578286, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11918 (Thread 0x7ffd697fa6c0 (LWP 3720280) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=1769970990, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=1769970990, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11917 (Thread 0x7ffd69ffb6c0 (LWP 3720278) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=1778363694, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=1778363694, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11916 (Thread 0x7ffd6a7fc6c0 (LWP 3720277) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=1786756398, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=1786756398, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11915 (Thread 0x7ffd6affd6c0 (LWP 3720276) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=1795149102, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=1795149102, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11914 (Thread 0x7ffd6b7fe6c0 (LWP 3720274) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=1803541806, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=1803541806, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11913 (Thread 0x7ffd6bfff6c0 (LWP 3720273) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=1811934510, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=1811934510, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11912 (Thread 0x7ffd70ff96c0 (LWP 3720272) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=1895796014, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=1895796014, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11911 (Thread 0x7ffd717fa6c0 (LWP 3720271) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=1904188718, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=1904188718, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11910 (Thread 0x7ffd71ffb6c0 (LWP 3720270) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=1912581422, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=1912581422, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11909 (Thread 0x7ffd727fc6c0 (LWP 3720268) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=1920974126, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=1920974126, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11908 (Thread 0x7ffd72ffd6c0 (LWP 3720267) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=1929366830, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=1929366830, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11907 (Thread 0x7ffd737fe6c0 (LWP 3720266) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=1937759534, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=1937759534, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11906 (Thread 0x7ffd73fff6c0 (LWP 3720265) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=1946152238, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=1946152238, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11905 (Thread 0x7ffd9cff96c0 (LWP 3720264) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=2633993518, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=2633993518, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11904 (Thread 0x7ffd9d7fa6c0 (LWP 3720262) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=2642386222, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=2642386222, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11903 (Thread 0x7ffd9dffb6c0 (LWP 3720261) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=2650778926, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=2650778926, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11902 (Thread 0x7ffd9e7fc6c0 (LWP 3720260) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736615959512, a2=<optimized out>, a3=a3@entry=2659171630, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc004bd8, expected=2659171630, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11901 (Thread 0x7ffd9effd6c0 (LWP 3720259) "llvmpipe-23"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648713024, a2=<optimized out>, a3=a3@entry=2667564334, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf41340, expected=2667564334, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11900 (Thread 0x7ffd9f7fe6c0 (LWP 3720258) "llvmpipe-22"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648712672, a2=<optimized out>, a3=a3@entry=2675957038, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf411e0, expected=2675957038, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11899 (Thread 0x7ffd9ffff6c0 (LWP 3720257) "llvmpipe-21"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648712320, a2=<optimized out>, a3=a3@entry=2684349742, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf41080, expected=2684349742, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11898 (Thread 0x7ffdb4ff96c0 (LWP 3720256) "llvmpipe-20"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648711968, a2=<optimized out>, a3=a3@entry=3036646702, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf40f20, expected=3036646702, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11897 (Thread 0x7ffdb57fa6c0 (LWP 3720255) "llvmpipe-19"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648711616, a2=<optimized out>, a3=a3@entry=3045039406, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf40dc0, expected=3045039406, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11896 (Thread 0x7ffdb5ffb6c0 (LWP 3720254) "llvmpipe-18"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648711264, a2=<optimized out>, a3=a3@entry=3053432110, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf40c60, expected=3053432110, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11895 (Thread 0x7ffdb67fc6c0 (LWP 3720253) "llvmpipe-17"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648710912, a2=<optimized out>, a3=a3@entry=3061824814, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf40b00, expected=3061824814, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11894 (Thread 0x7ffdb6ffd6c0 (LWP 3720252) "llvmpipe-16"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648710560, a2=<optimized out>, a3=a3@entry=3070217518, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf409a0, expected=3070217518, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11893 (Thread 0x7ffdb77fe6c0 (LWP 3720251) "llvmpipe-15"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648710208, a2=<optimized out>, a3=a3@entry=3078610222, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf40840, expected=3078610222, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11892 (Thread 0x7ffdb7fff6c0 (LWP 3720250) "llvmpipe-14"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648709856, a2=<optimized out>, a3=a3@entry=3087002926, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf406e0, expected=3087002926, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11891 (Thread 0x7ffdecff96c0 (LWP 3720249) "llvmpipe-13"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648709504, a2=<optimized out>, a3=a3@entry=3976170798, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf40580, expected=3976170798, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11890 (Thread 0x7ffded7fa6c0 (LWP 3720248) "llvmpipe-12"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648709152, a2=<optimized out>, a3=a3@entry=3984563502, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf40420, expected=3984563502, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11889 (Thread 0x7ffdedffb6c0 (LWP 3720247) "llvmpipe-11"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648708800, a2=<optimized out>, a3=a3@entry=3992956206, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf402c0, expected=3992956206, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11888 (Thread 0x7ffdee7fc6c0 (LWP 3720246) "llvmpipe-10"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648708448, a2=<optimized out>, a3=a3@entry=4001348910, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf40160, expected=4001348910, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11887 (Thread 0x7ffdeeffd6c0 (LWP 3720245) "llvmpipe-9"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648708096, a2=<optimized out>, a3=a3@entry=4009741614, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf40000, expected=4009741614, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11886 (Thread 0x7ffdef7fe6c0 (LWP 3720244) "llvmpipe-8"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648707744, a2=<optimized out>, a3=a3@entry=4018134318, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf3fea0, expected=4018134318, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11885 (Thread 0x7ffdeffff6c0 (LWP 3720243) "llvmpipe-7"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648707392, a2=<optimized out>, a3=a3@entry=4026527022, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf3fd40, expected=4026527022, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11884 (Thread 0x7ffdf4ff96c0 (LWP 3720242) "llvmpipe-6"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648707040, a2=<optimized out>, a3=a3@entry=4110388526, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf3fbe0, expected=4110388526, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11883 (Thread 0x7ffe75dfe6c0 (LWP 3720241) "llvmpipe-5"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648706688, a2=<optimized out>, a3=a3@entry=1977605422, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf3fa80, expected=1977605422, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11882 (Thread 0x7ffee9ffb6c0 (LWP 3720240) "llvmpipe-4"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648706336, a2=<optimized out>, a3=a3@entry=3925847342, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf3f920, expected=3925847342, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11881 (Thread 0x7ffef17fa6c0 (LWP 3720239) "llvmpipe-3"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648705984, a2=<optimized out>, a3=a3@entry=4051672366, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf3f7c0, expected=4051672366, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11880 (Thread 0x7ffc727d46c0 (LWP 3720238) "llvmpipe-2"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648705632, a2=<optimized out>, a3=a3@entry=1920810286, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf3f660, expected=1920810286, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11879 (Thread 0x7ffc71fd36c0 (LWP 3720237) "llvmpipe-1"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648705280, a2=<optimized out>, a3=a3@entry=1912417582, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf3f500, expected=1912417582, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11878 (Thread 0x7ffc657ba6c0 (LWP 3720236) "llvmpipe-0"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736648704928, a2=<optimized out>, a3=a3@entry=1702599982, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcdf3f3a0, expected=1702599982, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11877 (Thread 0x7ffbca8866c0 (LWP 3720235) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736621393824, a2=<optimized out>, a3=a3@entry=4294967295, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffcc5337a0, expected=4294967295, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11876 (Thread 0x7ffc31f536c0 (LWP 3720181) "pixels-:disk$0"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735821766320, a2=<optimized out>, a3=a3@entry=0, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9ca9deb0, expected=0, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11875 (Thread 0x7ffc327546c0 (LWP 3720180) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=846544174, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=846544174, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11874 (Thread 0x7ffc32f556c0 (LWP 3720179) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=854936878, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=854936878, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11873 (Thread 0x7ffc337566c0 (LWP 3720169) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=863329582, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=863329582, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11872 (Thread 0x7ffc33f576c0 (LWP 3720163) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=871722286, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=871722286, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11871 (Thread 0x7ffc347586c0 (LWP 3720156) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=880114990, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=880114990, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11870 (Thread 0x7ffc34f596c0 (LWP 3720155) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=888507694, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=888507694, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11869 (Thread 0x7ffc3575a6c0 (LWP 3720154) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=896900398, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=896900398, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11868 (Thread 0x7ffc35f5b6c0 (LWP 3720153) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=905293102, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=905293102, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11867 (Thread 0x7ffc3675c6c0 (LWP 3720152) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=913685806, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=913685806, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11866 (Thread 0x7ffc36f5d6c0 (LWP 3720151) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=922078510, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=922078510, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11865 (Thread 0x7ffc3775e6c0 (LWP 3720150) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=930471214, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=930471214, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11864 (Thread 0x7ffc37f5f6c0 (LWP 3720147) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=938863918, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=938863918, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11863 (Thread 0x7ffc387606c0 (LWP 3720146) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=947256622, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=947256622, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11862 (Thread 0x7ffc38f616c0 (LWP 3720145) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=955649326, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=955649326, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11861 (Thread 0x7ffc397626c0 (LWP 3720144) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=964042030, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=964042030, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11860 (Thread 0x7ffc39f636c0 (LWP 3720143) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=972434734, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=972434734, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11859 (Thread 0x7ffc3a7646c0 (LWP 3720142) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=980827438, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=980827438, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11858 (Thread 0x7ffc3af656c0 (LWP 3720141) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=989220142, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=989220142, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11857 (Thread 0x7ffc3b7666c0 (LWP 3720139) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=997612846, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=997612846, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11856 (Thread 0x7ffc3bf676c0 (LWP 3720138) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=1006005550, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=1006005550, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11855 (Thread 0x7ffc3c7686c0 (LWP 3720137) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=1014398254, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=1014398254, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11854 (Thread 0x7ffc3cf696c0 (LWP 3720136) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=1022790958, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=1022790958, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11853 (Thread 0x7ffc3d76a6c0 (LWP 3720135) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=1031183662, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=1031183662, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11852 (Thread 0x7ffc3df6b6c0 (LWP 3720134) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735810651928, a2=<optimized out>, a3=a3@entry=1039576366, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9c004718, expected=1039576366, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11851 (Thread 0x7ffc3e76c6c0 (LWP 3720132) "llvmpipe-23"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822536884, a2=<optimized out>, a3=a3@entry=1047969070, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb5a0b4, expected=1047969070, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11850 (Thread 0x7ffc3ef6d6c0 (LWP 3720131) "llvmpipe-22"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822536532, a2=<optimized out>, a3=a3@entry=2403515747, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb59f54, expected=2403515747, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11849 (Thread 0x7ffc3f76e6c0 (LWP 3720130) "llvmpipe-21"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822536180, a2=<optimized out>, a3=a3@entry=1064754478, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb59df4, expected=1064754478, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11848 (Thread 0x7ffc3ff6f6c0 (LWP 3720129) "llvmpipe-20"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822535828, a2=<optimized out>, a3=a3@entry=1073147182, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb59c94, expected=1073147182, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11847 (Thread 0x7ffc407706c0 (LWP 3720128) "llvmpipe-19"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822535476, a2=<optimized out>, a3=a3@entry=1081539886, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb59b34, expected=1081539886, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11846 (Thread 0x7ffc40f716c0 (LWP 3720127) "llvmpipe-18"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822535124, a2=<optimized out>, a3=a3@entry=1089932590, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb599d4, expected=1089932590, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11845 (Thread 0x7ffc417726c0 (LWP 3720126) "llvmpipe-17"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822534772, a2=<optimized out>, a3=a3@entry=1098325294, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb59874, expected=1098325294, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11844 (Thread 0x7ffc41f736c0 (LWP 3720125) "llvmpipe-16"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822534420, a2=<optimized out>, a3=a3@entry=1106717998, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb59714, expected=1106717998, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11843 (Thread 0x7ffc427746c0 (LWP 3720124) "llvmpipe-15"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822534068, a2=<optimized out>, a3=a3@entry=1115110702, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb595b4, expected=1115110702, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11842 (Thread 0x7ffc43f776c0 (LWP 3720122) "llvmpipe-14"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822533716, a2=<optimized out>, a3=a3@entry=1140288814, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb59454, expected=1140288814, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11841 (Thread 0x7ffc447786c0 (LWP 3720121) "llvmpipe-13"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822533364, a2=<optimized out>, a3=a3@entry=1148681518, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb592f4, expected=1148681518, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11840 (Thread 0x7ffc44f796c0 (LWP 3720120) "llvmpipe-12"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822533012, a2=<optimized out>, a3=a3@entry=1157074222, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb59194, expected=1157074222, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11839 (Thread 0x7ffc4577a6c0 (LWP 3720119) "llvmpipe-11"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822532660, a2=<optimized out>, a3=a3@entry=1165466926, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb59034, expected=1165466926, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11838 (Thread 0x7ffc45f7b6c0 (LWP 3720118) "llvmpipe-10"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822532308, a2=<optimized out>, a3=a3@entry=1173859630, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb58ed4, expected=1173859630, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11837 (Thread 0x7ffc4677c6c0 (LWP 3720117) "llvmpipe-9"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822531956, a2=<optimized out>, a3=a3@entry=1182252334, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb58d74, expected=1182252334, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11836 (Thread 0x7ffc46f7d6c0 (LWP 3720116) "llvmpipe-8"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822531604, a2=<optimized out>, a3=a3@entry=1190645038, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb58c14, expected=1190645038, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11835 (Thread 0x7ffc4777e6c0 (LWP 3720115) "llvmpipe-7"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822531252, a2=<optimized out>, a3=a3@entry=1199037742, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb58ab4, expected=1199037742, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11834 (Thread 0x7ffc47f7f6c0 (LWP 3720114) "llvmpipe-6"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822530896, a2=<optimized out>, a3=a3@entry=1207430446, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb58950, expected=1207430446, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11833 (Thread 0x7ffc487806c0 (LWP 3720113) "llvmpipe-5"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822530544, a2=<optimized out>, a3=a3@entry=1215823150, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb587f0, expected=1215823150, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11832 (Thread 0x7ffc48f816c0 (LWP 3720111) "llvmpipe-4"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822530196, a2=<optimized out>, a3=a3@entry=1224215854, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb58694, expected=1224215854, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11831 (Thread 0x7ffc497826c0 (LWP 3720110) "llvmpipe-3"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822529840, a2=<optimized out>, a3=a3@entry=28, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb58530, expected=28, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11830 (Thread 0x7ffc49f836c0 (LWP 3720109) "llvmpipe-2"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822529488, a2=<optimized out>, a3=a3@entry=1241001262, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb583d0, expected=1241001262, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11829 (Thread 0x7ffc4a7846c0 (LWP 3720108) "llvmpipe-1"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822529136, a2=<optimized out>, a3=a3@entry=2403515747, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb58270, expected=2403515747, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11828 (Thread 0x7ffc4af856c0 (LWP 3720107) "llvmpipe-0"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822528784, a2=<optimized out>, a3=a3@entry=1257786670, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb58110, expected=1257786670, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11827 (Thread 0x7ffc4b7866c0 (LWP 3720106) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140735822554512, a2=<optimized out>, a3=a3@entry=4294967295, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fff9cb5e590, expected=4294967295, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11826 (Thread 0x7ffc4bf876c0 (LWP 3719991) "pixels-:disk$0"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736756027216, a2=<optimized out>, a3=a3@entry=0, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4598f50, expected=0, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11825 (Thread 0x7ffc4c7886c0 (LWP 3719989) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1282964782, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1282964782, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11824 (Thread 0x7ffc4cf896c0 (LWP 3719986) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1291357486, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1291357486, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11823 (Thread 0x7ffc4d78a6c0 (LWP 3719985) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1299750190, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1299750190, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11822 (Thread 0x7ffc4e78c6c0 (LWP 3719984) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1316535598, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1316535598, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11821 (Thread 0x7ffc4ef8d6c0 (LWP 3719982) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1324928302, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1324928302, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11820 (Thread 0x7ffc4f78e6c0 (LWP 3719981) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1333321006, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1333321006, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11819 (Thread 0x7ffc4ff8f6c0 (LWP 3719980) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1341713710, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1341713710, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11818 (Thread 0x7ffc507906c0 (LWP 3719977) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1350106414, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1350106414, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11817 (Thread 0x7ffc50f916c0 (LWP 3719974) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1358499118, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1358499118, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11816 (Thread 0x7ffc517926c0 (LWP 3719970) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1366891822, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1366891822, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11815 (Thread 0x7ffc51f936c0 (LWP 3719944) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1375284526, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1375284526, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11814 (Thread 0x7ffc527946c0 (LWP 3719941) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1383677230, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1383677230, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11813 (Thread 0x7ffc52f956c0 (LWP 3719935) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1392069934, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1392069934, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11812 (Thread 0x7ffc537966c0 (LWP 3719931) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1400462638, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1400462638, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11811 (Thread 0x7ffc53f976c0 (LWP 3719930) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1408855342, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1408855342, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11810 (Thread 0x7ffc547986c0 (LWP 3719928) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1417248046, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1417248046, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11809 (Thread 0x7ffc54f996c0 (LWP 3719927) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1425640750, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1425640750, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11808 (Thread 0x7ffc5579a6c0 (LWP 3719925) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1434033454, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1434033454, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11807 (Thread 0x7ffc55f9b6c0 (LWP 3719922) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1442426158, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1442426158, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11806 (Thread 0x7ffc5679c6c0 (LWP 3719921) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1450818862, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1450818862, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11805 (Thread 0x7ffc56f9d6c0 (LWP 3719920) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1459211566, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1459211566, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11804 (Thread 0x7ffc5779e6c0 (LWP 3719918) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1467604270, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1467604270, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11803 (Thread 0x7ffc57f9f6c0 (LWP 3719917) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1475996974, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1475996974, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11802 (Thread 0x7ffc587a06c0 (LWP 3719916) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750176024, a2=<optimized out>, a3=a3@entry=1484389678, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd4004718, expected=1484389678, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11801 (Thread 0x7ffc58fa16c0 (LWP 3719914) "llvmpipe-23"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776127748, a2=<optimized out>, a3=a3@entry=1492782382, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c4504, expected=1492782382, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11800 (Thread 0x7ffc597a26c0 (LWP 3719910) "llvmpipe-22"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776127396, a2=<optimized out>, a3=a3@entry=1501175086, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c43a4, expected=1501175086, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11799 (Thread 0x7ffc59fa36c0 (LWP 3719909) "llvmpipe-21"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776127044, a2=<optimized out>, a3=a3@entry=1509567790, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c4244, expected=1509567790, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11798 (Thread 0x7ffc5a7a46c0 (LWP 3719906) "llvmpipe-20"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776126692, a2=<optimized out>, a3=a3@entry=1517960494, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c40e4, expected=1517960494, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11797 (Thread 0x7ffc5afa56c0 (LWP 3719905) "llvmpipe-19"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776126340, a2=<optimized out>, a3=a3@entry=1526353198, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c3f84, expected=1526353198, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11796 (Thread 0x7ffc5b7a66c0 (LWP 3719902) "llvmpipe-18"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776125988, a2=<optimized out>, a3=a3@entry=1534745902, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c3e24, expected=1534745902, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11795 (Thread 0x7ffc5bfa76c0 (LWP 3719901) "llvmpipe-17"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776125636, a2=<optimized out>, a3=a3@entry=1543138606, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c3cc4, expected=1543138606, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11794 (Thread 0x7ffc5c7a86c0 (LWP 3719900) "llvmpipe-16"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776125284, a2=<optimized out>, a3=a3@entry=1551531310, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c3b64, expected=1551531310, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11793 (Thread 0x7ffc5cfa96c0 (LWP 3719898) "llvmpipe-15"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776124932, a2=<optimized out>, a3=a3@entry=1559924014, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c3a04, expected=1559924014, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11792 (Thread 0x7ffc5d7aa6c0 (LWP 3719895) "llvmpipe-14"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776124580, a2=<optimized out>, a3=a3@entry=1568316718, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c38a4, expected=1568316718, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11791 (Thread 0x7ffc5dfab6c0 (LWP 3719893) "llvmpipe-13"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776124228, a2=<optimized out>, a3=a3@entry=1576709422, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c3744, expected=1576709422, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11790 (Thread 0x7ffc5e7ac6c0 (LWP 3719889) "llvmpipe-12"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776123876, a2=<optimized out>, a3=a3@entry=1585102126, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c35e4, expected=1585102126, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11789 (Thread 0x7ffc5efad6c0 (LWP 3719888) "llvmpipe-11"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776123524, a2=<optimized out>, a3=a3@entry=1593494830, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c3484, expected=1593494830, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11788 (Thread 0x7ffc5f7ae6c0 (LWP 3719885) "llvmpipe-10"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776123172, a2=<optimized out>, a3=a3@entry=1601887534, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c3324, expected=1601887534, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11787 (Thread 0x7ffc5ffaf6c0 (LWP 3719884) "llvmpipe-9"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776122820, a2=<optimized out>, a3=a3@entry=1610280238, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c31c4, expected=1610280238, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11786 (Thread 0x7ffc607b06c0 (LWP 3719882) "llvmpipe-8"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776122468, a2=<optimized out>, a3=a3@entry=1618672942, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c3064, expected=1618672942, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11785 (Thread 0x7ffc60fb16c0 (LWP 3719881) "llvmpipe-7"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776122116, a2=<optimized out>, a3=a3@entry=1627065646, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c2f04, expected=1627065646, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11784 (Thread 0x7ffc617b26c0 (LWP 3719880) "llvmpipe-6"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776121764, a2=<optimized out>, a3=a3@entry=1635458350, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c2da4, expected=1635458350, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11783 (Thread 0x7ffc61fb36c0 (LWP 3719878) "llvmpipe-5"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776121412, a2=<optimized out>, a3=a3@entry=1643851054, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c2c44, expected=1643851054, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11782 (Thread 0x7ffc627b46c0 (LWP 3719877) "llvmpipe-4"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776121060, a2=<optimized out>, a3=a3@entry=1652243758, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c2ae4, expected=1652243758, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11781 (Thread 0x7ffc62fb56c0 (LWP 3719876) "llvmpipe-3"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776120708, a2=<optimized out>, a3=a3@entry=1660636462, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c2984, expected=1660636462, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11780 (Thread 0x7ffc637b66c0 (LWP 3719874) "llvmpipe-2"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776120356, a2=<optimized out>, a3=a3@entry=1669029166, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c2824, expected=1669029166, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11779 (Thread 0x7ffc63fb76c0 (LWP 3719872) "llvmpipe-1"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776120004, a2=<optimized out>, a3=a3@entry=2403515747, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c26c4, expected=2403515747, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11778 (Thread 0x7ffc647b86c0 (LWP 3719869) "llvmpipe-0"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736776119652, a2=<optimized out>, a3=a3@entry=28, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd58c2564, expected=28, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11777 (Thread 0x7ffc64fb96c0 (LWP 3719868) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736750214864, a2=<optimized out>, a3=a3@entry=4294967295, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffd400ded0, expected=4294967295, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11676 (Thread 0x7ffef1ffb6c0 (LWP 3719383) "pixels-:disk$0"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736502655552, a2=<optimized out>, a3=a3@entry=0, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc53f6a40, expected=0, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11675 (Thread 0x7ffef27fc6c0 (LWP 3719380) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=4068457774, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=4068457774, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11674 (Thread 0x7ffef2ffd6c0 (LWP 3719379) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=4076850478, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=4076850478, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11673 (Thread 0x7ffef37fe6c0 (LWP 3719376) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=4085243182, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=4085243182, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11672 (Thread 0x7ffef3fff6c0 (LWP 3719375) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=4093635886, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=4093635886, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11671 (Thread 0x7fff18ff96c0 (LWP 3719374) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=419401006, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=419401006, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11670 (Thread 0x7fff197fa6c0 (LWP 3719373) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=427793710, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=427793710, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11669 (Thread 0x7fff19ffb6c0 (LWP 3719372) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=436186414, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=436186414, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11668 (Thread 0x7fff1a7fc6c0 (LWP 3719370) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=444579118, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=444579118, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11667 (Thread 0x7fff1affd6c0 (LWP 3719369) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=452971822, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=452971822, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11666 (Thread 0x7fff1b7fe6c0 (LWP 3719368) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=461364526, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=461364526, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11665 (Thread 0x7fff1bfff6c0 (LWP 3719367) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=469757230, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=469757230, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11664 (Thread 0x7fff38ff96c0 (LWP 3719365) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=956271918, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=956271918, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11663 (Thread 0x7fff397fa6c0 (LWP 3719362) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=964664622, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=964664622, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11662 (Thread 0x7fff39ffb6c0 (LWP 3719361) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=973057326, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=973057326, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11661 (Thread 0x7fff3a7fc6c0 (LWP 3719360) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=981450030, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=981450030, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11660 (Thread 0x7fff3affd6c0 (LWP 3719358) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=989842734, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=989842734, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11659 (Thread 0x7fff3b7fe6c0 (LWP 3719357) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=998235438, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=998235438, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11658 (Thread 0x7fff3bfff6c0 (LWP 3719356) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=1006628142, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=1006628142, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11657 (Thread 0x7fff58ff96c0 (LWP 3719355) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=1493142830, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=1493142830, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11656 (Thread 0x7fff597fa6c0 (LWP 3719354) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=1501535534, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=1501535534, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11655 (Thread 0x7fff59ffb6c0 (LWP 3719353) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=1509928238, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=1509928238, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11654 (Thread 0x7fff5a7fc6c0 (LWP 3719351) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=1518320942, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=1518320942, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11653 (Thread 0x7fff5affd6c0 (LWP 3719350) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=1526713646, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=1526713646, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11652 (Thread 0x7fff5b7fe6c0 (LWP 3719345) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736481740568, a2=<optimized out>, a3=a3@entry=1535106350, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4004718, expected=1535106350, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11651 (Thread 0x7fff5bfff6c0 (LWP 3719344) "llvmpipe-23"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491690464, a2=<optimized out>, a3=a3@entry=1543499054, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc49819e0, expected=1543499054, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11650 (Thread 0x7fff7cbfc6c0 (LWP 3719343) "llvmpipe-22"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491690112, a2=<optimized out>, a3=a3@entry=2092940590, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4981880, expected=2092940590, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11649 (Thread 0x7fff7d3fd6c0 (LWP 3719341) "llvmpipe-21"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491689760, a2=<optimized out>, a3=a3@entry=2101333294, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4981720, expected=2101333294, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11648 (Thread 0x7fff7dbfe6c0 (LWP 3719339) "llvmpipe-20"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491689408, a2=<optimized out>, a3=a3@entry=2109725998, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc49815c0, expected=2109725998, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11647 (Thread 0x7fff7e3ff6c0 (LWP 3719338) "llvmpipe-19"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491689056, a2=<optimized out>, a3=a3@entry=2118118702, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4981460, expected=2118118702, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11646 (Thread 0x7fff7f1c16c0 (LWP 3719336) "llvmpipe-18"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491688704, a2=<optimized out>, a3=a3@entry=2132544814, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4981300, expected=2132544814, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11645 (Thread 0x7fff7f9c26c0 (LWP 3719335) "llvmpipe-17"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491688352, a2=<optimized out>, a3=a3@entry=2140937518, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc49811a0, expected=2140937518, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11644 (Thread 0x7fff803f26c0 (LWP 3719333) "llvmpipe-16"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491688000, a2=<optimized out>, a3=a3@entry=2151619886, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4981040, expected=2151619886, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11643 (Thread 0x7fff80bf36c0 (LWP 3719331) "llvmpipe-15"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491687648, a2=<optimized out>, a3=a3@entry=2160012590, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4980ee0, expected=2160012590, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11642 (Thread 0x7fff813f46c0 (LWP 3719329) "llvmpipe-14"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491687296, a2=<optimized out>, a3=a3@entry=2168405294, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4980d80, expected=2168405294, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11641 (Thread 0x7fff81bf56c0 (LWP 3719327) "llvmpipe-13"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491686944, a2=<optimized out>, a3=a3@entry=2176797998, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4980c20, expected=2176797998, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11640 (Thread 0x7fff823f66c0 (LWP 3719326) "llvmpipe-12"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491686592, a2=<optimized out>, a3=a3@entry=2185190702, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4980ac0, expected=2185190702, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11639 (Thread 0x7fff82bf76c0 (LWP 3719325) "llvmpipe-11"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491686240, a2=<optimized out>, a3=a3@entry=28, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4980960, expected=28, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11638 (Thread 0x7fff833f86c0 (LWP 3719323) "llvmpipe-10"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491685888, a2=<optimized out>, a3=a3@entry=2201976110, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4980800, expected=2201976110, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11637 (Thread 0x7fff83bf96c0 (LWP 3719322) "llvmpipe-9"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491685540, a2=<optimized out>, a3=a3@entry=2210368814, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc49806a4, expected=2210368814, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11636 (Thread 0x7fff843fa6c0 (LWP 3719321) "llvmpipe-8"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491685184, a2=<optimized out>, a3=a3@entry=2218761518, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4980540, expected=2218761518, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11635 (Thread 0x7fff84bfb6c0 (LWP 3719318) "llvmpipe-7"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491684832, a2=<optimized out>, a3=a3@entry=2227154222, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc49803e0, expected=2227154222, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11634 (Thread 0x7fff853fc6c0 (LWP 3719317) "llvmpipe-6"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491684480, a2=<optimized out>, a3=a3@entry=2235546926, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4980280, expected=2235546926, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11633 (Thread 0x7fff85bfd6c0 (LWP 3719315) "llvmpipe-5"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491684128, a2=<optimized out>, a3=a3@entry=2243939630, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc4980120, expected=2243939630, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11632 (Thread 0x7fff863fe6c0 (LWP 3719314) "llvmpipe-4"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491683780, a2=<optimized out>, a3=a3@entry=2252332334, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc497ffc4, expected=2252332334, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11631 (Thread 0x7fff86bff6c0 (LWP 3719313) "llvmpipe-3"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491683424, a2=<optimized out>, a3=a3@entry=2260725038, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc497fe60, expected=2260725038, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11630 (Thread 0x7ffbd80a16c0 (LWP 3719312) "llvmpipe-2"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491683076, a2=<optimized out>, a3=a3@entry=3624537390, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc497fd04, expected=3624537390, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11629 (Thread 0x7ffbd78a06c0 (LWP 3719311) "llvmpipe-1"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491682724, a2=<optimized out>, a3=a3@entry=2403515747, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc497fba4, expected=2403515747, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 11628 (Thread 0x7ffbd709f6c0 (LWP 3719310) "llvmpipe-0"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140736491682372, a2=<optimized out>, a3=a3@entry=2403515747, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x7fffc497fa44, expected=2403515747, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 24 (Thread 0x7ffff4fe36c0 (LWP 3686905) "independent_dev"):
+#0  futex_wait (futex_word=0x7ffff49c32a0, expected=2, private=0) at ../sysdeps/nptl/futex-internal.h:126
+#1  __GI___lll_lock_wait (futex=futex@entry=0x7ffff49c32a0, private=0) at ./nptl/lowlevellock.c:49
+#2  0x00007ffff7ca7754 in lll_mutex_lock_optimized (mutex=0x7ffff49c32a0) at ./nptl/pthread_mutex_lock.c:48
+
+Thread 14 (Thread 0x7ffff63f36c0 (LWP 3686895) "independent_dev"):
+#0  futex_wait (futex_word=0x7ffff49c32a0, expected=2, private=0) at ../sysdeps/nptl/futex-internal.h:126
+#1  __GI___lll_lock_wait (futex=futex@entry=0x7ffff49c32a0, private=0) at ./nptl/lowlevellock.c:49
+#2  0x00007ffff7ca7754 in lll_mutex_lock_optimized (mutex=0x7ffff49c32a0) at ./nptl/pthread_mutex_lock.c:48
+
+Thread 12 (Thread 0x7ffff67f56c0 (LWP 3686893) "independent_dev"):
+#0  0x00007ffff49576dc in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan.so.1
+#1  0x00007ffff495034b in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan.so.1
+#2  0x00007ffff494ff88 in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan.so.1
+
+Thread 10 (Thread 0x7ffff6bf76c0 (LWP 3686891) "independent_dev"):
+#0  futex_wait (futex_word=0x7ffff49c32a0, expected=2, private=0) at ../sysdeps/nptl/futex-internal.h:126
+#1  __GI___lll_lock_wait (futex=futex@entry=0x7ffff49c32a0, private=0) at ./nptl/lowlevellock.c:49
+#2  0x00007ffff7ca7754 in lll_mutex_lock_optimized (mutex=0x7ffff49c32a0) at ./nptl/pthread_mutex_lock.c:48
+
+Thread 8 (Thread 0x7ffff6ff96c0 (LWP 3686889) "independent_dev"):
+#0  _dl_close_worker (map=<optimized out>, map@entry=0x7fffddb7f4e0, force=force@entry=false) at ./elf/dl-close.c:729
+#1  0x00007ffff7fc371c in _dl_close_worker (map=0x7fffddb7f4e0, force=false) at ./elf/dl-close.c:120
+#2  _dl_close (_map=0x7fffddb7f4e0) at ./elf/dl-close.c:793
+
+Thread 4 (Thread 0x7ffff77fd6c0 (LWP 3686885) "independent_dev"):
+#0  futex_wait (futex_word=0x7ffff49c32a0, expected=2, private=0) at ../sysdeps/nptl/futex-internal.h:126
+#1  __GI___lll_lock_wait (futex=futex@entry=0x7ffff49c32a0, private=0) at ./nptl/lowlevellock.c:49
+#2  0x00007ffff7ca7754 in lll_mutex_lock_optimized (mutex=0x7ffff49c32a0) at ./nptl/pthread_mutex_lock.c:48
+
+Thread 2 (Thread 0x7ffff7bff6c0 (LWP 3686883) "independent_dev"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007ffff7ca030c in __internal_syscall_cancel (a1=a1@entry=140737345740008, a2=<optimized out>, a3=<optimized out>, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007ffff7ca06e7 in __futex_abstimed_wait_common64 (private=128, futex_word=0x7ffff77fdce8, expected=<optimized out>, op=265, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+
+Thread 1 (Thread 0x7ffff7e4fcc0 (LWP 3686710) "pixels-6d784e01"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x0000555556fd04a6 in <std::thread::thread::Thread>::park_timeout ()
+#2  0x0000555555dc8f2d in <std::sync::mpmc::list::Channel<test::event::CompletedTest>>::recv::{closure#1} ()

@@ -1,0 +1,39 @@
+{
+  "renderer": "zgui wgpu Vulkan via Mesa llvmpipe LLVM 21.1.8",
+  "build_profile": "release optimized, Cargo workspace defaults",
+  "baseline": "before shared device/context and lazy atlas changes",
+  "atlas": {
+    "width": 2048,
+    "height": 2048,
+    "format": "RGBA8",
+    "bytes": 16777216,
+    "allocation": "eager per renderer"
+  },
+  "per_window_resources": [
+    "Instance",
+    "Adapter",
+    "Device",
+    "Queue",
+    "FontSystem"
+  ],
+  "pipelines": {
+    "quad": 2,
+    "surface_blit": 1,
+    "blur": "lazy"
+  },
+  "persistent_output_bytes": 2764800,
+  "blur_scratch": "two full-size textures lazily allocated; effects disabled in these runs",
+  "image_budget_bytes": 67108864,
+  "layer_budget_bytes": 67108864,
+  "layer_count_limit": 1024,
+  "shape_cache_bytes": 8388608,
+  "shape_cache_nodes": 1024,
+  "initial_vertex_buffer_bytes": 4096,
+  "max_vertex_buffer_bytes": 33554432,
+  "notes": [
+    "Benchmarks use frozen copies of all three release binaries, identified by SHA256.",
+    "Worktree source hashes are a supplementary run-time snapshot; concurrent development means they are not a claim of an immutable source checkout.",
+    "The comparison app does not request isolated subtrees, images, or backdrop filters.",
+    "All three windows have 960 \u00d7 720 logical pixels at scale 1 on Xvfb :96 (1280 \u00d7 900) with Openbox."
+  ]
+}

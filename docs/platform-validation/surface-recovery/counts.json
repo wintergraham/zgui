@@ -1,0 +1,12 @@
+{
+  "workspace": {
+    "passed": 599,
+    "failed": 0,
+    "ignored": 3
+  },
+  "doctests": {
+    "passed": 31,
+    "failed": 0,
+    "ignored": 0
+  }
+}

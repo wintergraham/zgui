@@ -1,0 +1,31 @@
+{
+  "status": "passed",
+  "platform": "X11/Xvfb",
+  "captures": [
+    {
+      "size": [
+        800,
+        600
+      ],
+      "file": "800x600.png",
+      "bytes": 31929
+    },
+    {
+      "size": [
+        560,
+        520
+      ],
+      "file": "560x520.png",
+      "bytes": 27953
+    },
+    {
+      "size": [
+        1000,
+        720
+      ],
+      "file": "1000x720.png",
+      "bytes": 34936
+    }
+  ],
+  "scope": "startup and three resizes; geometry assertions live in advanced_layout tests"
+}

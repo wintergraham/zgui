@@ -1,0 +1,19 @@
+{
+  "result": "pass",
+  "platform": "native Wayland client / Weston X11 backend / Xvfb",
+  "client_display_unset": true,
+  "xwayland_enabled": false,
+  "weston": "weston 14.0.2",
+  "checks": [
+    "pointer editor focus",
+    "keyboard selection replacement",
+    "Tab focus traversal",
+    "Wayland clipboard copy/paste",
+    "multiline text",
+    "disabled input suppression",
+    "reactive width",
+    "native Wayland resize",
+    "automatic close"
+  ],
+  "limitations": "Software rendering and nested compositor; does not validate physical seats, IME, hardware GPUs, or macOS."
+}

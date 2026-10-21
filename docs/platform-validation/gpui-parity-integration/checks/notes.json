@@ -1,0 +1,15 @@
+{
+  "workspace_tests": {
+    "passed": 712,
+    "failed": 0,
+    "ignored": 3
+  },
+  "doctests": {
+    "passed": 31,
+    "failed": 0,
+    "ignored": 0
+  },
+  "clippy_correction": "Single-range Vec lint in Unicode rich-text unit test; replaced vec![0..2] with iter::once(0..2).collect(). Production semantics unchanged. Strict retry passed.",
+  "native_build_failure": "Two build attempts hit per-user disk quota; linker logs preserved. Removed completed test and stale example executables only; subsequent native build passed.",
+  "macos": "Strict all-target cross-compilation only; no Mac runtime evidence."
+}

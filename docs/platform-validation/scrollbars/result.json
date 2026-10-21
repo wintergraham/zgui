@@ -1,0 +1,57 @@
+{
+  "platform": "X11/Xvfb",
+  "scale": 1,
+  "result": "pass",
+  "checks": [
+    "vertical track paging",
+    "captured thumb drag",
+    "Home End PageUp PageDown",
+    "horizontal thumb drag",
+    "hide without overflow",
+    "shrink offset clamp",
+    "automatic close"
+  ],
+  "pixel_samples": [
+    {
+      "stage": 1,
+      "vertical_thumb_pixels": 65,
+      "horizontal_thumb_pixels": 78
+    },
+    {
+      "stage": 2,
+      "vertical_thumb_pixels": 65,
+      "horizontal_thumb_pixels": 78
+    },
+    {
+      "stage": 3,
+      "vertical_thumb_pixels": 65,
+      "horizontal_thumb_pixels": 78
+    },
+    {
+      "stage": 4,
+      "vertical_thumb_pixels": 65,
+      "horizontal_thumb_pixels": 78
+    },
+    {
+      "stage": 5,
+      "vertical_thumb_pixels": 65,
+      "horizontal_thumb_pixels": 78
+    },
+    {
+      "stage": 6,
+      "vertical_thumb_pixels": 65,
+      "horizontal_thumb_pixels": 78
+    },
+    {
+      "stage": 7,
+      "vertical_thumb_pixels": 65,
+      "horizontal_thumb_pixels": 78
+    },
+    {
+      "stage": 8,
+      "vertical_thumb_pixels": 0,
+      "horizontal_thumb_pixels": 0
+    }
+  ],
+  "limitations": "Software rendering; does not validate macOS or hardware GPUs."
+}

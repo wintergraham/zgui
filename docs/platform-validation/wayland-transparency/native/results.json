@@ -1,0 +1,620 @@
+{
+  "passed": true,
+  "backend": "native Wayland / owned Sway X11 / Xvfb / pixman",
+  "compositor": "sway version 1.11",
+  "client_display_unset": true,
+  "client_shell": "xdg_shell",
+  "client_pid": 3821147,
+  "protocol_log": "protocol.log",
+  "tolerance": 2,
+  "stages": [
+    {
+      "stage": "initial",
+      "client_rect": {
+        "x": 160,
+        "y": 140,
+        "width": 320,
+        "height": 240
+      },
+      "background_actual": [
+        32,
+        64,
+        96
+      ],
+      "samples": [
+        {
+          "position": [
+            40,
+            40
+          ],
+          "expected": [
+            128,
+            64,
+            64
+          ],
+          "actual": [
+            128,
+            64,
+            64
+          ]
+        },
+        {
+          "position": [
+            120,
+            80
+          ],
+          "expected": [
+            112,
+            104,
+            80
+          ],
+          "actual": [
+            112,
+            104,
+            80
+          ]
+        },
+        {
+          "position": [
+            180,
+            120
+          ],
+          "expected": [
+            40,
+            104,
+            104
+          ],
+          "actual": [
+            40,
+            104,
+            104
+          ]
+        },
+        {
+          "position": [
+            280,
+            40
+          ],
+          "expected": [
+            32,
+            64,
+            96
+          ],
+          "actual": [
+            32,
+            64,
+            96
+          ]
+        },
+        {
+          "position": [
+            25,
+            165
+          ],
+          "expected": [
+            238,
+            238,
+            238
+          ],
+          "actual": [
+            238,
+            238,
+            238
+          ]
+        }
+      ]
+    },
+    {
+      "stage": "color-update",
+      "client_rect": {
+        "x": 160,
+        "y": 140,
+        "width": 320,
+        "height": 240
+      },
+      "background_actual": [
+        32,
+        64,
+        96
+      ],
+      "samples": [
+        {
+          "position": [
+            40,
+            40
+          ],
+          "expected": [
+            32,
+            80,
+            160
+          ],
+          "actual": [
+            32,
+            80,
+            160
+          ]
+        },
+        {
+          "position": [
+            120,
+            80
+          ],
+          "expected": [
+            40,
+            116,
+            152
+          ],
+          "actual": [
+            40,
+            116,
+            152
+          ]
+        },
+        {
+          "position": [
+            180,
+            120
+          ],
+          "expected": [
+            40,
+            104,
+            104
+          ],
+          "actual": [
+            40,
+            104,
+            104
+          ]
+        },
+        {
+          "position": [
+            280,
+            40
+          ],
+          "expected": [
+            32,
+            64,
+            96
+          ],
+          "actual": [
+            32,
+            64,
+            96
+          ]
+        },
+        {
+          "position": [
+            25,
+            165
+          ],
+          "expected": [
+            238,
+            238,
+            238
+          ],
+          "actual": [
+            238,
+            238,
+            238
+          ]
+        }
+      ]
+    },
+    {
+      "stage": "hidden-panel",
+      "client_rect": {
+        "x": 160,
+        "y": 140,
+        "width": 320,
+        "height": 240
+      },
+      "background_actual": [
+        32,
+        64,
+        96
+      ],
+      "samples": [
+        {
+          "position": [
+            40,
+            40
+          ],
+          "expected": [
+            32,
+            64,
+            96
+          ],
+          "actual": [
+            32,
+            64,
+            96
+          ]
+        },
+        {
+          "position": [
+            120,
+            80
+          ],
+          "expected": [
+            40,
+            104,
+            104
+          ],
+          "actual": [
+            40,
+            104,
+            104
+          ]
+        },
+        {
+          "position": [
+            180,
+            120
+          ],
+          "expected": [
+            40,
+            104,
+            104
+          ],
+          "actual": [
+            40,
+            104,
+            104
+          ]
+        },
+        {
+          "position": [
+            280,
+            40
+          ],
+          "expected": [
+            32,
+            64,
+            96
+          ],
+          "actual": [
+            32,
+            64,
+            96
+          ]
+        },
+        {
+          "position": [
+            25,
+            165
+          ],
+          "expected": [
+            238,
+            238,
+            238
+          ],
+          "actual": [
+            238,
+            238,
+            238
+          ]
+        }
+      ]
+    },
+    {
+      "stage": "moved-resized",
+      "client_rect": {
+        "x": 100,
+        "y": 120,
+        "width": 400,
+        "height": 300
+      },
+      "background_actual": [
+        32,
+        64,
+        96
+      ],
+      "samples": [
+        {
+          "position": [
+            40,
+            40
+          ],
+          "expected": [
+            32,
+            64,
+            96
+          ],
+          "actual": [
+            32,
+            64,
+            96
+          ]
+        },
+        {
+          "position": [
+            120,
+            80
+          ],
+          "expected": [
+            40,
+            104,
+            104
+          ],
+          "actual": [
+            40,
+            104,
+            104
+          ]
+        },
+        {
+          "position": [
+            180,
+            120
+          ],
+          "expected": [
+            40,
+            104,
+            104
+          ],
+          "actual": [
+            40,
+            104,
+            104
+          ]
+        },
+        {
+          "position": [
+            280,
+            40
+          ],
+          "expected": [
+            32,
+            64,
+            96
+          ],
+          "actual": [
+            32,
+            64,
+            96
+          ]
+        },
+        {
+          "position": [
+            25,
+            165
+          ],
+          "expected": [
+            238,
+            238,
+            238
+          ],
+          "actual": [
+            238,
+            238,
+            238
+          ]
+        },
+        {
+          "position": [
+            380,
+            280
+          ],
+          "expected": [
+            32,
+            64,
+            96
+          ],
+          "actual": [
+            32,
+            64,
+            96
+          ]
+        }
+      ]
+    },
+    {
+      "stage": "restored-panel",
+      "client_rect": {
+        "x": 100,
+        "y": 120,
+        "width": 400,
+        "height": 300
+      },
+      "background_actual": [
+        32,
+        64,
+        96
+      ],
+      "samples": [
+        {
+          "position": [
+            40,
+            40
+          ],
+          "expected": [
+            32,
+            80,
+            160
+          ],
+          "actual": [
+            32,
+            80,
+            160
+          ]
+        },
+        {
+          "position": [
+            120,
+            80
+          ],
+          "expected": [
+            40,
+            116,
+            152
+          ],
+          "actual": [
+            40,
+            116,
+            152
+          ]
+        },
+        {
+          "position": [
+            180,
+            120
+          ],
+          "expected": [
+            40,
+            104,
+            104
+          ],
+          "actual": [
+            40,
+            104,
+            104
+          ]
+        },
+        {
+          "position": [
+            280,
+            40
+          ],
+          "expected": [
+            32,
+            64,
+            96
+          ],
+          "actual": [
+            32,
+            64,
+            96
+          ]
+        },
+        {
+          "position": [
+            25,
+            165
+          ],
+          "expected": [
+            238,
+            238,
+            238
+          ],
+          "actual": [
+            238,
+            238,
+            238
+          ]
+        }
+      ]
+    },
+    {
+      "stage": "backdrop-change",
+      "client_rect": {
+        "x": 100,
+        "y": 120,
+        "width": 400,
+        "height": 300
+      },
+      "background_actual": [
+        112,
+        48,
+        16
+      ],
+      "samples": [
+        {
+          "position": [
+            40,
+            40
+          ],
+          "expected": [
+            72,
+            72,
+            120
+          ],
+          "actual": [
+            72,
+            72,
+            120
+          ]
+        },
+        {
+          "position": [
+            120,
+            80
+          ],
+          "expected": [
+            70,
+            110,
+            122
+          ],
+          "actual": [
+            70,
+            110,
+            122
+          ]
+        },
+        {
+          "position": [
+            180,
+            120
+          ],
+          "expected": [
+            100,
+            92,
+            44
+          ],
+          "actual": [
+            100,
+            92,
+            44
+          ]
+        },
+        {
+          "position": [
+            280,
+            40
+          ],
+          "expected": [
+            112,
+            48,
+            16
+          ],
+          "actual": [
+            112,
+            48,
+            16
+          ]
+        },
+        {
+          "position": [
+            25,
+            165
+          ],
+          "expected": [
+            238,
+            238,
+            238
+          ],
+          "actual": [
+            238,
+            238,
+            238
+          ]
+        },
+        {
+          "position": [
+            380,
+            280
+          ],
+          "expected": [
+            112,
+            48,
+            16
+          ],
+          "actual": [
+            112,
+            48,
+            16
+          ]
+        }
+      ]
+    }
+  ]
+}

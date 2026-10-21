@@ -1,0 +1,1231 @@
+   Compiling zgui-desktop v0.1.0 (/home/ubuntu/GitHub/zgui/crates/zgui-desktop)
+   Compiling zgui-gpu v0.1.0 (/home/ubuntu/GitHub/zgui/crates/zgui-gpu)
+   Compiling zgui v0.1.0 (/home/ubuntu/GitHub/zgui/crates/zgui)
+    Finished `test` profile [unoptimized] target(s) in 56.15s
+     Running unittests src/lib.rs (/tmp/zgui-target/debug/deps/zgui-b97b9a12f348f2de)
+
+running 171 tests
+test background::waker_cleanup_tests::replacing_consumer_waker_drops_it_outside_result_lock ... ok
+test collections::tests::length_observers_ignore_content_and_appends_batch ... ok
+test collections::tests::stable_handles_and_removed_row_notifications ... ok
+test background::tests::bounded_queue_cancellation_and_shutdown_do_not_block ... ok
+test background::tests::explicit_cancel_wakes_pending_consumer_and_skips_queued_closure ... ok
+test background::tests::worker_panic_becomes_result_and_worker_survives ... ok
+test components::tests::closing_outer_dialog_unwinds_nested_focus_scopes ... ok
+test components::tests::dialog_refreshes_backdrop_and_center_after_resize ... ok
+test compose::image_fit_tests::extreme_aspect_scaling_remains_finite_and_zero_content_has_no_bitmap ... ok
+test components::tests::scroll_clamps_resizes_and_uses_compositor_only_updates ... ok
+test compose_menu::tests::typeahead_storage_is_bounded_with_unicode_case_expansion ... ok
+test compose_popover::tests::submenu_placement_flips_and_clamps_with_nonzero_viewport_origin ... ok
+test components::tests::menu_arrows_skip_disabled_items_and_activation_restores_focus ... ok
+test components::tests::panel_blank_space_does_not_dismiss_and_popover_flips_above_anchor ... ok
+test compose_style::tests::removing_dynamic_properties_restores_base_and_inheritance ... ok
+test input::disabled_observer_tests::disabled_observer_callbacks_can_reenter_metadata_and_unregister ... ok
+test input::disabled_observer_tests::disabled_observer_tracks_registration_metadata_and_detaches_on_removal ... ok
+test components::tests::dialog_traps_input_escape_restores_focus_and_backdrop_dismisses ... ok
+test compose_style::tests::interaction_variants_restore_and_disabled_wins_without_layout ... ok
+test input::listener_tests::immediate_stop_skips_later_listeners_but_registration_replacement_is_safe ... ok
+test input::listener_tests::additive_bindings_drop_only_their_own_callback ... ok
+test compose_style::tests::boxed_text_reactive_wrapping_reflows_without_remounting ... ok
+test compose_style::tests::font_properties_inherit_override_and_update_without_remount ... ok
+test compose_style::tests::typography_inherits_and_explicit_overrides_are_stable ... ok
+test compose::editor_mount_tests::canonical_writeback_can_unmount_a_fully_registered_declarative_tree ... ok
+test input::listener_tests::listeners_added_during_capture_wait_until_next_event_and_removed_are_skipped ... ok
+test input::reentrant_drop_tests::callback_capture_drop_can_reenter_after_unregister_binding_drop_or_replace ... ok
+test components::tests::virtual_rows_are_bounded_retain_overlap_and_dispose_on_unmount ... ok
+test input::reentrant_drop_tests::dropping_listener_capture_can_drop_another_binding ... ok
+test input::listener_tests::stopping_propagation_preserves_same_node_listeners_and_default_action ... ok
+test input::tests::activation_callback_can_start_next_same_key_press ... ok
+test input::tests::callbacks_may_mutate_scene_and_keyboard_requires_press ... ok
+test compose_style::tests::styled_noninteractive_child_preserves_button_activation ... ok
+test input::tests::activation_key_release_ignores_unrelated_keys_and_repeat_but_honors_owner ... ok
+test input::tests::cancellation_reenable_and_refocus_does_not_blur_new_focus ... ok
+test input::tests::capture_target_bubble_and_raii ... ok
+test input::tests::click_tracker_time_distance_button_target_and_cycle_are_deterministic ... ok
+test input::tests::capture_tracks_drag_but_does_not_activate_outside ... ok
+test input::tests::disable_cleanup_may_remove_target_without_stale_notification_or_blur ... ok
+test compose_style::tests::nested_button_activation_stops_at_nearest_clickable_owner ... ok
+test input::tests::disabling_ancestor_cancels_unfocused_press_before_reenable ... ok
+test input::tests::disabling_detaches_interactions_before_callbacks_and_observes_reentrant_state ... ok
+test input::tests::prepended_listener_preserves_options_and_restores_default_on_drop ... ok
+test input::tests::prevented_matching_key_release_and_blur_discard_pending_activation ... ok
+test input::tests::removal_during_dispatch_does_not_leave_stale_focus ... ok
+test input::tests::prevented_release_and_cancel_clear_capture_without_delayed_activation ... ok
+test input::tests::tab_focus_disabled_and_stale_nodes ... ok
+test input::tests::pointer_metadata_routes_explicitly_and_legacy_dispatch_resets_chain ... ok
+test keyed::tests::external_removal_does_not_write_reused_nodes_and_unmount_is_reported ... ok
+test input::tests::unrelated_button_release_preserves_capture_and_primary_activation ... ok
+test keyed::tests::overlay_reorder_changes_paint_stacking_even_without_geometry_changes ... ok
+test keyed::tests::duplicates_are_rejected_before_mutation_and_same_order_is_idle ... ok
+test keyed::tests::removal_and_drop_dispose_subscriptions_and_subtrees ... ok
+test keyed::tests::late_initializer_panic_preserves_committed_rows_and_disposes_staged_scopes ... ok
+test reactive::tests::batching_equality_dynamic_dependencies_and_disposal ... ok
+test reactive::tests::borrowed_reads_need_no_clone_and_observer_panic_recovers ... ok
+test keyed::tests::reorder_retains_node_identity_and_state_and_damages_moved_rows ... ok
+test reactive::tests::chained_updates_and_panic_recovery ... ok
+test reactive::tests::dropping_effect_releases_captured_runtime_and_data ... ok
+test reactive::tests::providers_shadow_without_mutating_parent ... ok
+test reactive::tests::self_disposed_effect_cannot_subscribe_after_disposal ... ok
+test reactive::tests::untracked_component_effect_tracks_its_own_reads ... ok
+test reactive::tests::untracked_nested_and_caught_panic_restore_outer_dependencies ... ok
+test scene::absolute_layout_tests::geometry_revision_tracks_layout_and_transforms_but_not_equal_transforms ... ok
+test scene::absolute_layout_tests::absolute_text_remeasures_on_parent_resize_without_taking_flex_space ... ok
+test scene::absolute_layout_tests::absolute_children_do_not_change_flow_intrinsic_size_or_gaps ... ok
+test scene::hidden_layer_tests::hidden_nested_layers_prune_but_explicit_layer_root_opacity_stays_external ... ok
+test scene::hidden_layer_tests::hidden_huge_descendants_do_not_expand_visible_layer_allocation ... ok
+test scene::letter_spacing_fallback_tests::explicit_spacing_bypasses_legacy_callbacks_without_losing_metrics ... ok
+test scene::image_replacement_layout_tests::fixed_axes_ignore_source_size_even_zero_and_constrained_but_auto_axes_remeasure ... ok
+test scene::line_height_tests::explicit_pitch_relayouts_once_and_native_font_callback_receives_metrics ... ok
+test scene::line_height_tests::fallback_measurement_matches_grapheme_shaping_for_normal_and_explicit_pitch ... ok
+test scene::nonfinite_effect_tests::invalid_effects_normalize_before_equality_and_paint_traversal ... ok
+test scene::nonfinite_effect_tests::opacity_infinities_keep_clamped_endpoints_and_invalid_filters_remove_blur_tracking ... ok
+test scene::nonfinite_transform_tests::invalid_axes_normalize_independently_before_equality_and_damage ... ok
+test scene::paint_geometry_tests::rect_and_quad_paint_changes_preserve_layout ... ok
+test scene::percentage_layout_tests::indefinite_percentage_uses_auto_cross_axis_stretch ... ok
+test scene::percentage_layout_tests::indefinite_percentages_use_intrinsic_size_and_absolute_uses_final_content_box ... ok
+test scene::percentage_layout_tests::growing_row_provides_definite_height_for_percentage_container ... ok
+test scene::percentage_layout_tests::percentage_constraints_precedence_and_invalid_values_are_finite ... ok
+test scene::percentage_layout_tests::percentages_follow_definite_padded_parent_and_resize_without_idle_work ... ok
+test scene::percentage_layout_tests::percentages_supply_flex_bases_and_forced_allocation_supplies_descendant_basis ... ok
+test scene::percentage_layout_tests::zero_delta_flex_allocation_is_definite_for_percentage_descendants ... ok
+test scene::tests::alignment_stretch_and_justification_apply_to_children ... ok
+test scene::tests::expanding_clip_reveals_and_damages_previously_hidden_content ... ok
+test scene::tests::fixed_text_invalidates_only_its_paint ... ok
+test scene::tests::backdrop_damage_expands_to_filter_output ... ok
+test scene::tests::flex_distribution_respects_limits_and_resizes ... ok
+test scene::tests::flex_shrink_and_margins_are_included_in_allocation ... ok
+test scene::tests::fractional_damage_is_rounded_to_cover_complete_pixels ... ok
+test scene::tests::idle_and_equal_writes_do_no_work ... ok
+test scene::tests::hit_testing_respects_stacking_clip_transform_and_opacity ... ok
+test scene::tests::intrinsic_height_change_moves_and_damages_following_sibling ... ok
+test scene::tests::natural_text_layout_preserves_unaffected_subtrees ... ok
+test scene::tests::opacity_inherits_and_clips_follow_transforms ... ok
+test scene::tests::parent_transform_damages_descendant_at_both_locations ... ok
+test scene::tests::preparing_input_geometry_preserves_damage_for_renderer ... ok
+test scene::tests::removing_a_subtree_clears_its_pixels_and_reclaims_every_node ... ok
+test scene::tests::resizing_clip_damages_newly_visible_pixels ... ok
+test scene::tests::reused_slots_do_not_resurrect_handles ... ok
+test scene::tests::text_measurement_reflows_when_parent_constraint_changes ... ok
+test scene::tests::transforms_damage_old_and_new_without_layout_or_paint ... ok
+test semantics::tests::node_token_publishes_partial_update_when_callback_panics ... ok
+test semantics::tests::node_tokens_isolate_mutations_and_survive_retention ... ok
+test semantics::tests::semantic_updates_are_equal_suppressed_and_unmounted_nodes_removed ... ok
+test semantics::tests::text_input_update_initializes_missing_value_and_handles_empty_text ... ok
+test semantics::tests::text_input_update_reuses_payload_and_changes_revision_once ... ok
+test style::tests::conditional_transformations_preserve_sparse_patch_edges ... ok
+test style::tests::effect_reset_and_color_order_are_explicit ... ok
+test style::tests::patches_only_override_specified_properties ... ok
+test style::tests::percentage_patches_normalize_invalid_values_and_replace_pixel_axes ... ok
+test style::tests::side_spacing_obeys_chain_and_merge_precedence ... ok
+test task::cancellation_tests::cancellation_drops_sleeping_capture_without_polling_again ... ok
+test task::spawner_tests::nested_spawning_is_deferred_without_reborrowing_executor ... ok
+test task::spawner_tests::pending_tasks_are_cancelled_and_weak_spawner_cannot_resurrect_executor ... ok
+test task::tests::waking_then_completing_does_not_leave_stale_work ... ok
+test task::tests::yield_resumes_next_tick_and_idle_does_not_poll ... ok
+test task::tests::cross_thread_wakes_coalesce_and_finished_tasks_ignore_wakes ... ok
+test text_edit::tests::byte_offsets_clamp_and_combining_insert_stays_valid ... ok
+test text_edit::tests::external_composition_cancellation_has_one_revision_per_existing_preedit ... ok
+test text_edit::tests::graphemes_are_atomic ... ok
+test text_edit::tests::history_is_bounded ... ok
+test text_edit::tests::ime_does_not_mutate_until_commit ... ok
+test text_edit::tests::lowered_history_limits_remain_bounded_when_transferring_between_stacks ... ok
+test text_edit::tests::minimal_model_delta_obeys_limits_and_equal_values_preserve_state ... ok
+test text_edit::tests::native_preedit_clear_commit_and_noop_model_update_do_not_signal_external_cancel ... ok
+test text_edit::tests::model_delta_preserves_unicode_joins_exact_text_and_before_selection ... ok
+test text_edit::tests::replacement_undo_and_redo ... ok
+test text_layout::cache_weight_tests::existing_custom_layouts_have_unknown_weight_by_default ... ok
+test text_layout::cache_weight_tests::fallback_charges_spare_cell_capacity_without_counting_shared_sources ... ok
+test text_layout::letter_spacing_tests::extreme_spacing_keeps_fallback_geometry_finite_and_nonnegative ... ok
+test text_layout::letter_spacing_tests::normalized_spacing_has_stable_equality_and_hash ... ok
+test text_layout::letter_spacing_tests::spacing_changes_grapheme_advance_wrap_and_selection_consistently ... ok
+test text_layout::tests::explicit_pitch_keeps_wrapped_unicode_hit_selection_and_caret_aligned ... ok
+test text_layout::tests::grapheme_offsets_newlines_and_wrap ... ok
+test text_layout::tests::line_height_normalization_hashing_and_tight_pitch ... ok
+test text_layout::tests::visual_edges_exclude_crlf_and_preserve_empty_final_lines ... ok
+test text_layout::tests::wrapped_grapheme_boundary_preserves_visual_affinity ... ok
+test text_layout::tests::measurement_and_shape_agree_for_unbounded_and_tiny_widths ... ok
+test timer::waker_cleanup_tests::replacement_and_cancellation_drop_user_wakers_outside_timer_lock ... ok
+test view::tests::child_services_shadow_and_conditional_slot_cleanup_disposes_effects ... ok
+test view::tests::external_removal_and_slot_reuse_do_not_resurrect_text_binding ... ok
+test view::tests::disposing_view_removes_subtree_and_effects_but_retains_sibling ... ok
+test view::tests::retained_resources_drop_before_the_owned_subtree ... ok
+test virtual_list::tests::count_and_overscan_arithmetic_saturate ... ok
+test text_edit::tests::large_document_keeps_only_edit_deltas ... ok
+test text_edit::tests::payload_accounting_tracks_eviction_transfers_and_new_edit_redo_clear ... ok
+test virtual_list::tests::handles_empty_and_invalid_viewports ... ok
+test widgets::content_size_observer_tests::resize_subscriber_can_mount_observer_and_reenter_frame_preparation ... ok
+test virtual_list::tests::million_rows_remain_bounded ... ok
+test widgets::content_size_observer_tests::resize_subscriber_can_remove_itself_and_another_observed_subtree ... ok
+test virtual_list::tests::mutated_invalid_row_heights_are_empty_and_finite ... ok
+test widgets::bounds_observer_tests::bounds_subscriber_can_dispose_itself_and_reenter_preparation ... ok
+test widgets::layout_feedback_tests::panicking_resize_callback_does_not_disable_future_preparation ... ok
+test widgets::ownership_tests::only_last_owner_disposes_resources_and_effects ... ok
+test widgets::bounds_observer_tests::world_bounds_follow_ancestor_translation_without_layout_and_idle_notifications ... ok
+test virtual_list::tests::extreme_finite_pixels_do_not_expand_range_to_every_row ... ok
+test widgets::ownership_tests::resource_cleanup_can_remove_other_owned_subtrees ... ok
+test widgets::mount_initialization_tests::successful_binding_does_not_retain_initialization_token ... ok
+test widgets::layout_feedback_tests::reentrant_preparation_defers_to_outer_frame_until_allocation_settles ... ok
+test widgets::disabled_reentry_tests::disabling_can_remove_the_target_during_cleanup_without_resurrecting_metadata ... ok
+test widgets::layout_feedback_tests::alternating_allocation_feedback_returns_error_and_recovers ... ok
+test widgets::bounds_observer_tests::transform_feedback_is_bounded_and_recovers_after_disposal ... ok
+test widgets::layout_feedback_tests::monotonically_growing_allocation_feedback_returns_error_and_recovers ... ok
+test widgets::ownership_tests::listener_destructor_can_remove_its_owner_and_ancestor ... ok
+test widgets::editor_layout_cache_tests::external_editor_handle_does_not_retain_ui_layout_snapshot ... ok
+test widgets::ownership_tests::shared_handles_see_editors_and_preserve_bindings ... ok
+test text_edit::tests::streamed_model_appends_keep_one_hundred_small_undo_deltas ... ok
+test timer::tests::cancellation_unregisters_and_deadline_wakes_once ... ok
+test widgets::editor_layout_cache_tests::cache_charges_named_font_key_and_bounds_display_text ... ok
+test scene::deferred_frame_tests::unflushed_node_replacement_bounds_stale_dirty_generations ... ok
+
+test result: ok. 171 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/active_disable_lifecycle.rs (/tmp/zgui-target/debug/deps/active_disable_lifecycle-28c291266c9d6f17)
+
+running 2 tests
+test moving_focus_clears_held_keyboard_style_and_cannot_activate_old_target ... ok
+test disabling_pressed_button_or_ancestor_clears_active_and_blocks_late_release ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/active_key_ownership.rs (/tmp/zgui-target/debug/deps/active_key_ownership-798ea787c1fd2954)
+
+running 1 test
+test activation_style_tracks_latest_nonrepeat_key_and_preserves_pointer_press ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition.rs (/tmp/zgui-target/debug/deps/composition-80f7123376876854)
+
+running 13 tests
+test component_root_refinement_merges_both_reactive_style_callbacks ... ok
+test component_tasks_can_spawn_component_tasks_while_executor_is_polling ... ok
+test component_root_refinement_merges_inner_and_outer_hover_properties ... ok
+test component_styles_refine_the_actual_root_without_a_layout_wrapper ... ok
+test document_drop_disposes_components_even_when_handles_and_tasks_are_retained ... ok
+test conditional_replacement_disposes_resources_bindings_and_dependencies ... ok
+test failed_conditional_mount_keeps_previous_branch_and_can_recover ... ok
+test weak_task_capabilities_do_not_keep_components_alive_or_spawn_after_unmount ... ok
+test reactive_properties_update_only_their_dependency_without_rebuilding_components ... ok
+test keyed_reorder_keeps_local_state_and_builds_only_new_keys ... ok
+test slots_keep_lexical_providers_and_restore_receiver_scope_for_siblings ... ok
+test failed_mount_cleans_partial_nodes_resources_and_preserves_existing_document ... ok
+test failed_keyed_update_preserves_children_state_and_cleans_staged_mounts ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_checkbox.rs (/tmp/zgui-target/debug/deps/composition_checkbox-29283ae012f17122)
+
+running 4 tests
+test checkbox_rejects_extra_children_without_leaking_partial_mounts ... ok
+test checkbox_indicator_expands_for_large_inherited_typography ... ok
+test checkbox_inherits_typography_and_disabled_state_styles ... ok
+test checkbox_input_model_semantics_and_owned_cleanup ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_editors.rs (/tmp/zgui-target/debug/deps/composition_editors-79f1d2b2f8525843)
+
+running 8 tests
+test singleline_vertical_wheel_bubbles_without_moving_text ... ok
+test editor_focus_and_disabled_styles_preserve_editor_semantics_and_input ... ok
+test editor_viewport_follows_flex_allocation_and_padding_without_a_model_write ... ok
+test bound_editors_preserve_roles_model_sync_ime_and_unmount ... ok
+test paste_allows_model_subscribers_to_normalize_the_value ... ok
+test inherited_editor_font_and_reactive_dimensions_update_retained_content ... ok
+test reactive_editor_text_color_only_damages_paint ... ok
+test multiline_wheel_scroll_preserves_selection_clamps_and_bubbles_at_edges ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_effect_normalization.rs (/tmp/zgui-target/debug/deps/composition_effect_normalization-d2a4b50a65f6933e)
+
+running 1 test
+test reactive_nonfinite_effects_normalize_before_equality_and_restore_sparse_base ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_event_defaults.rs (/tmp/zgui-target/debug/deps/composition_event_defaults-a990f6d102ec34a3)
+
+running 5 tests
+test legacy_control_defaults_also_respect_prevented_actions ... ok
+test prevented_slider_actions_preserve_value_but_release_drag ... ok
+test ancestor_can_cancel_scrollbar_defaults_without_losing_release_cleanup ... ok
+test prevented_scroll_and_virtual_navigation_do_not_change_offsets_or_focus ... ok
+test menu_panel_can_cancel_navigation_and_escape_then_allow_them ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_events.rs (/tmp/zgui-target/debug/deps/composition_events-db3d1d052c37a756)
+
+running 7 tests
+test declarative_event_prevention_cancels_button_activation_and_hook_lifetime_is_owned ... ok
+test custom_component_can_capture_pointer_and_handle_keyboard_without_scene_writes ... ok
+test editor_target_hook_intercepts_text_and_deletion_before_builtin_editing ... ok
+test event_hooks_respect_inherited_disability_and_component_focus_override ... ok
+test owned_event_hooks_compose_capture_target_bubble_and_refinement_order ... ok
+test parent_capture_can_cancel_editor_text_before_model_mutation ... ok
+test editor_space_allows_native_text_without_activating_clickable_ancestor ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_focus_scroll.rs (/tmp/zgui-target/debug/deps/composition_focus_scroll-f3ae784a25784d83)
+
+running 5 tests
+test disabled_focus_rejected_and_unmounted_reveal_handler_released ... ok
+test redirected_focus_does_not_reveal_stale_event_target ... ok
+test oversized_focus_target_uses_nearest_edge_without_alternating ... ok
+test nested_focus_reveal_uses_immediate_inner_translation ... ok
+test tab_reveals_padded_viewport_and_manual_scroll_stays_put ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_image.rs (/tmp/zgui-target/debug/deps/composition_image-7d2654bcc67b0cd2)
+
+running 4 tests
+test image_same_source_is_idle_and_unmount_drops_binding_and_pixels ... ok
+test image_fills_allocated_content_and_reacts_to_padding_and_constraints ... ok
+test image_rejects_children_without_leaking_partial_mount ... ok
+test image_intrinsic_size_follows_source_and_preserves_nodes ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_image_fit.rs (/tmp/zgui-target/debug/deps/composition_image_fit-28585dcdd4111f45)
+
+running 4 tests
+test all_modes_center_in_padded_content_and_equal_styles_are_idle ... ok
+test fit_is_sparse_noninherited_and_wrapper_overrides_inner_mode ... ok
+test intrinsic_source_resize_and_scale_down_preserve_owned_nodes ... ok
+test fixed_fill_source_aspect_change_repaints_without_relayout_but_intrinsic_and_fit_reflow ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_initial_failure.rs (/tmp/zgui-target/debug/deps/composition_initial_failure-a8ef068393ca184a)
+
+running 5 tests
+test later_binding_panic_preserves_existing_view_and_subscriptions_for_retry ... ok
+test deferred_render_failure_cleans_new_root_without_restoring_removed_document ... ok
+test deferred_initial_failure_removes_only_its_public_mount_not_later_sibling ... ok
+test render_initial_binding_failure_preserves_previous_root_and_allows_retry ... ok
+test initial_conditional_and_keyed_descendant_binding_failures_cleanup_public_owner ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_letter_spacing.rs (/tmp/zgui-target/debug/deps/composition_letter_spacing-8c4340655b7cb56b)
+
+running 4 tests
+test inherited_spacing_reaches_components_and_slots_without_rebuilding ... ok
+test normalized_equivalent_spacing_is_idle_and_sparse_patch_restores_inheritance ... ok
+test editor_shaping_cache_invalidates_spacing_but_reuses_equivalent_zero ... ok
+test editor_spacing_changes_caret_and_wrapping_without_changing_selection_or_model ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_line_height.rs (/tmp/zgui-target/debug/deps/composition_line_height-87506bfe28da3b47)
+
+running 3 tests
+test sparse_reset_and_wrapper_override_preserve_equality_and_idle_damage ... ok
+test inherited_pitch_updates_labels_and_boxes_without_rebuilding_components ... ok
+test editor_pitch_tracks_inheritance_for_caret_pointer_and_vertical_navigation ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_menu.rs (/tmp/zgui-target/debug/deps/composition_menu-ea497b60570bf1a7)
+
+running 6 tests
+test disabled_menu_items_reject_pointer_and_invalid_leaf_cleanup ... ok
+test repeated_typeahead_cycles_even_when_a_label_matches_doubled_letters ... ok
+test menu_tab_closes_and_leaves_in_each_direction ... ok
+test keyed_component_menu_items_retain_identity_and_recover_after_focused_removal ... ok
+test nested_menu_activation_closes_entire_chain_before_callback ... ok
+test menu_keyboard_wrap_skip_typeahead_and_close_before_action ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_menu_scroll.rs (/tmp/zgui-target/debug/deps/composition_menu_scroll-a55a5b4014489250)
+
+running 2 tests
+test dynamic_menu_shrinks_after_overflow_content_is_removed ... ok
+test long_menu_reveals_keyboard_targets_and_scrolls_without_relayout ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_modal.rs (/tmp/zgui-target/debug/deps/composition_modal-8a129687df698930)
+
+running 7 tests
+test portal_failure_cleans_nodes_scopes_and_owned_resources ... ok
+test nondismissing_backdrop_preserves_focus_and_nested_initial_open_is_ordered ... ok
+test render_replaces_open_portal_without_losing_new_scope ... ok
+test modal_focus_traps_dismisses_and_restores_without_click_through ... ok
+test modal_portal_escapes_parent_clip_retains_children_and_recenters ... ok
+test nested_escape_closes_only_top_and_parent_close_unwinds_children ... ok
+test closing_or_removing_lower_sibling_keeps_top_and_repairs_focus_restore ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_percent.rs (/tmp/zgui-target/debug/deps/composition_percent-56297733270908c6)
+
+running 6 tests
+test full_size_tracks_window_and_equal_style_patches_produce_no_layout_or_damage ... ok
+test percentages_use_parent_content_box_and_reactive_resize_retains_children ... ok
+test sparse_patches_override_pixels_and_percentages_and_can_restore_base ... ok
+test percentage_image_overrides_intrinsic_size_and_stretches_after_parent_resize ... ok
+test percentage_editor_reflows_caret_after_parent_resize_without_editing_model ... ok
+test growing_split_retains_full_height_siblings_through_editor_refresh_and_window_resize ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_popover.rs (/tmp/zgui-target/debug/deps/composition_popover-71bf3baf0efe0dae)
+
+running 5 tests
+test popover_body_inherits_lexical_services_and_disposes_with_owner ... ok
+test popover_follows_anchor_transforms_flips_and_clamps_after_resize ... ok
+test popover_dismissal_restores_focus_and_keeps_panel_translation_additive ... ok
+test open_popover_tracks_anchor_scrolling_without_inheriting_viewport_clip ... ok
+test virtual_row_disposal_removes_open_popover_scope_and_subscriptions ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_progress.rs (/tmp/zgui-target/debug/deps/composition_progress-48ff8d199c160c69)
+
+running 2 tests
+test progress_normalizes_external_values_and_retains_disabled_semantics ... ok
+test progress_values_composite_without_layout_and_follow_allocated_size ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_read_only.rs (/tmp/zgui-target/debug/deps/composition_read_only-940759baa41aace2)
+
+running 3 tests
+test wrapper_override_and_event_prevention_remain_compositional ... ok
+test reactive_read_only_retains_editor_history_focus_and_disposes_its_subscription ... ok
+test read_only_editors_block_mutations_but_allow_selection_copy_and_external_model ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_scroll.rs (/tmp/zgui-target/debug/deps/composition_scroll-91909cd14a8b7ead)
+
+running 4 tests
+test disabled_scroll_blocks_input_and_unmount_releases_observers ... ok
+test ordinary_scroll_measures_dynamic_children_and_reclamps_on_resize ... ok
+test nested_scroll_consumes_motion_until_edge_then_bubbles ... ok
+test offset_updates_are_compositor_only_and_children_retain_local_state ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_scroll_x.rs (/tmp/zgui-target/debug/deps/composition_scroll_x-aa13c5adf6b17975)
+
+running 4 tests
+test horizontal_disabled_cleanup_and_oversized_focus ... ok
+test mixed_axis_wheels_route_to_the_matching_viewport ... ok
+test mixed_axis_batched_focus_reveals_without_rebuilding_or_layout ... ok
+test horizontal_scroll_follows_intrinsic_extent_padding_and_resize ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_scrollbar.rs (/tmp/zgui-target/debug/deps/composition_scrollbar-9ff52b6aa40edde7)
+
+running 5 tests
+test thumb_drag_survives_unrelated_button_release ... ok
+test horizontal_scrollbar_keyboard_numeric_and_translation_only ... ok
+test scrollbar_track_paging_thumb_capture_resize_and_cancel ... ok
+test hidden_scrollbar_releases_focus_and_allows_underlying_button ... ok
+test virtual_scrollbar_tracks_extent_and_leaf_validation_cleans_mount ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_slider.rs (/tmp/zgui-target/debug/deps/composition_slider-314eef114940fc63)
+
+running 5 tests
+test slider_value_only_updates_avoid_layout ... ok
+test slider_initial_disabled_semantics_match_input ... ok
+test slider_disabled_and_reactive_thumb_styles_preserve_model_ownership ... ok
+test slider_full_float_range_semantics_keyboard_and_cleanup ... ok
+test slider_tracks_allocated_size_padding_and_captured_drag ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_submenu.rs (/tmp/zgui-target/debug/deps/composition_submenu-ded2254030741412)
+
+running 2 tests
+test outside_cascade_click_closes_every_level_without_background_activation ... ok
+test batched_parent_pointer_handoff_preserves_one_activation_and_full_width_trigger ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_transform_normalization.rs (/tmp/zgui-target/debug/deps/composition_transform_normalization-3263172f6727d79a)
+
+running 1 test
+test reactive_invalid_translation_is_idle_and_sparse_removal_restores_base ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_virtual_keyboard.rs (/tmp/zgui-target/debug/deps/composition_virtual_keyboard-1af6b0be1a5a00f1)
+
+running 4 tests
+test disabled_opt_in_cleanup_and_invalid_view_validation ... ok
+test interactive_descendants_keep_keys_and_pointer_activation ... ok
+test retained_key_reorder_updates_focus_index_and_removal_falls_back ... ok
+test million_row_navigation_is_bounded_and_works_in_batches ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_virtual_list.rs (/tmp/zgui-target/debug/deps/composition_virtual_list-e2e6e27d14beed4d)
+
+running 5 tests
+test scrolling_with_same_visible_rows_changes_only_composition ... ok
+test wheel_scrolls_and_failed_constructor_preserves_existing_rows ... ok
+test reorder_updates_index_without_rebuilding_key_and_resize_expands_range ... ok
+test virtual_list_initial_disabled_semantics_and_wheel_agree ... ok
+test virtual_rows_are_bounded_retain_keys_and_dispose_offscreen_state ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/composition_wrap.rs (/tmp/zgui-target/debug/deps/composition_wrap-26aa6c92598b1310)
+
+running 5 tests
+test wrapped_pointer_hit_and_vertical_selection_use_visual_lines ... ok
+test equal_wrap_and_idle_geometry_do_not_relayout_or_damage ... ok
+test inherited_wrap_tracks_allocated_width_without_changing_model_or_selection ... ok
+test single_line_stays_unwrapped_and_reactive_wrap_toggle_preserves_editor ... ok
+test wrapped_wheel_scrolling_preserves_selection_and_keyboard_reveals_caret ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/deferred_mount_failure.rs (/tmp/zgui-target/debug/deps/deferred_mount_failure-5edbc2e6148e63a1)
+
+running 5 tests
+test binding_initial_callback_can_unmount_its_owner_without_resurrected_ownership ... ok
+test binding_removed_owner_is_rejected_before_registering_an_effect ... ok
+test deferred_failure_preserves_unrelated_mount_created_later_in_same_batch ... ok
+test initial_binding_failure_after_active_effect_cleans_returned_mount_handle ... ok
+test initial_binding_failure_after_outer_batch_cleans_only_its_mount ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/editor_accessible_selection.rs (/tmp/zgui-target/debug/deps/editor_accessible_selection-09b124081af9011b)
+
+running 3 tests
+test accessible_selection_clamps_unicode_preserves_direction_and_cancels_preedit ... ok
+test accessible_selection_obeys_cancellation_disability_modal_scope_and_disposal ... ok
+test selection_action_reveals_wrapped_caret_and_updates_committed_metadata ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/editor_autoscroll.rs (/tmp/zgui-target/debug/deps/editor_autoscroll-c7276c36138daac7)
+
+running 10 tests
+test held_boundary_rearms_after_resize_without_another_pointer_move ... ok
+test idle_advance_does_not_prepare_unrelated_dirty_layout ... ok
+test prevented_moves_do_not_arm_and_equal_model_writes_keep_the_gesture ... ok
+test resize_and_external_replacement_revalidate_retained_drag_geometry ... ok
+test stalled_ticks_have_bounded_motion_and_read_only_selection_preserves_history ... ok
+test dormant_boundary_gesture_cannot_reclaim_transferred_capture_or_another_editor_deadline ... ok
+test reversing_stationary_unit_drag_uses_opposite_original_edge ... ok
+test stationary_character_word_and_visual_line_selection_advance_without_reshaping ... ok
+test cancelled_or_invalid_owned_gestures_never_keep_deadlines ... ok
+test horizontal_single_line_and_multiline_nowrap_reverse_and_stop_at_edges ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/editor_ingress_normalization.rs (/tmp/zgui-target/debug/deps/editor_ingress_normalization-2941a36a1cc07311)
+
+running 2 tests
+test native_text_control_rejection_remains_atomic_after_line_ending_normalization ... ok
+test committed_editor_ingress_agrees_on_line_endings_and_preserves_tabs ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/editor_model_normalization.rs (/tmp/zgui-target/debug/deps/editor_model_normalization-9b9c66bcbaea96b1)
+
+running 4 tests
+test construction_normalization_respects_an_existing_outer_batch ... ok
+test canonical_writeback_settles_once_without_resurrecting_unmounted_bindings ... ok
+test initial_canonical_writeback_can_remove_the_editor_parent_without_retaining_bindings ... ok
+test initial_and_external_models_are_canonical_without_initial_undo_or_equal_value_edits ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/editor_paging.rs (/tmp/zgui-target/debug/deps/editor_paging-36724f68f90bf5c7)
+
+running 7 tests
+test paging_keeps_preferred_column_through_short_lines_and_arrow_navigation ... ok
+test capture_handler_can_prevent_paging_without_changing_selection_or_scroll ... ok
+test wrapped_unicode_paging_reuses_shapes_and_keeps_visual_end_affinity ... ok
+test paging_cancels_preedit_but_single_line_and_modified_keys_are_unhandled ... ok
+test paging_uses_padded_resized_viewport_and_preserves_history_and_shift_anchor ... ok
+test paging_reaches_empty_and_trailing_line_boundaries_and_allows_read_only ... ok
+test fractional_pitch_exact_last_row_landing_preserves_column ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/editor_pointer_selection.rs (/tmp/zgui-target/debug/deps/editor_pointer_selection-808dff4835b40a32)
+
+running 7 tests
+test double_click_drag_extends_whole_words_and_reverses_around_original_word ... ok
+test shift_click_and_drag_keep_existing_anchor_while_legacy_clicks_collapse ... ok
+test triple_click_drag_selects_visual_lines_without_consuming_next_wrap_row ... ok
+test word_selection_uses_the_clicked_glyph_on_both_sides_of_caret_midpoints ... ok
+test double_click_selects_complete_unicode_graphemes_and_separator_segments ... ok
+test single_line_triple_click_selects_all_and_cancel_stops_unit_drag ... ok
+test pointer_selection_is_read_only_safe_cancels_composition_and_preserves_history ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/editor_read_only.rs (/tmp/zgui-target/debug/deps/editor_read_only-aa70d3eb80016c8a)
+
+running 2 tests
+test entering_read_only_cancels_composition_once_and_preserves_undo_history ... ok
+test read_only_blocks_mutations_but_keeps_selection_copy_and_external_models ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/editor_shape_reuse.rs (/tmp/zgui-target/debug/deps/editor_shape_reuse-f93d9e8f5f08de83)
+
+running 6 tests
+test cached_layout_is_released_on_blur_and_removal_despite_retained_editor_handle ... ok
+test shaper_replacement_refreshes_metrics_even_when_text_and_font_are_equal ... ok
+test focus_owner_reacquires_geometry_and_retained_handle_cannot_refresh_removed_owner ... ok
+test unchanged_refresh_selection_scroll_and_visual_navigation_reuse_shaping ... ok
+test text_font_pitch_wrap_and_allocated_width_invalidate_reused_geometry ... ok
+test preedit_cursor_changes_reuse_geometry_but_composed_text_changes_invalidate ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/editor_streaming_history.rs (/tmp/zgui-target/debug/deps/editor_streaming_history-dc070d06005f13fe)
+
+running 4 tests
+test unicode_model_replacements_round_trip_original_selection_and_cancel_preedit ... ok
+test long_document_streaming_retains_small_updates_under_default_and_small_budgets ... ok
+test minimal_replacement_budget_counts_both_changed_sides_and_preserves_redo_branch ... ok
+test external_ui_model_streaming_uses_delta_history_and_commits_undo_back_to_model ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/editor_wrap_navigation.rs (/tmp/zgui-target/debug/deps/editor_wrap_navigation-7f026034037701d9)
+
+running 2 tests
+test end_keeps_upstream_wrap_affinity_and_home_stays_on_that_visual_row ... ok
+test vertical_navigation_remembers_visual_column_through_short_lines_and_resets_on_home ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hidden_blur_damage.rs (/tmp/zgui-target/debug/deps/hidden_blur_damage-5e0bc7d8e5521627)
+
+running 2 tests
+test directly_transparent_filter_is_excluded_but_positive_opacity_is_not ... ok
+test transparent_ancestor_filter_does_not_expand_background_damage ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/image_updates.rs (/tmp/zgui-target/debug/deps/image_updates-00384fc075af37ce)
+
+running 1 test
+test equal_image_dimensions_repaint_without_layout_but_intrinsic_resize_reflows ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/layout_feedback.rs (/tmp/zgui-target/debug/deps/layout_feedback-08642a0fe7d9669a)
+
+running 1 test
+test virtual_row_mount_and_disposal_feedback_is_reported_and_can_be_repaired ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/lifecycle_resources.rs (/tmp/zgui-target/debug/deps/lifecycle_resources-7c4d656ad542b252)
+
+running 4 tests
+test completed_task_guard_destructor_can_spawn_through_retained_tasks_capability ... ok
+test task_completion_check_can_spawn_and_new_guard_stays_owned_until_unmount ... ok
+test component_resource_destructor_can_remove_sibling_with_retained_handles ... ok
+test retained_handles_do_not_keep_keyed_rows_slots_services_or_effects_alive ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/panel_layout.rs (/tmp/zgui-target/debug/deps/panel_layout-5dd418d8edb90ac8)
+
+running 5 tests
+test decoration_changes_reuse_layout_but_layout_direction_reflows ... ok
+test asymmetric_padding_intrinsic_sizes_and_children ... ok
+test asymmetric_padding_constrains_flex_and_reflows_on_resize ... ok
+test panel_shadow_old_and_new_positions_are_damaged ... ok
+test fluent_absolute_and_relative_update_flow_reactively ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/pointer_drag_buttons.rs (/tmp/zgui-target/debug/deps/pointer_drag_buttons-6c6837ad6315240b)
+
+running 2 tests
+test editor_selection_survives_unrelated_release_and_cancels_on_primary_release ... ok
+test legacy_and_declarative_slider_drag_survive_unrelated_release ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/portal_scope_regressions.rs (/tmp/zgui-target/debug/deps/portal_scope_regressions-1baa19fb0d8c88b1)
+
+running 6 tests
+test modal_slot_keeps_callers_provider_when_receiver_shadows_it ... ok
+test disabled_modal_panel_has_no_enabled_descendant_and_escape_still_dismisses ... ok
+test unmounting_opening_modal_from_prior_focus_blur_is_safe ... ok
+test modal_inherits_logical_ancestor_disability ... ok
+test popover_inherits_logical_ancestor_disability ... ok
+test render_replacement_preserves_new_modal_focus_after_disposing_old_portal ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/semantics_text_allocations.rs (/tmp/zgui-target/debug/deps/semantics_text_allocations-4177def366c99bf5)
+
+running 2 tests
+test text_metadata_updates_reuse_storage_and_only_advance_changed_revisions ... ok
+test warmed_editor_selection_and_policy_refresh_do_not_copy_the_document ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/submenu_regressions.rs (/tmp/zgui-target/debug/deps/submenu_regressions-2d0fab26db942ee3)
+
+running 6 tests
+test reentrant_owner_disposal_during_pointer_scope_restore_keeps_input_metadata_removed ... ok
+test parent_menu_action_is_clickable_once_while_child_popup_is_open ... ok
+test disabling_open_submenu_closes_only_child_and_blocks_trigger_activation ... ok
+test removing_open_submenu_branch_keeps_parent_menu_usable ... ok
+test clicking_parent_sibling_trigger_switches_child_in_one_gesture ... ok
+test opening_sibling_submenu_replaces_child_scope_and_preserves_parent ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/widgets.rs (/tmp/zgui-target/debug/deps/widgets-a22e24dbe316010f)
+
+running 17 tests
+test disabling_focused_button_clears_focus_visual ... ok
+test checkbox_reacts_to_activation_and_external_state ... ok
+test button_pointer_keyboard_disabled_and_removal ... ok
+test disabled_container_blocks_nested_controls_and_blurs_focused_child ... ok
+test empty_overlay_passes_through_but_disabled_interactive_overlay_blocks ... ok
+test application_listeners_extend_buttons_and_editors_without_replacing_behavior ... ok
+test invalid_slider_and_progress_values_normalize_without_nonfinite_geometry ... ok
+test clipboard_normalizes_platform_line_endings_and_preedit_cursor_is_safe ... ok
+test empty_ime_preedit_cancels_without_hiding_selected_committed_text ... ok
+test modal_blocks_outside_clicks_and_removed_scope_restores_focus ... ok
+test progress_tracks_allocated_dimensions_without_model_changes ... ok
+test native_ime_caret_follows_selection_and_preedit_has_underline ... ok
+test nested_modal_scopes_trap_focus_pointer_and_restore ... ok
+test slider_captures_drag_clamps_and_supports_keyboard ... ok
+test slider_resize_keeps_pointer_mapping_and_fill_in_sync ... ok
+test removing_subtree_disposes_subscriptions_and_editors ... ok
+test text_input_unicode_ime_clipboard_undo_and_semantics ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/core_bench.rs (/tmp/zgui-target/debug/examples/core_bench-7c4d31a0ae4c66c4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/editor_streaming.rs (/tmp/zgui-target/debug/examples/editor_streaming-f10149261f5e2e4e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/model.rs (/tmp/zgui-target/debug/examples/model-bac5fe5b4f1c1091)
+
+running 3 tests
+test tests::empty_row_access_maps_to_bounds_error ... ok
+test tests::unmount_cancels_yielding_click_handler ... ok
+test tests::components_preserve_sample_updates_and_partial_append_errors ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/tmp/zgui-target/debug/deps/zgui_desktop-fc5b67b08eede3c2)
+
+running 52 tests
+test accessibility::projection_key_tests::replacing_semantics_instance_cannot_reuse_coincident_node_revisions ... ok
+test application::tests::requested_window_size_rejects_nonfinite_and_unrepresentable_dimensions ... ok
+test accessibility::editor_text_tests::equal_value_role_change_from_nontext_creates_text_runs ... ok
+test application::tests::native_cursor_roles_distinguish_editable_and_actionable_controls ... ok
+test application::tests::retained_window_factory_releases_native_clipboard_after_manager_shutdown ... ignored, requires an owned X11 display; run alone with --test-threads=1
+test application::tests::keyboard_space_encodings_and_unicode_are_preserved ... ok
+test application::tests::resized_and_scaled_geometry_persists_for_native_recreation ... ok
+test application::tests::wheel_down_is_positive_in_logical_scene_coordinates ... ok
+test accessibility::editor_text_tests::static_label_value_and_text_content_update_for_native_names ... ok
+test accessibility::projection_key_tests::children_visibility_and_reconnect_invalidate_projection_revisions ... ok
+test accessibility::editor_text_tests::long_lines_split_bounded_metadata_without_changing_text_or_line_linkage ... ok
+test accessibility::editor_text_tests::read_only_projection_preserves_text_selection_and_focus_actions ... ok
+test accessibility::scroll_tests::native_scroll_actions_page_clamp_and_respect_disabled ... ok
+test accessibility::scroll_tests::horizontal_native_actions_use_width_and_reject_vertical_requests ... ok
+test accessibility::editor_text_tests::mixed_owner_selections_are_rejected_and_oversized_graphemes_keep_value ... ok
+test accessibility::editor_text_tests::native_text_reads_unicode_lines_and_maps_selection_without_byte_truncation ... ok
+test application::tests::window_commands_preserve_recreation_options ... ok
+test application::tests::window_handles_can_close_from_worker_threads ... ok
+test accessibility::projection_key_tests::unchanged_editor_skips_unrelated_updates_but_tracks_ancestor_and_geometry ... ok
+test focus_memory::tests::activation_consumes_memory_and_does_not_replay_focus ... ok
+test focus_memory::tests::deactivation_cancels_pressed_controls_before_blurring ... ok
+test focus_memory::tests::repeated_deactivation_preserves_focus_and_sends_blur_once ... ok
+test focus_memory::tests::removed_or_disabled_targets_are_not_restored ... ok
+test native_ime::tests::rapid_read_only_toggle_keeps_native_reset_boundary ... ok
+test native_ime::tests::accessible_value_cancellation_uses_same_reset_policy ... ok
+test presentation::tests::repairs_recycled_buffers_using_their_age ... ok
+test native_ime::tests::prevented_accessible_selection_does_not_restart_composition ... ok
+test presentation_retry::tests::occlusion_preserves_new_damage_until_visibility_returns ... ok
+test native_ime::tests::prevented_preedit_tracks_actual_editor_state ... ok
+test presentation_retry::tests::timeout_retries_retained_frame_without_new_damage_then_sleeps ... ok
+test native_ime::tests::cancellation_revision_does_not_restart_native_empty_preedit_commit_or_new_owner ... ok
+test native_ime::tests::accessible_selection_restarts_composition_and_rejects_old_native_text ... ok
+test presentation_retry::visibility_tests::invisible_surfaces_cancel_retry_deadlines_but_keep_pending_frame ... ok
+test presentation_retry::visibility_tests::redraw_cannot_override_platform_occlusion ... ok
+test native_ime::tests::external_model_and_direct_selection_cancellation_restart_observed_session ... ok
+test native_ime::tests::late_composition_after_native_blur_cannot_edit_remembered_focus ... ok
+test native_ime::tests::read_only_editor_rejects_ime_without_losing_logical_focus ... ok
+test native_ime::tests::stale_session_cannot_deliver_to_a_different_or_removed_editor ... ok
+test scoped_task::tests::cancel_before_executor_poll_releases_captures ... ok
+test scoped_task::tests::completed_future_destructor_can_reenter_its_cancellation_state ... ok
+test scoped_task::tests::self_cancellation_during_poll_is_safe ... ok
+test scoped_task::tests::view_disposal_wakes_sleeping_task_and_drops_capture_immediately ... ok
+test scoped_task::tests::window_executor_drop_cancels_even_when_guard_survives ... ok
+test presentation_retry::visibility_tests::hidden_updates_preserve_damage_until_restoration ... ok
+test raster::tests::panel_background_border_and_children_have_correct_paint_order ... ok
+test raster::extended_tests::shadow_damage_and_clipped_images_match_full_repaint ... ok
+test raster::tests::blur_and_edge_fade_change_pixels_and_stay_stable ... ok
+test raster::isolation_tests::opacity_is_applied_once_to_overlapping_children ... ok
+test raster::tests::incremental_matches_full_after_move_opacity_and_removal ... ok
+test raster::hidden_effect_tests::transparent_subtrees_do_not_blur_backdrop_or_rasterize_text ... ok
+test raster::line_height_tests::changing_line_pitch_repairs_old_pixels_and_keys_software_shapes ... ok
+test raster::letter_spacing_tests::tracking_changes_repair_old_glyphs_and_distinguish_cached_font_keys ... ok
+
+test result: ok. 51 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.08s
+
+     Running unittests src/main.rs (/tmp/zgui-target/debug/deps/zgui_demo-ff4c433f618eabe2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/accessibility.rs (/tmp/zgui-target/debug/deps/accessibility-8e29a4b11d90f57e)
+
+running 13 tests
+test composed_image_exports_alt_text_and_removes_native_identity ... ok
+test composed_checkbox_exports_live_toggle_state_and_rejects_disabled_activation ... ok
+test composed_progress_exports_read_only_live_numeric_state ... ok
+test hidden_dialog_subtree_leaves_native_tree_and_actions ... ok
+test horizontal_scroll_exports_only_horizontal_native_actions ... ok
+test disabled_container_marks_native_descendants_disabled ... ok
+test composed_slider_exports_range_value_and_accessible_adjustments ... ok
+test consumer_accepts_hierarchy_root_semantics_focus_removal_and_reactivation ... ok
+test composed_scroll_exports_page_actions_and_retained_children ... ok
+test slider_and_editor_accessible_actions_update_values_and_reject_disabled ... ok
+test overlay_scrollbar_exports_value_actions_orientation_and_hides_without_overflow ... ok
+test focus_reveal_updates_native_descendant_bounds_and_focus ... ok
+test virtual_keyboard_navigation_exports_offscreen_row_position_with_bounded_work ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/accessibility_allocations.rs (/tmp/zgui-target/debug/deps/accessibility_allocations-9e5f19217e87dee2)
+
+running 1 test
+test unrelated_semantic_updates_do_not_reallocate_large_editor_projection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/damage.rs (/tmp/zgui-target/debug/deps/damage-5c7cea7eabe7bbf7)
+
+running 4 tests
+test styled_fonts_change_software_pixels_and_damage_matches_full_render ... ok
+test removing_last_blur_restores_incremental_compositing_without_ghosts ... ok
+test incremental_matches_full_with_filter_changes_and_removal ... ok
+test incremental_matches_full_for_randomized_retained_mutations ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.88s
+
+     Running tests/logical_accessibility.rs (/tmp/zgui-target/debug/deps/logical_accessibility-796ba53d1160b3bb)
+
+running 2 tests
+test logical_parent_connects_portal_without_changing_physical_bounds ... ok
+test invalid_hidden_self_and_cyclic_logical_parents_keep_valid_native_tree ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/menu_accessibility.rs (/tmp/zgui-target/debug/deps/menu_accessibility-b70fbbe82050e45d)
+
+running 4 tests
+test menu_activation_can_unmount_its_owner_without_leaving_native_nodes ... ok
+test disabled_menu_item_rejects_native_activation_and_live_disable_updates_consumer ... ok
+test menu_action_can_open_dialog_without_stale_native_focus_or_scope ... ok
+test menu_projects_roles_disabled_actions_and_keyboard_focus_then_restores_anchor ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/overlays_accessibility.rs (/tmp/zgui-target/debug/deps/overlays_accessibility-5feb5ec316a6736d)
+
+running 4 tests
+test ordinary_dialog_role_does_not_imply_modal_interaction ... ok
+test legacy_focus_trapping_dialog_exports_modal_metadata ... ok
+test anchored_popup_projects_modal_dialog_at_anchor_bounds_and_restores_focus ... ok
+test modal_native_projection_tracks_visibility_focus_and_modal_state ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/submenu_accessibility.rs (/tmp/zgui-target/debug/deps/submenu_accessibility-3226693a4dcc882b)
+
+running 2 tests
+test submenu_exposes_popup_trigger_hierarchy_and_right_left_focus_transitions ... ok
+test disabling_submenu_removes_native_popup_and_disables_trigger ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/atspi.rs (/tmp/zgui-target/debug/examples/atspi-9924aecd14332085)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/checkbox.rs (/tmp/zgui-target/debug/examples/checkbox-6ca71e8cc1563cea)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/component_workload.rs (/tmp/zgui-target/debug/examples/component_workload-3540778b6c2d3397)
+
+running 1 test
+test tests::public_components_match_geometry_and_bound_virtual_rows ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests examples/components.rs (/tmp/zgui-target/debug/examples/components-590b99ad3745d465)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/disabled_interaction.rs (/tmp/zgui-target/debug/examples/disabled_interaction-083c956516ea3cf8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/dpi_transition.rs (/tmp/zgui-target/debug/examples/dpi_transition-1ddbb091a52d02c3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/editor_autoscroll.rs (/tmp/zgui-target/debug/examples/editor_autoscroll-ce7343057be485bb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/editor_paging.rs (/tmp/zgui-target/debug/examples/editor_paging-f09dfc5e47ed9733)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/editor_selection.rs (/tmp/zgui-target/debug/examples/editor_selection-354da85e50a14933)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/effects.rs (/tmp/zgui-target/debug/examples/effects-a608d208079bc297)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/event_hooks.rs (/tmp/zgui-target/debug/examples/event_hooks-a00116c99db517ec)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/external_ime.rs (/tmp/zgui-target/debug/examples/external_ime-bfcec050441bc2a7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/focus_scroll.rs (/tmp/zgui-target/debug/examples/focus_scroll-81e56da4bc5be74d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/form.rs (/tmp/zgui-target/debug/examples/form-c6d014707c54a643)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/gallery.rs (/tmp/zgui-target/debug/examples/gallery-507f9879a789d264)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/held_keys.rs (/tmp/zgui-target/debug/examples/held_keys-4d08334d21cfdf86)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/hidden_updates.rs (/tmp/zgui-target/debug/examples/hidden_updates-524bf98599e574bd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/history_limits.rs (/tmp/zgui-target/debug/examples/history_limits-53657cdb204ef65e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/horizontal_scroll.rs (/tmp/zgui-target/debug/examples/horizontal_scroll-79c3c494f38df901)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/image_fit.rs (/tmp/zgui-target/debug/examples/image_fit-17a04b33944c0f8d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/images.rs (/tmp/zgui-target/debug/examples/images-fbe5a2076724009b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/keyboard_chords.rs (/tmp/zgui-target/debug/examples/keyboard_chords-06387c4b1406d42e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/letter_spacing.rs (/tmp/zgui-target/debug/examples/letter_spacing-1c4a7d084e11624b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/line_height.rs (/tmp/zgui-target/debug/examples/line_height-6aa70825dfbfd45b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/live_dpi_pointer.rs (/tmp/zgui-target/debug/examples/live_dpi_pointer-58fb56b33d1813cc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/menus.rs (/tmp/zgui-target/debug/examples/menus-27281e2d9e854f90)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/model_text.rs (/tmp/zgui-target/debug/examples/model_text-9616e16a6bad7d76)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/native_ime.rs (/tmp/zgui-target/debug/examples/native_ime-123b8e17dea816fa)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/overlays.rs (/tmp/zgui-target/debug/examples/overlays-ee2f8802d7645b7a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/percent_sizes.rs (/tmp/zgui-target/debug/examples/percent_sizes-27b6771ff7a77d7b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/pointer_chords.rs (/tmp/zgui-target/debug/examples/pointer_chords-051ac251005a69c9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/progress.rs (/tmp/zgui-target/debug/examples/progress-aa1635a1e4d4be47)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/read_only.rs (/tmp/zgui-target/debug/examples/read_only-8e4f1a0de84339d4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/scroll.rs (/tmp/zgui-target/debug/examples/scroll-825a75af3b3406a6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/scrollbars.rs (/tmp/zgui-target/debug/examples/scrollbars-9a4a1135cfbdddcf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/slider.rs (/tmp/zgui-target/debug/examples/slider-105e79ab03b29413)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/submenus.rs (/tmp/zgui-target/debug/examples/submenus-79f6ad952495da79)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/virtual_keyboard.rs (/tmp/zgui-target/debug/examples/virtual_keyboard-12c658cfbbfd75a0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/window_controls.rs (/tmp/zgui-target/debug/examples/window_controls-e474f0e543eaf943)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/windows.rs (/tmp/zgui-target/debug/examples/windows-558f630829fafb6a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/workbench.rs (/tmp/zgui-target/debug/examples/workbench-99280185644de6b7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/wrapped_editor.rs (/tmp/zgui-target/debug/examples/wrapped_editor-ed4bea16a886be51)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/tmp/zgui-target/debug/deps/zgui_gpu-e64d79d31eecdb29)
+
+running 24 tests
+test blur_damage_tests::chained_filters_expand_to_fixed_point_independent_of_order ... ok
+test blur_damage_tests::distant_damage_is_local_and_sampling_halo_activates_filter ... ok
+test blur_damage_tests::fractional_output_rounds_before_integer_kernel_halo_and_clips_viewport ... ok
+test surface::tests::outdated_preserves_surface_and_reconfigures ... ok
+test surface::tests::lost_recreates_before_configuring_and_acquires_replacement ... ok
+test surface::tests::recovered_surface_can_skip_then_succeed_on_a_later_call ... ok
+test surface::tests::recreation_and_acquisition_errors_propagate_without_retry ... ok
+test surface::tests::repeated_loss_or_outdated_is_bounded_without_unused_recovery ... ok
+test surface::tests::skipped_frames_are_distinct_and_do_not_retry_or_configure ... ok
+test blur_damage_tests::reconstruction_covers_integer_sampling_support_across_fractional_scales ... ok
+test text::line_height_tests::default_measurement_includes_the_same_trailing_caret_row ... ok
+test text::letter_spacing_tests::extreme_tracking_remains_finite ... ok
+test text::visual_line_tests::wrapped_unicode_hit_caret_and_selection_share_visual_lines ... ok
+test text::line_height_tests::custom_pitch_preserves_wrapping_and_visual_edges ... ok
+test text::visual_line_tests::logical_visual_row_range_includes_mixed_bidi_clusters_beyond_physical_edges ... ok
+test text::visual_line_tests::visual_row_ranges_exclude_hard_endings_and_preserve_empty_rows_and_wrap_affinity ... ok
+test text::letter_spacing_tests::cpu_raster_uses_pixel_tracking_for_each_shaped_glyph ... ok
+test text::line_height_tests::explicit_pitch_matches_carets_hit_selection_and_trailing_empty_line ... ok
+test text::visual_line_tests::combining_interior_snaps_to_grapheme_and_crlf_edges_stay_on_line ... ok
+test text::letter_spacing_tests::pixel_tracking_changes_glyph_advances_not_by_font_size_multiple ... ok
+test text::line_height_tests::software_shaping_uses_the_same_explicit_pitch ... ok
+test text::visual_line_tests::bidi_visual_edges_stay_on_the_selected_wrapped_row ... ok
+test text::letter_spacing_tests::unicode_and_negative_tracking_keep_finite_geometry_and_grapheme_hits ... ok
+test text::cache_weight_tests::native_accounting_includes_shape_and_layout_capacities ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/editor_selection.rs (/tmp/zgui-target/debug/deps/editor_selection-365c7c6e8e1b6a02)
+
+running 1 test
+test triple_click_selects_full_logical_row_in_mixed_direction_text ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/pixels.rs (/tmp/zgui-target/debug/deps/pixels-2305dad3a907f4f1)
+
+running 53 tests
+test backdrop_blur_reconstructs_without_feedback ... ok
+test blur_inside_isolated_layer_rebuilds_on_backdrop_mutation ... ok
+test bounded_blur_damage_cached_layer_root_samples_changed_parent_backdrop ... ok
+test independent_device_lifecycle_stress ... ignored, opt-in independent-device lifecycle stress; may consume substantial driver resources
+test bounded_blur_damage_cascades_through_overlapping_filters_without_feedback ... ok
+test bounded_blur_damage_distant_and_backdrop_halo_updates ... ok
+test bounded_blur_damage_fractional_scale_and_sigma_clamp_match_fresh_frames ... ok
+test bounded_blur_damage_respects_clipped_and_offscreen_filter_outputs ... ok
+test bounded_blur_damage_many_fractional_mutations_match_fresh_frames ... ok
+test composed_fluent_styles_render_and_repaint_without_relayout ... ok
+test declarative_editors_keep_styled_text_caret_and_selection_correct_when_resized ... ok
+test declarative_images_repaint_source_and_allocated_content_without_padding_bleed ... ok
+test declarative_menu_focus_and_dismissal_match_full_repaint ... ok
+test declarative_portals_restore_pixels_and_track_clipped_anchors_without_layout ... ok
+test declarative_progress_composites_fill_without_layout_or_padding_bleed ... ok
+test declarative_slider_damage_clears_old_thumb_and_resized_surface ... ok
+test declarative_scroll_clips_children_and_repairs_damage_without_relayout ... ok
+test declarative_virtual_rows_clip_padding_and_repair_scroll_damage ... ok
+test decorated_container_paints_background_before_children ... ok
+test fluent_text_padding_and_background_render_as_one_box ... ok
+test font_selection_changes_pixels_and_measurement_without_stale_cached_glyphs ... ok
+test hidden_oversized_descendant_does_not_inflate_visible_isolated_layer ... ok
+test horizontal_scroll_clips_padding_and_repairs_compositor_damage ... ok
+test glyph_atlas_grows_only_when_a_frame_needs_more_capacity ... ok
+test focused_scroll_descendant_is_revealed_with_correct_damage ... ok
+test image_and_svg_decoding_are_bounded_and_alpha_correct ... ok
+test image_cache_reclaims_removed_nodes_and_rejects_oversized_allocations ... ok
+test independent_devices_render_concurrently_with_bounded_workers ... ok
+test inherited_letter_spacing_updates_editor_and_pixels_without_new_glyph_uploads ... ok
+test inherited_line_height_reflows_glyphs_and_editor_without_rasterizing_again ... ok
+test invisible_isolated_images_defer_upload_and_reveal_cached_pixels_correctly ... ok
+test isolated_opacity_composites_once_and_retains_transformed_subtrees ... ok
+test isolated_overflow_and_fractional_translation_reuse_content ... ok
+test layer_texture_budget_fails_before_allocation_and_recovers_after_removal ... ok
+test nested_layers_apply_opacity_at_each_boundary_and_invalidate_ancestors ... ok
+test nonfinite_effects_normalize_to_stable_pixels_and_repeated_writes_stay_idle ... ok
+test nonfinite_translations_restore_pixels_without_repainting_retained_layers ... ok
+test object_fit_pixels_crop_center_and_reuse_uploaded_image_across_transitions ... ok
+test overflowing_menu_keeps_keyboard_focus_pixels_inside_padded_viewport ... ok
+test overlay_scrollbar_thumb_translates_and_clears_when_content_shrinks ... ok
+test percentage_panel_resize_updates_damage_and_keeps_idle_layout_cached ... ok
+test retained_damage_alpha_text_and_scale ... ok
+test rounded_border_shadow_images_and_background_damage ... ok
+test scene_installs_native_text_geometry ... ok
+test shaped_hit_caret_and_disjoint_bidi_selection_use_visual_clusters ... ok
+test shared_device_and_fonts_outlive_individual_renderers_with_lazy_atlases ... ok
+test submenu_side_flip_and_dismissal_match_full_repaint_without_layout ... ok
+test text_metrics_match_editor_line_pitch ... ok
+test thousand_streaming_frames_keep_caches_bounded_and_reuse_vertices ... ok
+test unchanged_native_editor_reuses_shaping_and_preserves_damage_pixels ... ok
+test virtual_keyboard_end_home_repaint_only_retained_visible_rows ... ok
+test wrapped_editor_pixels_follow_allocation_selection_and_preedit ... ok
+test zero_opacity_backdrop_blur_preserves_pixels_before_and_after_reveal ... ok
+
+test result: ok. 52 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 7.14s
+
+     Running unittests src/lib.rs (/tmp/zgui-target/debug/deps/zgui_workload-84c7378fdbabb6cf)
+
+running 2 tests
+test tests::visible_range_uses_two_rows_of_overscan_on_each_side ... ok
+test tests::bounded_and_deterministic ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

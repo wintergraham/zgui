@@ -1,0 +1,58 @@
+[
+  {
+    "stage": "read_only_cancellation",
+    "replaced": true,
+    "preedit": false,
+    "focus": true,
+    "focus_changes": 1,
+    "model": "replacement"
+  },
+  {
+    "stage": "editable_again",
+    "replaced": true,
+    "preedit": false,
+    "focus": true,
+    "focus_changes": 1,
+    "model": "replacement"
+  },
+  {
+    "stage": "old_candidate_does_not_commit",
+    "replaced": true,
+    "preedit": false,
+    "focus": true,
+    "focus_changes": 1,
+    "model": "replacement"
+  },
+  {
+    "stage": "ordinary_backspace",
+    "replaced": true,
+    "preedit": false,
+    "focus": true,
+    "focus_changes": 1,
+    "model": "replacemen"
+  },
+  {
+    "stage": "ordinary_input",
+    "replaced": true,
+    "preedit": false,
+    "focus": true,
+    "focus_changes": 1,
+    "model": "replacemen7"
+  },
+  {
+    "stage": "fresh_preedit",
+    "replaced": true,
+    "preedit": true,
+    "focus": true,
+    "focus_changes": 1,
+    "model": "replacemen7"
+  },
+  {
+    "stage": "fresh_commit",
+    "replaced": true,
+    "preedit": false,
+    "focus": true,
+    "focus_changes": 1,
+    "model": "replacemen7\u4f60\u597d"
+  }
+]

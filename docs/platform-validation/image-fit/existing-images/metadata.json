@@ -1,0 +1,12 @@
+{
+  "binary_sha256": "52416ef9b1342402e210760ef756d20f5c28e2ecfc2438b74ed1a01f1ed4c6ac",
+  "command": [
+    "python3",
+    "scripts/images_smoke.py",
+    "/tmp/zgui-target/debug/examples/images",
+    "--output",
+    "/tmp/zgui-image-fit-existing"
+  ],
+  "source_archive": "../source.tar.gz",
+  "runner_sha256": "2e5bff471039524fecc13ba0c15a177b79c77b0e8ccf384996883570534a0baf"
+}

@@ -1,0 +1,8 @@
+[ 760616.519] zwp_text_input_v3#20.preedit_string("n", 0, 1)
+[ 760616.552] zwp_text_input_v3#20.done(8)
+[ 760616.640] wl_buffer#41.release()
+[ 760617.914]  -> wl_surface#28.attach(wl_buffer#41, 0, 0)
+[ 760617.936]  -> wl_surface#28.damage_buffer(0, 0, 1200, 800)
+[ 760617.948]  -> wl_surface#28.commit()
+[ 760617.993]  -> zwp_text_input_v3#20.set_cursor_rectangle(54, 80, 1, 24)
+[ 760618.012]  -> zwp_text_input_v3#20.commit()

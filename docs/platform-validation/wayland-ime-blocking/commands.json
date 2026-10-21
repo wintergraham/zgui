@@ -1,0 +1,59 @@
+[
+  {
+    "condition": "baseline-0",
+    "argv": [
+      "/usr/bin/python3",
+      "docs/platform-validation/wayland-ime-blocking/sources/wayland_ime_blocking_probe.py",
+      "/tmp/zgui-target/debug/zgui-ime-blocking-probe",
+      "--sessions",
+      "1",
+      "--bursts",
+      "2",
+      "--preedit-block-ms",
+      "0",
+      "--preedit-block-position",
+      "before-cursor",
+      "--present-on-ime",
+      "--output",
+      "docs/platform-validation/wayland-ime-blocking/baseline-0"
+    ]
+  },
+  {
+    "condition": "before-80",
+    "argv": [
+      "/usr/bin/python3",
+      "docs/platform-validation/wayland-ime-blocking/sources/wayland_ime_blocking_probe.py",
+      "/tmp/zgui-target/debug/zgui-ime-blocking-probe",
+      "--sessions",
+      "1",
+      "--bursts",
+      "2",
+      "--preedit-block-ms",
+      "80",
+      "--preedit-block-position",
+      "before-cursor",
+      "--present-on-ime",
+      "--output",
+      "docs/platform-validation/wayland-ime-blocking/before-80"
+    ]
+  },
+  {
+    "condition": "after-80",
+    "argv": [
+      "/usr/bin/python3",
+      "docs/platform-validation/wayland-ime-blocking/sources/wayland_ime_blocking_probe.py",
+      "/tmp/zgui-target/debug/zgui-ime-blocking-probe",
+      "--sessions",
+      "1",
+      "--bursts",
+      "2",
+      "--preedit-block-ms",
+      "80",
+      "--preedit-block-position",
+      "after-cursor",
+      "--present-on-ime",
+      "--output",
+      "docs/platform-validation/wayland-ime-blocking/after-80"
+    ]
+  }
+]

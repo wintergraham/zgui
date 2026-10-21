@@ -1,0 +1,39 @@
+SNAPSHOT 1 parent=true child=false focus=Some("First")
+BOUNDS 1 parent-menu Rect { x: 260.0, y: 104.0, width: 200.0, height: 132.0 }
+BOUNDS 1 child-menu Rect { x: 456.0, y: 152.0, width: 180.0, height: 80.0 }
+SNAPSHOT 2 parent=true child=true focus=Some("Action")
+BOUNDS 2 parent-menu Rect { x: 260.0, y: 104.0, width: 200.0, height: 132.0 }
+BOUNDS 2 child-menu Rect { x: 456.0, y: 152.0, width: 180.0, height: 80.0 }
+SNAPSHOT 3 parent=true child=true focus=Some("Action")
+BOUNDS 3 parent-menu Rect { x: 260.0, y: 104.0, width: 200.0, height: 132.0 }
+BOUNDS 3 child-menu Rect { x: 84.0, y: 152.0, width: 180.0, height: 80.0 }
+SNAPSHOT 4 parent=true child=false focus=Some("More")
+BOUNDS 4 parent-menu Rect { x: 260.0, y: 104.0, width: 200.0, height: 132.0 }
+BOUNDS 4 child-menu Rect { x: 84.0, y: 152.0, width: 180.0, height: 80.0 }
+SNAPSHOT 5 parent=true child=true focus=Some("Action")
+BOUNDS 5 parent-menu Rect { x: 260.0, y: 104.0, width: 200.0, height: 132.0 }
+BOUNDS 5 child-menu Rect { x: 84.0, y: 152.0, width: 180.0, height: 80.0 }
+SNAPSHOT 6 parent=true child=false focus=Some("More")
+BOUNDS 6 parent-menu Rect { x: 260.0, y: 104.0, width: 200.0, height: 132.0 }
+BOUNDS 6 child-menu Rect { x: 84.0, y: 152.0, width: 180.0, height: 80.0 }
+SNAPSHOT 7 parent=true child=true focus=Some("Action")
+BOUNDS 7 parent-menu Rect { x: 260.0, y: 104.0, width: 200.0, height: 132.0 }
+BOUNDS 7 child-menu Rect { x: 84.0, y: 152.0, width: 180.0, height: 80.0 }
+ACTION parent=false child=false selections=1
+SNAPSHOT 8 parent=false child=false focus=Some("Open actions")
+BOUNDS 8 parent-menu Rect { x: 260.0, y: 104.0, width: 200.0, height: 132.0 }
+BOUNDS 8 child-menu Rect { x: 84.0, y: 152.0, width: 180.0, height: 80.0 }
+SNAPSHOT 9 parent=true child=true focus=Some("Action")
+BOUNDS 9 parent-menu Rect { x: 260.0, y: 104.0, width: 200.0, height: 132.0 }
+BOUNDS 9 child-menu Rect { x: 84.0, y: 152.0, width: 180.0, height: 80.0 }
+PARENT_ACTION parent=false child=false count=1
+SNAPSHOT 10 parent=false child=false focus=Some("Open actions")
+BOUNDS 10 parent-menu Rect { x: 260.0, y: 104.0, width: 200.0, height: 132.0 }
+BOUNDS 10 child-menu Rect { x: 84.0, y: 152.0, width: 180.0, height: 80.0 }
+SNAPSHOT 11 parent=true child=true focus=Some("Action")
+BOUNDS 11 parent-menu Rect { x: 260.0, y: 104.0, width: 200.0, height: 132.0 }
+BOUNDS 11 child-menu Rect { x: 84.0, y: 152.0, width: 180.0, height: 80.0 }
+SNAPSHOT 12 parent=false child=false focus=Some("Open actions")
+BOUNDS 12 parent-menu Rect { x: 260.0, y: 104.0, width: 200.0, height: 132.0 }
+BOUNDS 12 child-menu Rect { x: 84.0, y: 152.0, width: 180.0, height: 80.0 }
+SUBMENUS parent=false child=false selections=1 reports=12 parent_actions=1 background_hits=0

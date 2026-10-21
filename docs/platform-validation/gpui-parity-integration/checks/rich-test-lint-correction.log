@@ -1,0 +1,9 @@
+   Compiling zgui v0.1.0 (/home/ubuntu/GitHub/zgui/crates/zgui)
+    Finished `test` profile [unoptimized] target(s) in 5.08s
+     Running unittests src/lib.rs (/tmp/zgui-target/debug/deps/zgui-3d382db47f8f827f)
+
+running 1 test
+test rich_text::tests::validates_unicode_coverage_sizes_and_empty_text ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 185 filtered out; finished in 0.00s
+

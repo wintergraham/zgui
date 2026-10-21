@@ -1,0 +1,8 @@
+[package]
+name = "zgui-ime-blocking-probe"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+winit = "=0.30.13"
+softbuffer = "=0.4.8"

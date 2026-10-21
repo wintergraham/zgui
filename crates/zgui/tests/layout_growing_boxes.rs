@@ -1,0 +1,173 @@
+//! Boxes that grow open (a layout animation's negative margin) and rows of
+//! wrapping text: a parent is always as tall as its children end, frame
+//! after frame, so nothing hangs out of its box or under the next one.
+use zgui::{compose::prelude::*, scene::Align, scene::NodeId, scene::Rect, widgets::Ui};
+
+fn bounds(ui: &Ui, path: &[usize]) -> Rect {
+    let scene = ui.scene.borrow();
+    let mut id: NodeId = scene.root();
+    for index in path {
+        id = scene.children(id)[*index];
+    }
+    scene.bounds(id)
+}
+
+/// A row of a price and a shrinking column of a title and wrapping text,
+/// then another row, as a list of picks lays them out.
+fn picks(line_height: Option<f32>) -> View {
+    let mut why = text("Cordless, but it's the only portable one that handles frozen fruit.")
+        .text_wrap(true)
+        .text_size(18.);
+    if let Some(pixels) = line_height {
+        why = why.line_height(pixels);
+    }
+    column()
+        .gap(8.)
+        .items_stretch()
+        .child(
+            row()
+                .gap(12.)
+                .items_start()
+                .child(text("£34.99").w(44.).flex_shrink(0.))
+                .child(
+                    column()
+                        .grow()
+                        .flex_shrink(1.)
+                        .min_w(0.)
+                        .gap(2.)
+                        .child(
+                            row()
+                                .gap(4.)
+                                .items_center()
+                                .child(text("Ninja Blast BC151")),
+                        )
+                        .child(why),
+                ),
+        )
+        .child(row().child(text("£49.00")))
+}
+
+#[test]
+fn rows_are_as_tall_as_the_wrapped_text_they_shrink_to() {
+    for line_height in [None, Some(28.)] {
+        // Directly in a stretching column, and inside a layout box growing
+        // open (its bottom margin animating from negative to nothing) in a
+        // shrink-to-fit presence wrapper.
+        for animated in [false, true] {
+            let mut ui = Ui::new(400., 800.);
+            let margin = ui.signal(-60_f32);
+            let read = margin.clone();
+            let content = match animated {
+                false => picks(line_height),
+                true => overlay().w_full().child(
+                    div().w_full().child(
+                        column().items_stretch().child(
+                            column()
+                                .items_stretch()
+                                .reactive_style(move || Styles::new().mb(read.get()))
+                                .child(
+                                    column()
+                                        .items_stretch()
+                                        .opacity(0.5)
+                                        .child(picks(line_height)),
+                                ),
+                        ),
+                    ),
+                ),
+            };
+            let _view = ui.mount(column().w(300.).items_stretch().child(content));
+            let picks_path: &[usize] = match animated {
+                false => &[0, 0],
+                true => &[0, 0, 0, 0, 0, 0, 0],
+            };
+            for frame in 0..4 {
+                ui.prepare_frame();
+                let path = [picks_path, &[0]].concat();
+                let (row, next) = (
+                    bounds(&ui, &path),
+                    bounds(&ui, &[picks_path, &[1]].concat()),
+                );
+                let column = bounds(&ui, &[&path[..], &[1]].concat());
+                let why = bounds(&ui, &[&path[..], &[1, 1]].concat());
+                let case =
+                    format!("line height {line_height:?}, animated {animated}, frame {frame}");
+                assert_eq!(row.width, 300., "{case}");
+                assert_eq!(column.width, 244., "{case}");
+                assert_eq!(row.height, column.height, "{case}");
+                assert_eq!(why.y + why.height, column.y + column.height, "{case}");
+                assert_eq!(next.y, row.y + row.height + 8., "{case}");
+                margin.set(margin.get() + 20.);
+            }
+        }
+    }
+}
+
+/// A box (9 px padding) around a growing region: a child growing open by a
+/// negative bottom margin, styled by `kid`, then a 48 px child, 12 px apart.
+fn growing_box(
+    ui: &mut Ui,
+    kid: impl Fn(View, zgui::reactive::Signal<f32>) -> View,
+) -> (zgui::reactive::Signal<f32>, zgui::compose::ViewHandle) {
+    let margin = ui.signal(-75_f32);
+    let grown = kid(column().pt(3.).child(row().h(60.).w(100.)), margin.clone());
+    let region = column()
+        .items_start()
+        .gap(12.)
+        .grow()
+        .child(grown)
+        .child(column().h(48.));
+    let view = ui.mount(
+        column()
+            .items_stretch()
+            .child(column().p(9.).items_stretch().child(region)),
+    );
+    (margin, view)
+}
+
+/// A case: its name, how the growing child is styled, and the box's height
+/// for a margin.
+type Case = (
+    &'static str,
+    fn(View, zgui::reactive::Signal<f32>) -> View,
+    fn(f32) -> f32,
+);
+
+#[test]
+fn boxes_grow_open_with_their_children_whatever_lays_them_out() {
+    // Stretched by `align_self` (so laid out by taffy), plain, and clipped
+    // with a negative margin at both ends beside a stretched sibling.
+    let cases: [Case; 3] = [
+        (
+            "align_self stretch",
+            |kid, margin| {
+                kid.align_self(Align::Stretch)
+                    .reactive_style(move || Styles::new().mb(margin.get()))
+            },
+            |margin| 141. + margin,
+        ),
+        (
+            "plain",
+            |kid, margin| kid.reactive_style(move || Styles::new().mb(margin.get())),
+            |margin| 141. + margin,
+        ),
+        (
+            "clipped",
+            |kid, margin| {
+                kid.overflow_hidden()
+                    .align_self(Align::Start)
+                    .reactive_style(move || Styles::new().my(margin.get() / 5.))
+            },
+            |margin| 141. + 2. * margin / 5.,
+        ),
+    ];
+    for (name, kid, expected) in cases {
+        let mut ui = Ui::new(400., 600.);
+        let (margin, _view) = growing_box(&mut ui, kid);
+        for frame in 0..5 {
+            ui.prepare_frame();
+            let height = bounds(&ui, &[0, 0]).height;
+            assert_eq!(height, expected(margin.get()), "{name}, frame {frame}");
+            margin.set(margin.get() + 25.);
+        }
+    }
+}

@@ -1,0 +1,67 @@
+{
+  "status": "passed",
+  "trials": 36,
+  "samples": 10815,
+  "exact_rotated_trial_order": true,
+  "raw_and_csv_recomputed": true,
+  "all_summary_medians_and_ranges_recomputed": true,
+  "ticks_per_requested_second": {
+    "min": 59.25,
+    "max": 59.95
+  },
+  "sampled_wall_seconds": {
+    "min": 15.01706102117896,
+    "max": 15.121593485586345
+  },
+  "archived_inputs": 439,
+  "archive_inventory_and_hashes_match": true,
+  "current_archive_input_mismatches": [],
+  "current_build_input_mismatches": [],
+  "all_three_binary_hashes_and_loader_verified": true,
+  "binary_paths": {
+    "zgui": "/tmp/zgui-latest-linux-2026-09-26-10b90de-bin/component_workload",
+    "gpui": "/tmp/zgui-latest-linux-2026-09-26-10b90de-bin/zgui-compare-gpui",
+    "quickgui": "/tmp/zgui-latest-linux-2026-09-26-10b90de-bin/zgui-compare-quickgui"
+  },
+  "host_observations": 145,
+  "host_observation_span_seconds": 723.1986186504364,
+  "observed_build_process_names": [],
+  "host_context": {
+    "zeron": {
+      "observations": 145,
+      "pids": 2,
+      "max_ps_cpu": 37.4
+    },
+    "git": {
+      "observations": 52,
+      "pids": 77,
+      "max_ps_cpu": 1400.0
+    },
+    "gh": {
+      "observations": 13,
+      "pids": 16,
+      "max_ps_cpu": 100.0
+    }
+  },
+  "capture_thread_counts": {
+    "zgui": {
+      "all_threads": 16,
+      "llvmpipe_workers": 4
+    },
+    "gpui": {
+      "all_threads": 40,
+      "llvmpipe_workers": 4
+    },
+    "quickgui": {
+      "all_threads": 25,
+      "llvmpipe_workers": 8
+    }
+  },
+  "limitations": [
+    "Ticks count logical updates, not presented frames.",
+    "Shared host activity is recorded in host observations; ps CPU is lifetime-averaged, not interval contention.",
+    "LP_NUM_THREADS=4 applies to each Mesa worker pool; QuickGUI capture shows two pools.",
+    "Software Vulkan on Xvfb does not establish native macOS, hardware-GPU or universal performance rankings.",
+    "A measured 0% CPU means no accounted CPU increment between endpoint samples, not proof of literally zero cycles."
+  ]
+}

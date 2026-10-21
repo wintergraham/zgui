@@ -1,0 +1,229 @@
+{
+  "status": "rejected_workload_parity",
+  "trials": 36,
+  "samples": 10808,
+  "exact_rotated_trial_order": true,
+  "raw_and_csv_recomputed": true,
+  "all_summary_medians_and_ranges_recomputed": true,
+  "ticks_per_requested_second": {
+    "min": 15.0,
+    "max": 59.95
+  },
+  "sampled_wall_seconds": {
+    "min": 15.00830824393779,
+    "max": 18.556159157305956
+  },
+  "archived_inputs": 437,
+  "archive_inventory_and_hashes_match": true,
+  "current_archive_input_mismatches": [],
+  "current_build_input_mismatches": [],
+  "all_three_binary_hashes_and_loader_verified": true,
+  "binary_paths": {
+    "zgui": "/tmp/zgui-latest-linux-2026-09-25-fcfcc9a-bin/component_workload",
+    "gpui": "/tmp/zgui-latest-linux-2026-09-25-fcfcc9a-bin/zgui-compare-gpui",
+    "quickgui": "/tmp/zgui-latest-linux-2026-09-25-fcfcc9a-bin/zgui-compare-quickgui"
+  },
+  "host_observations": 142,
+  "host_observation_span_seconds": 731.2418270111084,
+  "observed_build_process_names": [
+    "cargo",
+    "rustc",
+    "rust-lld"
+  ],
+  "host_context": {
+    "zeron": {
+      "observations": 142,
+      "pids": 3,
+      "max_ps_cpu": 40.2
+    },
+    "git": {
+      "observations": 80,
+      "pids": 116,
+      "max_ps_cpu": 1500.0
+    },
+    "gh": {
+      "observations": 14,
+      "pids": 14,
+      "max_ps_cpu": 96.9
+    }
+  },
+  "capture_thread_counts": {
+    "zgui": {
+      "all_threads": 16,
+      "llvmpipe_workers": 4
+    },
+    "gpui": {
+      "all_threads": 40,
+      "llvmpipe_workers": 4
+    },
+    "quickgui": {
+      "all_threads": 25,
+      "llvmpipe_workers": 8
+    }
+  },
+  "limitations": [
+    "Ticks count logical updates, not presented frames.",
+    "Shared host activity is recorded in host observations; ps CPU is lifetime-averaged, not interval contention.",
+    "LP_NUM_THREADS=4 applies to each Mesa worker pool; QuickGUI capture shows two pools.",
+    "Software Vulkan on Xvfb does not establish native macOS, hardware-GPU or universal performance rankings.",
+    "A measured 0% CPU means no accounted CPU increment between endpoint samples, not proof of literally zero cycles."
+  ],
+  "parity_violations": [
+    {
+      "framework": "zgui",
+      "mode": "stream",
+      "repeat": 0,
+      "ticks": 1155,
+      "ticks_per_requested_second": 57.75
+    },
+    {
+      "framework": "gpui",
+      "mode": "stream",
+      "repeat": 0,
+      "ticks": 300,
+      "ticks_per_requested_second": 15.0
+    },
+    {
+      "framework": "quickgui",
+      "mode": "stream",
+      "repeat": 0,
+      "ticks": 389,
+      "ticks_per_requested_second": 19.45
+    },
+    {
+      "framework": "zgui",
+      "mode": "scroll",
+      "repeat": 0,
+      "ticks": 1128,
+      "ticks_per_requested_second": 56.4
+    },
+    {
+      "framework": "gpui",
+      "mode": "scroll",
+      "repeat": 0,
+      "ticks": 634,
+      "ticks_per_requested_second": 31.7
+    },
+    {
+      "framework": "quickgui",
+      "mode": "scroll",
+      "repeat": 0,
+      "ticks": 820,
+      "ticks_per_requested_second": 41.0
+    },
+    {
+      "framework": "gpui",
+      "mode": "both",
+      "repeat": 0,
+      "ticks": 609,
+      "ticks_per_requested_second": 30.45
+    },
+    {
+      "framework": "quickgui",
+      "mode": "both",
+      "repeat": 0,
+      "ticks": 477,
+      "ticks_per_requested_second": 23.85
+    },
+    {
+      "framework": "gpui",
+      "mode": "stream",
+      "repeat": 1,
+      "ticks": 969,
+      "ticks_per_requested_second": 48.45
+    },
+    {
+      "framework": "quickgui",
+      "mode": "stream",
+      "repeat": 1,
+      "ticks": 1030,
+      "ticks_per_requested_second": 51.5
+    },
+    {
+      "framework": "gpui",
+      "mode": "scroll",
+      "repeat": 1,
+      "ticks": 1029,
+      "ticks_per_requested_second": 51.45
+    },
+    {
+      "framework": "quickgui",
+      "mode": "scroll",
+      "repeat": 1,
+      "ticks": 950,
+      "ticks_per_requested_second": 47.5
+    },
+    {
+      "framework": "gpui",
+      "mode": "both",
+      "repeat": 1,
+      "ticks": 1064,
+      "ticks_per_requested_second": 53.2
+    },
+    {
+      "framework": "quickgui",
+      "mode": "both",
+      "repeat": 1,
+      "ticks": 1099,
+      "ticks_per_requested_second": 54.95
+    },
+    {
+      "framework": "quickgui",
+      "mode": "stream",
+      "repeat": 2,
+      "ticks": 1012,
+      "ticks_per_requested_second": 50.6
+    },
+    {
+      "framework": "gpui",
+      "mode": "stream",
+      "repeat": 2,
+      "ticks": 796,
+      "ticks_per_requested_second": 39.8
+    },
+    {
+      "framework": "quickgui",
+      "mode": "scroll",
+      "repeat": 2,
+      "ticks": 873,
+      "ticks_per_requested_second": 43.65
+    },
+    {
+      "framework": "zgui",
+      "mode": "scroll",
+      "repeat": 2,
+      "ticks": 957,
+      "ticks_per_requested_second": 47.85
+    },
+    {
+      "framework": "gpui",
+      "mode": "both",
+      "repeat": 2,
+      "ticks": 1126,
+      "ticks_per_requested_second": 56.3
+    }
+  ],
+  "near_60hz_workload_updates": false,
+  "framework_updates_per_requested_second": {
+    "zgui": {
+      "min": 47.85,
+      "max": 59.95
+    },
+    "gpui": {
+      "min": 15.0,
+      "max": 59.6
+    },
+    "quickgui": {
+      "min": 19.45,
+      "max": 58.75
+    }
+  },
+  "protocol_deviation": {
+    "recorded_at_utc": "2026-09-25T20:29:36.294043+00:00",
+    "before_first_trial": true,
+    "deviation": "Clean-start build gate changed from refusal to warning after repeated unrelated-build blockers. Active builds at start; explicitly contended shared-host measurement.",
+    "unchanged": "All workloads, repeat counts, sampling, durations, source/binary proofs, and58\u201361 logical updates acceptance gates unchanged."
+  },
+  "active_builds_at_start": true,
+  "integrity_checks_passed": true
+}

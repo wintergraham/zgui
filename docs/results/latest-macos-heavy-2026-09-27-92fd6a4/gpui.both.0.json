@@ -1,0 +1,16 @@
+{
+ "framework": "gpui",
+ "mode": "both",
+ "repeat": 0,
+ "wall_seconds": 15.0258,
+ "cpu_seconds": 3.1459,
+ "cpu_percent_one_core": 20.9367,
+ "mean_footprint_bytes": 289052954,
+ "peak_footprint_bytes": 291767040,
+ "mean_rss_bytes": 79085332,
+ "peak_rss_bytes": 79151104,
+ "samples": 278,
+ "workload_ticks": 1197,
+ "exit_code": 0,
+ "terminated_after_report": false
+}

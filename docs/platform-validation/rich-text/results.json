@@ -1,0 +1,12 @@
+{
+  "pointer_activation": 1,
+  "keyboard_activation": 2,
+  "link_bounds": [
+    24.0,
+    114.0,
+    227.22656,
+    28.0
+  ],
+  "clamped_height": 56.0,
+  "exit_code": 0
+}

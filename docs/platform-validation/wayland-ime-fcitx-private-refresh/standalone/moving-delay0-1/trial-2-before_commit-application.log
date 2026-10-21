@@ -1,0 +1,40 @@
+IME Preedit("n", Some((0, 1))) elapsed=3.825706
+PRESENT_BEGIN stage=ime-before-cursor elapsed=3.825728
+PRESENT_END stage=ime-before-cursor observed_ms=1.453 elapsed=3.827181
+RECT_REQUEST x=54 delay_ms=0 elapsed=3.827189
+RECT x=54 y=80 width=1 height=24 elapsed=3.827219
+IME Preedit("ni", Some((0, 2))) elapsed=3.827223
+PRESENT_BEGIN stage=ime-before-cursor elapsed=3.827229
+PRESENT_END stage=ime-before-cursor observed_ms=1.729 elapsed=3.828958
+RECT_REQUEST x=68 delay_ms=0 elapsed=3.828971
+RECT x=68 y=80 width=1 height=24 elapsed=3.829001
+IME Preedit("ni h", Some((0, 4))) elapsed=3.829007
+PRESENT_BEGIN stage=ime-before-cursor elapsed=3.829017
+PRESENT_END stage=ime-before-cursor observed_ms=1.018 elapsed=3.830035
+RECT_REQUEST x=96 delay_ms=0 elapsed=3.830040
+RECT x=96 y=80 width=1 height=24 elapsed=3.830055
+IME Preedit("ni ha", Some((0, 5))) elapsed=3.830058
+PRESENT_BEGIN stage=ime-before-cursor elapsed=3.830062
+PRESENT_END stage=ime-before-cursor observed_ms=1.134 elapsed=3.831196
+RECT_REQUEST x=110 delay_ms=0 elapsed=3.831200
+RECT x=110 y=80 width=1 height=24 elapsed=3.831214
+IME Preedit("ni hao", Some((0, 6))) elapsed=3.831217
+PRESENT_BEGIN stage=ime-before-cursor elapsed=3.831221
+PRESENT_END stage=ime-before-cursor observed_ms=0.951 elapsed=3.832172
+RECT_REQUEST x=124 delay_ms=0 elapsed=3.832177
+RECT x=124 y=80 width=1 height=24 elapsed=3.832194
+IME Preedit("ni hao", Some((0, 6))) elapsed=3.832331
+PRESENT_BEGIN stage=ime-before-cursor elapsed=3.832338
+PRESENT_END stage=ime-before-cursor observed_ms=1.290 elapsed=3.833628
+IME Preedit("ni hao", Some((0, 6))) elapsed=3.833634
+PRESENT_BEGIN stage=ime-before-cursor elapsed=3.833639
+PRESENT_END stage=ime-before-cursor observed_ms=0.991 elapsed=3.834630
+IME Preedit("ni hao", Some((0, 6))) elapsed=3.834635
+PRESENT_BEGIN stage=ime-before-cursor elapsed=3.834639
+PRESENT_END stage=ime-before-cursor observed_ms=0.983 elapsed=3.835622
+IME Preedit("ni hao", Some((0, 6))) elapsed=3.835682
+PRESENT_BEGIN stage=ime-before-cursor elapsed=3.835687
+PRESENT_END stage=ime-before-cursor observed_ms=1.822 elapsed=3.837509
+IME Preedit("ni hao", Some((0, 6))) elapsed=3.837518
+PRESENT_BEGIN stage=ime-before-cursor elapsed=3.837527
+PRESENT_END stage=ime-before-cursor observed_ms=1.206 elapsed=3.838733

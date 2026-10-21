@@ -1,0 +1,21 @@
+PREEDIT first "n" Some((0, 1))
+MODEL 9 first="" second="" focus=Some(NodeId { index: 3, generation: 0 })
+CARET first Rect { x: 47.94336, y: 70.0, width: 1.0, height: 31.0 }
+DISPLAY first "n" Rect { x: 34.0, y: 70.0, width: 542.0, height: 31.0 }
+CARET second Rect { x: 34.0, y: 162.0, width: 1.0, height: 31.0 }
+DISPLAY second "" Rect { x: 34.0, y: 162.0, width: 542.0, height: 31.0 }
+MODEL 10 first="" second="" focus=Some(NodeId { index: 3, generation: 0 })
+CARET first Rect { x: 47.94336, y: 70.0, width: 1.0, height: 31.0 }
+DISPLAY first "n" Rect { x: 34.0, y: 70.0, width: 542.0, height: 31.0 }
+CARET second Rect { x: 34.0, y: 162.0, width: 1.0, height: 31.0 }
+DISPLAY second "" Rect { x: 34.0, y: 162.0, width: 542.0, height: 31.0 }
+MODEL 11 first="" second="" focus=Some(NodeId { index: 3, generation: 0 })
+CARET first Rect { x: 47.94336, y: 70.0, width: 1.0, height: 31.0 }
+DISPLAY first "n" Rect { x: 34.0, y: 70.0, width: 542.0, height: 31.0 }
+CARET second Rect { x: 34.0, y: 162.0, width: 1.0, height: 31.0 }
+DISPLAY second "" Rect { x: 34.0, y: 162.0, width: 542.0, height: 31.0 }
+MODEL 12 first="" second="" focus=Some(NodeId { index: 3, generation: 0 })
+CARET first Rect { x: 47.94336, y: 70.0, width: 1.0, height: 31.0 }
+DISPLAY first "n" Rect { x: 34.0, y: 70.0, width: 542.0, height: 31.0 }
+CARET second Rect { x: 34.0, y: 162.0, width: 1.0, height: 31.0 }
+DISPLAY second "" Rect { x: 34.0, y: 162.0, width: 542.0, height: 31.0 }

@@ -1,0 +1,26 @@
+{
+  "accepted_for_comparison": false,
+  "all_processes_exited_successfully": true,
+  "reason": "model-update parity failed",
+  "required_active_updates_per_second": [
+    58,
+    61
+  ],
+  "failed_trials": [
+    {
+      "framework": "zgui",
+      "mode": "scroll",
+      "repeat": "1",
+      "wall_seconds": "15.011048779822886",
+      "cpu_seconds": "22.32",
+      "cpu_percent_one_core": "148.69047677735514",
+      "mean_rss_bytes": "111501312.0",
+      "peak_rss_bytes": "111501312",
+      "samples": "291",
+      "workload_ticks": "1099",
+      "exit_code": "0"
+    }
+  ],
+  "unrelated_builds_observed": true,
+  "causal_attribution": "Shared-host build activity was observed but not experimentally isolated as the cause."
+}

@@ -1,0 +1,26 @@
+{
+  "backend": "X11 / owned Xvfb / Openbox",
+  "hidden_updates": 20,
+  "hidden_map_state": "IsUnMapped",
+  "shown": {
+    "image": "shown.png",
+    "expected_rgb": [
+      40,
+      180,
+      80
+    ],
+    "matching_pixels": 42000
+  },
+  "minimized_map_state": "IsUnMapped",
+  "total_updates": 40,
+  "restored": {
+    "image": "restored.png",
+    "expected_rgb": [
+      40,
+      100,
+      220
+    ],
+    "matching_pixels": 42000
+  },
+  "exit_code": 0
+}

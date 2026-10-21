@@ -1,0 +1,15 @@
+{
+  "purpose": "Failure reproduction after reclaiming disk space; not performance samples",
+  "trials": [
+    {
+      "trial": 0,
+      "exit_code": 0,
+      "log": "docs/results/refined-framework/diagnostic-zgui-stream-0.log"
+    },
+    {
+      "trial": 1,
+      "exit_code": 0,
+      "log": "docs/results/refined-framework/diagnostic-zgui-stream-1.log"
+    }
+  ]
+}

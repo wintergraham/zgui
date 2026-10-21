@@ -1,0 +1,86 @@
+{
+  "passed": true,
+  "backend": "owned X11/Xvfb/Openbox",
+  "checks": [
+    {
+      "mode": "Fill",
+      "window_width": 500,
+      "fitted_size": [
+        300,
+        140
+      ],
+      "checked_pixels": 1044,
+      "colors_visible": 6
+    },
+    {
+      "mode": "Contain",
+      "window_width": 500,
+      "fitted_size": [
+        280.0,
+        140.0
+      ],
+      "checked_pixels": 1048,
+      "colors_visible": 6
+    },
+    {
+      "mode": "Cover",
+      "window_width": 500,
+      "fitted_size": [
+        300.0,
+        150.0
+      ],
+      "checked_pixels": 1082,
+      "colors_visible": 6
+    },
+    {
+      "mode": "None",
+      "window_width": 500,
+      "fitted_size": [
+        120.0,
+        60.0
+      ],
+      "checked_pixels": 1150,
+      "colors_visible": 6
+    },
+    {
+      "mode": "ScaleDown",
+      "window_width": 500,
+      "fitted_size": [
+        120.0,
+        60.0
+      ],
+      "checked_pixels": 1150,
+      "colors_visible": 6
+    },
+    {
+      "mode": "ScaleDown",
+      "window_width": 280,
+      "fitted_size": [
+        80.0,
+        40.0
+      ],
+      "checked_pixels": 385,
+      "colors_visible": 6
+    },
+    {
+      "mode": "None",
+      "window_width": 280,
+      "fitted_size": [
+        120.0,
+        60.0
+      ],
+      "checked_pixels": 371,
+      "colors_visible": 6
+    },
+    {
+      "mode": "Cover",
+      "window_width": 280,
+      "fitted_size": [
+        280.0,
+        140.0
+      ],
+      "checked_pixels": 378,
+      "colors_visible": 2
+    }
+  ]
+}

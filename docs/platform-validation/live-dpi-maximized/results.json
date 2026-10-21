@@ -1,0 +1,36 @@
+{
+  "passed": true,
+  "event_counts": [
+    1,
+    0,
+    2,
+    0
+  ],
+  "final_viewport": [
+    700.0,
+    490.5
+  ],
+  "backend": "X11",
+  "maximized": true,
+  "before": {
+    "WINDOW": 6291458,
+    "X": 0,
+    "Y": 38,
+    "WIDTH": 1400,
+    "HEIGHT": 981,
+    "SCREEN": 0
+  },
+  "after": {
+    "WINDOW": 6291458,
+    "X": 0,
+    "Y": 38,
+    "WIDTH": 1400,
+    "HEIGHT": 981,
+    "SCREEN": 0
+  },
+  "stationary_pointer": "X=300\nY=79\nSCREEN=0\nWINDOW=2097525",
+  "binary_sha256": "343403eeabd1c3ef204c6dffe8421dfecb127c0745e5cb326985219f3d99f2eb",
+  "script_sha256": "6946e982df13a4e942c9698159f9f3b190226ffa7948e74f2900476a5cc93151",
+  "source_archive_sha256": "eee0489e1bbae3a7916e0fbeff8bd4f8d2db1388dec80a8d652e1a858422d4c3",
+  "source_archive": "../live-dpi-pointer/source.tar.gz"
+}

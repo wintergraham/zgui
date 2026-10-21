@@ -1,0 +1,4 @@
+# Definitions use `declare` syntax StyLua cannot parse.
+crates/zgui-script/types/zgui.d.luau
+# Generated from the motion lab's design data.
+crates/zgui-script/examples/composer_states/states.luau

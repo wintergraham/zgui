@@ -1,0 +1,11 @@
+   Compiling zgui-gpu v0.1.0 (/home/ubuntu/GitHub/zgui/crates/zgui-gpu)
+   Compiling zgui-desktop v0.1.0 (/home/ubuntu/GitHub/zgui/crates/zgui-desktop)
+    Finished `test` profile [unoptimized] target(s) in 4.28s
+     Running unittests src/lib.rs (/tmp/zgui-target/debug/deps/zgui_desktop-d1e0ad2ee9727860)
+
+running 2 tests
+test wayland_files::tests::uri_list_is_bounded_and_all_or_nothing ... ok
+test wayland_files::tests::stalled_oversized_and_disconnected_streams_do_not_block ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 67 filtered out; finished in 0.00s
+

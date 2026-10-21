@@ -1,0 +1,1 @@
+Error: Os(OsError { line: 89, file: "/home/ubuntu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/wayland/event_loop/mod.rs", error: WaylandError(Connection(NoCompositor)) })

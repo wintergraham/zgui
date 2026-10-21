@@ -1,0 +1,31 @@
+{
+  "captured_utc": "2026-09-22T12:31:43.967861+00:00",
+  "binary_sha256": "e8480de7dc3dc9a7b0e279eb917480628f39a791c937e3d1e6faf6625d28238b",
+  "source_archive_sha256": "0776751070df3dfe79182c9fd2dfcd5e0f96122b62239d4cec7905895c4a9289",
+  "source_inputs": 128,
+  "source_unchanged_during_build_and_smoke": true,
+  "build": [
+    "cargo",
+    "build",
+    "-p",
+    "zgui-desktop",
+    "--example",
+    "letter_spacing",
+    "--locked"
+  ],
+  "run": [
+    "python3",
+    "scripts/letter_spacing_smoke.py",
+    "/tmp/zgui-target/debug/examples/letter_spacing",
+    "--output",
+    "/home/ubuntu/GitHub/zgui/docs/platform-validation/letter-spacing"
+  ],
+  "environment": {
+    "CARGO_TARGET_DIR": "/tmp/zgui-target",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0",
+    "LD_LIBRARY_PATH": "/tmp/zgui-ci-loader-check/build/loader"
+  },
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "backend": "X11 / Openbox / Xvfb / Mesa llvmpipe"
+}

@@ -1,0 +1,5 @@
+{
+  "registry_packages": 201,
+  "all_registry_versions_sources_checksums_match_root_lock": true,
+  "resolution": "Copied workspace lock required offline pruning for standalone package; final build used --offline --locked."
+}

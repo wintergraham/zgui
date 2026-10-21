@@ -1,0 +1,9 @@
+[package]
+name="zgui"
+version="0.1.0"
+edition="2024"
+[dependencies]
+unicode-segmentation="=1.13.3"
+[profile.release]
+lto="thin"
+codegen-units=1

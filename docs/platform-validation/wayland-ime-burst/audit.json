@@ -1,0 +1,16 @@
+{
+  "baseline": {
+    "source_inputs": 162,
+    "trials": 12,
+    "final_unicode_commits": 12,
+    "source_archive_verified": true,
+    "script_snapshot_verified": true
+  },
+  "delay-sweep": {
+    "source_inputs": 162,
+    "trials": 10,
+    "final_unicode_commits": 10,
+    "source_archive_verified": true,
+    "script_snapshot_verified": true
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "sway": "sway version 1.11",
+  "portal": "xdg-desktop-portal\t1.21.1+ds-1ubuntu3\nxdg-desktop-portal-gtk\t1.15.3-2ubuntu1",
+  "zenity-private": "Package: zenity\nVersion: 4.2.1-1"
+}

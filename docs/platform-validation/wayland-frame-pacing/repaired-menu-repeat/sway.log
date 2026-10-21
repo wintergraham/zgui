@@ -1,0 +1,2 @@
+00:00:00.025 [ERROR] [wlr] [backend/x11/backend.c:713] X11 error: op ChangeProperty (no minor), code Atom (no extension), sequence 59, value 0
+2026-09-22 22:06:53 - [main.c:278] Could not find config for output X11-1 ((null))

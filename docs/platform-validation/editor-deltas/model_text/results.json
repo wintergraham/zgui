@@ -1,0 +1,70 @@
+{
+  "passed": true,
+  "backend": "owned X11/Xvfb/Openbox",
+  "reports": {
+    "initial": {
+      "single": {
+        "model": "ABCD\tE",
+        "display": "ABCD\tE",
+        "retained": true,
+        "caret_y": 108.0,
+        "caret_h": 23.0
+      },
+      "multi": {
+        "model": "A\nB\nC\tD",
+        "display": "A\nB\nC\tD",
+        "retained": true,
+        "caret_y": 206.0,
+        "caret_h": 23.0
+      }
+    },
+    "replacement": {
+      "single": {
+        "model": "XYZ\tQ",
+        "display": "XYZ\tQ",
+        "retained": true,
+        "caret_y": 108.0,
+        "caret_h": 23.0
+      },
+      "multi": {
+        "model": "X\nY\nZ\tQ",
+        "display": "X\nY\nZ\tQ",
+        "retained": true,
+        "caret_y": 206.0,
+        "caret_h": 23.0
+      }
+    },
+    "single_input": {
+      "single": {
+        "model": "XYZ\tQ!",
+        "display": "XYZ\tQ!",
+        "retained": true,
+        "caret_y": 108.0,
+        "caret_h": 23.0
+      },
+      "multi": {
+        "model": "X\nY\nZ\tQ",
+        "display": "X\nY\nZ\tQ",
+        "retained": true,
+        "caret_y": 206.0,
+        "caret_h": 23.0
+      }
+    },
+    "multiline_input": {
+      "single": {
+        "model": "XYZ\tQ!",
+        "display": "XYZ\tQ!",
+        "retained": true,
+        "caret_y": 108.0,
+        "caret_h": 23.0
+      },
+      "multi": {
+        "model": "X\nY\nZ\tQ?",
+        "display": "X\nY\nZ\tQ?",
+        "retained": true,
+        "caret_y": 206.0,
+        "caret_h": 23.0
+      }
+    }
+  }
+}

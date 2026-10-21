@@ -1,0 +1,18 @@
+{
+  "source_inputs": 171,
+  "archive_entries_match": true,
+  "archive_hashes_match": true,
+  "working_sources_match": true,
+  "checks": {
+    "workspace-tests": {
+      "passed": 584,
+      "failed": 0,
+      "ignored": 2
+    },
+    "doctests": {
+      "passed": 30,
+      "failed": 0,
+      "ignored": 0
+    }
+  }
+}

@@ -1,0 +1,5 @@
+SNAPSHOT 1 offset=31999840 position=Some(1000000) live=6 built=12
+SNAPSHOT 2 offset=31999808 position=Some(999995) live=7 built=13
+SNAPSHOT 3 offset=0 position=Some(1) live=6 built=19
+SNAPSHOT 4 offset=0 position=Some(2) live=6 built=19
+VIRTUAL_KEYBOARD offset=0 live=6 built=19 reports=4

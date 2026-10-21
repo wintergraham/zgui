@@ -1,0 +1,15 @@
+IME Preedit("n", Some((0, 1))) elapsed=4.094764
+RECT_REQUEST x=54 delay_ms=16 elapsed=4.094778
+RECT x=54 y=80 width=1 height=24 elapsed=4.110919
+IME Preedit("ni", Some((0, 2))) elapsed=4.138198
+RECT_REQUEST x=68 delay_ms=16 elapsed=4.138211
+RECT x=68 y=80 width=1 height=24 elapsed=4.154322
+IME Preedit("ni h", Some((0, 4))) elapsed=4.185367
+RECT_REQUEST x=96 delay_ms=16 elapsed=4.185381
+RECT x=96 y=80 width=1 height=24 elapsed=4.201515
+IME Preedit("ni ha", Some((0, 5))) elapsed=4.229960
+RECT_REQUEST x=110 delay_ms=16 elapsed=4.229973
+RECT x=110 y=80 width=1 height=24 elapsed=4.246099
+IME Preedit("ni hao", Some((0, 6))) elapsed=4.273449
+RECT_REQUEST x=124 delay_ms=16 elapsed=4.273460
+RECT x=124 y=80 width=1 height=24 elapsed=4.289538

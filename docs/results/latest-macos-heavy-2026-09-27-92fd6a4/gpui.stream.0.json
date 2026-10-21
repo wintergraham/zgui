@@ -1,0 +1,16 @@
+{
+ "framework": "gpui",
+ "mode": "stream",
+ "repeat": 0,
+ "wall_seconds": 15.0137,
+ "cpu_seconds": 3.0862,
+ "cpu_percent_one_core": 20.5559,
+ "mean_footprint_bytes": 281904025,
+ "peak_footprint_bytes": 282460904,
+ "mean_rss_bytes": 77391238,
+ "peak_rss_bytes": 79151104,
+ "samples": 278,
+ "workload_ticks": 1198,
+ "exit_code": 0,
+ "terminated_after_report": false
+}

@@ -1,0 +1,4 @@
+{
+  "utc": "2026-09-25T20:11:13.206800+00:00",
+  "reason": "Unrelated cargo/rustc builds running before sampling; runner refused to start. No measurement trials started. Wait for clean preflight before first series."
+}

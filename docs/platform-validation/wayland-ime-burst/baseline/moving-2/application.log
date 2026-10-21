@@ -1,0 +1,44 @@
+READY mode=moving
+FOCUS true
+RECT x=40 y=80 width=1 height=24 elapsed=0.004086
+IME Enabled elapsed=0.011452
+IME Preedit("n", Some((0, 1))) elapsed=1.125080
+RECT x=54 y=80 width=1 height=24 elapsed=1.125133
+IME Preedit("ni hao", Some((0, 6))) elapsed=1.159197
+RECT x=124 y=80 width=1 height=24 elapsed=1.159250
+IME Preedit("", None) elapsed=3.206144
+RECT x=40 y=80 width=1 height=24 elapsed=3.206183
+IME Commit("你好") elapsed=3.206186
+IME Preedit("", None) elapsed=3.206190
+RESET
+IME Preedit("n", Some((0, 1))) elapsed=4.356076
+RECT x=54 y=80 width=1 height=24 elapsed=4.356124
+IME Preedit("ni", Some((0, 2))) elapsed=4.400248
+RECT x=68 y=80 width=1 height=24 elapsed=4.400294
+IME Preedit("ni h", Some((0, 4))) elapsed=4.449056
+RECT x=96 y=80 width=1 height=24 elapsed=4.449114
+IME Preedit("ni ha", Some((0, 5))) elapsed=4.491266
+RECT x=110 y=80 width=1 height=24 elapsed=4.491307
+IME Preedit("ni hao", Some((0, 6))) elapsed=4.535325
+RECT x=124 y=80 width=1 height=24 elapsed=4.535370
+IME Preedit("", None) elapsed=6.583425
+RECT x=40 y=80 width=1 height=24 elapsed=6.583482
+IME Commit("你好") elapsed=6.583486
+IME Preedit("", None) elapsed=6.583493
+RESET
+IME Preedit("n", Some((0, 1))) elapsed=7.736735
+RECT x=54 y=80 width=1 height=24 elapsed=7.736776
+IME Preedit("ni", Some((0, 2))) elapsed=7.781867
+RECT x=68 y=80 width=1 height=24 elapsed=7.781920
+IME Preedit("ni h", Some((0, 4))) elapsed=7.828263
+RECT x=96 y=80 width=1 height=24 elapsed=7.828311
+IME Preedit("ni ha", Some((0, 5))) elapsed=7.875799
+RECT x=110 y=80 width=1 height=24 elapsed=7.875861
+IME Preedit("ni hao", Some((0, 6))) elapsed=7.921682
+RECT x=124 y=80 width=1 height=24 elapsed=7.921739
+IME Preedit("", None) elapsed=9.966064
+RECT x=40 y=80 width=1 height=24 elapsed=9.966105
+IME Commit("你好") elapsed=9.966108
+IME Preedit("", None) elapsed=9.966112
+RESET
+FINAL fixed=false committed="" preedit=""

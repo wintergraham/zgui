@@ -1,0 +1,11 @@
+Command: CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/zgui-target CARGO_PROFILE_DEV_DEBUG=0 cargo test -p zgui --test editor_shape_reuse -- --nocapture
+Baseline measured before the editor geometry reuse implementation.
+The source in before.rs was the complete integration test used for this run.
+Counters reset after initial allocation, wrapping, typography, and focus settle.
+Document: "abcdefghijabcdefghij\nx\nabcdefghijabcdefghij\nlast\n" repeated four times.
+Width100, multiline legacy editor viewport, font10, wrapping enabled.
+BASELINE refresh5=5
+BASELINE selection3=3
+BASELINE scroll3=3
+BASELINE navigation4=8
+test baseline_counts ... ok

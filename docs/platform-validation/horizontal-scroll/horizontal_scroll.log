@@ -1,0 +1,5 @@
+SNAPSHOT 1 offset=416.000 focused=Some(7) wide=false
+SNAPSHOT 2 offset=0.000 focused=Some(0) wide=false
+SNAPSHOT 3 offset=112.000 focused=Some(0) wide=false
+SNAPSHOT 4 offset=336.000 focused=Some(8) wide=true
+HORIZONTAL_SCROLL offset=336.000 wide=true reports=4

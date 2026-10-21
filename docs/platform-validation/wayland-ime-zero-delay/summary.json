@@ -1,0 +1,59 @@
+{
+  "observations": [
+    {
+      "application": "native",
+      "temperature": "cold",
+      "preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao"
+      ],
+      "commits": [
+        "你好"
+      ],
+      "outcome": "delivered"
+    },
+    {
+      "application": "native",
+      "temperature": "warm",
+      "preedits": [
+        "n"
+      ],
+      "commits": [
+        "你好"
+      ],
+      "outcome": "delivery_failure"
+    },
+    {
+      "application": "standalone",
+      "temperature": "cold",
+      "preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao"
+      ],
+      "commits": [
+        "你好"
+      ],
+      "outcome": "delivered"
+    },
+    {
+      "application": "standalone",
+      "temperature": "warm",
+      "preedits": [
+        "n"
+      ],
+      "commits": [
+        "你好"
+      ],
+      "outcome": "delivery_failure"
+    }
+  ],
+  "final_preedit_failures": 2,
+  "unicode_commit_failures": 0,
+  "binary_and_harness_hashes_verified": true
+}

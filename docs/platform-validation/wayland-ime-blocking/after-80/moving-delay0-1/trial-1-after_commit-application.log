@@ -1,0 +1,48 @@
+IME Preedit("n", Some((0, 1))) elapsed=0.813448
+RECT_REQUEST x=54 delay_ms=0 elapsed=0.813469
+RECT x=54 y=80 width=1 height=24 elapsed=0.813520
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="n" elapsed=0.813525
+BLOCK_END position=after-cursor observed_ms=80.073 elapsed=0.893598
+PRESENT_BEGIN stage=ime-after-cursor elapsed=0.893643
+PRESENT_END stage=ime-after-cursor observed_ms=3.955 elapsed=0.897598
+IME Preedit("ni", Some((0, 2))) elapsed=0.897786
+RECT_REQUEST x=68 delay_ms=0 elapsed=0.897799
+RECT x=68 y=80 width=1 height=24 elapsed=0.897841
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="ni" elapsed=0.897847
+BLOCK_END position=after-cursor observed_ms=81.028 elapsed=0.978876
+PRESENT_BEGIN stage=ime-after-cursor elapsed=0.978916
+PRESENT_END stage=ime-after-cursor observed_ms=1.483 elapsed=0.980399
+IME Preedit("ni h", Some((0, 4))) elapsed=0.980411
+RECT_REQUEST x=96 delay_ms=0 elapsed=0.980424
+RECT x=96 y=80 width=1 height=24 elapsed=0.980457
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="ni h" elapsed=0.980461
+BLOCK_END position=after-cursor observed_ms=80.070 elapsed=1.060531
+PRESENT_BEGIN stage=ime-after-cursor elapsed=1.060562
+PRESENT_END stage=ime-after-cursor observed_ms=1.244 elapsed=1.061807
+IME Preedit("ni ha", Some((0, 5))) elapsed=1.061816
+RECT_REQUEST x=110 delay_ms=0 elapsed=1.061828
+RECT x=110 y=80 width=1 height=24 elapsed=1.061856
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="ni ha" elapsed=1.061865
+BLOCK_END position=after-cursor observed_ms=80.073 elapsed=1.141939
+PRESENT_BEGIN stage=ime-after-cursor elapsed=1.141979
+PRESENT_END stage=ime-after-cursor observed_ms=1.212 elapsed=1.143191
+IME Preedit("ni hao", Some((0, 6))) elapsed=1.143202
+RECT_REQUEST x=124 delay_ms=0 elapsed=1.143214
+RECT x=124 y=80 width=1 height=24 elapsed=1.143248
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="ni hao" elapsed=1.143253
+BLOCK_END position=after-cursor observed_ms=80.068 elapsed=1.223321
+PRESENT_BEGIN stage=ime-after-cursor elapsed=1.223360
+PRESENT_END stage=ime-after-cursor observed_ms=1.283 elapsed=1.224643
+IME Preedit("", None) elapsed=2.906789
+RECT_REQUEST x=40 delay_ms=0 elapsed=2.906803
+RECT x=40 y=80 width=1 height=24 elapsed=2.906844
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="" elapsed=2.906849
+BLOCK_END position=after-cursor observed_ms=80.028 elapsed=2.986877
+PRESENT_BEGIN stage=ime-after-cursor elapsed=2.986912
+PRESENT_END stage=ime-after-cursor observed_ms=1.352 elapsed=2.988264
+IME Commit("你好") elapsed=2.988274
+IME Preedit("", None) elapsed=2.988286
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="" elapsed=2.988291
+BLOCK_END position=after-cursor observed_ms=80.069 elapsed=3.068360
+PRESENT_BEGIN stage=ime-after-cursor elapsed=3.068397
+PRESENT_END stage=ime-after-cursor observed_ms=1.414 elapsed=3.069811

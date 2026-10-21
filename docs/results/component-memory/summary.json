@@ -1,0 +1,1112 @@
+[
+  {
+    "framework": "zgui",
+    "binary_sha256": "7a2e44bb41355bf7a912b2a7ff1d0146b50aa2093183d3e5d469c09800f727b1",
+    "snapshot_seconds_after_spawn": 2,
+    "threads": 104,
+    "totals_kib": {
+      "Rss": 132188,
+      "Pss": 98103,
+      "Private_Clean": 28164,
+      "Private_Dirty": 54236,
+      "Anonymous": 34108,
+      "Swap": 0
+    },
+    "mappings": [
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libLLVM.so.21.1",
+        "Rss": 54940,
+        "Pss": 26793,
+        "Anonymous": 2192
+      },
+      {
+        "name": "[heap]",
+        "Rss": 23508,
+        "Pss": 23508,
+        "Anonymous": 23508
+      },
+      {
+        "name": "/tmp/zgui-component-comparison-bin/component_workload",
+        "Rss": 10716,
+        "Pss": 10716,
+        "Anonymous": 440
+      },
+      {
+        "name": "/memfd:allocation fd (deleted)",
+        "Rss": 9852,
+        "Pss": 9852,
+        "Anonymous": 0
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so",
+        "Rss": 9268,
+        "Pss": 9268,
+        "Anonymous": 996
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libvulkan_lvp.so",
+        "Rss": 7384,
+        "Pss": 7384,
+        "Anonymous": 336
+      },
+      {
+        "name": "[anonymous]",
+        "Rss": 5828,
+        "Pss": 5828,
+        "Anonymous": 5828
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "Rss": 1868,
+        "Pss": 77,
+        "Anonymous": 24
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.35",
+        "Rss": 1448,
+        "Pss": 401,
+        "Anonymous": 72
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libX11.so.6.4.0",
+        "Rss": 856,
+        "Pss": 403,
+        "Anonymous": 20
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.341",
+        "Rss": 564,
+        "Pss": 564,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libGLdispatch.so.0.0.0",
+        "Rss": 520,
+        "Pss": 249,
+        "Anonymous": 116
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+        "Rss": 484,
+        "Pss": 44,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libEGL_mesa.so.0.0.0",
+        "Rss": 420,
+        "Pss": 420,
+        "Anonymous": 52
+      },
+      {
+        "name": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "Rss": 360,
+        "Pss": 197,
+        "Anonymous": 0
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxkbcommon.so.0.13.1",
+        "Rss": 336,
+        "Pss": 336,
+        "Anonymous": 12
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.7",
+        "Rss": 332,
+        "Pss": 194,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxml2.so.16.1.2",
+        "Rss": 256,
+        "Pss": 107,
+        "Anonymous": 36
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+        "Rss": 248,
+        "Pss": 19,
+        "Anonymous": 12
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libexpat.so.1.11.2",
+        "Rss": 184,
+        "Pss": 53,
+        "Anonymous": 12
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb.so.1.1.0",
+        "Rss": 172,
+        "Pss": 54,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+        "Rss": 168,
+        "Pss": 39,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libedit.so.2.0.76",
+        "Rss": 144,
+        "Pss": 55,
+        "Anonymous": 12
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libtinfo.so.6.6",
+        "Rss": 140,
+        "Pss": 34,
+        "Anonymous": 20
+      },
+      {
+        "name": "/usr/lib/locale/C.utf8/LC_CTYPE",
+        "Rss": 128,
+        "Pss": 14,
+        "Anonymous": 0
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-xkb.so.1.0.0",
+        "Rss": 124,
+        "Pss": 124,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libdrm_intel.so.1.131.0",
+        "Rss": 120,
+        "Pss": 120,
+        "Anonymous": 8
+      },
+      {
+        "name": "[stack]",
+        "Rss": 120,
+        "Pss": 120,
+        "Anonymous": 120
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libz.so.1.3.1",
+        "Rss": 108,
+        "Pss": 12,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libVkLayer_MESA_device_select.so",
+        "Rss": 100,
+        "Pss": 100,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libelf-0.194.so",
+        "Rss": 92,
+        "Pss": 92,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libdrm.so.2.131.0",
+        "Rss": 92,
+        "Pss": 29,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libbsd.so.0.12.2",
+        "Rss": 80,
+        "Pss": 31,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libXext.so.6.4.0",
+        "Rss": 80,
+        "Pss": 44,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libXi.so.6.1.0",
+        "Rss": 80,
+        "Pss": 44,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libEGL.so.1.1.0",
+        "Rss": 76,
+        "Pss": 76,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libsensors.so.5.0.0",
+        "Rss": 68,
+        "Pss": 68,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libffi.so.8.2.0",
+        "Rss": 68,
+        "Pss": 13,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libdisplay-info.so.0.3.0",
+        "Rss": 68,
+        "Pss": 68,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-randr.so.0.1.0",
+        "Rss": 68,
+        "Pss": 68,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libwayland-client.so.0.24.0",
+        "Rss": 64,
+        "Pss": 64,
+        "Anonymous": 12
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libmd.so.0.1.0",
+        "Rss": 56,
+        "Pss": 22,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libdrm_amdgpu.so.1.131.0",
+        "Rss": 48,
+        "Pss": 28,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libXrender.so.1.3.0",
+        "Rss": 48,
+        "Pss": 28,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libXcursor.so.1.0.2",
+        "Rss": 48,
+        "Pss": 28,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libpciaccess.so.0.11.1",
+        "Rss": 40,
+        "Pss": 40,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-xfixes.so.0.0.0",
+        "Rss": 40,
+        "Pss": 40,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/locale/locale-archive",
+        "Rss": 40,
+        "Pss": 3,
+        "Anonymous": 0
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxkbcommon-x11.so.0.13.1",
+        "Rss": 40,
+        "Pss": 40,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-sync.so.1.0.0",
+        "Rss": 36,
+        "Pss": 36,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libXfixes.so.3.1.0",
+        "Rss": 32,
+        "Pss": 20,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libXdmcp.so.6.0.0",
+        "Rss": 32,
+        "Pss": 14,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-dri3.so.0.1.0",
+        "Rss": 28,
+        "Pss": 28,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libgbm.so.1.0.0",
+        "Rss": 28,
+        "Pss": 13,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/gconv/gconv-modules.cache",
+        "Rss": 28,
+        "Pss": 1,
+        "Anonymous": 0
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libXau.so.6.0.0",
+        "Rss": 24,
+        "Pss": 12,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxshmfence.so.1.0.0",
+        "Rss": 20,
+        "Pss": 20,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-shm.so.0.0.0",
+        "Rss": 20,
+        "Pss": 14,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-present.so.0.0.0",
+        "Rss": 20,
+        "Pss": 20,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libX11-xcb.so.1.0.0",
+        "Rss": 20,
+        "Pss": 14,
+        "Anonymous": 8
+      },
+      {
+        "name": "[vdso]",
+        "Rss": 8,
+        "Pss": 0,
+        "Anonymous": 0
+      },
+      {
+        "name": "/home/ubuntu/.cache/mesa_shader_cache/index",
+        "Rss": 0,
+        "Pss": 0,
+        "Anonymous": 0
+      },
+      {
+        "name": "[vvar]",
+        "Rss": 0,
+        "Pss": 0,
+        "Anonymous": 0
+      },
+      {
+        "name": "[vvar_vclock]",
+        "Rss": 0,
+        "Pss": 0,
+        "Anonymous": 0
+      },
+      {
+        "name": "[vsyscall]",
+        "Rss": 0,
+        "Pss": 0,
+        "Anonymous": 0
+      }
+    ]
+  },
+  {
+    "framework": "gpui",
+    "binary_sha256": "e4fc6caa468c9e1e2a3b7fac9ee7b3c9f0613f187788194cee318c93a4434b00",
+    "snapshot_seconds_after_spawn": 2,
+    "threads": 80,
+    "totals_kib": {
+      "Rss": 115100,
+      "Pss": 62785,
+      "Private_Clean": 10096,
+      "Private_Dirty": 47756,
+      "Anonymous": 26748,
+      "Swap": 0
+    },
+    "mappings": [
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libLLVM.so.21.1",
+        "Rss": 55004,
+        "Pss": 8053,
+        "Anonymous": 2192
+      },
+      {
+        "name": "[heap]",
+        "Rss": 18656,
+        "Pss": 18656,
+        "Anonymous": 18656
+      },
+      {
+        "name": "/memfd:allocation fd (deleted)",
+        "Rss": 10908,
+        "Pss": 10908,
+        "Anonymous": 0
+      },
+      {
+        "name": "/tmp/zgui-component-comparison-bin/zgui-compare-gpui",
+        "Rss": 10556,
+        "Pss": 10556,
+        "Anonymous": 456
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libvulkan_lvp.so",
+        "Rss": 7440,
+        "Pss": 7440,
+        "Anonymous": 336
+      },
+      {
+        "name": "[anonymous]",
+        "Rss": 4584,
+        "Pss": 4584,
+        "Anonymous": 4584
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "Rss": 1676,
+        "Pss": 46,
+        "Anonymous": 24
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.35",
+        "Rss": 1448,
+        "Pss": 138,
+        "Anonymous": 72
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+        "Rss": 636,
+        "Pss": 61,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.341",
+        "Rss": 564,
+        "Pss": 564,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "Rss": 340,
+        "Pss": 177,
+        "Anonymous": 0
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.7",
+        "Rss": 336,
+        "Pss": 183,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxkbcommon.so.0.13.1",
+        "Rss": 312,
+        "Pss": 312,
+        "Anonymous": 12
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxml2.so.16.1.2",
+        "Rss": 256,
+        "Pss": 46,
+        "Anonymous": 36
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+        "Rss": 244,
+        "Pss": 14,
+        "Anonymous": 12
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libtinfo.so.6.6",
+        "Rss": 192,
+        "Pss": 28,
+        "Anonymous": 20
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb.so.1.1.0",
+        "Rss": 172,
+        "Pss": 54,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "Rss": 152,
+        "Pss": 50,
+        "Anonymous": 0
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+        "Rss": 140,
+        "Pss": 18,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libedit.so.2.0.76",
+        "Rss": 132,
+        "Pss": 17,
+        "Anonymous": 12
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libexpat.so.1.11.2",
+        "Rss": 124,
+        "Pss": 33,
+        "Anonymous": 12
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-xkb.so.1.0.0",
+        "Rss": 124,
+        "Pss": 124,
+        "Anonymous": 8
+      },
+      {
+        "name": "[stack]",
+        "Rss": 120,
+        "Pss": 120,
+        "Anonymous": 120
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libz.so.1.3.1",
+        "Rss": 104,
+        "Pss": 9,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libVkLayer_MESA_device_select.so",
+        "Rss": 100,
+        "Pss": 100,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libdrm.so.2.131.0",
+        "Rss": 92,
+        "Pss": 29,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libbsd.so.0.12.2",
+        "Rss": 80,
+        "Pss": 10,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libffi.so.8.2.0",
+        "Rss": 68,
+        "Pss": 9,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libdisplay-info.so.0.3.0",
+        "Rss": 68,
+        "Pss": 68,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-randr.so.0.1.0",
+        "Rss": 68,
+        "Pss": 68,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libwayland-client.so.0.24.0",
+        "Rss": 64,
+        "Pss": 64,
+        "Anonymous": 12
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libmd.so.0.1.0",
+        "Rss": 56,
+        "Pss": 9,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-xfixes.so.0.0.0",
+        "Rss": 40,
+        "Pss": 40,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxkbcommon-x11.so.0.13.1",
+        "Rss": 40,
+        "Pss": 40,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-sync.so.1.0.0",
+        "Rss": 36,
+        "Pss": 36,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-dri3.so.0.1.0",
+        "Rss": 28,
+        "Pss": 28,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libXdmcp.so.6.0.0",
+        "Rss": 28,
+        "Pss": 13,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libXau.so.6.0.0",
+        "Rss": 24,
+        "Pss": 12,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxshmfence.so.1.0.0",
+        "Rss": 20,
+        "Pss": 20,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-shm.so.0.0.0",
+        "Rss": 20,
+        "Pss": 14,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-present.so.0.0.0",
+        "Rss": 20,
+        "Pss": 20,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libX11-xcb.so.1.0.0",
+        "Rss": 20,
+        "Pss": 14,
+        "Anonymous": 8
+      },
+      {
+        "name": "[vdso]",
+        "Rss": 8,
+        "Pss": 0,
+        "Anonymous": 0
+      },
+      {
+        "name": "/home/ubuntu/.cache/mesa_shader_cache/index",
+        "Rss": 0,
+        "Pss": 0,
+        "Anonymous": 0
+      },
+      {
+        "name": "[vvar]",
+        "Rss": 0,
+        "Pss": 0,
+        "Anonymous": 0
+      },
+      {
+        "name": "[vvar_vclock]",
+        "Rss": 0,
+        "Pss": 0,
+        "Anonymous": 0
+      },
+      {
+        "name": "[vsyscall]",
+        "Rss": 0,
+        "Pss": 0,
+        "Anonymous": 0
+      }
+    ]
+  },
+  {
+    "framework": "quickgui",
+    "binary_sha256": "059c3906311373166313d39dba78eb9f244ffb8e532209ab88bc4f71e3735b51",
+    "snapshot_seconds_after_spawn": 2,
+    "threads": 105,
+    "totals_kib": {
+      "Rss": 139816,
+      "Pss": 105599,
+      "Private_Clean": 28156,
+      "Private_Dirty": 61684,
+      "Anonymous": 41000,
+      "Swap": 0
+    },
+    "mappings": [
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libLLVM.so.21.1",
+        "Rss": 55004,
+        "Pss": 26857,
+        "Anonymous": 2192
+      },
+      {
+        "name": "[heap]",
+        "Rss": 29884,
+        "Pss": 29884,
+        "Anonymous": 29884
+      },
+      {
+        "name": "/tmp/zgui-component-comparison-bin/zgui-compare-quickgui",
+        "Rss": 14756,
+        "Pss": 14756,
+        "Anonymous": 568
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so",
+        "Rss": 9268,
+        "Pss": 9268,
+        "Anonymous": 996
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libvulkan_lvp.so",
+        "Rss": 7380,
+        "Pss": 7380,
+        "Anonymous": 336
+      },
+      {
+        "name": "/memfd:allocation fd (deleted)",
+        "Rss": 6496,
+        "Pss": 6496,
+        "Anonymous": 0
+      },
+      {
+        "name": "[anonymous]",
+        "Rss": 5836,
+        "Pss": 5836,
+        "Anonymous": 5836
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "Rss": 1868,
+        "Pss": 78,
+        "Anonymous": 24
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.35",
+        "Rss": 1448,
+        "Pss": 401,
+        "Anonymous": 72
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libX11.so.6.4.0",
+        "Rss": 856,
+        "Pss": 403,
+        "Anonymous": 20
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+        "Rss": 648,
+        "Pss": 97,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.341",
+        "Rss": 564,
+        "Pss": 564,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libGLdispatch.so.0.0.0",
+        "Rss": 520,
+        "Pss": 249,
+        "Anonymous": 116
+      },
+      {
+        "name": "[stack]",
+        "Rss": 500,
+        "Pss": 500,
+        "Anonymous": 500
+      },
+      {
+        "name": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "Rss": 360,
+        "Pss": 197,
+        "Anonymous": 0
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libEGL_mesa.so.0.0.0",
+        "Rss": 356,
+        "Pss": 356,
+        "Anonymous": 52
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.7",
+        "Rss": 332,
+        "Pss": 194,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxkbcommon.so.0.13.1",
+        "Rss": 332,
+        "Pss": 332,
+        "Anonymous": 12
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxml2.so.16.1.2",
+        "Rss": 264,
+        "Pss": 115,
+        "Anonymous": 36
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+        "Rss": 248,
+        "Pss": 19,
+        "Anonymous": 12
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libtinfo.so.6.6",
+        "Rss": 192,
+        "Pss": 45,
+        "Anonymous": 20
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libexpat.so.1.11.2",
+        "Rss": 184,
+        "Pss": 53,
+        "Anonymous": 12
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb.so.1.1.0",
+        "Rss": 172,
+        "Pss": 54,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libedit.so.2.0.76",
+        "Rss": 144,
+        "Pss": 55,
+        "Anonymous": 12
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+        "Rss": 140,
+        "Pss": 26,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/locale/C.utf8/LC_CTYPE",
+        "Rss": 128,
+        "Pss": 15,
+        "Anonymous": 0
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-xkb.so.1.0.0",
+        "Rss": 124,
+        "Pss": 124,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libz.so.1.3.1",
+        "Rss": 108,
+        "Pss": 13,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libdrm_intel.so.1.131.0",
+        "Rss": 100,
+        "Pss": 100,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libelf-0.194.so",
+        "Rss": 100,
+        "Pss": 100,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libVkLayer_MESA_device_select.so",
+        "Rss": 100,
+        "Pss": 100,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libdrm.so.2.131.0",
+        "Rss": 92,
+        "Pss": 29,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libbsd.so.0.12.2",
+        "Rss": 80,
+        "Pss": 31,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libXext.so.6.4.0",
+        "Rss": 80,
+        "Pss": 44,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libXi.so.6.1.0",
+        "Rss": 80,
+        "Pss": 44,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libEGL.so.1.1.0",
+        "Rss": 76,
+        "Pss": 76,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libsensors.so.5.0.0",
+        "Rss": 68,
+        "Pss": 68,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libdisplay-info.so.0.3.0",
+        "Rss": 68,
+        "Pss": 68,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-randr.so.0.1.0",
+        "Rss": 68,
+        "Pss": 68,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libffi.so.8.2.0",
+        "Rss": 64,
+        "Pss": 13,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libwayland-client.so.0.24.0",
+        "Rss": 64,
+        "Pss": 64,
+        "Anonymous": 12
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libmd.so.0.1.0",
+        "Rss": 56,
+        "Pss": 22,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libXcursor.so.1.0.2",
+        "Rss": 52,
+        "Pss": 30,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libdrm_amdgpu.so.1.131.0",
+        "Rss": 48,
+        "Pss": 28,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libXrender.so.1.3.0",
+        "Rss": 48,
+        "Pss": 28,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libpciaccess.so.0.11.1",
+        "Rss": 44,
+        "Pss": 44,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-xfixes.so.0.0.0",
+        "Rss": 40,
+        "Pss": 40,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/locale/locale-archive",
+        "Rss": 40,
+        "Pss": 3,
+        "Anonymous": 0
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxkbcommon-x11.so.0.13.1",
+        "Rss": 40,
+        "Pss": 40,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-sync.so.1.0.0",
+        "Rss": 36,
+        "Pss": 36,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libXfixes.so.3.1.0",
+        "Rss": 32,
+        "Pss": 20,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libXdmcp.so.6.0.0",
+        "Rss": 32,
+        "Pss": 14,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libgbm.so.1.0.0",
+        "Rss": 28,
+        "Pss": 13,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-dri3.so.0.1.0",
+        "Rss": 28,
+        "Pss": 28,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/gconv/gconv-modules.cache",
+        "Rss": 28,
+        "Pss": 1,
+        "Anonymous": 0
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libXau.so.6.0.0",
+        "Rss": 24,
+        "Pss": 12,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxshmfence.so.1.0.0",
+        "Rss": 20,
+        "Pss": 20,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-shm.so.0.0.0",
+        "Rss": 20,
+        "Pss": 14,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libxcb-present.so.0.0.0",
+        "Rss": 20,
+        "Pss": 20,
+        "Anonymous": 8
+      },
+      {
+        "name": "/usr/lib/x86_64-linux-gnu/libX11-xcb.so.1.0.0",
+        "Rss": 20,
+        "Pss": 14,
+        "Anonymous": 8
+      },
+      {
+        "name": "[vdso]",
+        "Rss": 8,
+        "Pss": 0,
+        "Anonymous": 0
+      },
+      {
+        "name": "/home/ubuntu/.cache/mesa_shader_cache/index",
+        "Rss": 0,
+        "Pss": 0,
+        "Anonymous": 0
+      },
+      {
+        "name": "[vvar]",
+        "Rss": 0,
+        "Pss": 0,
+        "Anonymous": 0
+      },
+      {
+        "name": "[vvar_vclock]",
+        "Rss": 0,
+        "Pss": 0,
+        "Anonymous": 0
+      },
+      {
+        "name": "[vsyscall]",
+        "Rss": 0,
+        "Pss": 0,
+        "Anonymous": 0
+      }
+    ]
+  }
+]

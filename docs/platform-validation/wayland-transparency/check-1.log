@@ -1,0 +1,11 @@
+test_evidence_write_failure_is_not_hidden (__main__.TrialEvidence.test_evidence_write_failure_is_not_hidden) ... ok
+test_failed_process_preserves_samples (__main__.TrialEvidence.test_failed_process_preserves_samples) ... ok
+test_launch_failure_writes_status_without_exit_code (__main__.TrialEvidence.test_launch_failure_writes_status_without_exit_code) ... ok
+test_missing_or_incompatible_ticks_preserves_samples (__main__.TrialEvidence.test_missing_or_incompatible_ticks_preserves_samples) ... ok
+test_success_keeps_existing_artifact_shape (__main__.TrialEvidence.test_success_keeps_existing_artifact_shape) ... ok
+test_timeout_preserves_samples_and_reaps_child (__main__.TrialEvidence.test_timeout_preserves_samples_and_reaps_child) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.006s
+
+OK

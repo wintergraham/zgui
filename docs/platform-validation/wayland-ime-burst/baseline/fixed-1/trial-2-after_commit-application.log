@@ -1,0 +1,8 @@
+IME Preedit("n", Some((0, 1))) elapsed=4.318901
+IME Preedit("ni", Some((0, 2))) elapsed=4.363994
+IME Preedit("ni h", Some((0, 4))) elapsed=4.411846
+IME Preedit("ni ha", Some((0, 5))) elapsed=4.455595
+IME Preedit("ni hao", Some((0, 6))) elapsed=4.498289
+IME Preedit("", None) elapsed=6.546167
+IME Commit("你好") elapsed=6.546179
+IME Preedit("", None) elapsed=6.546185

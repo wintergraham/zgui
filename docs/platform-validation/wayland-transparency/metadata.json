@@ -1,0 +1,27 @@
+{
+  "captured_utc": "2026-09-22T17:12:03.833252+00:00",
+  "commands": [
+    [
+      "/usr/bin/python3",
+      "scripts/wayland_transparency_smoke.py",
+      "/tmp/zgui-target/debug/examples/transparency",
+      "--output",
+      "/home/ubuntu/GitHub/zgui/docs/platform-validation/wayland-transparency/native"
+    ],
+    [
+      "python3",
+      "scripts/test_compare.py",
+      "-v"
+    ]
+  ],
+  "binary_sha256": "5f308516aa984a267a501923b47a7986f962977a75b307b24acde8d3645884b8",
+  "build_proof": "../transparency/metadata.json",
+  "compiled_inputs_verified_against_build": 159,
+  "source_inputs": 164,
+  "source_archive_sha256": "9b7c2e3fb22028a80f104aae51053905710bf25ef934423b42a48c854fb07e89",
+  "source_unchanged": true,
+  "environment": {
+    "LD_LIBRARY_PATH": "/tmp/zgui-ci-loader-check/build/loader"
+  },
+  "scope": "Native Wayland compositor pixel checks and six Python sampler regressions; no Rust source changes or new Rust test run"
+}

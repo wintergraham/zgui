@@ -1,0 +1,8 @@
+[3007358.938] zwp_text_input_v3#20.preedit_string("n", 0, 1)
+[3007358.965] zwp_text_input_v3#20.done(2)
+[3007359.073]  -> zwp_text_input_v3#20.set_cursor_rectangle(54, 80, 1, 24)
+[3007359.081]  -> zwp_text_input_v3#20.commit()
+[3007393.058] zwp_text_input_v3#20.preedit_string("ni hao", 0, 6)
+[3007393.086] zwp_text_input_v3#20.done(3)
+[3007393.190]  -> zwp_text_input_v3#20.set_cursor_rectangle(124, 80, 1, 24)
+[3007393.198]  -> zwp_text_input_v3#20.commit()

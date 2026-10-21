@@ -1,0 +1,15 @@
+VIEWPORT (900.0, 760.0)
+SEMANTIC "Enable notifications" None
+SEMANTIC "Retained widgets · GPU shaping · keyboard navigation · native accessibility" None
+SEMANTIC "Notes" Some("Tab moves focus. Shift+Tab moves back.\nTry selecting Unicode text and composing with your IME.\nUse Ctrl/Cmd+A, C, X, V, Z.")
+SEMANTIC "Name" Some("Hello, 世界 👋")
+SEMANTIC "Increment" None
+SEMANTIC "Volume level" None
+SEMANTIC "zgui · Linux & macOS" None
+SEMANTIC "Async update" None
+SEMANTIC "Ready" None
+SEMANTIC "Notes — multiline editing" None
+SEMANTIC "Volume — drag or use arrow keys" None
+SEMANTIC "Disabled" None
+SEMANTIC "Volume" None
+SEMANTIC "Name — selection, clipboard, undo, IME" None

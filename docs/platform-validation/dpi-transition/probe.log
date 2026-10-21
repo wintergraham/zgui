@@ -1,0 +1,7 @@
+VIEWPORT (800.0, 500.0)
+VIEWPORT (1200.0, 800.0)
+DPI viewport=(1200.0, 800.0) editor=Rect { x: 20.0, y: 54.0, width: 400.0, height: 44.0 } caret=Rect { x: 37.6, y: 62.0, width: 1.0, height: 23.0 } selection=1 model="A0123456789"
+VIEWPORT (600.0, 400.0)
+DPI viewport=(600.0, 400.0) editor=Rect { x: 20.0, y: 54.0, width: 400.0, height: 44.0 } caret=Rect { x: 37.6, y: 62.0, width: 1.0, height: 23.0 } selection=1 model="BA0123456789"
+VIEWPORT (1200.0, 800.0)
+DPI viewport=(1200.0, 800.0) editor=Rect { x: 20.0, y: 54.0, width: 400.0, height: 44.0 } caret=Rect { x: 37.6, y: 62.0, width: 1.0, height: 23.0 } selection=1 model="CBA0123456789"

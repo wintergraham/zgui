@@ -1,0 +1,46 @@
+{
+  "passed": true,
+  "backend": "owned X11/Xvfb/Openbox",
+  "reports": {
+    "editor_before_chord": {
+      "anchor": 0,
+      "focus": 9,
+      "amount": 10.0
+    },
+    "editor_after_chord": {
+      "anchor": 0,
+      "focus": 23,
+      "amount": 10.0
+    },
+    "editor_released": {
+      "anchor": 0,
+      "focus": 23,
+      "amount": 10.0
+    },
+    "editor_after_release_motion": {
+      "anchor": 0,
+      "focus": 23,
+      "amount": 10.0
+    },
+    "slider_before_chord": {
+      "anchor": 0,
+      "focus": 23,
+      "amount": 14.135021
+    },
+    "slider_after_chord": {
+      "anchor": 0,
+      "focus": 23,
+      "amount": 70.04219
+    },
+    "slider_released": {
+      "anchor": 0,
+      "focus": 23,
+      "amount": 70.04219
+    },
+    "slider_after_release_motion": {
+      "anchor": 0,
+      "focus": 23,
+      "amount": 70.04219
+    }
+  }
+}

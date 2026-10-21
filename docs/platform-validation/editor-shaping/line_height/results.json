@@ -1,0 +1,38 @@
+{
+  "passed": true,
+  "backend": "X11",
+  "stages": [
+    {
+      "stage": 1,
+      "height": 24.0,
+      "y": 96.0,
+      "anchor": 11,
+      "focus": 11,
+      "model": "First line\nSecond line\nThird line"
+    },
+    {
+      "stage": 2,
+      "height": 42.0,
+      "y": 114.0,
+      "anchor": 11,
+      "focus": 11,
+      "model": "First line\nSecond line\nThird line"
+    },
+    {
+      "stage": 3,
+      "height": 12.0,
+      "y": 84.0,
+      "anchor": 11,
+      "focus": 11,
+      "model": "First line\nSecond line\nThird line"
+    },
+    {
+      "stage": 4,
+      "height": 28.0,
+      "y": 100.0,
+      "anchor": 11,
+      "focus": 11,
+      "model": "First line\nSecond line\nThird line"
+    }
+  ]
+}

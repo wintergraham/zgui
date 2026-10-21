@@ -1,0 +1,572 @@
+{
+  "passed": true,
+  "backend": "owned Xvfb/Openbox/picom xrender",
+  "stages": [
+    {
+      "stage": "initial",
+      "client_origin": [
+        290,
+        237
+      ],
+      "samples": [
+        {
+          "position": [
+            40,
+            40
+          ],
+          "expected": [
+            128,
+            64,
+            64
+          ],
+          "actual": [
+            128,
+            64,
+            64
+          ]
+        },
+        {
+          "position": [
+            120,
+            80
+          ],
+          "expected": [
+            112,
+            104,
+            80
+          ],
+          "actual": [
+            112,
+            104,
+            80
+          ]
+        },
+        {
+          "position": [
+            180,
+            120
+          ],
+          "expected": [
+            40,
+            104,
+            104
+          ],
+          "actual": [
+            40,
+            104,
+            104
+          ]
+        },
+        {
+          "position": [
+            280,
+            40
+          ],
+          "expected": [
+            32,
+            64,
+            96
+          ],
+          "actual": [
+            32,
+            64,
+            96
+          ]
+        },
+        {
+          "position": [
+            25,
+            165
+          ],
+          "expected": [
+            238,
+            238,
+            238
+          ],
+          "actual": [
+            238,
+            238,
+            238
+          ]
+        }
+      ]
+    },
+    {
+      "stage": "color-update",
+      "client_origin": [
+        290,
+        237
+      ],
+      "samples": [
+        {
+          "position": [
+            40,
+            40
+          ],
+          "expected": [
+            32,
+            80,
+            160
+          ],
+          "actual": [
+            32,
+            80,
+            160
+          ]
+        },
+        {
+          "position": [
+            120,
+            80
+          ],
+          "expected": [
+            40,
+            116,
+            152
+          ],
+          "actual": [
+            40,
+            116,
+            152
+          ]
+        },
+        {
+          "position": [
+            180,
+            120
+          ],
+          "expected": [
+            40,
+            104,
+            104
+          ],
+          "actual": [
+            40,
+            104,
+            104
+          ]
+        },
+        {
+          "position": [
+            280,
+            40
+          ],
+          "expected": [
+            32,
+            64,
+            96
+          ],
+          "actual": [
+            32,
+            64,
+            96
+          ]
+        },
+        {
+          "position": [
+            25,
+            165
+          ],
+          "expected": [
+            238,
+            238,
+            238
+          ],
+          "actual": [
+            238,
+            238,
+            238
+          ]
+        }
+      ]
+    },
+    {
+      "stage": "hidden-panel",
+      "client_origin": [
+        290,
+        237
+      ],
+      "samples": [
+        {
+          "position": [
+            40,
+            40
+          ],
+          "expected": [
+            32,
+            64,
+            96
+          ],
+          "actual": [
+            32,
+            64,
+            96
+          ]
+        },
+        {
+          "position": [
+            120,
+            80
+          ],
+          "expected": [
+            40,
+            104,
+            104
+          ],
+          "actual": [
+            40,
+            104,
+            104
+          ]
+        },
+        {
+          "position": [
+            180,
+            120
+          ],
+          "expected": [
+            40,
+            104,
+            104
+          ],
+          "actual": [
+            40,
+            104,
+            104
+          ]
+        },
+        {
+          "position": [
+            280,
+            40
+          ],
+          "expected": [
+            32,
+            64,
+            96
+          ],
+          "actual": [
+            32,
+            64,
+            96
+          ]
+        },
+        {
+          "position": [
+            25,
+            165
+          ],
+          "expected": [
+            238,
+            238,
+            238
+          ],
+          "actual": [
+            238,
+            238,
+            238
+          ]
+        }
+      ]
+    },
+    {
+      "stage": "moved-resized",
+      "client_origin": [
+        101,
+        140
+      ],
+      "samples": [
+        {
+          "position": [
+            40,
+            40
+          ],
+          "expected": [
+            32,
+            64,
+            96
+          ],
+          "actual": [
+            32,
+            64,
+            96
+          ]
+        },
+        {
+          "position": [
+            120,
+            80
+          ],
+          "expected": [
+            40,
+            104,
+            104
+          ],
+          "actual": [
+            40,
+            104,
+            104
+          ]
+        },
+        {
+          "position": [
+            180,
+            120
+          ],
+          "expected": [
+            40,
+            104,
+            104
+          ],
+          "actual": [
+            40,
+            104,
+            104
+          ]
+        },
+        {
+          "position": [
+            280,
+            40
+          ],
+          "expected": [
+            32,
+            64,
+            96
+          ],
+          "actual": [
+            32,
+            64,
+            96
+          ]
+        },
+        {
+          "position": [
+            25,
+            165
+          ],
+          "expected": [
+            238,
+            238,
+            238
+          ],
+          "actual": [
+            238,
+            238,
+            238
+          ]
+        },
+        {
+          "position": [
+            380,
+            280
+          ],
+          "expected": [
+            32,
+            64,
+            96
+          ],
+          "actual": [
+            32,
+            64,
+            96
+          ]
+        }
+      ]
+    },
+    {
+      "stage": "restored-panel",
+      "client_origin": [
+        101,
+        140
+      ],
+      "samples": [
+        {
+          "position": [
+            40,
+            40
+          ],
+          "expected": [
+            32,
+            80,
+            160
+          ],
+          "actual": [
+            32,
+            80,
+            160
+          ]
+        },
+        {
+          "position": [
+            120,
+            80
+          ],
+          "expected": [
+            40,
+            116,
+            152
+          ],
+          "actual": [
+            40,
+            116,
+            152
+          ]
+        },
+        {
+          "position": [
+            180,
+            120
+          ],
+          "expected": [
+            40,
+            104,
+            104
+          ],
+          "actual": [
+            40,
+            104,
+            104
+          ]
+        },
+        {
+          "position": [
+            280,
+            40
+          ],
+          "expected": [
+            32,
+            64,
+            96
+          ],
+          "actual": [
+            32,
+            64,
+            96
+          ]
+        },
+        {
+          "position": [
+            25,
+            165
+          ],
+          "expected": [
+            238,
+            238,
+            238
+          ],
+          "actual": [
+            238,
+            238,
+            238
+          ]
+        }
+      ]
+    },
+    {
+      "stage": "backdrop-change",
+      "client_origin": [
+        101,
+        140
+      ],
+      "samples": [
+        {
+          "position": [
+            40,
+            40
+          ],
+          "expected": [
+            72,
+            72,
+            120
+          ],
+          "actual": [
+            72,
+            72,
+            120
+          ]
+        },
+        {
+          "position": [
+            120,
+            80
+          ],
+          "expected": [
+            70,
+            110,
+            122
+          ],
+          "actual": [
+            70,
+            110,
+            122
+          ]
+        },
+        {
+          "position": [
+            180,
+            120
+          ],
+          "expected": [
+            100,
+            92,
+            44
+          ],
+          "actual": [
+            100,
+            92,
+            44
+          ]
+        },
+        {
+          "position": [
+            280,
+            40
+          ],
+          "expected": [
+            112,
+            48,
+            16
+          ],
+          "actual": [
+            112,
+            48,
+            16
+          ]
+        },
+        {
+          "position": [
+            25,
+            165
+          ],
+          "expected": [
+            238,
+            238,
+            238
+          ],
+          "actual": [
+            238,
+            238,
+            238
+          ]
+        },
+        {
+          "position": [
+            380,
+            280
+          ],
+          "expected": [
+            112,
+            48,
+            16
+          ],
+          "actual": [
+            112,
+            48,
+            16
+          ]
+        }
+      ]
+    }
+  ]
+}

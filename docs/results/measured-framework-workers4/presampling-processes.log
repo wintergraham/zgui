@@ -1,0 +1,430 @@
+    PID COMMAND
+      1 systemd
+      2 kthreadd
+      3 pool_workqueue_release
+      4 kworker/R-rcu_gp
+      5 kworker/R-sync_wq
+      6 kworker/R-kvfree_rcu_reclaim
+      7 kworker/R-slub_flushwq
+      8 kworker/R-netns
+     10 kworker/0:0H-kblockd
+     12 kworker/u96:0-ipv6_addrconf
+     13 kworker/R-mm_percpu_wq
+     14 ksoftirqd/0
+     15 rcu_preempt
+     16 rcu_exp_par_gp_kthread_worker/1
+     17 rcu_exp_gp_kthread_worker
+     18 migration/0
+     19 kprobe-optimizer
+     20 idle_inject/0
+     21 cpuhp/0
+     22 cpuhp/1
+     23 idle_inject/1
+     24 migration/1
+     25 ksoftirqd/1
+     28 cpuhp/2
+     29 idle_inject/2
+     30 migration/2
+     31 ksoftirqd/2
+     33 kworker/2:0H-kblockd
+     34 cpuhp/3
+     35 idle_inject/3
+     36 migration/3
+     37 ksoftirqd/3
+     39 kworker/3:0H-kblockd
+     40 cpuhp/4
+     41 idle_inject/4
+     42 migration/4
+     43 ksoftirqd/4
+     45 kworker/4:0H-kblockd
+     46 cpuhp/5
+     47 idle_inject/5
+     48 migration/5
+     49 ksoftirqd/5
+     51 kworker/5:0H-kblockd
+     52 cpuhp/6
+     53 idle_inject/6
+     54 migration/6
+     55 ksoftirqd/6
+     57 kworker/6:0H-kblockd
+     58 cpuhp/7
+     59 idle_inject/7
+     60 migration/7
+     61 ksoftirqd/7
+     63 kworker/7:0H-kblockd
+     64 cpuhp/8
+     65 idle_inject/8
+     66 migration/8
+     67 ksoftirqd/8
+     69 kworker/8:0H-kblockd
+     70 cpuhp/9
+     71 idle_inject/9
+     72 migration/9
+     73 ksoftirqd/9
+     75 kworker/9:0H-kblockd
+     76 cpuhp/10
+     77 idle_inject/10
+     78 migration/10
+     79 ksoftirqd/10
+     81 kworker/10:0H-kblockd
+     82 cpuhp/11
+     83 idle_inject/11
+     84 migration/11
+     85 ksoftirqd/11
+     87 kworker/11:0H-kblockd
+     88 cpuhp/12
+     89 idle_inject/12
+     90 migration/12
+     91 ksoftirqd/12
+     93 kworker/12:0H-kblockd
+     94 rcu_exp_par_gp_kthread_worker/2
+     95 cpuhp/13
+     96 idle_inject/13
+     97 migration/13
+     98 ksoftirqd/13
+    100 kworker/13:0H-kblockd
+    101 cpuhp/14
+    102 idle_inject/14
+    103 migration/14
+    104 ksoftirqd/14
+    106 kworker/14:0H-kblockd
+    107 cpuhp/15
+    108 idle_inject/15
+    109 migration/15
+    110 ksoftirqd/15
+    112 kworker/15:0H-kblockd
+    113 cpuhp/16
+    114 idle_inject/16
+    115 migration/16
+    116 ksoftirqd/16
+    118 kworker/16:0H-kblockd
+    119 cpuhp/17
+    120 idle_inject/17
+    121 migration/17
+    122 ksoftirqd/17
+    124 kworker/17:0H-kblockd
+    125 cpuhp/18
+    126 idle_inject/18
+    127 migration/18
+    128 ksoftirqd/18
+    130 kworker/18:0H-kblockd
+    131 cpuhp/19
+    132 idle_inject/19
+    133 migration/19
+    134 ksoftirqd/19
+    136 kworker/19:0H-kblockd
+    137 cpuhp/20
+    138 idle_inject/20
+    139 migration/20
+    140 ksoftirqd/20
+    142 kworker/20:0H-kblockd
+    143 cpuhp/21
+    144 idle_inject/21
+    145 migration/21
+    146 ksoftirqd/21
+    148 kworker/21:0H-kblockd
+    149 cpuhp/22
+    150 idle_inject/22
+    151 migration/22
+    152 ksoftirqd/22
+    154 kworker/22:0H-kblockd
+    155 cpuhp/23
+    156 idle_inject/23
+    157 migration/23
+    158 ksoftirqd/23
+    160 kworker/23:0H-kblockd
+    163 kdevtmpfs
+    164 kworker/R-inet_frag_wq
+    165 rcu_tasks_kthread
+    166 rcu_tasks_rude_kthread
+    167 kauditd
+    168 khungtaskd
+    169 oom_reaper
+    172 kworker/R-writeback
+    173 kcompactd0
+    174 ksmd
+    175 khugepaged
+    176 kworker/R-kblockd
+    177 kworker/R-blkcg_punt_bio
+    178 kworker/R-kintegrityd
+    179 irq/9-acpi
+    181 kworker/R-tpm_dev_wq
+    182 kworker/R-ata_sff
+    183 kworker/R-md_bitmap
+    184 kworker/R-md_llbitmap_io
+    185 kworker/R-md_llbitmap_unplug
+    186 kworker/R-edac-poller
+    187 kworker/u96:1-ipv6_addrconf
+    188 kworker/R-devfreq_wq
+    189 watchdogd
+    190 kworker/R-quota_events_unbound
+    195 irq/25-AMD-Vi
+    198 kswapd0
+    199 ecryptfs-kthread
+    200 kworker/R-kthrotld
+    201 kworker/u99:0
+    202 irq/31-aerdrv
+    203 irq/32-aerdrv
+    204 kworker/R-acpi_thermal_pm
+    222 hwrng
+    225 kworker/R-mld
+    226 kworker/R-ipv6_addrconf
+    227 kworker/R-kstrp
+    231 kworker/u100:0
+    232 kworker/u101:0
+    243 kworker/R-charger_manager
+    244 irq/26-ACPI:Event
+    368 scsi_eh_0
+    369 kworker/R-scsi_tmf_0
+    370 scsi_eh_1
+    371 kworker/R-scsi_tmf_1
+    372 scsi_eh_2
+    373 kworker/R-scsi_tmf_2
+    374 scsi_eh_3
+    375 kworker/R-scsi_tmf_3
+    376 scsi_eh_4
+    377 kworker/R-scsi_tmf_4
+    378 kworker/R-nvme-wq
+    379 kworker/R-nvme-reset-wq
+    380 scsi_eh_5
+    381 kworker/R-nvme-delete-wq
+    382 kworker/R-scsi_tmf_5
+    383 kworker/R-nvme-auth-wq
+    434 md1_raid1
+    436 kworker/0:1H-kblockd
+    439 md2_raid1
+    440 kworker/1:1H-kblockd
+    490 md3_raid1
+    491 kworker/15:1H-kblockd
+    529 kworker/R-raid5wq
+    569 kworker/18:1H-kblockd
+    570 kworker/4:1H-kblockd
+    573 jbd2/md3-8
+    574 kworker/R-ext4-rsv-conversion
+    669 kworker/R-kmpathd
+    670 kworker/R-kmpath_handlerd
+    702 kworker/7:1H-kblockd
+    707 kworker/3:1H-kblockd
+    709 kworker/19:1H-kblockd
+    711 kworker/12:1H-kblockd
+    712 kworker/20:1H-kblockd
+    714 kworker/21:1H-kblockd
+    907 kworker/R-ipmi-msghandler-remove-wq
+    930 kipmi0
+    962 jbd2/md2-8
+    963 kworker/R-ext4-rsv-conversion
+    964 kworker/2:1H-kblockd
+    971 kworker/14:1H-kblockd
+    972 spl_system_task
+    973 spl_delay_taskq
+    974 spl_dynamic_tas
+    975 spl_kmem_cache
+    977 zvol_tq-0
+    978 zvol_tq-1
+    979 zvol_tq-2
+    980 zvol_tq-3
+    981 zvol_tq-4
+    982 arc_prune
+    983 arc_evict
+    984 arc_evict
+    985 arc_evict
+    986 arc_evict
+    987 arc_flush
+    988 arc_evict
+    989 arc_reap
+    990 dbu_evict
+    991 dbuf_evict
+    992 z_vdev_file
+    993 l2arc_feed
+   1271 kworker/13:1H-kblockd
+   1292 kworker/R-cfg80211
+   1336 dbus-daemon
+   1386 networkd-dispat
+   1441 systemd-logind
+   1645 unattended-upgr
+   1659 agetty
+   1676 agetty
+   1760 kworker/11:1H-kblockd
+   1763 kworker/23:1H-kblockd
+   1765 kworker/9:1H-kblockd
+   1780 kworker/17:1H-kblockd
+   1851 kworker/8:1H-kblockd
+   1852 kworker/10:1H-kblockd
+   1907 kworker/22:1H-kblockd
+   1964 kworker/6:1H-kblockd
+   1981 kworker/5:1H-kblockd
+   2147 kworker/16:1H-kblockd
+  25207 dockerd
+  25578 systemd
+  25580 (sd-pam)
+  48308 kworker/10:2-events
+  95819 kworker/1:1-events
+ 102023 python3
+ 102077 claude
+ 104543 steering_probe
+ 104690 node
+ 106516 bash
+ 106518 sleep
+ 108771 python3
+ 108813 python3
+ 108820 git
+ 108954 git
+ 108959 git
+ 108990 ps
+ 130375 xdg-permission-
+ 130443 xdg-document-po
+ 130525 fusermount3
+ 188820 kworker/u98:1-iou_exit
+ 245726 kworker/u97:2-ext4-rsv-conversion
+ 266466 ssh-agent
+ 306678 kworker/11:1-mm_percpu_wq
+ 553627 at-spi-bus-laun
+ 553643 dbus-daemon
+ 553650 at-spi2-registr
+ 590690 kworker/u98:4-iou_exit
+ 592452 kworker/6:2-events
+ 597479 kworker/21:1-events
+ 608446 kworker/2:1-events
+ 610475 kworker/23:0-events
+ 627267 kworker/u97:4-iou_exit
+ 644575 kworker/16:2-mm_percpu_wq
+ 652809 dbus-daemon
+ 906339 kworker/u97:0-iou_exit
+ 964738 kworker/4:2
+ 972027 codex
+ 977972 kworker/3:1-events
+ 980812 kworker/12:0
+ 987427 codex
+ 995493 codex-code-mode
+1002329 codex-code-mode
+1007831 kworker/18:0-events
+1025960 kworker/u98:2-iou_exit
+1111414 kworker/7:2-events
+1322853 kworker/8:1-mm_percpu_wq
+1620339 kworker/15:2-mm_percpu_wq
+1639261 kworker/12:1-mm_percpu_wq
+1663793 zeron
+1669701 kworker/9:1-mm_percpu_wq
+1723476 containerd-shim
+1723542 sh
+1723686 docker-proxy
+1723693 docker-proxy
+1723723 docker-proxy
+1723731 docker-proxy
+1723747 docker-proxy
+1723754 docker-proxy
+1723768 run.sh
+1723775 vttestserver
+1733513 mysqld_safe
+1734430 mysqld
+1738690 vtcombo
+1774926 kworker/4:0-events
+1953064 kworker/3:0-events
+1978330 udisksd
+1984819 fwupd
+2032891 polkitd
+2033314 ModemManager
+2077163 kworker/0:1-events
+2120241 systemd
+2120243 (sd-pam)
+2159460 psimon
+2159677 rsyslogd
+2280980 bash
+2319289 kworker/14:0-mm_percpu_wq
+2323333 node
+2346824 kworker/17:0-mm_percpu_wq
+2355460 ssh-agent
+2450224 kworker/19:0-events
+2458681 bash
+2491917 kworker/10:0-events
+2616514 bash
+2655746 kworker/10:1-events
+2687271 herdr
+2687303 zsh
+2695119 kworker/5:1-events
+2801216 kworker/0:2-rcu_gp
+2823575 kworker/23:1-mm_percpu_wq
+2901098 kworker/13:0-mm_percpu_wq
+2903290 kworker/18:2-mm_percpu_wq
+2926119 claude
+2932963 xdg-desktop-por
+2933787 dbus-daemon
+2933856 at-spi2-registr
+2999197 kworker/6:0-events
+3016683 kworker/15:1-events
+3049851 kworker/u98:0-iou_exit
+3154414 kworker/9:2-events
+3158872 kworker/14:2-events
+3212644 bash
+3212754 tail
+3212813 public_for3
+3261948 opencode
+3263984 kworker/5:0-events
+3275394 kworker/19:1-events
+3313769 xdg-permission-
+3336077 kworker/u97:1-iou_exit
+3389707 kworker/2:2-events
+3390357 kworker/17:1
+3394488 kworker/8:2-events
+3402095 kworker/20:2-events
+3403019 kworker/16:0-cgroup_free
+3408307 kworker/21:2-events
+3412930 kworker/7:1-cgroup_release
+3415014 kworker/13:2-events
+3416968 kworker/22:1-events
+3417557 kworker/11:2-events
+3429859 zeron
+3436979 bash
+3485047 kworker/20:1-events
+3521445 kworker/22:2-mm_percpu_wq
+3592945 Xvfb
+3603225 kworker/1:2H-kblockd
+3610259 kworker/1:0-events
+3644945 cron
+3644982 chronyd-starter
+3645004 mdadm
+3645073 multipathd
+3645087 containerd
+3645162 chronyd
+3645174 chronyd
+3655942 redis-server
+3655976 sshd
+3655999 systemd-journal
+3656017 systemd-resolve
+3656061 zed
+3656260 systemd-udevd
+3656335 psimon
+3656353 systemd-network
+3667143 Xvfb
+3684582 zeron
+3766935 dbus-daemon
+3766992 at-spi-bus-laun
+3837961 codex
+3863269 codex-code-mode
+3869511 kworker/6:1-events
+3892645 kworker/u97:3-iou_exit
+4076738 kworker/u98:3-iou_exit
+4170756 kworker/u98:5-iou_exit
+4170765 kworker/u98:6-events_power_efficient
+4170766 kworker/u98:7-iou_exit
+4170811 kworker/u98:8-iou_exit
+4170816 kworker/u97:5-iou_exit
+4170817 kworker/u97:6-iou_exit
+4170830 kworker/u98:9-iou_exit
+4170843 kworker/u97:7-events_unbound
+4170852 kworker/u98:10-iou_exit
+4170871 kworker/u98:11-iou_exit
+4170923 kworker/u98:12-iou_exit
+4170925 kworker/u97:8-iou_exit
+4170927 kworker/u98:13-iou_exit
+4170930 kworker/u97:9-events_power_efficient
+4170996 kworker/u98:14-iou_exit
+4170997 kworker/u98:15-ext4-rsv-conversion
+4171011 kworker/u98:16-iou_exit
+4171012 kworker/u98:17-md_bitmap
+4171013 kworker/u98:18-writeback
+4171045 kworker/u97:10-iou_exit
+4171046 kworker/u97:11-flush-9:3
+4171047 kworker/u98:19
+4171051 kworker/u97:12
+4175933 kworker/19:2-mm_percpu_wq

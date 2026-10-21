@@ -1,0 +1,46 @@
+READY mode=moving
+FOCUS true
+RECT_REQUEST x=40 delay_ms=40 elapsed=0.002570
+RECT x=40 y=80 width=1 height=24 elapsed=0.002583
+IME Enabled elapsed=0.006193
+IME Preedit("n", Some((0, 1))) elapsed=0.793270
+RECT_REQUEST x=54 delay_ms=40 elapsed=0.793281
+IME Preedit("ni", Some((0, 2))) elapsed=0.800180
+RECT_REQUEST x=68 delay_ms=40 elapsed=0.800186
+IME Preedit("ni h", Some((0, 4))) elapsed=0.800189
+RECT_REQUEST x=96 delay_ms=40 elapsed=0.800191
+IME Preedit("ni ha", Some((0, 5))) elapsed=0.802329
+RECT_REQUEST x=110 delay_ms=40 elapsed=0.802334
+RECT x=110 y=80 width=1 height=24 elapsed=0.833363
+IME Preedit("ni hao", Some((0, 6))) elapsed=0.843371
+RECT_REQUEST x=124 delay_ms=40 elapsed=0.843377
+RECT x=124 y=80 width=1 height=24 elapsed=0.883439
+IME Preedit("", None) elapsed=2.891151
+RECT_REQUEST x=40 delay_ms=40 elapsed=2.891163
+IME Commit("你好") elapsed=2.891167
+RECT_REQUEST x=40 delay_ms=40 elapsed=2.891172
+IME Preedit("", None) elapsed=2.891174
+RECT_REQUEST x=40 delay_ms=40 elapsed=2.891177
+RECT x=40 y=80 width=1 height=24 elapsed=2.931332
+RESET
+IME Preedit("n", Some((0, 1))) elapsed=4.044147
+RECT_REQUEST x=54 delay_ms=40 elapsed=4.044158
+RECT x=54 y=80 width=1 height=24 elapsed=4.084283
+IME Preedit("ni", Some((0, 2))) elapsed=4.088460
+RECT_REQUEST x=68 delay_ms=40 elapsed=4.088470
+RECT x=68 y=80 width=1 height=24 elapsed=4.128545
+IME Preedit("ni h", Some((0, 4))) elapsed=4.136474
+RECT_REQUEST x=96 delay_ms=40 elapsed=4.136480
+RECT x=96 y=80 width=1 height=24 elapsed=4.176564
+IME Preedit("ni hao", Some((0, 6))) elapsed=4.225161
+RECT_REQUEST x=124 delay_ms=40 elapsed=4.225174
+RECT x=124 y=80 width=1 height=24 elapsed=4.265362
+IME Preedit("", None) elapsed=6.271765
+RECT_REQUEST x=40 delay_ms=40 elapsed=6.271775
+IME Commit("你好") elapsed=6.271779
+RECT_REQUEST x=40 delay_ms=40 elapsed=6.271783
+IME Preedit("", None) elapsed=6.271784
+RECT_REQUEST x=40 delay_ms=40 elapsed=6.271786
+RECT x=40 y=80 width=1 height=24 elapsed=6.311868
+RESET
+FINAL fixed=false committed="" preedit=""

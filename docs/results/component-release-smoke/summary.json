@@ -1,0 +1,74 @@
+[
+  {
+    "mode": "idle",
+    "exit_code": 0,
+    "cpu_percent_one_core": 0.0,
+    "mean_rss_mib": 124.96875,
+    "peak_rss_mib": 124.96875,
+    "sample_count": 82,
+    "application_reports": [
+      {
+        "framework": "zgui",
+        "adapter": "components",
+        "renderer": "gpu",
+        "ticks": 0,
+        "mounted_rows": 17,
+        "elapsed_seconds": 5.001
+      }
+    ]
+  },
+  {
+    "mode": "stream",
+    "exit_code": 0,
+    "cpu_percent_one_core": 136.07083373264268,
+    "mean_rss_mib": 127.59765625,
+    "peak_rss_mib": 127.59765625,
+    "sample_count": 82,
+    "application_reports": [
+      {
+        "framework": "zgui",
+        "adapter": "components",
+        "renderer": "gpu",
+        "ticks": 299,
+        "mounted_rows": 17,
+        "elapsed_seconds": 5.001
+      }
+    ]
+  },
+  {
+    "mode": "scroll",
+    "exit_code": 0,
+    "cpu_percent_one_core": 167.67193907732795,
+    "mean_rss_mib": 127.71484375,
+    "peak_rss_mib": 127.71484375,
+    "sample_count": 82,
+    "application_reports": [
+      {
+        "framework": "zgui",
+        "adapter": "components",
+        "renderer": "gpu",
+        "ticks": 299,
+        "mounted_rows": 19,
+        "elapsed_seconds": 5.0
+      }
+    ]
+  },
+  {
+    "mode": "both",
+    "exit_code": 0,
+    "cpu_percent_one_core": 206.15723807726488,
+    "mean_rss_mib": 126.8515625,
+    "peak_rss_mib": 126.8515625,
+    "sample_count": 82,
+    "application_reports": [
+      {
+        "framework": "zgui",
+        "adapter": "components",
+        "renderer": "gpu",
+        "ticks": 299,
+        "mounted_rows": 19,
+        "elapsed_seconds": 5.0
+      }
+    ]
+  }
+]

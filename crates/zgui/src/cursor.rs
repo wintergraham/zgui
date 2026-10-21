@@ -1,0 +1,30 @@
+//! Platform-independent pointer cursor styles.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Cursor {
+    #[default]
+    Default,
+    Pointer,
+    Text,
+    VerticalText,
+    Crosshair,
+    Move,
+    Grab,
+    Grabbing,
+    NotAllowed,
+    Wait,
+    Progress,
+    Help,
+    ContextMenu,
+    Copy,
+    Alias,
+    NoDrop,
+    AllScroll,
+    ColResize,
+    RowResize,
+    EwResize,
+    NsResize,
+    NeswResize,
+    NwseResize,
+    ZoomIn,
+    ZoomOut,
+}

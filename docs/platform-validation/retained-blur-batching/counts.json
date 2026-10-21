@@ -1,0 +1,17 @@
+{
+  "workspace": {
+    "passed": 600,
+    "failed": 0,
+    "ignored": 3
+  },
+  "doctests": {
+    "passed": 31,
+    "failed": 0,
+    "ignored": 0
+  },
+  "native-host": {
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0
+  }
+}

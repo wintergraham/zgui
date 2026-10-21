@@ -1,0 +1,27 @@
+[package]
+name = "zgui-script"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Luau scripts that describe zgui component trees, with hot reload."
+
+[dependencies]
+zgui = { path = "../zgui" }
+# Image decoding for `ui.image` (PNG, JPEG).
+zgui-gpu = { path = "../zgui-gpu" }
+mlua = { version = "0.12.2", features = ["luau"] }
+# `.luaurc` aliases for `require("@alias/...")`.
+serde_json = "1"
+
+# The script time budget counts the thread's CPU time (clock_gettime).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+zgui-desktop = { path = "../zgui-desktop" }
+
+# The examples' frosted-glass chrome (zgui-desktop/examples/support/glass.rs).
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2 = "=0.6.4"
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSView", "NSWindow"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSObject", "NSString"] }

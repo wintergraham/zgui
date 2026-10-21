@@ -1,0 +1,1 @@
+PASS: external model replacement during native preedit, preedit cancellation without focus change, Return does not commit cancelled candidate, ordinary Backspace recovery, ordinary digit input recovery without engine switch, fresh composition and Unicode commit

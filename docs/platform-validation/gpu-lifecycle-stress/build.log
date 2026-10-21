@@ -1,0 +1,25 @@
+[  4%] Building C object loader/CMakeFiles/asm_offset.dir/asm_offset.c.o
+[  9%] Linking C executable asm_offset
+[  9%] Built target asm_offset
+[ 13%] Generating gen_defines.asm
+[ 13%] Built target loader_asm_gen_files
+[ 22%] Building C object loader/CMakeFiles/vulkan.dir/cJSON.c.o
+[ 22%] Building C object loader/CMakeFiles/vulkan.dir/allocation.c.o
+[ 27%] Building C object loader/CMakeFiles/vulkan.dir/debug_utils.c.o
+[ 31%] Building C object loader/CMakeFiles/vulkan.dir/extension_manual.c.o
+[ 36%] Building C object loader/CMakeFiles/vulkan.dir/loader_environment.c.o
+[ 40%] Building C object loader/CMakeFiles/vulkan.dir/gpa_helper.c.o
+[ 45%] Building C object loader/CMakeFiles/vulkan.dir/loader.c.o
+[ 50%] Building C object loader/CMakeFiles/vulkan.dir/log.c.o
+[ 54%] Building C object loader/CMakeFiles/vulkan.dir/loader_json.c.o
+[ 59%] Building C object loader/CMakeFiles/vulkan.dir/settings.c.o
+[ 63%] Building C object loader/CMakeFiles/vulkan.dir/terminator.c.o
+[ 68%] Building C object loader/CMakeFiles/vulkan.dir/trampoline.c.o
+[ 72%] Building C object loader/CMakeFiles/vulkan.dir/unknown_function_handling.c.o
+[ 77%] Building C object loader/CMakeFiles/vulkan.dir/wsi.c.o
+[ 81%] Building C object loader/CMakeFiles/vulkan.dir/loader_linux.c.o
+[ 86%] Building C object loader/CMakeFiles/vulkan.dir/dev_ext_trampoline.c.o
+[ 90%] Building C object loader/CMakeFiles/vulkan.dir/phys_dev_ext.c.o
+[ 95%] Building ASM object loader/CMakeFiles/vulkan.dir/unknown_ext_chain_gas_x86.S.o
+[100%] Linking C shared library libvulkan.so
+[100%] Built target vulkan

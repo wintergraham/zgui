@@ -1,0 +1,9 @@
+{
+  "result": "pass",
+  "backend": "x11",
+  "fullscreen": true,
+  "minimum_size": true,
+  "custom_titlebar_drag": true,
+  "open_urls": true,
+  "reopen_after_last_window_closed": true
+}

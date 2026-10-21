@@ -1,0 +1,864 @@
+[New LWP 4088470]
+[New LWP 4088466]
+[New LWP 4088465]
+[New LWP 4088464]
+[New LWP 4088463]
+[New LWP 4088462]
+[New LWP 4088461]
+[New LWP 4088460]
+[New LWP 4088459]
+[New LWP 4088458]
+[New LWP 4088457]
+[New LWP 4088456]
+[New LWP 4088455]
+[New LWP 4088454]
+[New LWP 4088453]
+[New LWP 4088452]
+[New LWP 4088451]
+[New LWP 4088450]
+[New LWP 4088449]
+[New LWP 4088447]
+[New LWP 4088446]
+[New LWP 4088445]
+[New LWP 4088444]
+[New LWP 4088443]
+[New LWP 4088442]
+[New LWP 4088441]
+[New LWP 4088440]
+[New LWP 4088439]
+[New LWP 4088438]
+[New LWP 4088437]
+[New LWP 4088436]
+[New LWP 4088435]
+[New LWP 4088434]
+[New LWP 4088433]
+[New LWP 4088432]
+[New LWP 4088431]
+[New LWP 4088430]
+[New LWP 4088429]
+[New LWP 4088428]
+[New LWP 4088427]
+[New LWP 4088426]
+[New LWP 4088425]
+[New LWP 4088424]
+[New LWP 4088423]
+[New LWP 4088422]
+[New LWP 4088421]
+[New LWP 4088420]
+[New LWP 4088419]
+[New LWP 4088418]
+[New LWP 4088417]
+[New LWP 4088114]
+[New LWP 4088113]
+[New LWP 4088111]
+[New LWP 4088108]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+__syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+
+warning: 56	../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S: No such file or directory
+
+Thread 55 (Thread 0x7d7d3305e6c0 (LWP 4088108) "smithay-clipboa"):
+#0  0x00005a6658e2b58e in rustix::backend::arch::asm::syscall5 ()
+#1  0x00005a6658e2bb5d in rustix::backend::event::syscalls::epoll_wait ()
+#2  0x00005a6658e27d68 in rustix::event::epoll::wait::<&std::os::fd::owned::OwnedFd, rustix::buffer::SpareCapacity<rustix::event::epoll::Event>> ()
+#3  0x00005a6658e2901a in <polling::epoll::Poller>::wait_deadline ()
+#4  0x00005a6658e2a5cc in <polling::Poller>::wait_impl ()
+#5  0x00005a6658e2a49a in <polling::Poller>::wait ()
+#6  0x00005a6657a7ccfb in <calloop::sys::Poll>::poll ()
+#7  0x00005a6657a29fa9 in <calloop::loop_logic::EventLoop<smithay_clipboard::state::State>>::dispatch_events ()
+#8  0x00005a6657a28471 in <calloop::loop_logic::EventLoop<smithay_clipboard::state::State>>::dispatch::<core::option::Option<core::time::Duration>> ()
+#9  0x00005a6657a42dc2 in smithay_clipboard::worker::worker_impl ()
+#10 0x00005a6657a3f2e0 in smithay_clipboard::worker::spawn::{closure#0} ()
+#11 0x00005a6657a62316 in std::sys::backtrace::__rust_begin_short_backtrace::<smithay_clipboard::worker::spawn::{closure#0}, ()> ()
+#12 0x00005a6657a32cff in std::thread::lifecycle::spawn_unchecked::<smithay_clipboard::worker::spawn::{closure#0}, ()>::{closure#1}::{closure#0} ()
+#13 0x00005a6657a6c9b4 in <core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<smithay_clipboard::worker::spawn::{closure#0}, ()>::{closure#1}::{closure#0}> as core::ops::function::FnOnce<()>>::call_once ()
+#14 0x00005a6657a397cd in std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<smithay_clipboard::worker::spawn::{closure#0}, ()>::{closure#1}::{closure#0}>, ()> ()
+#15 0x00005a6657a37aab in __rust_try ()
+#16 0x00005a6657a329b5 in std::thread::lifecycle::spawn_unchecked::<smithay_clipboard::worker::spawn::{closure#0}, ()>::{closure#1} ()
+#17 0x00005a6657a6c0d7 in <std::thread::lifecycle::spawn_unchecked<smithay_clipboard::worker::spawn::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0} ()
+#18 0x00005a6659146a6f in <std::sys::thread::unix::Thread>::new::thread_start ()
+#19 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+
+Thread 54 (Thread 0x7d7d32e5d6c0 (LWP 4088111) "dynamic_menus"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00005a665912ac25 in <std::sys::sync::condvar::futex::Condvar>::wait ()
+#2  0x00005a665790ab46 in <std::sync::poison::condvar::Condvar>::wait::<()> ()
+#3  0x00005a665790c080 in <parking::Inner>::park ()
+#4  0x00005a665790b964 in <parking::Parker>::park ()
+#5  0x00005a66575baf17 in futures_lite::future::block_on::<(), <accesskit_unix::executor::Executor>::run<(), accesskit_unix::context::get_or_init_messages::{closure#0}::{closure#0}::{closure#0}>::{closure#0}>::{closure#0} ()
+#6  0x00005a6657546663 in <std::thread::local::LocalKey<core::cell::RefCell<(parking::Parker, core::task::wake::Waker)>>>::try_with::<futures_lite::future::block_on<(), <accesskit_unix::executor::Executor>::run<(), accesskit_unix::context::get_or_init_messages::{closure#0}::{closure#0}::{closure#0}>::{closure#0}>::{closure#0}, ()> ()
+#7  0x00005a66575465a7 in <std::thread::local::LocalKey<core::cell::RefCell<(parking::Parker, core::task::wake::Waker)>>>::with::<futures_lite::future::block_on<(), <accesskit_unix::executor::Executor>::run<(), accesskit_unix::context::get_or_init_messages::{closure#0}::{closure#0}::{closure#0}>::{closure#0}>::{closure#0}, ()> ()
+#8  0x00005a66575b3fe4 in futures_lite::future::block_on::<(), <accesskit_unix::executor::Executor>::run<(), accesskit_unix::context::get_or_init_messages::{closure#0}::{closure#0}::{closure#0}>::{closure#0}> ()
+#9  0x00005a66575eb7fe in accesskit_unix::util::block_on::<<accesskit_unix::executor::Executor>::run<(), accesskit_unix::context::get_or_init_messages::{closure#0}::{closure#0}::{closure#0}>::{closure#0}> ()
+#10 0x00005a66575a7d2c in accesskit_unix::context::get_or_init_messages::{closure#0}::{closure#0} ()
+#11 0x00005a66575faf96 in std::sys::backtrace::__rust_begin_short_backtrace::<accesskit_unix::context::get_or_init_messages::{closure#0}::{closure#0}, ()> ()
+#12 0x00005a66575feae3 in std::thread::lifecycle::spawn_unchecked::<accesskit_unix::context::get_or_init_messages::{closure#0}::{closure#0}, ()>::{closure#1}::{closure#0} ()
+#13 0x00005a665750aa01 in <core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<accesskit_unix::context::get_or_init_messages::{closure#0}::{closure#0}, ()>::{closure#1}::{closure#0}> as core::ops::function::FnOnce<()>>::call_once ()
+#14 0x00005a665754b3c1 in std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<accesskit_unix::context::get_or_init_messages::{closure#0}::{closure#0}, ()>::{closure#1}::{closure#0}>, ()> ()
+#15 0x00005a6657610beb in __rust_try ()
+#16 0x00005a66575fe3f3 in std::thread::lifecycle::spawn_unchecked::<accesskit_unix::context::get_or_init_messages::{closure#0}::{closure#0}, ()>::{closure#1} ()
+#17 0x00005a6657486677 in <std::thread::lifecycle::spawn_unchecked<accesskit_unix::context::get_or_init_messages::{closure#0}::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0} ()
+#18 0x00005a6659146a6f in <std::sys::thread::unix::Thread>::new::thread_start ()
+#19 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+
+Thread 53 (Thread 0x7d7d32bd26c0 (LWP 4088113) "blocking-1"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00005a665912ab5b in <std::sys::sync::condvar::futex::Condvar>::wait_optional_timeout ()
+#2  0x00005a66578a611c in <std::sync::poison::condvar::Condvar>::wait_timeout::<blocking::Inner> ()
+#3  0x00005a66578a93cd in <blocking::Executor>::main_loop ()
+#4  0x00005a66578a8656 in <blocking::Executor>::grow_pool::{closure#0} ()
+#5  0x00005a66578a6f06 in std::sys::backtrace::__rust_begin_short_backtrace::<<blocking::Executor>::grow_pool::{closure#0}, ()> ()
+#6  0x00005a66578a85bf in std::thread::lifecycle::spawn_unchecked::<<blocking::Executor>::grow_pool::{closure#0}, ()>::{closure#1}::{closure#0} ()
+#7  0x00005a66578ac8f1 in <core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<<blocking::Executor>::grow_pool::{closure#0}, ()>::{closure#1}::{closure#0}> as core::ops::function::FnOnce<()>>::call_once ()
+#8  0x00005a66578a7eed in std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<<blocking::Executor>::grow_pool::{closure#0}, ()>::{closure#1}::{closure#0}>, ()> ()
+#9  0x00005a66578acd5b in __rust_try ()
+#10 0x00005a66578a82ca in std::thread::lifecycle::spawn_unchecked::<<blocking::Executor>::grow_pool::{closure#0}, ()>::{closure#1} ()
+#11 0x00005a66578a87b7 in <std::thread::lifecycle::spawn_unchecked<<blocking::Executor>::grow_pool::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0} ()
+#12 0x00005a6659146a6f in <std::sys::thread::unix::Thread>::new::thread_start ()
+#13 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#14 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 52 (Thread 0x7d7d329d16c0 (LWP 4088114) "async-io"):
+#0  0x00005a6658e2b58e in rustix::backend::arch::asm::syscall5 ()
+#1  0x00005a6658e2bb5d in rustix::backend::event::syscalls::epoll_wait ()
+#2  0x00005a6658e27d68 in rustix::event::epoll::wait::<&std::os::fd::owned::OwnedFd, rustix::buffer::SpareCapacity<rustix::event::epoll::Event>> ()
+#3  0x00005a6658e2901a in <polling::epoll::Poller>::wait_deadline ()
+#4  0x00005a6658e2a5cc in <polling::Poller>::wait_impl ()
+#5  0x00005a6658e2a49a in <polling::Poller>::wait ()
+#6  0x00005a6657907d15 in <async_io::reactor::ReactorLock>::react ()
+#7  0x00005a66578fc8fb in async_io::driver::main_loop ()
+#8  0x00005a66578faca6 in async_io::driver::unparker::{closure#0}::{closure#0} ()
+#9  0x00005a66578fa826 in std::sys::backtrace::__rust_begin_short_backtrace::<async_io::driver::unparker::{closure#0}::{closure#0}, ()> ()
+#10 0x00005a6657904e1f in std::thread::lifecycle::spawn_unchecked::<async_io::driver::unparker::{closure#0}::{closure#0}, ()>::{closure#1}::{closure#0} ()
+#11 0x00005a6657909ca1 in <core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<async_io::driver::unparker::{closure#0}::{closure#0}, ()>::{closure#1}::{closure#0}> as core::ops::function::FnOnce<()>>::call_once ()
+#12 0x00005a665790463d in std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<async_io::driver::unparker::{closure#0}::{closure#0}, ()>::{closure#1}::{closure#0}>, ()> ()
+#13 0x00005a6657909dab in __rust_try ()
+#14 0x00005a66579049aa in std::thread::lifecycle::spawn_unchecked::<async_io::driver::unparker::{closure#0}::{closure#0}, ()>::{closure#1} ()
+#15 0x00005a66578fb097 in <std::thread::lifecycle::spawn_unchecked<async_io::driver::unparker::{closure#0}::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0} ()
+#16 0x00005a6659146a6f in <std::sys::thread::unix::Thread>::new::thread_start ()
+#17 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#18 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 51 (Thread 0x7d7d3129c6c0 (LWP 4088417) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071285188, a2=<optimized out>, a3=a3@entry=834876161, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a66738561c4, expected=834876161, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a66738561c4, expected=834876161, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a66738561c4, expected=expected@entry=25, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a6673856178, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a6673856178) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31879fd2 in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 50 (Thread 0x7d7d30a9b6c0 (LWP 4088418) "llvmpipe-0"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071455888, a2=<optimized out>, a3=a3@entry=832748899, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a667387fc90, expected=832748899, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a667387fc90, expected=832748899, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a667387fc90, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a667387fc48, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a667387fc48) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 49 (Thread 0x7d7d139ff6c0 (LWP 4088419) "llvmpipe-1"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071456240, a2=<optimized out>, a3=a3@entry=204, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a667387fdf0, expected=204, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a667387fdf0, expected=204, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a667387fdf0, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a667387fda8, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a667387fda8) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 48 (Thread 0x7d7d131fe6c0 (LWP 4088420) "llvmpipe-2"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071456592, a2=<optimized out>, a3=a3@entry=204, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a667387ff50, expected=204, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a667387ff50, expected=204, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a667387ff50, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a667387ff08, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a667387ff08) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 47 (Thread 0x7d7d129fd6c0 (LWP 4088421) "llvmpipe-3"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071456944, a2=<optimized out>, a3=a3@entry=832748899, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a66738800b0, expected=832748899, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a66738800b0, expected=832748899, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a66738800b0, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a6673880068, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a6673880068) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 46 (Thread 0x7d7d121fc6c0 (LWP 4088422) "llvmpipe-4"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071457296, a2=<optimized out>, a3=a3@entry=124, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673880210, expected=124, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673880210, expected=124, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673880210, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738801c8, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738801c8) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 45 (Thread 0x7d7d119fb6c0 (LWP 4088423) "llvmpipe-5"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071457648, a2=<optimized out>, a3=a3@entry=172, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673880370, expected=172, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673880370, expected=172, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673880370, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a6673880328, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a6673880328) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 44 (Thread 0x7d7d111fa6c0 (LWP 4088424) "llvmpipe-6"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071458000, a2=<optimized out>, a3=a3@entry=204, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a66738804d0, expected=204, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a66738804d0, expected=204, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a66738804d0, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a6673880488, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a6673880488) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 43 (Thread 0x7d7d109f96c0 (LWP 4088425) "llvmpipe-7"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071458352, a2=<optimized out>, a3=a3@entry=92, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673880630, expected=92, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673880630, expected=92, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673880630, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738805e8, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738805e8) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 42 (Thread 0x7d7cfbfff6c0 (LWP 4088426) "llvmpipe-8"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071458704, a2=<optimized out>, a3=a3@entry=188, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673880790, expected=188, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673880790, expected=188, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673880790, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a6673880748, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a6673880748) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 41 (Thread 0x7d7cfb7fe6c0 (LWP 4088427) "llvmpipe-9"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071459056, a2=<optimized out>, a3=a3@entry=204, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a66738808f0, expected=204, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a66738808f0, expected=204, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a66738808f0, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738808a8, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738808a8) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 40 (Thread 0x7d7cfaffd6c0 (LWP 4088428) "llvmpipe-10"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071459408, a2=<optimized out>, a3=a3@entry=124, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673880a50, expected=124, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673880a50, expected=124, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673880a50, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a6673880a08, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a6673880a08) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 39 (Thread 0x7d7cfa7fc6c0 (LWP 4088429) "llvmpipe-11"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071459760, a2=<optimized out>, a3=a3@entry=188, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673880bb0, expected=188, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673880bb0, expected=188, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673880bb0, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a6673880b68, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a6673880b68) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 38 (Thread 0x7d7cf9ffb6c0 (LWP 4088430) "llvmpipe-12"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071460112, a2=<optimized out>, a3=a3@entry=144, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673880d10, expected=144, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673880d10, expected=144, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673880d10, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a6673880cc8, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a6673880cc8) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 37 (Thread 0x7d7cf97fa6c0 (LWP 4088431) "llvmpipe-13"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071460464, a2=<optimized out>, a3=a3@entry=164, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673880e70, expected=164, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673880e70, expected=164, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673880e70, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a6673880e28, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a6673880e28) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 36 (Thread 0x7d7cf8ff96c0 (LWP 4088432) "llvmpipe-14"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071460816, a2=<optimized out>, a3=a3@entry=188, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673880fd0, expected=188, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673880fd0, expected=188, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673880fd0, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a6673880f88, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a6673880f88) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 35 (Thread 0x7d7cdffff6c0 (LWP 4088433) "llvmpipe-15"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071461168, a2=<optimized out>, a3=a3@entry=204, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673881130, expected=204, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673881130, expected=204, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673881130, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738810e8, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738810e8) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 34 (Thread 0x7d7cdf7fe6c0 (LWP 4088434) "llvmpipe-16"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071461520, a2=<optimized out>, a3=a3@entry=124, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673881290, expected=124, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673881290, expected=124, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673881290, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a6673881248, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a6673881248) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 33 (Thread 0x7d7cdeffd6c0 (LWP 4088435) "llvmpipe-17"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071461872, a2=<optimized out>, a3=a3@entry=204, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a66738813f0, expected=204, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a66738813f0, expected=204, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a66738813f0, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738813a8, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738813a8) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 32 (Thread 0x7d7cde7fc6c0 (LWP 4088436) "llvmpipe-18"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071462224, a2=<optimized out>, a3=a3@entry=14417920, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673881550, expected=14417920, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673881550, expected=14417920, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673881550, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a6673881508, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a6673881508) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 31 (Thread 0x7d7cddffb6c0 (LWP 4088437) "llvmpipe-19"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071462576, a2=<optimized out>, a3=a3@entry=284, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a66738816b0, expected=284, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a66738816b0, expected=284, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a66738816b0, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a6673881668, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a6673881668) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 30 (Thread 0x7d7cdd7fa6c0 (LWP 4088438) "llvmpipe-20"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071462928, a2=<optimized out>, a3=a3@entry=0, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673881810, expected=0, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673881810, expected=0, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673881810, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738817c8, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738817c8) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 29 (Thread 0x7d7cdcff96c0 (LWP 4088439) "llvmpipe-21"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071463280, a2=<optimized out>, a3=a3@entry=188, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673881970, expected=188, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673881970, expected=188, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673881970, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a6673881928, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a6673881928) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 28 (Thread 0x7d7cbffff6c0 (LWP 4088440) "llvmpipe-22"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071463632, a2=<optimized out>, a3=a3@entry=832748899, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673881ad0, expected=832748899, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673881ad0, expected=832748899, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673881ad0, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a6673881a88, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a6673881a88) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 27 (Thread 0x7d7cbf7fe6c0 (LWP 4088441) "llvmpipe-23"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071463984, a2=<optimized out>, a3=a3@entry=60, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673881c30, expected=60, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673881c30, expected=60, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673881c30, expected=expected@entry=22, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a6673881be8, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a6673881be8) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3b15f in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 26 (Thread 0x7d7cbeffd6c0 (LWP 4088442) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=3204434798, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=3204434798, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=3204434798, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 25 (Thread 0x7d7cbe7fc6c0 (LWP 4088443) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=3196042094, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=3196042094, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=3196042094, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 24 (Thread 0x7d7cbdffb6c0 (LWP 4088444) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=3187649390, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=3187649390, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=3187649390, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 23 (Thread 0x7d7cbd7fa6c0 (LWP 4088445) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=3179256686, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=3179256686, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=3179256686, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 22 (Thread 0x7d7cbcff96c0 (LWP 4088446) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=3170863982, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=3170863982, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=3170863982, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 21 (Thread 0x7d7cb3fff6c0 (LWP 4088447) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=3019893614, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=3019893614, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=3019893614, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 20 (Thread 0x7d7cab5ff6c0 (LWP 4088449) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=2875190126, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=2875190126, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=2875190126, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 19 (Thread 0x7d7cb37fe6c0 (LWP 4088450) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=3011500910, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=3011500910, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=3011500910, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 18 (Thread 0x7d7cb2ffd6c0 (LWP 4088451) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=3003108206, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=3003108206, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=3003108206, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 17 (Thread 0x7d7cb27fc6c0 (LWP 4088452) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=2994715502, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=2994715502, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=2994715502, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 16 (Thread 0x7d7cb1ffb6c0 (LWP 4088453) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=2986322798, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=2986322798, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=2986322798, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 15 (Thread 0x7d7cb17fa6c0 (LWP 4088454) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=2977930094, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=2977930094, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=2977930094, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 14 (Thread 0x7d7cb0ff96c0 (LWP 4088455) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=2969537390, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=2969537390, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=2969537390, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 13 (Thread 0x7d7cabfff6c0 (LWP 4088456) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=2885675886, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=2885675886, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=2885675886, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 12 (Thread 0x7d7caadfe6c0 (LWP 4088457) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=2866797422, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=2866797422, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=2866797422, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 11 (Thread 0x7d7caa5fd6c0 (LWP 4088458) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=2858404718, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=2858404718, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=2858404718, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 10 (Thread 0x7d7ca9dfc6c0 (LWP 4088459) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=2850012014, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=2850012014, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=2850012014, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 9 (Thread 0x7d7ca95fb6c0 (LWP 4088460) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=2841619310, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=2841619310, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=2841619310, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 8 (Thread 0x7d7ca8dfa6c0 (LWP 4088461) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=2833226606, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=2833226606, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=2833226606, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 7 (Thread 0x7d7c63fff6c0 (LWP 4088462) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=1677716334, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=1677716334, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=1677716334, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 6 (Thread 0x7d7c637fe6c0 (LWP 4088463) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=1669323630, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=1669323630, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=1669323630, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 5 (Thread 0x7d7c62ffd6c0 (LWP 4088464) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=1660930926, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=1660930926, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=1660930926, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 4 (Thread 0x7d7c627fc6c0 (LWP 4088465) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=1652538222, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=1652538222, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=1652538222, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 3 (Thread 0x7d7c61ffb6c0 (LWP 4088466) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396071219480, a2=<optimized out>, a3=a3@entry=1644145518, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a6673846118, expected=1644145518, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a6673846118, expected=1644145518, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a6673846118, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66738460d0, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66738460d0) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31c3770c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 2 (Thread 0x7d7c617fa6c0 (LWP 4088470) "dynamic:disk$0"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a030c in __internal_syscall_cancel (a1=a1@entry=99396070586272, a2=<optimized out>, a3=a3@entry=4096, a4=a4@entry=0, a5=a5@entry=0, a6=a6@entry=4294967295, nr=202) at ./nptl/cancellation.c:49
+#2  0x00007d7d332a06e7 in __futex_abstimed_wait_common64 (private=0, futex_word=0x5a66737ab7a0, expected=4096, op=393, abstime=0x0, cancel=true) at ./nptl/futex-internal.c:57
+#3  __futex_abstimed_wait_common (futex_word=0x5a66737ab7a0, expected=4096, clockid=0, abstime=0x0, private=0, cancel=true) at ./nptl/futex-internal.c:87
+#4  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a66737ab7a0, expected=expected@entry=18, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#5  0x00007d7d332a30c7 in __pthread_cond_wait_common (cond=<optimized out>, mutex=0x5a66737ab750, clockid=0, abstime=0x0) at ./nptl/pthread_cond_wait.c:421
+#6  ___pthread_cond_wait (cond=<optimized out>, mutex=0x5a66737ab750) at ./nptl/pthread_cond_wait.c:453
+#7  0x00007d7d319ea91d in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d319a445c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00007d7d319ea85c in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#10 0x00007d7d332a3dfa in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:454
+#11 0x00007d7d333375cc in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 1 (Thread 0x7d7d334c7a40 (LWP 4088105) "dynamic_menus"):
+#0  __syscall_cancel_arch () at ../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56
+#1  0x00007d7d332a039c in __internal_syscall_cancel (a1=<optimized out>, a2=<optimized out>, a3=<optimized out>, a4=<optimized out>, a5=8, a6=0, nr=271) at ./nptl/cancellation.c:49
+#2  __syscall_cancel (a1=<optimized out>, a2=<optimized out>, a3=<optimized out>, a4=<optimized out>, a5=a5@entry=8, a6=a6@entry=0, nr=271) at ./nptl/cancellation.c:75
+#3  0x00007d7d33328136 in __GI_ppoll (fds=<optimized out>, nfds=<optimized out>, timeout=<optimized out>, sigmask=<optimized out>) at ../sysdeps/unix/sysv/linux/ppoll.c:42
+#4  0x00007d7d33469ffd in ?? () from /usr/lib/x86_64-linux-gnu/libwayland-client.so.0
+#5  0x00007d7d3346f31a in wl_display_dispatch_queue_timeout () from /usr/lib/x86_64-linux-gnu/libwayland-client.so.0
+#6  0x00007d7d3346f40f in wl_display_dispatch_queue () from /usr/lib/x86_64-linux-gnu/libwayland-client.so.0
+#7  0x00007d7d3185f317 in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#8  0x00007d7d31852bbf in ?? () from /usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+#9  0x00005a665803a3c4 in <ash::extensions_generated::khr::swapchain::Device>::queue_present ()
+#10 0x00005a6658063fb1 in <wgpu_hal::vulkan::swapchain::native::NativeSwapchain as wgpu_hal::vulkan::swapchain::Swapchain>::present ()
+#11 0x00005a6657f8a1ed in <wgpu_hal::vulkan::Queue as wgpu_hal::Queue>::present ()
+#12 0x00005a6657f5744b in <wgpu_hal::vulkan::Queue as wgpu_hal::dynamic::queue::DynQueue>::present ()
+#13 0x00005a6657f4300e in <wgpu_core::instance::Surface>::present ()
+#14 0x00005a6657f43982 in <wgpu_core::global::Global>::surface_present ()
+#15 0x00005a6657c5e89b in <wgpu::backend::wgpu_core::CoreSurfaceOutputDetail as wgpu::dispatch::SurfaceOutputDetailInterface>::present ()
+#16 0x00005a6657c9587c in <wgpu::api::surface_texture::SurfaceTexture>::present ()
+#17 0x00005a6657acc4a1 in <zgui_gpu::GpuRenderer>::present_with_status ()
+#18 0x00005a6657417cde in <zgui_desktop::application::Host>::draw ()
+#19 0x00005a665741c701 in <zgui_desktop::application::Host>::update ()
+[Inferior 1 (process 4088105) detached]

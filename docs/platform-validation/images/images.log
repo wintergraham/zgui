@@ -1,0 +1,11 @@
+STATE 1 source=80x40 allocated=200
+STATE 2 source=120x60 allocated=200
+STATE 3 source=120x60 allocated=300
+STATE 4 source=80x40 allocated=200
+IMAGES stage=4 source=80x40 allocated=200
+BOUNDS intrinsic Rect { x: 24.0, y: 124.0, width: 88.0, height: 48.0 }
+SEMANTICS intrinsic Some(SemanticNode { role: Image, label: "Intrinsic preview", value: None, checked: None, disabled: false, min: None, max: None, numeric_value: None })
+BOUNDS allocated Rect { x: 220.0, y: 124.0, width: 200.0, height: 80.0 }
+SEMANTICS allocated Some(SemanticNode { role: Image, label: "Allocated preview", value: None, checked: None, disabled: false, min: None, max: None, numeric_value: None })
+BOUNDS static Rect { x: 24.0, y: 236.0, width: 24.0, height: 24.0 }
+SEMANTICS static Some(SemanticNode { role: Image, label: "Static swatch", value: None, checked: None, disabled: false, min: None, max: None, numeric_value: None })

@@ -1,0 +1,77 @@
+{
+  "observations": [
+    {
+      "application": "native",
+      "temperature": "cold",
+      "preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao",
+        "ni hao",
+        "ni hao"
+      ],
+      "commits": [
+        "你好"
+      ],
+      "outcome": "delivered"
+    },
+    {
+      "application": "native",
+      "temperature": "warm",
+      "preedits": [
+        "n",
+        "ni hao",
+        "ni hao"
+      ],
+      "commits": [
+        "你好"
+      ],
+      "outcome": "delivered"
+    },
+    {
+      "application": "standalone",
+      "temperature": "cold",
+      "preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao",
+        "ni hao",
+        "ni hao",
+        "ni hao",
+        "ni hao",
+        "ni hao"
+      ],
+      "commits": [
+        "你好"
+      ],
+      "outcome": "delivered"
+    },
+    {
+      "application": "standalone",
+      "temperature": "warm",
+      "preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao",
+        "ni hao",
+        "ni hao",
+        "ni hao",
+        "ni hao",
+        "ni hao"
+      ],
+      "commits": [
+        "你好"
+      ],
+      "outcome": "delivered"
+    }
+  ],
+  "cancellation_focus": "pass",
+  "private_plugin_and_installed_core_maps_verified": true,
+  "scope": "Nonempty preedit refresh only; not a committed-text/deletion replay or general protocol repair"
+}

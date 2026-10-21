@@ -1,0 +1,26 @@
+--- a/src/frontend/waylandim/waylandimserverv2.cpp
++++ b/src/frontend/waylandim/waylandimserverv2.cpp
+@@ -168,6 +168,7 @@
+     ic_->done().connect([this]() {
+         WAYLANDIM_DEBUG() << "DONE";
+         ++serial_;
++        const bool transition = pendingActivate_ || pendingDeactivate_;
+         if (pendingDeactivate_) {
+             pendingDeactivate_ = false;
+             keyboardGrab_.reset();
+@@ -238,6 +239,15 @@
+                 focusInWrapper();
+             }
+         }
++        // Private diagnostic: refresh only current preedit state at the new
++        // serial. Never replay commit_string or delete_surrounding_text.
++        if (!transition && realFocus()) {
++            auto *current = delegatedInputContext();
++            if (current && current->inputPanel().clientPreedit().textLength() > 0) {
++                WAYLANDIM_DEBUG() << "DIAGNOSTIC_REFRESH_PREEDIT serial=" << serial_;
++                updatePreeditDelegate(current);
++            }
++        }
+     });
+     ic_->contentType().connect([this](uint32_t hint, uint32_t purpose) {
+         WAYLANDIM_DEBUG() << "contentTypeCallback:" << hint << purpose;

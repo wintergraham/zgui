@@ -1,0 +1,157 @@
+{
+  "sha": "84f5970f7c2213b9a9d3c8eb9a92fc014694ce47",
+  "url": "https://api.github.com/repos/fcitx/fcitx5/git/trees/84f5970f7c2213b9a9d3c8eb9a92fc014694ce47",
+  "tree": [
+    {
+      "path": ".clang-format",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bb7e8ec354150db205790f31ed3f16a06bfb633b",
+      "size": 3660,
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/blobs/bb7e8ec354150db205790f31ed3f16a06bfb633b"
+    },
+    {
+      "path": ".codedocs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0b8d64f865d8afb560d525e9f5c67c5f6ea496ba",
+      "size": 456,
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/blobs/0b8d64f865d8afb560d525e9f5c67c5f6ea496ba"
+    },
+    {
+      "path": ".formatignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5dc1d78800767d9d73e166fbe35f619c885b1ed5",
+      "size": 52,
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/blobs/5dc1d78800767d9d73e166fbe35f619c885b1ed5"
+    },
+    {
+      "path": ".github",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "88d6ee64bd5dbca1c25ce6c2117978fa76ca3710",
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/trees/88d6ee64bd5dbca1c25ce6c2117978fa76ca3710"
+    },
+    {
+      "path": ".gitignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a5fec40fa9b1f50874d7ece73bc6f36018c80c5e",
+      "size": 117,
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/blobs/a5fec40fa9b1f50874d7ece73bc6f36018c80c5e"
+    },
+    {
+      "path": ".gitmodules",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3e73eaef87f45d0ab251e630f320eaab8568d544",
+      "size": 96,
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/blobs/3e73eaef87f45d0ab251e630f320eaab8568d544"
+    },
+    {
+      "path": ".reuse",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "671b1cf982364dea3d29b70c998189abe0467ec2",
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/trees/671b1cf982364dea3d29b70c998189abe0467ec2"
+    },
+    {
+      "path": "CMakeLists.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bb3c56c80be6bc8063638afa5fa73f11c4a8935d",
+      "size": 10582,
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/blobs/bb3c56c80be6bc8063638afa5fa73f11c4a8935d"
+    },
+    {
+      "path": "Doxyfile.in",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2ee2ff425b47520cdab2f3c91aa15259b689e21f",
+      "size": 129,
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/blobs/2ee2ff425b47520cdab2f3c91aa15259b689e21f"
+    },
+    {
+      "path": "LICENSES",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "b5faeda9d686529fc382624a7075b5f9bef85e88",
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/trees/b5faeda9d686529fc382624a7075b5f9bef85e88"
+    },
+    {
+      "path": "Messages.sh",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "d724973383fce772ad7a787429651de9a0e4a1c4",
+      "size": 56,
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/blobs/d724973383fce772ad7a787429651de9a0e4a1c4"
+    },
+    {
+      "path": "README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ffc9534bb7e072b99289cc4c59ea8d13e8b10edd",
+      "size": 2736,
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/blobs/ffc9534bb7e072b99289cc4c59ea8d13e8b10edd"
+    },
+    {
+      "path": "cmake",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "cb5fd6721b115e8d654b59a3338858fda91da677",
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/trees/cb5fd6721b115e8d654b59a3338858fda91da677"
+    },
+    {
+      "path": "config.h.in",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2be4167120ef0210349fba7cbb66f69a29a0a001",
+      "size": 1786,
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/blobs/2be4167120ef0210349fba7cbb66f69a29a0a001"
+    },
+    {
+      "path": "data",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "caafce75a6904f49569ae9d13ca723f0bd98a42b",
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/trees/caafce75a6904f49569ae9d13ca723f0bd98a42b"
+    },
+    {
+      "path": "po",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "11f29bf30fdaeee5af27ce4a3f00cf36340e6480",
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/trees/11f29bf30fdaeee5af27ce4a3f00cf36340e6480"
+    },
+    {
+      "path": "src",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "f59bfb1f0df0b2fb501595e39be574c25840fe8d",
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/trees/f59bfb1f0df0b2fb501595e39be574c25840fe8d"
+    },
+    {
+      "path": "test",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "9c33a81be4d66b7f51033010043fda557bdb3f8a",
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/trees/9c33a81be4d66b7f51033010043fda557bdb3f8a"
+    },
+    {
+      "path": "testing",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "cf594d789b18ac37ce944afaf2e0c4ae94cb8b92",
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/trees/cf594d789b18ac37ce944afaf2e0c4ae94cb8b92"
+    },
+    {
+      "path": "third_party",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "a1c3eb3927526a4226ab5f259e2b51888f0931ff",
+      "url": "https://api.github.com/repos/fcitx/fcitx5/git/trees/a1c3eb3927526a4226ab5f259e2b51888f0931ff"
+    }
+  ],
+  "truncated": false
+}

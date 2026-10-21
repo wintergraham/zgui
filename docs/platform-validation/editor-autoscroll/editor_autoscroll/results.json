@@ -1,0 +1,359 @@
+{
+  "passed": true,
+  "backend": "owned X11/Xvfb/Openbox",
+  "no_periodic_diagnostic_wakes": true,
+  "reports": {
+    "vertical_start": [
+      {
+        "editor": 0.0,
+        "anchor": 3.0,
+        "focus": 157.0,
+        "x": 0.0,
+        "y": 0.0,
+        "captured": true,
+        "readonly": false,
+        "unchanged": true
+      },
+      {
+        "editor": 1.0,
+        "anchor": 900.0,
+        "focus": 900.0,
+        "x": 6937.61,
+        "y": 0.0,
+        "captured": false,
+        "readonly": false,
+        "unchanged": true
+      }
+    ],
+    "vertical_hold": [
+      {
+        "editor": 0.0,
+        "anchor": 3.0,
+        "focus": 696.0,
+        "x": 0.0,
+        "y": 337.7,
+        "captured": true,
+        "readonly": false,
+        "unchanged": true
+      },
+      {
+        "editor": 1.0,
+        "anchor": 900.0,
+        "focus": 900.0,
+        "x": 6937.61,
+        "y": 0.0,
+        "captured": false,
+        "readonly": false,
+        "unchanged": true
+      }
+    ],
+    "vertical_hold_again": [
+      {
+        "editor": 0.0,
+        "anchor": 3.0,
+        "focus": 1291.0,
+        "x": 0.0,
+        "y": 683.41,
+        "captured": true,
+        "readonly": false,
+        "unchanged": true
+      },
+      {
+        "editor": 1.0,
+        "anchor": 900.0,
+        "focus": 900.0,
+        "x": 6937.61,
+        "y": 0.0,
+        "captured": false,
+        "readonly": false,
+        "unchanged": true
+      }
+    ],
+    "inside": [
+      {
+        "editor": 0.0,
+        "anchor": 3.0,
+        "focus": 1235.0,
+        "x": 0.0,
+        "y": 738.06,
+        "captured": true,
+        "readonly": false,
+        "unchanged": true
+      },
+      {
+        "editor": 1.0,
+        "anchor": 900.0,
+        "focus": 900.0,
+        "x": 6937.61,
+        "y": 0.0,
+        "captured": false,
+        "readonly": false,
+        "unchanged": true
+      }
+    ],
+    "inside_still": [
+      {
+        "editor": 0.0,
+        "anchor": 3.0,
+        "focus": 1235.0,
+        "x": 0.0,
+        "y": 738.06,
+        "captured": true,
+        "readonly": false,
+        "unchanged": true
+      },
+      {
+        "editor": 1.0,
+        "anchor": 900.0,
+        "focus": 900.0,
+        "x": 6937.61,
+        "y": 0.0,
+        "captured": false,
+        "readonly": false,
+        "unchanged": true
+      }
+    ],
+    "released": [
+      {
+        "editor": 0.0,
+        "anchor": 3.0,
+        "focus": 1599.0,
+        "x": 0.0,
+        "y": 892.0,
+        "captured": false,
+        "readonly": false,
+        "unchanged": true
+      },
+      {
+        "editor": 1.0,
+        "anchor": 900.0,
+        "focus": 900.0,
+        "x": 6937.61,
+        "y": 0.0,
+        "captured": false,
+        "readonly": false,
+        "unchanged": true
+      }
+    ],
+    "released_still": [
+      {
+        "editor": 0.0,
+        "anchor": 3.0,
+        "focus": 1599.0,
+        "x": 0.0,
+        "y": 892.0,
+        "captured": false,
+        "readonly": false,
+        "unchanged": true
+      },
+      {
+        "editor": 1.0,
+        "anchor": 900.0,
+        "focus": 900.0,
+        "x": 6937.61,
+        "y": 0.0,
+        "captured": false,
+        "readonly": false,
+        "unchanged": true
+      }
+    ],
+    "readonly_start": [
+      {
+        "editor": 0.0,
+        "anchor": 3.0,
+        "focus": 157.0,
+        "x": 0.0,
+        "y": 0.0,
+        "captured": true,
+        "readonly": true,
+        "unchanged": true
+      },
+      {
+        "editor": 1.0,
+        "anchor": 900.0,
+        "focus": 900.0,
+        "x": 6937.61,
+        "y": 0.0,
+        "captured": false,
+        "readonly": false,
+        "unchanged": true
+      }
+    ],
+    "readonly_hold": [
+      {
+        "editor": 0.0,
+        "anchor": 3.0,
+        "focus": 696.0,
+        "x": 0.0,
+        "y": 334.76,
+        "captured": true,
+        "readonly": true,
+        "unchanged": true
+      },
+      {
+        "editor": 1.0,
+        "anchor": 900.0,
+        "focus": 900.0,
+        "x": 6937.61,
+        "y": 0.0,
+        "captured": false,
+        "readonly": false,
+        "unchanged": true
+      }
+    ],
+    "horizontal_start": [
+      {
+        "editor": 0.0,
+        "anchor": 3.0,
+        "focus": 752.0,
+        "x": 0.0,
+        "y": 364.0,
+        "captured": false,
+        "readonly": true,
+        "unchanged": true
+      },
+      {
+        "editor": 1.0,
+        "anchor": 4.0,
+        "focus": 30.0,
+        "x": 0.0,
+        "y": 0.0,
+        "captured": true,
+        "readonly": false,
+        "unchanged": true
+      }
+    ],
+    "horizontal_hold": [
+      {
+        "editor": 0.0,
+        "anchor": 3.0,
+        "focus": 752.0,
+        "x": 0.0,
+        "y": 364.0,
+        "captured": false,
+        "readonly": true,
+        "unchanged": true
+      },
+      {
+        "editor": 1.0,
+        "anchor": 4.0,
+        "focus": 108.0,
+        "x": 599.95,
+        "y": 0.0,
+        "captured": true,
+        "readonly": false,
+        "unchanged": true
+      }
+    ],
+    "horizontal_released": [
+      {
+        "editor": 0.0,
+        "anchor": 3.0,
+        "focus": 752.0,
+        "x": 0.0,
+        "y": 364.0,
+        "captured": false,
+        "readonly": true,
+        "unchanged": true
+      },
+      {
+        "editor": 1.0,
+        "anchor": 4.0,
+        "focus": 113.0,
+        "x": 670.59,
+        "y": 0.0,
+        "captured": false,
+        "readonly": false,
+        "unchanged": true
+      }
+    ],
+    "horizontal_stopped": [
+      {
+        "editor": 0.0,
+        "anchor": 3.0,
+        "focus": 752.0,
+        "x": 0.0,
+        "y": 364.0,
+        "captured": false,
+        "readonly": true,
+        "unchanged": true
+      },
+      {
+        "editor": 1.0,
+        "anchor": 4.0,
+        "focus": 113.0,
+        "x": 670.59,
+        "y": 0.0,
+        "captured": false,
+        "readonly": false,
+        "unchanged": true
+      }
+    ],
+    "before_hide": [
+      {
+        "editor": 0.0,
+        "anchor": 3.0,
+        "focus": 157.0,
+        "x": 0.0,
+        "y": 0.0,
+        "captured": true,
+        "readonly": true,
+        "unchanged": true
+      },
+      {
+        "editor": 1.0,
+        "anchor": 4.0,
+        "focus": 113.0,
+        "x": 670.59,
+        "y": 0.0,
+        "captured": false,
+        "readonly": false,
+        "unchanged": true
+      }
+    ],
+    "restored_cancelled": [
+      {
+        "editor": 0.0,
+        "anchor": 3.0,
+        "focus": 157.0,
+        "x": 0.0,
+        "y": 4.0,
+        "captured": false,
+        "readonly": true,
+        "unchanged": true
+      },
+      {
+        "editor": 1.0,
+        "anchor": 4.0,
+        "focus": 113.0,
+        "x": 670.59,
+        "y": 0.0,
+        "captured": false,
+        "readonly": false,
+        "unchanged": true
+      }
+    ],
+    "restored_stable": [
+      {
+        "editor": 0.0,
+        "anchor": 3.0,
+        "focus": 157.0,
+        "x": 0.0,
+        "y": 4.0,
+        "captured": false,
+        "readonly": true,
+        "unchanged": true
+      },
+      {
+        "editor": 1.0,
+        "anchor": 4.0,
+        "focus": 113.0,
+        "x": 670.59,
+        "y": 0.0,
+        "captured": false,
+        "readonly": false,
+        "unchanged": true
+      }
+    ]
+  }
+}

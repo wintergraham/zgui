@@ -1,0 +1,192 @@
+{
+  "measurement_start_utc": "2026-09-25T03:17:06.875330+00:00",
+  "measurement_last_observation_utc": "2026-09-25T03:29:10.533940+00:00",
+  "build_processes": [
+    {
+      "pid": 3539070,
+      "ppid": 3537135,
+      "name": "cargo",
+      "first_unix": 1790306347.351552,
+      "last_unix": 1790306357.3985603,
+      "observations": 3
+    },
+    {
+      "pid": 3545800,
+      "ppid": 3539070,
+      "name": "rustc",
+      "first_unix": 1790306352.3823812,
+      "last_unix": 1790306352.3823812,
+      "observations": 1
+    },
+    {
+      "pid": 3554470,
+      "ppid": 3539070,
+      "name": "rustc",
+      "first_unix": 1790306357.3985603,
+      "last_unix": 1790306357.3985603,
+      "observations": 1
+    },
+    {
+      "pid": 3563121,
+      "ppid": 3537135,
+      "name": "cargo",
+      "first_unix": 1790306362.4168463,
+      "last_unix": 1790306452.8426619,
+      "observations": 19
+    },
+    {
+      "pid": 3572333,
+      "ppid": 3563121,
+      "name": "rustc",
+      "first_unix": 1790306362.4168463,
+      "last_unix": 1790306382.5118895,
+      "observations": 5
+    },
+    {
+      "pid": 3628762,
+      "ppid": 3563121,
+      "name": "rustc",
+      "first_unix": 1790306387.5293045,
+      "last_unix": 1790306437.7673914,
+      "observations": 11
+    },
+    {
+      "pid": 3749387,
+      "ppid": 3749384,
+      "name": "rust-lld",
+      "first_unix": 1790306437.7673914,
+      "last_unix": 1790306437.7673914,
+      "observations": 1
+    },
+    {
+      "pid": 3788010,
+      "ppid": 3537135,
+      "name": "cargo",
+      "first_unix": 1790306457.8637624,
+      "last_unix": 1790306583.7710664,
+      "observations": 26
+    },
+    {
+      "pid": 3797946,
+      "ppid": 3788010,
+      "name": "rustc",
+      "first_unix": 1790306457.8637624,
+      "last_unix": 1790306483.0838103,
+      "observations": 6
+    },
+    {
+      "pid": 4117599,
+      "ppid": 4115049,
+      "name": "cargo",
+      "first_unix": 1790306593.8093305,
+      "last_unix": 1790306593.8093305,
+      "observations": 1
+    },
+    {
+      "pid": 4123187,
+      "ppid": 4115049,
+      "name": "cargo",
+      "first_unix": 1790306598.8281493,
+      "last_unix": 1790306603.845338,
+      "observations": 2
+    },
+    {
+      "pid": 4164873,
+      "ppid": 4161793,
+      "name": "cargo",
+      "first_unix": 1790306613.8822396,
+      "last_unix": 1790306613.8822396,
+      "observations": 1
+    },
+    {
+      "pid": 4166398,
+      "ppid": 4161793,
+      "name": "cargo",
+      "first_unix": 1790306618.903734,
+      "last_unix": 1790306623.93193,
+      "observations": 2
+    },
+    {
+      "pid": 15724,
+      "ppid": 15218,
+      "name": "cargo",
+      "first_unix": 1790306633.970545,
+      "last_unix": 1790306734.4574203,
+      "observations": 21
+    },
+    {
+      "pid": 17123,
+      "ppid": 15724,
+      "name": "rustc",
+      "first_unix": 1790306633.970545,
+      "last_unix": 1790306633.970545,
+      "observations": 1
+    },
+    {
+      "pid": 24581,
+      "ppid": 15724,
+      "name": "rustc",
+      "first_unix": 1790306638.999109,
+      "last_unix": 1790306638.999109,
+      "observations": 1
+    },
+    {
+      "pid": 24603,
+      "ppid": 15724,
+      "name": "rustc",
+      "first_unix": 1790306638.999109,
+      "last_unix": 1790306644.025384,
+      "observations": 2
+    },
+    {
+      "pid": 29096,
+      "ppid": 15724,
+      "name": "rustc",
+      "first_unix": 1790306638.999109,
+      "last_unix": 1790306638.999109,
+      "observations": 1
+    },
+    {
+      "pid": 34439,
+      "ppid": 15724,
+      "name": "rustc",
+      "first_unix": 1790306638.999109,
+      "last_unix": 1790306638.999109,
+      "observations": 1
+    },
+    {
+      "pid": 42079,
+      "ppid": 15724,
+      "name": "rustc",
+      "first_unix": 1790306644.025384,
+      "last_unix": 1790306664.1175876,
+      "observations": 5
+    },
+    {
+      "pid": 102994,
+      "ppid": 15724,
+      "name": "rustc",
+      "first_unix": 1790306669.154574,
+      "last_unix": 1790306724.4212148,
+      "observations": 12
+    },
+    {
+      "pid": 226200,
+      "ppid": 226182,
+      "name": "rust-lld",
+      "first_unix": 1790306724.4212148,
+      "last_unix": 1790306724.4212148,
+      "observations": 1
+    },
+    {
+      "pid": 267161,
+      "ppid": 15218,
+      "name": "cargo",
+      "first_unix": 1790306739.4808342,
+      "last_unix": 1790306749.51624,
+      "observations": 3
+    }
+  ],
+  "attribution": "Observed build parent chains lead to process3483300, whose cwd after measurement was /home/ubuntu/GitHub/comet, an unrelated workspace. No command arguments retained.",
+  "limitations": "Process observations occur about every5seconds, so short-lived builds can be missed; ps CPU is lifetime-averaged."
+}

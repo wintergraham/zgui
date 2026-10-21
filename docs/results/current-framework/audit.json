@@ -1,0 +1,12 @@
+{
+  "trials": 24,
+  "samples": 3386,
+  "archived_sources": 156,
+  "active_ticks_per_requested_second": {
+    "min": 59.6,
+    "max": 59.9
+  },
+  "near_60hz_workload_updates": true,
+  "verified": "CSV/raw recomputation, complete trial inventory, successful exits, positive RSS, monotonic post-warmup samples, log ticks",
+  "limitations": "Ticks are model updates, not presented frames. Optional source/binary checks only verify supplied files."
+}

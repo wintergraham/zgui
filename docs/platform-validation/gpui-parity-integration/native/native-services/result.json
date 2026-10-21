@@ -1,0 +1,13 @@
+{
+  "result": "pass",
+  "backend": "native Wayland / XDG Desktop Portal GTK",
+  "selected": "/tmp/zgui-parity-native/native-services/fixture.txt",
+  "folder": "/tmp/zgui-parity-native/native-services/chosen-folder",
+  "save_destination": "/tmp/zgui-parity-native/native-services/chosen-folder/saved.txt",
+  "save_did_not_write": true,
+  "menu_cancel": true,
+  "escape_termination_probe": false,
+  "client_display_unset": true,
+  "prompt": true,
+  "url_handler": true
+}

@@ -1,0 +1,20 @@
+{
+  "script_sha256": "7cef206261694ad06aaf89f95c4d94528cb991e9f149b19a134728033c731a1f",
+  "binary_sha256": "808133205f3d051b51bfb69dbb600c28d7a7bb6777882295e90da03f5738a218",
+  "argv": [
+    "docs/platform-validation/wayland-ime-blocking/sources/wayland_ime_blocking_probe.py",
+    "/tmp/zgui-target/debug/zgui-ime-blocking-probe",
+    "--sessions",
+    "1",
+    "--bursts",
+    "2",
+    "--preedit-block-ms",
+    "80",
+    "--preedit-block-position",
+    "after-cursor",
+    "--present-on-ime",
+    "--output",
+    "docs/platform-validation/wayland-ime-blocking/after-80"
+  ],
+  "python": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]"
+}

@@ -1,0 +1,25 @@
+IME Preedit("n", Some((0, 1))) elapsed=0.806732
+BLOCK_BEGIN position=before-cursor requested_ms=80 preedit="n" elapsed=0.806749
+BLOCK_END position=before-cursor observed_ms=80.074 elapsed=0.886823
+PRESENT_BEGIN stage=ime-before-cursor elapsed=0.886873
+PRESENT_END stage=ime-before-cursor observed_ms=4.084 elapsed=0.890957
+IME Preedit("ni", Some((0, 2))) elapsed=0.891156
+BLOCK_BEGIN position=before-cursor requested_ms=80 preedit="ni" elapsed=0.891172
+BLOCK_END position=before-cursor observed_ms=80.525 elapsed=0.971698
+PRESENT_BEGIN stage=ime-before-cursor elapsed=0.971746
+PRESENT_END stage=ime-before-cursor observed_ms=1.621 elapsed=0.973367
+IME Preedit("ni h", Some((0, 4))) elapsed=0.973380
+BLOCK_BEGIN position=before-cursor requested_ms=80 preedit="ni h" elapsed=0.973393
+BLOCK_END position=before-cursor observed_ms=80.072 elapsed=1.053465
+PRESENT_BEGIN stage=ime-before-cursor elapsed=1.053497
+PRESENT_END stage=ime-before-cursor observed_ms=1.264 elapsed=1.054761
+IME Preedit("ni ha", Some((0, 5))) elapsed=1.054774
+BLOCK_BEGIN position=before-cursor requested_ms=80 preedit="ni ha" elapsed=1.054787
+BLOCK_END position=before-cursor observed_ms=80.071 elapsed=1.134858
+PRESENT_BEGIN stage=ime-before-cursor elapsed=1.134900
+PRESENT_END stage=ime-before-cursor observed_ms=1.124 elapsed=1.136023
+IME Preedit("ni hao", Some((0, 6))) elapsed=1.136034
+BLOCK_BEGIN position=before-cursor requested_ms=80 preedit="ni hao" elapsed=1.136043
+BLOCK_END position=before-cursor observed_ms=80.069 elapsed=1.216113
+PRESENT_BEGIN stage=ime-before-cursor elapsed=1.216147
+PRESENT_END stage=ime-before-cursor observed_ms=1.128 elapsed=1.217275

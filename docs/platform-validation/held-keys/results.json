@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "backend": "X11",
+  "binary_sha256": "4ce00105c174816654c4825c5596f0cecc822919af11fd642f97a79830acb758",
+  "script_sha256": "930cf63c1a43273b813078e4b094ee697d310c4d071366b739972c5dac11f1c6",
+  "checks": [
+    "held printable focus transfer does not type into target",
+    "held Space focus transfer does not activate target",
+    "normal subsequent text and Space remain functional"
+  ],
+  "source_archive": "../live-dpi-pointer/source.tar.gz",
+  "source_archive_sha256": "eee0489e1bbae3a7916e0fbeff8bd4f8d2db1388dec80a8d652e1a858422d4c3"
+}

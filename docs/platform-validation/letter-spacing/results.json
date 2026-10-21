@@ -1,0 +1,38 @@
+{
+  "passed": true,
+  "backend": "X11",
+  "stages": [
+    {
+      "spacing": 0.0,
+      "x": 64.0,
+      "width": 72.0,
+      "anchor": 3,
+      "focus": 3,
+      "model": "ABCDEF"
+    },
+    {
+      "spacing": 3.0,
+      "x": 73.0,
+      "width": 90.0,
+      "anchor": 3,
+      "focus": 3,
+      "model": "ABCDEF"
+    },
+    {
+      "spacing": -1.0,
+      "x": 61.0,
+      "width": 66.0,
+      "anchor": 3,
+      "focus": 3,
+      "model": "ABCDEF"
+    },
+    {
+      "spacing": 0.0,
+      "x": 64.0,
+      "width": 72.0,
+      "anchor": 3,
+      "focus": 3,
+      "model": "ABCDEF"
+    }
+  ]
+}

@@ -1,0 +1,156 @@
+[
+  {
+    "name": "paint-media",
+    "command": [
+      "xvfb-run",
+      "-a",
+      "-s",
+      "-screen 0 1000x700x24",
+      "python3",
+      "scripts/paint_media_smoke.py",
+      "--binaries",
+      "/tmp/zgui-target/debug/examples",
+      "--output",
+      "/tmp/zgui-parity-native/paint-media"
+    ],
+    "exit_code": 0,
+    "seconds": 5.326405332423747
+  },
+  {
+    "name": "cursors",
+    "command": [
+      "xvfb-run",
+      "-a",
+      "-s",
+      "-screen 0 1000x700x24",
+      "python3",
+      "scripts/cursors_smoke.py",
+      "/tmp/zgui-target/debug/examples/cursors",
+      "--output",
+      "/tmp/zgui-parity-native/cursors"
+    ],
+    "exit_code": 0,
+    "seconds": 2.4712204663082957
+  },
+  {
+    "name": "rich-text",
+    "command": [
+      "python3",
+      "scripts/rich_text_smoke.py",
+      "/tmp/zgui-target/debug/examples/rich_text",
+      "--output",
+      "/tmp/zgui-parity-native/rich-text"
+    ],
+    "exit_code": 0,
+    "seconds": 8.58614400587976
+  },
+  {
+    "name": "layout",
+    "command": [
+      "python3",
+      "scripts/layout_smoke.py",
+      "/tmp/zgui-target/debug/examples/layout",
+      "--output",
+      "/tmp/zgui-parity-native/layout"
+    ],
+    "exit_code": 0,
+    "seconds": 2.872813083231449
+  },
+  {
+    "name": "actions",
+    "command": [
+      "python3",
+      "scripts/actions_smoke.py",
+      "/tmp/zgui-target/debug/examples/actions",
+      "--output",
+      "/tmp/zgui-parity-native/actions"
+    ],
+    "exit_code": 0,
+    "seconds": 6.782560469582677
+  },
+  {
+    "name": "drag-drop",
+    "command": [
+      "python3",
+      "scripts/drag_drop_smoke.py",
+      "/tmp/zgui-target/debug/examples/drag_drop",
+      "--output",
+      "/tmp/zgui-parity-native/drag-drop"
+    ],
+    "exit_code": 0,
+    "seconds": 2.268714708276093
+  },
+  {
+    "name": "file-drop-x11",
+    "command": [
+      "python3",
+      "scripts/file_drop_smoke.py",
+      "/tmp/zgui-target/debug/examples/drag_drop",
+      "--output",
+      "/tmp/zgui-parity-native/file-drop-x11"
+    ],
+    "exit_code": 0,
+    "seconds": 5.38171617127955
+  },
+  {
+    "name": "file-drop-wayland",
+    "command": [
+      "python3",
+      "scripts/wayland_file_drop_smoke.py",
+      "/tmp/zgui-target/debug/examples/drag_drop",
+      "--output",
+      "/tmp/zgui-parity-native/file-drop-wayland"
+    ],
+    "exit_code": 0,
+    "seconds": 4.674544581212103
+  },
+  {
+    "name": "menus-x11",
+    "command": [
+      "python3",
+      "scripts/native_menu_smoke.py",
+      "/tmp/zgui-target/debug/examples/dynamic_menus",
+      "--output",
+      "/tmp/zgui-parity-native/menus-x11"
+    ],
+    "exit_code": 0,
+    "seconds": 3.021339333616197
+  },
+  {
+    "name": "menus-wayland",
+    "command": [
+      "python3",
+      "scripts/native_menu_smoke.py",
+      "/tmp/zgui-target/debug/examples/dynamic_menus",
+      "--wayland",
+      "--output",
+      "/tmp/zgui-parity-native/menus-wayland"
+    ],
+    "exit_code": 0,
+    "seconds": 2.772917245514691
+  },
+  {
+    "name": "effects",
+    "command": [
+      "python3",
+      "scripts/effects_smoke.py",
+      "/tmp/zgui-target/debug/examples/effects",
+      "--output",
+      "/tmp/zgui-parity-native/effects"
+    ],
+    "exit_code": 0,
+    "seconds": 30.753450741060078
+  },
+  {
+    "name": "component-host",
+    "command": [
+      "python3",
+      "scripts/component_host_smoke.py",
+      "/tmp/zgui-target/debug/examples/component_workload",
+      "--output",
+      "/tmp/zgui-parity-native/component-host"
+    ],
+    "exit_code": 1,
+    "seconds": 0.11395085044205189
+  }
+]

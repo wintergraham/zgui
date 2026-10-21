@@ -1,0 +1,45 @@
+{
+  "sample_start_utc": "2026-09-25T09:35:09.983250+00:00",
+  "sample_end_utc": "2026-09-25T09:47:13.053586+00:00",
+  "process_names": {
+    "cargo": {
+      "observations": 63,
+      "distinct_pids": 6,
+      "first_elapsed_seconds": 35.126190423965454,
+      "last_elapsed_seconds": 723.0703356266022,
+      "parent_pids": [
+        236888,
+        400967,
+        607875,
+        1017855,
+        1182904,
+        3909668
+      ]
+    },
+    "rustc": {
+      "observations": 175,
+      "distinct_pids": 97,
+      "first_elapsed_seconds": 35.126190423965454,
+      "last_elapsed_seconds": 723.0703356266022,
+      "parent_pids": [
+        236892,
+        400983,
+        607878,
+        1017873,
+        1182911,
+        3909690
+      ]
+    },
+    "rust-lld": {
+      "observations": 2,
+      "distinct_pids": 2,
+      "first_elapsed_seconds": 366.6083097457886,
+      "last_elapsed_seconds": 446.94524598121643,
+      "parent_pids": [
+        500815,
+        689788
+      ]
+    }
+  },
+  "caveat": "No builds at preflight. This task ran no builds during sampling. Unrelated builds appeared afterward. ps CPU is lifetime averaged, not interval contention; process ancestry not inferred for exited processes."
+}

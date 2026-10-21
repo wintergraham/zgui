@@ -1,0 +1,18 @@
+   Compiling slotmap v1.1.1
+   Compiling libdbus-sys v0.2.7
+   Compiling grid v0.18.0
+   Compiling fontdb v0.16.2
+   Compiling taffy v0.9.0
+   Compiling is-docker v0.2.0
+   Compiling weezl v0.1.12
+   Compiling rfd v0.17.2
+   Compiling cosmic-text v0.14.2
+   Compiling gif v0.14.2
+   Compiling is-wsl v0.4.0
+   Compiling dbus v0.9.12
+   Compiling zgui v0.1.0 (/home/ubuntu/GitHub/zgui/crates/zgui)
+   Compiling zgui-gpu v0.1.0 (/home/ubuntu/GitHub/zgui/crates/zgui-gpu)
+   Compiling dbus-crossroads v0.5.3
+   Compiling open v5.4.4
+   Compiling zgui-desktop v0.1.0 (/home/ubuntu/GitHub/zgui/crates/zgui-desktop)
+    Finished `release` profile [optimized] target(s) in 2m 21s

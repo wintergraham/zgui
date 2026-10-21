@@ -1,0 +1,7 @@
+{
+  "date": "2026-09-22",
+  "binary_sha256": "a34c4a30568d5fd0b2851ad909c37184582a051d30cb603f198557ce6c9be144",
+  "native_scope": "X11/Xvfb startup and resize at 800x600,560x520,1000x720; screenshots manually inspected",
+  "geometry_scope": "13 advanced_layout integration tests, retained cache unit test; all 185 core library tests pass; strict core Clippy passes",
+  "limitations": "No native macOS runtime evidence in this packet; concurrent workspace snapshot is not archived."
+}

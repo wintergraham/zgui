@@ -1,0 +1,37 @@
+{
+  "rustc --version": {
+    "exit_code": 0,
+    "stdout": "rustc 1.97.1 (8bab26f4f 2026-07-14)\n",
+    "stderr": ""
+  },
+  "cargo --version": {
+    "exit_code": 0,
+    "stdout": "cargo 1.97.1 (c980f4866 2026-06-30)\n",
+    "stderr": ""
+  },
+  "/usr/bin/python3 --version": {
+    "exit_code": 0,
+    "stdout": "Python 3.14.4\n",
+    "stderr": ""
+  },
+  "sway --version": {
+    "exit_code": 0,
+    "stdout": "sway version 1.11\n",
+    "stderr": ""
+  },
+  "fcitx5 --version": {
+    "exit_code": 0,
+    "stdout": "5.1.19\n",
+    "stderr": ""
+  },
+  "xdotool --version": {
+    "exit_code": 0,
+    "stdout": "xdotool version 3.20160805.1\n",
+    "stderr": ""
+  },
+  "dpkg-query -W -f=${Package} ${Version}\n libwlroots-0.19 fcitx5 fcitx5-pinyin libwayland-server0 libwayland-client0 xvfb openbox grim": {
+    "exit_code": 0,
+    "stdout": "fcitx5 5.1.19-1\nfcitx5-pinyin 5.1.12-1\ngrim 1.4.0+ds-2build3\nlibwayland-client0 1.24.0-2\nlibwayland-server0 1.24.0-2\nlibwlroots-0.19 0.19.2-1\nopenbox 3.6.1-12ubuntu3\nxvfb 2:21.1.22-1ubuntu1\n",
+    "stderr": ""
+  }
+}

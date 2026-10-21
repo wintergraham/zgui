@@ -1,0 +1,21 @@
+[
+  {
+    "backend": "X11",
+    "scale": 1.5,
+    "result": "PASS: X11 scale=1.5, initial physical size=(1350, 1140), native pointer activation, text entry, selection, clipboard, Tab focus, resize, close",
+    "screenshot": "x11-scale-1.5.png"
+  },
+  {
+    "backend": "X11",
+    "scale": 2.0,
+    "result": "PASS: X11 scale=2, initial physical size=(1800, 1520), native pointer activation, text entry, selection, clipboard, Tab focus, resize, close",
+    "screenshot": "x11-scale-2.png"
+  },
+  {
+    "backend": "Wayland",
+    "compositor": "Weston headless pixman",
+    "theme_background_pixels": 489661,
+    "screenshot": "wayland-gallery.png",
+    "input_validation": "No seat: physical keyboard/pointer/IME not tested"
+  }
+]

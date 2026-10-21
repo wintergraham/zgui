@@ -1,0 +1,14 @@
+IME Preedit("n", Some((0, 1))) elapsed=3.831885
+PRESENT_BEGIN stage=ime-before-cursor elapsed=3.831906
+PRESENT_END stage=ime-before-cursor observed_ms=1.337 elapsed=3.833243
+RECT_REQUEST x=54 delay_ms=0 elapsed=3.833252
+RECT x=54 y=80 width=1 height=24 elapsed=3.833297
+IME Preedit("", None) elapsed=5.831014
+PRESENT_BEGIN stage=ime-before-cursor elapsed=5.831033
+PRESENT_END stage=ime-before-cursor observed_ms=1.040 elapsed=5.832073
+RECT_REQUEST x=40 delay_ms=0 elapsed=5.832081
+RECT x=40 y=80 width=1 height=24 elapsed=5.832114
+IME Commit("你好") elapsed=5.832122
+IME Preedit("", None) elapsed=5.832131
+PRESENT_BEGIN stage=ime-before-cursor elapsed=5.832136
+PRESENT_END stage=ime-before-cursor observed_ms=18.571 elapsed=5.850708

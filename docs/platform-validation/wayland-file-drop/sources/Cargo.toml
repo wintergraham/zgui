@@ -1,0 +1,17 @@
+[workspace]
+members = ["crates/zgui", "crates/zgui-desktop", "crates/zgui-gpu", "comparisons/workload"]
+exclude = ["comparisons/gpui", "comparisons/quickgui"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+lto = "thin"
+codegen-units = 1

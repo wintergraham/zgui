@@ -1,0 +1,15 @@
+IME Preedit("n", Some((0, 1))) elapsed=4.057673
+PRESENT_BEGIN stage=ime-before-cursor elapsed=4.057692
+PRESENT_END stage=ime-before-cursor observed_ms=1.214 elapsed=4.058906
+IME Preedit("ni", Some((0, 2))) elapsed=4.101862
+PRESENT_BEGIN stage=ime-before-cursor elapsed=4.101882
+PRESENT_END stage=ime-before-cursor observed_ms=1.228 elapsed=4.103110
+IME Preedit("ni h", Some((0, 4))) elapsed=4.150032
+PRESENT_BEGIN stage=ime-before-cursor elapsed=4.150055
+PRESENT_END stage=ime-before-cursor observed_ms=1.276 elapsed=4.151331
+IME Preedit("ni ha", Some((0, 5))) elapsed=4.191965
+PRESENT_BEGIN stage=ime-before-cursor elapsed=4.191983
+PRESENT_END stage=ime-before-cursor observed_ms=1.044 elapsed=4.193027
+IME Preedit("ni hao", Some((0, 6))) elapsed=4.238666
+PRESENT_BEGIN stage=ime-before-cursor elapsed=4.238689
+PRESENT_END stage=ime-before-cursor observed_ms=1.430 elapsed=4.240120

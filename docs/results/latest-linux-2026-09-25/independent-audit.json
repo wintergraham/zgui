@@ -1,0 +1,76 @@
+{
+  "status": "passed",
+  "trials": 36,
+  "samples": 10806,
+  "exact_rotated_trial_order": true,
+  "raw_and_csv_recomputed": true,
+  "all_summary_medians_and_ranges_recomputed": true,
+  "ticks_per_requested_second": {
+    "min": 58.6,
+    "max": 59.95
+  },
+  "sampled_wall_seconds": {
+    "min": 14.974307850934565,
+    "max": 15.140085156075656
+  },
+  "archived_inputs": 433,
+  "archive_inventory_and_hashes_match": true,
+  "current_archive_input_mismatches": [],
+  "current_build_input_mismatches": [],
+  "all_three_binary_hashes_and_loader_verified": true,
+  "binary_paths": {
+    "zgui": "/tmp/zgui-latest-linux-2026-09-25-bin/component_workload",
+    "gpui": "/tmp/zgui-latest-linux-2026-09-25-bin/zgui-compare-gpui",
+    "quickgui": "/tmp/zgui-latest-linux-2026-09-25-bin/zgui-compare-quickgui"
+  },
+  "host_observations": 145,
+  "host_observation_span_seconds": 723.6586105823517,
+  "observed_build_process_names": [
+    "cargo",
+    "rustc",
+    "rust-lld"
+  ],
+  "host_context": {
+    "zeron": {
+      "observations": 145,
+      "pids": 3,
+      "max_ps_cpu": 42.8
+    },
+    "git": {
+      "observations": 137,
+      "pids": 365,
+      "max_ps_cpu": 1500.0
+    },
+    "gh": {
+      "observations": 33,
+      "pids": 38,
+      "max_ps_cpu": 244.0
+    }
+  },
+  "capture_thread_counts": {
+    "zgui": {
+      "all_threads": 16,
+      "llvmpipe_workers": 4
+    },
+    "gpui": {
+      "all_threads": 40,
+      "llvmpipe_workers": 4
+    },
+    "quickgui": {
+      "all_threads": 25,
+      "llvmpipe_workers": 8
+    }
+  },
+  "limitations": [
+    "Ticks count logical updates, not presented frames.",
+    "Unrelated cargo/rustc/rust-lld builds occurred during this shared-host series; it is not isolated benchmarking.",
+    "Shared host shows unrelated zeron/git/gh activity; ps CPU is lifetime-averaged, not interval contention.",
+    "LP_NUM_THREADS=4 applies to each Mesa worker pool; QuickGUI capture shows two pools.",
+    "Software Vulkan on Xvfb does not establish native macOS, hardware-GPU or universal performance rankings.",
+    "A measured0% CPU means no accounted CPU increment between endpoint samples, not proof of literally zero cycles."
+  ],
+  "audited_at_utc": "2026-09-25T03:30:47.338113+00:00",
+  "host_build_contention": "Unrelated /home/ubuntu/GitHub/comet builds observed, approximately120\u2013523seconds after first observation; current benchmark inputs remained unchanged.",
+  "measurement_start_utc": "2026-09-25T03:17:06.875330+00:00",
+  "measurement_last_observation_utc": "2026-09-25T03:29:10.533940+00:00"
+}

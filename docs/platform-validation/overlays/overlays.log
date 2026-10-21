@@ -1,0 +1,56 @@
+SNAPSHOT 1 popup=true modal=false nested=false offset=0 focus=Some("Close popup")
+BOUNDS 1 anchor Rect { x: 24.0, y: 152.0, width: 180.0, height: 32.0 }
+BOUNDS 1 popup Rect { x: 24.0, y: 188.0, width: 180.0, height: 100.0 }
+BOUNDS 1 modal Rect { x: 140.0, y: 100.0, width: 320.0, height: 220.0 }
+BOUNDS 1 nested Rect { x: 156.0, y: 188.0, width: 180.0, height: 80.0 }
+SNAPSHOT 2 popup=true modal=false nested=false offset=40 focus=Some("Close popup")
+BOUNDS 2 anchor Rect { x: 24.0, y: 112.0, width: 180.0, height: 32.0 }
+BOUNDS 2 popup Rect { x: 24.0, y: 148.0, width: 180.0, height: 100.0 }
+BOUNDS 2 modal Rect { x: 140.0, y: 100.0, width: 320.0, height: 220.0 }
+BOUNDS 2 nested Rect { x: 156.0, y: 188.0, width: 180.0, height: 80.0 }
+SNAPSHOT 3 popup=true modal=false nested=false offset=40 focus=Some("Close popup")
+BOUNDS 3 anchor Rect { x: 24.0, y: 112.0, width: 180.0, height: 32.0 }
+BOUNDS 3 popup Rect { x: 24.0, y: 8.0, width: 180.0, height: 100.0 }
+BOUNDS 3 modal Rect { x: 140.0, y: 16.0, width: 320.0, height: 208.0 }
+BOUNDS 3 nested Rect { x: 156.0, y: 104.0, width: 180.0, height: 80.0 }
+SNAPSHOT 4 popup=false modal=false nested=false offset=40 focus=Some("Open anchored popup")
+BOUNDS 4 anchor Rect { x: 24.0, y: 112.0, width: 180.0, height: 32.0 }
+BOUNDS 4 popup Rect { x: 24.0, y: 148.0, width: 180.0, height: 100.0 }
+BOUNDS 4 modal Rect { x: 140.0, y: 100.0, width: 320.0, height: 220.0 }
+BOUNDS 4 nested Rect { x: 156.0, y: 188.0, width: 180.0, height: 80.0 }
+SNAPSHOT 5 popup=false modal=true nested=false offset=40 focus=Some("Open nested popup")
+BOUNDS 5 anchor Rect { x: 24.0, y: 112.0, width: 180.0, height: 32.0 }
+BOUNDS 5 popup Rect { x: 24.0, y: 148.0, width: 180.0, height: 100.0 }
+BOUNDS 5 modal Rect { x: 140.0, y: 100.0, width: 320.0, height: 220.0 }
+BOUNDS 5 nested Rect { x: 156.0, y: 188.0, width: 180.0, height: 80.0 }
+SNAPSHOT 6 popup=false modal=true nested=false offset=40 focus=Some("Open nested popup")
+BOUNDS 6 anchor Rect { x: 24.0, y: 112.0, width: 180.0, height: 32.0 }
+BOUNDS 6 popup Rect { x: 24.0, y: 148.0, width: 180.0, height: 100.0 }
+BOUNDS 6 modal Rect { x: 140.0, y: 100.0, width: 320.0, height: 220.0 }
+BOUNDS 6 nested Rect { x: 156.0, y: 188.0, width: 180.0, height: 80.0 }
+SNAPSHOT 7 popup=false modal=true nested=true offset=40 focus=Some("Close nested")
+BOUNDS 7 anchor Rect { x: 24.0, y: 112.0, width: 180.0, height: 32.0 }
+BOUNDS 7 popup Rect { x: 24.0, y: 148.0, width: 180.0, height: 100.0 }
+BOUNDS 7 modal Rect { x: 140.0, y: 100.0, width: 320.0, height: 220.0 }
+BOUNDS 7 nested Rect { x: 156.0, y: 188.0, width: 180.0, height: 80.0 }
+SNAPSHOT 8 popup=false modal=true nested=false offset=40 focus=Some("Open nested popup")
+BOUNDS 8 anchor Rect { x: 24.0, y: 112.0, width: 180.0, height: 32.0 }
+BOUNDS 8 popup Rect { x: 24.0, y: 148.0, width: 180.0, height: 100.0 }
+BOUNDS 8 modal Rect { x: 140.0, y: 100.0, width: 320.0, height: 220.0 }
+BOUNDS 8 nested Rect { x: 156.0, y: 188.0, width: 180.0, height: 80.0 }
+SNAPSHOT 9 popup=false modal=false nested=false offset=40 focus=Some("Open modal")
+BOUNDS 9 anchor Rect { x: 24.0, y: 112.0, width: 180.0, height: 32.0 }
+BOUNDS 9 popup Rect { x: 24.0, y: 148.0, width: 180.0, height: 100.0 }
+BOUNDS 9 modal Rect { x: 140.0, y: 100.0, width: 320.0, height: 220.0 }
+BOUNDS 9 nested Rect { x: 156.0, y: 188.0, width: 180.0, height: 80.0 }
+SNAPSHOT 10 popup=true modal=false nested=false offset=40 focus=Some("Close popup")
+BOUNDS 10 anchor Rect { x: 24.0, y: 112.0, width: 180.0, height: 32.0 }
+BOUNDS 10 popup Rect { x: 24.0, y: 148.0, width: 180.0, height: 100.0 }
+BOUNDS 10 modal Rect { x: 140.0, y: 100.0, width: 320.0, height: 220.0 }
+BOUNDS 10 nested Rect { x: 156.0, y: 188.0, width: 180.0, height: 80.0 }
+SNAPSHOT 11 popup=false modal=false nested=false offset=40 focus=Some("Open anchored popup")
+BOUNDS 11 anchor Rect { x: 24.0, y: 112.0, width: 180.0, height: 32.0 }
+BOUNDS 11 popup Rect { x: 24.0, y: 148.0, width: 180.0, height: 100.0 }
+BOUNDS 11 modal Rect { x: 140.0, y: 100.0, width: 320.0, height: 220.0 }
+BOUNDS 11 nested Rect { x: 156.0, y: 188.0, width: 180.0, height: 80.0 }
+OVERLAYS popup=false modal=false nested=false offset=40 reports=11

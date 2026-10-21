@@ -1,0 +1,113 @@
+{
+  "scope": "Artifact consistency audit; not a rerun, source-to-binary reproducibility proof, or hardware performance validation.",
+  "checks": [
+    "CSV row matches adjacent JSON summary",
+    "Raw sample CPU delta and elapsed interval reproduce CPU percentage",
+    "Raw RSS sample arithmetic reproduces mean RSS",
+    "Raw sample count and 3-second warmup/10-second run configuration agree",
+    "Log workload ticks agree with CSV; zgui reports Vulkan CPU adapter and GPU renderer",
+    "Recorded exit code is zero for every completed trial",
+    "Frozen executable SHA256 matches metadata",
+    "Baseline regenerated summary JSON matches stored summary byte for byte"
+  ],
+  "series": {
+    "xvfb-llvmpipe-gpu.csv": {
+      "completed_runs": 24,
+      "expected_runs": 24,
+      "raw_samples_verified": 3396,
+      "zero_rss_samples": 1,
+      "frozen_binary_hash_verification": {
+        "zgui": "matches",
+        "gpui": "matches",
+        "quickgui": "matches"
+      },
+      "missing_runs": [],
+      "csv_sha256": "1c6fdf55b6fcbe8c9d040233ffb10d493210f2a0795b4ba7a6c87254a573ea59"
+    },
+    "xvfb-llvmpipe-gpu-optimized.csv": {
+      "completed_runs": 14,
+      "expected_runs": 24,
+      "raw_samples_verified": 1983,
+      "zero_rss_samples": 2,
+      "frozen_binary_hash_verification": {
+        "zgui": "matches",
+        "gpui": "matches",
+        "quickgui": "matches"
+      },
+      "missing_runs": [
+        {
+          "framework": "gpui",
+          "mode": "both",
+          "repeat": "1"
+        },
+        {
+          "framework": "gpui",
+          "mode": "scroll",
+          "repeat": "1"
+        },
+        {
+          "framework": "gpui",
+          "mode": "stream",
+          "repeat": "1"
+        },
+        {
+          "framework": "quickgui",
+          "mode": "both",
+          "repeat": "1"
+        },
+        {
+          "framework": "quickgui",
+          "mode": "scroll",
+          "repeat": "1"
+        },
+        {
+          "framework": "quickgui",
+          "mode": "stream",
+          "repeat": "1"
+        },
+        {
+          "framework": "zgui",
+          "mode": "both",
+          "repeat": "1"
+        },
+        {
+          "framework": "zgui",
+          "mode": "idle",
+          "repeat": "1"
+        },
+        {
+          "framework": "zgui",
+          "mode": "scroll",
+          "repeat": "1"
+        },
+        {
+          "framework": "zgui",
+          "mode": "stream",
+          "repeat": "1"
+        }
+      ],
+      "csv_sha256": "b86805cdd9cf6441bb63fde487d521f90aa10472d7421fd6277439d79d60f227"
+    },
+    "xvfb-llvmpipe-gpu-current.csv": {
+      "completed_runs": 24,
+      "expected_runs": 24,
+      "raw_samples_verified": 3394,
+      "zero_rss_samples": 0,
+      "frozen_binary_hash_verification": {
+        "zgui": "matches",
+        "gpui": "matches",
+        "quickgui": "matches"
+      },
+      "missing_runs": [],
+      "csv_sha256": "5d1459f5b5e1c15762acf70459f70c1e1431f8f28372d1f468e65a006dd08d14",
+      "active_ticks_range": [
+        596,
+        599
+      ],
+      "zgui_atlas_bytes": [
+        1048576
+      ],
+      "source_archive_sha256_verified": true
+    }
+  }
+}

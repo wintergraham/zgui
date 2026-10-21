@@ -1,0 +1,63 @@
+{
+  "platform": "X11/Xvfb",
+  "scale": 1,
+  "result": "pass",
+  "checks": [
+    "anchored popup native opening",
+    "anchor compositor scroll tracking",
+    "viewport resize flip",
+    "Escape focus restore",
+    "modal Tab containment",
+    "nested popup focus scope",
+    "backdrop dismissal",
+    "panel pixels",
+    "automatic close"
+  ],
+  "samples": [
+    {
+      "stage": 1,
+      "panel_pixel_checked": true
+    },
+    {
+      "stage": 2,
+      "panel_pixel_checked": true
+    },
+    {
+      "stage": 3,
+      "panel_pixel_checked": true
+    },
+    {
+      "stage": 4,
+      "panel_pixel_checked": false
+    },
+    {
+      "stage": 5,
+      "panel_pixel_checked": true
+    },
+    {
+      "stage": 6,
+      "panel_pixel_checked": false
+    },
+    {
+      "stage": 7,
+      "panel_pixel_checked": true
+    },
+    {
+      "stage": 8,
+      "panel_pixel_checked": false
+    },
+    {
+      "stage": 9,
+      "panel_pixel_checked": false
+    },
+    {
+      "stage": 10,
+      "panel_pixel_checked": false
+    },
+    {
+      "stage": 11,
+      "panel_pixel_checked": false
+    }
+  ],
+  "limitations": "Software rendering; does not validate macOS or hardware GPUs."
+}

@@ -1,0 +1,18 @@
+{
+  "status": "passed",
+  "verified_at_utc": "2026-09-26T04:50:05.078538+00:00",
+  "url": "https://zgui-performance.pages.dev",
+  "deployment_url": "https://ee46fde5.zgui-performance.pages.dev",
+  "measured_commit": "ca22316ec63f3605204eecfc2cee1cfeffac5c9a",
+  "viewports": [
+    1440,
+    390
+  ],
+  "workloads_per_viewport": 4,
+  "displayed_cpu_medians_verified": 12,
+  "displayed_memory_medians_verified": 12,
+  "page_errors": [],
+  "horizontal_page_overflow": false,
+  "stale_failure_notice_removed": true,
+  "live_measurement_bytes_match_local": true
+}

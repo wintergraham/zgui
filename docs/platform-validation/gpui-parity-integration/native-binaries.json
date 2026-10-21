@@ -1,0 +1,58 @@
+{
+  "paint_styles": {
+    "sha256": "63a54875e7004db2f9a0f4f6ee0cc026d5d08a38c15835fdef11f0d62618236f",
+    "bytes": 82099432
+  },
+  "canvas": {
+    "sha256": "70500be1052396859e1b25c9c596b32116884930fcc6c9215bd16f02b5f9d73b",
+    "bytes": 82080040
+  },
+  "svg_transform": {
+    "sha256": "f341d31f584eba27b65fbe370cb43282c85f5cb0004caa3d5b8e59ab460933d3",
+    "bytes": 82091912
+  },
+  "animated_image": {
+    "sha256": "15117c11d5ed271993fee94037725839c5e0923972c6931091b28adb15a41a59",
+    "bytes": 82408968
+  },
+  "cursors": {
+    "sha256": "2c871b8be1093a433a080ead0c25bd78691538fb1ccc11177a20aab36c8d9a9b",
+    "bytes": 82065296
+  },
+  "rich_text": {
+    "sha256": "0458046bd3bf5f66f78fd4a323f5fc4bd0b9f898ed3ef2982a603941dbe91405",
+    "bytes": 82991256
+  },
+  "actions": {
+    "sha256": "4c6e898896263537b5d92eed8a4adf8fd3929aa31e2c6a168d716829f06f8de4",
+    "bytes": 82124120
+  },
+  "layout": {
+    "sha256": "7d6390ffc3ecf5a18abf8e1e3cbb2a3efe8e21baa2660f3afd4ce11fb7c6f3ae",
+    "bytes": 82076200
+  },
+  "drag_drop": {
+    "sha256": "cdab1e958de85a6c2ee7ccef4d90d7c6ca65c52874ff363041f7d580df6acbae",
+    "bytes": 82119896
+  },
+  "dynamic_menus": {
+    "sha256": "cbe60dd3d8bb7a72648bd212a9e8fb29b5ee8a630894e6cc29b67aff1d724061",
+    "bytes": 82227272
+  },
+  "platform_services": {
+    "sha256": "8131ca6b8df6b13461f9c598fec2283a9613ca592222b4e34d5ceb65d8fb3610",
+    "bytes": 83109824
+  },
+  "native_platform": {
+    "sha256": "c14241639ffa451ee82fef826ab77fabf273163d0f8f469255945cbe97192c30",
+    "bytes": 82145080
+  },
+  "component_workload": {
+    "sha256": "1325d38bd37f3a72219e40be647567f78ec532998e66812c4263244a67466f9c",
+    "bytes": 82486704
+  },
+  "effects": {
+    "sha256": "612234b435f76ff05827b7a0f68dcccf4c42606837641fc4790b50c475a37273",
+    "bytes": 82132632
+  }
+}

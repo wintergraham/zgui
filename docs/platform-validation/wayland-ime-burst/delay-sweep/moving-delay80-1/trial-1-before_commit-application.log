@@ -1,0 +1,11 @@
+IME Preedit("n", Some((0, 1))) elapsed=0.802346
+RECT_REQUEST x=54 delay_ms=80 elapsed=0.802358
+IME Preedit("ni", Some((0, 2))) elapsed=0.813250
+RECT_REQUEST x=68 delay_ms=80 elapsed=0.813260
+IME Preedit("ni h", Some((0, 4))) elapsed=0.813264
+RECT_REQUEST x=96 delay_ms=80 elapsed=0.813266
+IME Preedit("ni ha", Some((0, 5))) elapsed=0.813268
+RECT_REQUEST x=110 delay_ms=80 elapsed=0.813270
+IME Preedit("ni hao", Some((0, 6))) elapsed=0.846571
+RECT_REQUEST x=124 delay_ms=80 elapsed=0.846584
+RECT x=124 y=80 width=1 height=24 elapsed=0.882497

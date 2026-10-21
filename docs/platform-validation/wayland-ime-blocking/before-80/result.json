@@ -1,0 +1,364 @@
+{
+  "result": "diagnostic_completed",
+  "findings": {
+    "moving-delay0": {
+      "cold": {
+        "trials": 1,
+        "full_preedit": 1,
+        "unicode_commit": 1,
+        "delivery_failures": 0
+      },
+      "warm": {
+        "trials": 1,
+        "full_preedit": 1,
+        "unicode_commit": 1,
+        "delivery_failures": 0
+      }
+    },
+    "fixed-delay0": {
+      "cold": {
+        "trials": 1,
+        "full_preedit": 1,
+        "unicode_commit": 1,
+        "delivery_failures": 0
+      },
+      "warm": {
+        "trials": 1,
+        "full_preedit": 1,
+        "unicode_commit": 1,
+        "delivery_failures": 0
+      }
+    }
+  },
+  "sessions": [
+    {
+      "mode": "moving",
+      "cursor_delay_ms": 0,
+      "preedit_block_ms": 80,
+      "preedit_block_position": "before-cursor",
+      "present_on_ime": true,
+      "server_protocol_trace": true,
+      "session": 1,
+      "client_display_unset": true,
+      "trials": [
+        {
+          "trial": 1,
+          "condition": "cold",
+          "warm_definition": "Prior burst completed in the same input-method process; no engine switch or refocus.",
+          "burst": "nihao",
+          "xdotool_delay_ms": 90,
+          "burst_wall_seconds": 0.23168498277664185,
+          "observation_seconds": 2.0,
+          "client_preedits": [
+            "n",
+            "ni",
+            "ni h",
+            "ni ha",
+            "ni hao"
+          ],
+          "engine_preedits": [
+            "n",
+            "ni",
+            "ni h",
+            "ni ha",
+            "ni hao"
+          ],
+          "client_commits": [
+            "\u4f60\u597d"
+          ],
+          "engine_commits": [
+            "\u4f60\u597d"
+          ],
+          "application_preedits": [
+            "n",
+            "ni",
+            "ni h",
+            "ni ha",
+            "ni hao"
+          ],
+          "application_commits": [
+            "\u4f60\u597d"
+          ],
+          "full_preedit": true,
+          "unicode_commit": true,
+          "outcome": "delivered",
+          "client_cursor_updates": [
+            "54, 80, 1, 24",
+            "68, 80, 1, 24",
+            "96, 80, 1, 24",
+            "110, 80, 1, 24",
+            "124, 80, 1, 24"
+          ],
+          "engine_transaction_serials": [
+            "2",
+            "2",
+            "2",
+            "2",
+            "2"
+          ],
+          "client_done_serials": [
+            "2",
+            "2",
+            "2",
+            "2",
+            "2"
+          ],
+          "client_state_commit_count": 5,
+          "engine_key_events": [
+            "14, 411806106, 49, 1",
+            "15, 411806128, 49, 0",
+            "16, 411806151, 23, 1",
+            "17, 411806174, 23, 0",
+            "18, 411806197, 35, 1",
+            "19, 411806219, 35, 0",
+            "20, 411806242, 30, 1",
+            "21, 411806265, 30, 0",
+            "22, 411806288, 24, 1",
+            "23, 411806311, 24, 0"
+          ],
+          "input_method_done_count": 5
+        },
+        {
+          "trial": 2,
+          "condition": "warm",
+          "warm_definition": "Prior burst completed in the same input-method process; no engine switch or refocus.",
+          "burst": "nihao",
+          "xdotool_delay_ms": 90,
+          "burst_wall_seconds": 0.23057238291949034,
+          "observation_seconds": 2.0,
+          "client_preedits": [
+            "n",
+            "ni",
+            "ni h",
+            "ni ha",
+            "ni hao"
+          ],
+          "engine_preedits": [
+            "n",
+            "ni",
+            "ni h",
+            "ni ha",
+            "ni hao"
+          ],
+          "client_commits": [
+            "\u4f60\u597d"
+          ],
+          "engine_commits": [
+            "\u4f60\u597d"
+          ],
+          "application_preedits": [
+            "n",
+            "ni",
+            "ni h",
+            "ni ha",
+            "ni hao"
+          ],
+          "application_commits": [
+            "\u4f60\u597d"
+          ],
+          "full_preedit": true,
+          "unicode_commit": true,
+          "outcome": "delivered",
+          "client_cursor_updates": [
+            "54, 80, 1, 24",
+            "68, 80, 1, 24",
+            "96, 80, 1, 24",
+            "110, 80, 1, 24",
+            "124, 80, 1, 24"
+          ],
+          "engine_transaction_serials": [
+            "8",
+            "8",
+            "9",
+            "9",
+            "10"
+          ],
+          "client_done_serials": [
+            "8",
+            "8",
+            "9",
+            "9",
+            "10"
+          ],
+          "client_state_commit_count": 5,
+          "engine_key_events": [
+            "43, 411809485, 49, 1",
+            "44, 411809508, 49, 0",
+            "45, 411809530, 23, 1",
+            "46, 411809553, 23, 0",
+            "47, 411809576, 35, 1",
+            "48, 411809598, 35, 0",
+            "49, 411809621, 30, 1",
+            "50, 411809644, 30, 0",
+            "51, 411809667, 24, 1",
+            "52, 411809690, 24, 0"
+          ],
+          "input_method_done_count": 5
+        }
+      ],
+      "limitations": [
+        "Diagnostic only; no delayed event injection or serial-cancellation guarantee.",
+        "Cold means a fresh private Fcitx process and empty user data, not a cold OS page cache."
+      ]
+    },
+    {
+      "mode": "fixed",
+      "cursor_delay_ms": 0,
+      "preedit_block_ms": 80,
+      "preedit_block_position": "before-cursor",
+      "present_on_ime": true,
+      "server_protocol_trace": true,
+      "session": 1,
+      "client_display_unset": true,
+      "trials": [
+        {
+          "trial": 1,
+          "condition": "cold",
+          "warm_definition": "Prior burst completed in the same input-method process; no engine switch or refocus.",
+          "burst": "nihao",
+          "xdotool_delay_ms": 90,
+          "burst_wall_seconds": 0.22927443962544203,
+          "observation_seconds": 2.0,
+          "client_preedits": [
+            "n",
+            "ni",
+            "ni h",
+            "ni ha",
+            "ni hao"
+          ],
+          "engine_preedits": [
+            "n",
+            "ni",
+            "ni h",
+            "ni ha",
+            "ni hao"
+          ],
+          "client_commits": [
+            "\u4f60\u597d"
+          ],
+          "engine_commits": [
+            "\u4f60\u597d"
+          ],
+          "application_preedits": [
+            "n",
+            "ni",
+            "ni h",
+            "ni ha",
+            "ni hao"
+          ],
+          "application_commits": [
+            "\u4f60\u597d"
+          ],
+          "full_preedit": true,
+          "unicode_commit": true,
+          "outcome": "delivered",
+          "client_cursor_updates": [],
+          "engine_transaction_serials": [
+            "2",
+            "2",
+            "2",
+            "2",
+            "2"
+          ],
+          "client_done_serials": [
+            "2",
+            "2",
+            "2",
+            "2",
+            "2"
+          ],
+          "client_state_commit_count": 0,
+          "engine_key_events": [
+            "14, 411814260, 49, 1",
+            "15, 411814283, 49, 0",
+            "16, 411814306, 23, 1",
+            "17, 411814328, 23, 0",
+            "18, 411814351, 35, 1",
+            "19, 411814374, 35, 0",
+            "20, 411814396, 30, 1",
+            "21, 411814419, 30, 0",
+            "22, 411814442, 24, 1",
+            "23, 411814464, 24, 0"
+          ],
+          "input_method_done_count": 0
+        },
+        {
+          "trial": 2,
+          "condition": "warm",
+          "warm_definition": "Prior burst completed in the same input-method process; no engine switch or refocus.",
+          "burst": "nihao",
+          "xdotool_delay_ms": 90,
+          "burst_wall_seconds": 0.23115660343319178,
+          "observation_seconds": 2.0,
+          "client_preedits": [
+            "n",
+            "ni",
+            "ni h",
+            "ni ha",
+            "ni hao"
+          ],
+          "engine_preedits": [
+            "n",
+            "ni",
+            "ni h",
+            "ni ha",
+            "ni hao"
+          ],
+          "client_commits": [
+            "\u4f60\u597d"
+          ],
+          "engine_commits": [
+            "\u4f60\u597d"
+          ],
+          "application_preedits": [
+            "n",
+            "ni",
+            "ni h",
+            "ni ha",
+            "ni hao"
+          ],
+          "application_commits": [
+            "\u4f60\u597d"
+          ],
+          "full_preedit": true,
+          "unicode_commit": true,
+          "outcome": "delivered",
+          "client_cursor_updates": [],
+          "engine_transaction_serials": [
+            "2",
+            "2",
+            "2",
+            "2",
+            "2"
+          ],
+          "client_done_serials": [
+            "2",
+            "2",
+            "2",
+            "2",
+            "2"
+          ],
+          "client_state_commit_count": 0,
+          "engine_key_events": [
+            "43, 411817640, 49, 1",
+            "44, 411817663, 49, 0",
+            "45, 411817686, 23, 1",
+            "46, 411817708, 23, 0",
+            "47, 411817731, 35, 1",
+            "48, 411817754, 35, 0",
+            "49, 411817776, 30, 1",
+            "50, 411817799, 30, 0",
+            "51, 411817822, 24, 1",
+            "52, 411817846, 24, 0"
+          ],
+          "input_method_done_count": 0
+        }
+      ],
+      "limitations": [
+        "Diagnostic only; no delayed event injection or serial-cancellation guarantee.",
+        "Cold means a fresh private Fcitx process and empty user data, not a cold OS page cache."
+      ]
+    }
+  ],
+  "conclusion": "Observed outcomes apply only to these runs; failures remain recorded and no framework fix is claimed."
+}

@@ -1,0 +1,5 @@
+IME Preedit("n", Some((0, 1))) elapsed=7.819244
+IME Preedit("ni", Some((0, 2))) elapsed=7.862578
+IME Preedit("ni h", Some((0, 4))) elapsed=7.897880
+IME Preedit("ni ha", Some((0, 5))) elapsed=7.941841
+IME Preedit("ni hao", Some((0, 6))) elapsed=7.993478

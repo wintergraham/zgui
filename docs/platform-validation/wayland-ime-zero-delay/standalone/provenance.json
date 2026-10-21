@@ -1,0 +1,18 @@
+{
+  "script_sha256": "9c15acef15b911214f7d23d0039734a5fcf2a12185bf00f5f9e7f18fd8db72c7",
+  "binary_sha256": "808133205f3d051b51bfb69dbb600c28d7a7bb6777882295e90da03f5738a218",
+  "argv": [
+    "docs/platform-validation/wayland-ime-zero-delay/sources/standalone_zero.py",
+    "/tmp/zgui-target/debug/zgui-ime-blocking-probe",
+    "--sessions",
+    "1",
+    "--bursts",
+    "2",
+    "--key-delay-ms",
+    "0",
+    "--present-on-ime",
+    "--output",
+    "docs/platform-validation/wayland-ime-zero-delay/standalone"
+  ],
+  "python": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]"
+}

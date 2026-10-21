@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "platform": "X11/Xvfb",
+  "stages": [
+    "Red typed drop accepted",
+    "retained preview screenshot",
+    "Green Escape cancellation"
+  ],
+  "scope": "Actual native pointer and keyboard events; external file DND is separate"
+}

@@ -1,0 +1,1 @@
+PASS: End navigates to unmounted millionth row, PageUp across virtual rows, Home returns first, ArrowDown selects next, bounded live and total builds, automatic close

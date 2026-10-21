@@ -1,0 +1,150 @@
+[
+  {
+    "trial": 1,
+    "condition": "cold",
+    "warm_definition": "Prior burst completed in the same input-method process; no engine switch or refocus.",
+    "burst": "nihao",
+    "xdotool_delay_ms": 90,
+    "burst_wall_seconds": 0.2311826329678297,
+    "observation_seconds": 2.0,
+    "client_preedits": [
+      "n",
+      "ni",
+      "ni h",
+      "ni ha",
+      "ni hao"
+    ],
+    "engine_preedits": [
+      "n",
+      "ni",
+      "ni h",
+      "ni ha",
+      "ni hao"
+    ],
+    "client_commits": [
+      "\u4f60\u597d"
+    ],
+    "engine_commits": [
+      "\u4f60\u597d"
+    ],
+    "application_preedits": [
+      "n",
+      "ni",
+      "ni h",
+      "ni ha",
+      "ni hao"
+    ],
+    "application_commits": [
+      "\u4f60\u597d"
+    ],
+    "full_preedit": true,
+    "unicode_commit": true,
+    "outcome": "delivered",
+    "client_cursor_updates": [
+      "124, 80, 1, 24"
+    ],
+    "engine_transaction_serials": [
+      "2",
+      "2",
+      "2",
+      "2",
+      "2"
+    ],
+    "client_done_serials": [
+      "2",
+      "2",
+      "2",
+      "2",
+      "2"
+    ],
+    "client_state_commit_count": 1,
+    "engine_key_events": [
+      "14, 406013083, 49, 1",
+      "15, 406013106, 49, 0",
+      "16, 406013128, 23, 1",
+      "17, 406013151, 23, 0",
+      "18, 406013174, 35, 1",
+      "19, 406013197, 35, 0",
+      "20, 406013219, 30, 1",
+      "21, 406013242, 30, 0",
+      "22, 406013265, 24, 1",
+      "23, 406013288, 24, 0"
+    ],
+    "input_method_done_count": 1
+  },
+  {
+    "trial": 2,
+    "condition": "warm",
+    "warm_definition": "Prior burst completed in the same input-method process; no engine switch or refocus.",
+    "burst": "nihao",
+    "xdotool_delay_ms": 90,
+    "burst_wall_seconds": 0.23047873936593533,
+    "observation_seconds": 2.0,
+    "client_preedits": [
+      "n",
+      "ni",
+      "ni h",
+      "ni ha",
+      "ni hao"
+    ],
+    "engine_preedits": [
+      "n",
+      "ni",
+      "ni h",
+      "ni ha",
+      "ni hao"
+    ],
+    "client_commits": [
+      "\u4f60\u597d"
+    ],
+    "engine_commits": [
+      "\u4f60\u597d"
+    ],
+    "application_preedits": [
+      "n",
+      "ni",
+      "ni h",
+      "ni ha",
+      "ni hao"
+    ],
+    "application_commits": [
+      "\u4f60\u597d"
+    ],
+    "full_preedit": true,
+    "unicode_commit": true,
+    "outcome": "delivered",
+    "client_cursor_updates": [
+      "68, 80, 1, 24",
+      "110, 80, 1, 24",
+      "124, 80, 1, 24"
+    ],
+    "engine_transaction_serials": [
+      "4",
+      "4",
+      "5",
+      "5",
+      "6"
+    ],
+    "client_done_serials": [
+      "4",
+      "4",
+      "5",
+      "5",
+      "6"
+    ],
+    "client_state_commit_count": 3,
+    "engine_key_events": [
+      "43, 406016460, 49, 1",
+      "44, 406016483, 49, 0",
+      "45, 406016506, 23, 1",
+      "46, 406016528, 23, 0",
+      "47, 406016551, 35, 1",
+      "48, 406016574, 35, 0",
+      "49, 406016596, 30, 1",
+      "50, 406016620, 30, 0",
+      "51, 406016642, 24, 1",
+      "52, 406016665, 24, 0"
+    ],
+    "input_method_done_count": 3
+  }
+]

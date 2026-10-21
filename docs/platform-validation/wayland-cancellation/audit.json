@@ -1,0 +1,11 @@
+{
+  "verified_inputs": 163,
+  "native_stages": {
+    "composition": 8,
+    "external": 6,
+    "read_only": 7
+  },
+  "binary_hashes_verified": true,
+  "archive_hashes_verified": true,
+  "workspace_hashes_verified": true
+}

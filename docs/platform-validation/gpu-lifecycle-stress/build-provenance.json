@@ -1,0 +1,11 @@
+{
+  "loader_tag": "v1.4.345",
+  "loader_commit": "363f465abadab0a8dcfc5c85d2c691e9b0b788d6",
+  "headers_commit": "74d8a6cb930c68ef617b202c3ff3c59d919e086b",
+  "cmake": "3.31.6",
+  "cmake_archive_sha256": "5a1133ff103c71eb5120e2cc3de922733e7d8a26a98ae716397e8676adb367bf",
+  "cmake_checksum_verified_official": true,
+  "library_sha256": "ae08898a32f5ba290033ddd98ce4e6571d8e47a4293164d1c3c1bd43329626e4",
+  "system_install": false,
+  "tests_run": false
+}

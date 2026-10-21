@@ -1,0 +1,20 @@
+[
+  {
+    "example": "paint_styles",
+    "exit": 0,
+    "captured": true,
+    "binary_sha256": "bfe926b433ecc5bb82ba88f13bbc4705878d3b593c6c7b26ab487db6bc1951f5"
+  },
+  {
+    "example": "canvas",
+    "exit": 0,
+    "captured": true,
+    "binary_sha256": "4d1eb17311f29e1e0be8c6fa4f1a38d9167ed6d21bbad87bf3d610b61435b5e4"
+  },
+  {
+    "example": "svg_transform",
+    "exit": 0,
+    "captured": true,
+    "binary_sha256": "078df38a0a9a430745ff6e6f51f2081d1848f2b57b0aabcee2cd68fce970e883"
+  }
+]

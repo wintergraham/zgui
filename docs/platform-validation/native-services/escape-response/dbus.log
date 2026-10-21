@@ -1,0 +1,2 @@
+dbus-daemon[1642351]: [session uid=1000 pid=1642351 pidfd=4] Connection :1.0 (uid=1000 pid=1643411 comm="dbus-monitor --session interface='org.freedesktop." label="unconfined") became a monitor.
+dbus-daemon[1642351]: [session uid=1000 pid=1642351 pidfd=4] Monitoring connection :1.0 closed.

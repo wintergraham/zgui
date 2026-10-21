@@ -1,0 +1,156 @@
+[3638575.768] {Default Queue} zwp_input_method_keyboard_grab_v2#23.repeat_info(25, 600)
+[3638575.783] {Default Queue} zwp_input_method_keyboard_grab_v2#23.modifiers(13, 0, 0, 0, 0)
+[3638575.795] {Default Queue}  -> zwp_virtual_keyboard_v1#22.modifiers(0, 0, 0, 0)
+[3638575.803] {Default Queue} zwp_input_method_keyboard_grab_v2#23.key(14, 415102498, 49, 1)
+D2026-09-22 20:02:32.842958 waylandimserverv2.cpp:531] n IsRelease=0
+[3638705.064] {Default Queue}  -> zwp_input_method_v2#16.set_preedit_string("n", 0, 1)
+[3638705.089] {Default Queue}  -> zwp_input_method_v2#16.commit(2)
+[3638706.908] {Default Queue}  -> wl_buffer#26.destroy()
+[3638706.929] {Default Queue}  -> wl_shm_pool#25.destroy()
+[3638706.974] {Default Queue}  -> wl_shm#3.create_pool(new id wl_shm_pool#27, fd 26, 37696)
+[3638706.980] {Default Queue}  -> wl_shm_pool#27.create_buffer(new id wl_buffer#28, 0, 304, 31, 1216, 0)
+[3638707.482] {Default Queue}  -> wl_surface#5.frame(new id wl_callback#29)
+[3638707.495] {Default Queue}  -> wl_surface#5.attach(wl_buffer#28, 0, 0)
+[3638707.502] {Default Queue}  -> wl_surface#5.set_buffer_scale(1)
+[3638707.507] {Default Queue}  -> wl_surface#5.damage(0, 0, 304, 31)
+[3638707.516] {Default Queue}  -> wp_viewport#12.set_destination(304, 31)
+[3638707.522] {Default Queue}  -> wl_surface#5.commit()
+[3638707.537] {Default Queue} zwp_input_method_keyboard_grab_v2#23.key(15, 415102498, 49, 0)
+D2026-09-22 20:02:32.974690 waylandimserverv2.cpp:531] n IsRelease=1
+[3638707.607] {Default Queue}  -> zwp_virtual_keyboard_v1#22.key(415102498, 49, 0)
+[3638707.613] {Default Queue} zwp_input_method_keyboard_grab_v2#23.key(16, 415102498, 23, 1)
+D2026-09-22 20:02:32.974755 waylandimserverv2.cpp:531] i IsRelease=0
+[3638709.256] {Default Queue}  -> zwp_input_method_v2#16.set_preedit_string("ni", 0, 2)
+[3638709.267] {Default Queue}  -> zwp_input_method_v2#16.commit(2)
+[3638709.968] {Default Queue}  -> wl_shm#3.create_pool(new id wl_shm_pool#30, fd 27, 38192)
+[3638709.977] {Default Queue}  -> wl_shm_pool#30.create_buffer(new id wl_buffer#31, 0, 308, 31, 1232, 0)
+[3638710.318] {Default Queue}  -> wl_surface#5.frame(new id wl_callback#32)
+[3638710.330] {Default Queue}  -> wl_surface#5.attach(wl_buffer#31, 0, 0)
+[3638710.345] {Default Queue}  -> wl_surface#5.set_buffer_scale(1)
+[3638710.351] {Default Queue}  -> wl_surface#5.damage(0, 0, 308, 31)
+[3638710.357] {Default Queue}  -> wp_viewport#12.set_destination(308, 31)
+[3638710.361] {Default Queue}  -> wl_surface#5.commit()
+[3638710.371] {Default Queue} zwp_input_method_keyboard_grab_v2#23.key(17, 415102498, 23, 0)
+D2026-09-22 20:02:32.977517 waylandimserverv2.cpp:531] i IsRelease=1
+[3638710.403] {Default Queue}  -> zwp_virtual_keyboard_v1#22.key(415102498, 23, 0)
+[3638710.408] {Default Queue} zwp_input_method_keyboard_grab_v2#23.key(18, 415102498, 35, 1)
+D2026-09-22 20:02:32.977551 waylandimserverv2.cpp:531] h IsRelease=0
+[3638713.613] {Default Queue}  -> zwp_input_method_v2#16.set_preedit_string("ni h", 0, 4)
+[3638713.628] {Default Queue}  -> zwp_input_method_v2#16.commit(2)
+[3638715.166] {Default Queue} zwp_input_method_keyboard_grab_v2#23.key(19, 415102498, 35, 0)
+D2026-09-22 20:02:32.982318 waylandimserverv2.cpp:531] h IsRelease=1
+[3638715.205] {Default Queue}  -> zwp_virtual_keyboard_v1#22.key(415102498, 35, 0)
+[3638715.217] {Default Queue} zwp_input_method_keyboard_grab_v2#23.key(20, 415102499, 30, 1)
+D2026-09-22 20:02:32.982361 waylandimserverv2.cpp:531] a IsRelease=0
+[3638716.949] {Default Queue}  -> zwp_input_method_v2#16.set_preedit_string("ni ha", 0, 5)
+[3638716.959] {Default Queue}  -> zwp_input_method_v2#16.commit(2)
+[3638717.333] {Default Queue} zwp_input_method_keyboard_grab_v2#23.key(21, 415102499, 30, 0)
+D2026-09-22 20:02:32.984482 waylandimserverv2.cpp:531] a IsRelease=1
+[3638717.363] {Default Queue}  -> zwp_virtual_keyboard_v1#22.key(415102499, 30, 0)
+[3638717.369] {Default Queue} zwp_input_method_keyboard_grab_v2#23.key(22, 415102499, 24, 1)
+D2026-09-22 20:02:32.984509 waylandimserverv2.cpp:531] o IsRelease=0
+[3638718.306] {Default Queue}  -> zwp_input_method_v2#16.set_preedit_string("ni hao", 0, 6)
+[3638718.323] {Default Queue}  -> zwp_input_method_v2#16.commit(2)
+[3638718.814] {Default Queue} zwp_input_method_keyboard_grab_v2#23.key(23, 415102499, 24, 0)
+D2026-09-22 20:02:32.985967 waylandimserverv2.cpp:531] o IsRelease=1
+[3638718.861] {Default Queue}  -> zwp_virtual_keyboard_v1#22.key(415102499, 24, 0)
+[3638719.449] {Display Queue} wl_display#1.delete_id(26)
+[3638719.460] {Display Queue} wl_display#1.delete_id(25)
+[3638719.466] {Display Queue} wl_display#1.delete_id(32)
+[3638719.476] {Display Queue} wl_display#1.delete_id(29)
+[3638719.481] {Default Queue} zwp_input_popup_surface_v2#24.text_input_rectangle(0, -24, 1, 24)
+[3638719.491] {Default Queue} wl_buffer#28.release()
+[3638719.497] {Default Queue} zwp_input_popup_surface_v2#24.text_input_rectangle(0, -24, 1, 24)
+[3638719.505] {Default Queue} wl_callback#32.done(415102644)
+[3638719.516] {Default Queue} wl_callback#29.done(415102644)
+[3638719.954] {Default Queue}  -> wl_buffer#28.destroy()
+[3638719.969] {Default Queue}  -> wl_shm_pool#27.destroy()
+[3638720.030] {Default Queue}  -> wl_shm#3.create_pool(new id wl_shm_pool#29, fd 26, 42780)
+[3638720.039] {Default Queue}  -> wl_shm_pool#29.create_buffer(new id wl_buffer#32, 0, 345, 31, 1380, 0)
+[3638720.419] {Default Queue}  -> wl_surface#5.frame(new id wl_callback#25)
+[3638720.433] {Default Queue}  -> wl_surface#5.attach(wl_buffer#32, 0, 0)
+[3638720.440] {Default Queue}  -> wl_surface#5.set_buffer_scale(1)
+[3638720.450] {Default Queue}  -> wl_surface#5.damage(0, 0, 345, 31)
+[3638720.457] {Default Queue}  -> wp_viewport#12.set_destination(345, 31)
+[3638720.466] {Default Queue}  -> wl_surface#5.commit()
+[3638720.655] {Display Queue} wl_display#1.delete_id(28)
+[3638720.663] {Display Queue} wl_display#1.delete_id(27)
+[3638720.668] {Default Queue} wl_buffer#31.release()
+[3638720.677] {Default Queue} zwp_input_popup_surface_v2#24.text_input_rectangle(0, -24, 1, 24)
+[3638723.445] {Default Queue} zwp_input_method_v2#16.text_change_cause(0)
+D2026-09-22 20:02:32.990593 waylandimserverv2.cpp:257] TEXTCHANGECAUSE:00x5a108ed43fa0
+[3638723.472] {Default Queue} zwp_input_method_v2#16.content_type(0, 0)
+D2026-09-22 20:02:32.990614 waylandimserverv2.cpp:253] contentTypeCallback:00
+[3638723.494] {Default Queue} zwp_input_popup_surface_v2#24.text_input_rectangle(0, -24, 1, 24)
+[3638723.503] {Default Queue} zwp_input_method_v2#16.done()
+D2026-09-22 20:02:32.990645 waylandimserverv2.cpp:169] DONE
+D2026-09-22 20:02:32.990655 waylandimserverv2.cpp:247] DIAGNOSTIC_REFRESH_PREEDIT serial=3
+[3638723.532] {Default Queue}  -> zwp_input_method_v2#16.set_preedit_string("ni hao", 0, 6)
+[3638723.541] {Default Queue}  -> zwp_input_method_v2#16.commit(3)
+[3638724.615] {Default Queue} zwp_input_method_v2#16.text_change_cause(0)
+D2026-09-22 20:02:32.991760 waylandimserverv2.cpp:257] TEXTCHANGECAUSE:00x5a108ed43fa0
+[3638724.637] {Default Queue} zwp_input_method_v2#16.content_type(0, 0)
+D2026-09-22 20:02:32.991778 waylandimserverv2.cpp:253] contentTypeCallback:00
+[3638724.651] {Default Queue} zwp_input_popup_surface_v2#24.text_input_rectangle(0, -24, 1, 24)
+[3638724.657] {Default Queue} zwp_input_method_v2#16.done()
+D2026-09-22 20:02:32.991800 waylandimserverv2.cpp:169] DONE
+D2026-09-22 20:02:32.991811 waylandimserverv2.cpp:247] DIAGNOSTIC_REFRESH_PREEDIT serial=4
+[3638724.686] {Default Queue}  -> zwp_input_method_v2#16.set_preedit_string("ni hao", 0, 6)
+[3638724.692] {Default Queue}  -> zwp_input_method_v2#16.commit(4)
+[3638725.786] {Default Queue} zwp_input_method_v2#16.text_change_cause(0)
+D2026-09-22 20:02:32.992931 waylandimserverv2.cpp:257] TEXTCHANGECAUSE:00x5a108ed43fa0
+[3638725.807] {Default Queue} zwp_input_method_v2#16.content_type(0, 0)
+D2026-09-22 20:02:32.992949 waylandimserverv2.cpp:253] contentTypeCallback:00
+[3638725.822] {Default Queue} zwp_input_popup_surface_v2#24.text_input_rectangle(0, -24, 1, 24)
+[3638725.828] {Default Queue} zwp_input_method_v2#16.done()
+D2026-09-22 20:02:32.992971 waylandimserverv2.cpp:169] DONE
+D2026-09-22 20:02:32.992982 waylandimserverv2.cpp:247] DIAGNOSTIC_REFRESH_PREEDIT serial=5
+[3638725.857] {Default Queue}  -> zwp_input_method_v2#16.set_preedit_string("ni hao", 0, 6)
+[3638725.863] {Default Queue}  -> zwp_input_method_v2#16.commit(5)
+[3638726.930] {Default Queue} zwp_input_method_v2#16.text_change_cause(0)
+D2026-09-22 20:02:32.994074 waylandimserverv2.cpp:257] TEXTCHANGECAUSE:00x5a108ed43fa0
+[3638726.949] {Default Queue} zwp_input_method_v2#16.content_type(0, 0)
+D2026-09-22 20:02:32.994091 waylandimserverv2.cpp:253] contentTypeCallback:00
+[3638726.964] {Default Queue} zwp_input_popup_surface_v2#24.text_input_rectangle(0, -24, 1, 24)
+[3638726.970] {Default Queue} zwp_input_method_v2#16.done()
+D2026-09-22 20:02:32.994113 waylandimserverv2.cpp:169] DONE
+D2026-09-22 20:02:32.994123 waylandimserverv2.cpp:247] DIAGNOSTIC_REFRESH_PREEDIT serial=6
+[3638726.999] {Default Queue}  -> zwp_input_method_v2#16.set_preedit_string("ni hao", 0, 6)
+[3638727.005] {Default Queue}  -> zwp_input_method_v2#16.commit(6)
+[3638727.875] {Default Queue} zwp_input_method_v2#16.text_change_cause(0)
+D2026-09-22 20:02:32.995019 waylandimserverv2.cpp:257] TEXTCHANGECAUSE:00x5a108ed43fa0
+[3638727.895] {Default Queue} zwp_input_method_v2#16.content_type(0, 0)
+D2026-09-22 20:02:32.995037 waylandimserverv2.cpp:253] contentTypeCallback:00
+[3638727.910] {Default Queue} zwp_input_popup_surface_v2#24.text_input_rectangle(0, -24, 1, 24)
+[3638727.916] {Default Queue} zwp_input_method_v2#16.done()
+D2026-09-22 20:02:32.995058 waylandimserverv2.cpp:169] DONE
+D2026-09-22 20:02:32.995069 waylandimserverv2.cpp:247] DIAGNOSTIC_REFRESH_PREEDIT serial=7
+[3638727.944] {Default Queue}  -> zwp_input_method_v2#16.set_preedit_string("ni hao", 0, 6)
+[3638727.950] {Default Queue}  -> zwp_input_method_v2#16.commit(7)
+[3638735.791] {Display Queue} wl_display#1.delete_id(25)
+[3638735.801] {Default Queue} wl_callback#25.done(415102660)
+[3640578.231] {Default Queue} zwp_input_method_keyboard_grab_v2#23.key(24, 415104501, 57, 1)
+D2026-09-22 20:02:34.845392 waylandimserverv2.cpp:531] space IsRelease=0
+[3640578.351] {Default Queue}  -> zwp_input_method_v2#16.commit_string("你好")
+[3640578.356] {Default Queue}  -> zwp_input_method_v2#16.commit(7)
+[3640578.361] {Default Queue}  -> zwp_input_method_v2#16.commit(7)
+[3640578.513] {Default Queue}  -> wl_surface#5.attach(nil, 0, 0)
+[3640578.519] {Default Queue}  -> wl_surface#5.commit()
+[3640578.523] {Default Queue}  -> zwp_input_popup_surface_v2#24.destroy()
+[3640578.528] {Default Queue}  -> wp_viewport#12.destroy()
+[3640578.531] {Default Queue}  -> wp_fractional_scale_v1#13.destroy()
+[3640578.535] {Default Queue}  -> wl_surface#5.destroy()
+[3640578.707] {Display Queue} wl_display#1.delete_id(24)
+[3640578.713] {Display Queue} wl_display#1.delete_id(12)
+[3640578.717] {Display Queue} wl_display#1.delete_id(13)
+[3640578.719] {Display Queue} wl_display#1.delete_id(5)
+[3640578.722] {Default Queue} wl_buffer#32.release()
+[3640580.022] {Default Queue} zwp_input_method_v2#16.text_change_cause(0)
+D2026-09-22 20:02:34.847166 waylandimserverv2.cpp:257] TEXTCHANGECAUSE:00x5a108ed43fa0
+[3640580.042] {Default Queue} zwp_input_method_v2#16.content_type(0, 0)
+D2026-09-22 20:02:34.847181 waylandimserverv2.cpp:253] contentTypeCallback:00
+[3640580.051] {Default Queue} zwp_input_method_v2#16.done()
+D2026-09-22 20:02:34.847191 waylandimserverv2.cpp:169] DONE
+[3640584.287] {Default Queue} zwp_input_method_keyboard_grab_v2#23.key(25, 415104508, 57, 0)
+D2026-09-22 20:02:34.851432 waylandimserverv2.cpp:531] space IsRelease=1
+[3640584.316] {Default Queue}  -> zwp_virtual_keyboard_v1#22.key(415104508, 57, 0)

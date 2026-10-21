@@ -1,0 +1,20 @@
+{
+  "script_sha256": "032b48d067b768d771cbab8c43cb657d2fbff8c7c46ccfde95fc3ff641952888",
+  "binary_sha256": "808133205f3d051b51bfb69dbb600c28d7a7bb6777882295e90da03f5738a218",
+  "argv": [
+    "docs/platform-validation/wayland-ime-fcitx-private-refresh/sources/standalone_refresh.py",
+    "/tmp/zgui-target/debug/zgui-ime-blocking-probe",
+    "--sessions",
+    "1",
+    "--bursts",
+    "2",
+    "--key-delay-ms",
+    "0",
+    "--present-on-ime",
+    "--addon-dir",
+    "/tmp/zgui-fcitx-preedit/plugin",
+    "--output",
+    "docs/platform-validation/wayland-ime-fcitx-private-refresh/standalone"
+  ],
+  "python": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]"
+}

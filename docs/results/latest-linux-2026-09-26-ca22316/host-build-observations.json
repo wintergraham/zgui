@@ -1,0 +1,7 @@
+{
+  "sample_start_utc": "2026-09-26T04:35:49.462568+00:00",
+  "sample_end_utc": "2026-09-26T04:47:52.563945+00:00",
+  "observations": 145,
+  "process_names": {},
+  "caveat": "No cargo, rustc or rust-lld processes at preflight or in 5-second observations. This task ran no builds or browser work during sampling. Other shared-host activity remained. Snapshot observations can miss short processes; ps CPU is lifetime averaged, not interval contention."
+}

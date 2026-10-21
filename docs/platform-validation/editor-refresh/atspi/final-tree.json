@@ -1,0 +1,161 @@
+[
+  {
+    "name": "main",
+    "role": "desktop frame",
+    "depth": 0,
+    "pid": 1698967,
+    "interfaces": [
+      "Accessible",
+      "Application",
+      "Component"
+    ]
+  },
+  {
+    "name": "atspi",
+    "role": "application",
+    "depth": 1,
+    "pid": 1699036,
+    "interfaces": [
+      "Accessible",
+      "Application"
+    ]
+  },
+  {
+    "name": "zgui accessibility probe",
+    "role": "frame",
+    "depth": 2,
+    "pid": 1699036,
+    "interfaces": [
+      "Accessible",
+      "Component"
+    ]
+  },
+  {
+    "name": "Native accessibility controls",
+    "role": "label",
+    "depth": 3,
+    "pid": 1699036,
+    "interfaces": [
+      "Accessible",
+      "Component",
+      "Text"
+    ],
+    "text": "Native accessibility controls"
+  },
+  {
+    "name": "AT-SPI name",
+    "role": "entry",
+    "depth": 3,
+    "pid": 1699036,
+    "interfaces": [
+      "Accessible",
+      "Component",
+      "Text"
+    ],
+    "text": "Grace"
+  },
+  {
+    "name": "AT-SPI count",
+    "role": "button",
+    "depth": 3,
+    "pid": 1699036,
+    "interfaces": [
+      "Accessible",
+      "Action",
+      "Component"
+    ]
+  },
+  {
+    "name": "AT-SPI count",
+    "role": "label",
+    "depth": 4,
+    "pid": 1699036,
+    "interfaces": [
+      "Accessible",
+      "Component",
+      "Text"
+    ],
+    "text": "AT-SPI count"
+  },
+  {
+    "name": "Count: 3",
+    "role": "label",
+    "depth": 3,
+    "pid": 1699036,
+    "interfaces": [
+      "Accessible",
+      "Component",
+      "Text"
+    ],
+    "text": "Count: 3"
+  },
+  {
+    "name": "AT-SPI option",
+    "role": "check box",
+    "depth": 3,
+    "pid": 1699036,
+    "interfaces": [
+      "Accessible",
+      "Action",
+      "Component"
+    ]
+  },
+  {
+    "name": "\u2611",
+    "role": "label",
+    "depth": 4,
+    "pid": 1699036,
+    "interfaces": [
+      "Accessible",
+      "Component",
+      "Text"
+    ],
+    "text": "\u2611"
+  },
+  {
+    "name": "AT-SPI option",
+    "role": "label",
+    "depth": 4,
+    "pid": 1699036,
+    "interfaces": [
+      "Accessible",
+      "Component",
+      "Text"
+    ],
+    "text": "AT-SPI option"
+  },
+  {
+    "name": "AT-SPI amount",
+    "role": "slider",
+    "depth": 3,
+    "pid": 1699036,
+    "interfaces": [
+      "Accessible",
+      "Component",
+      "Value"
+    ]
+  },
+  {
+    "name": "Disable input",
+    "role": "button",
+    "depth": 3,
+    "pid": 1699036,
+    "interfaces": [
+      "Accessible",
+      "Action",
+      "Component"
+    ]
+  },
+  {
+    "name": "Disable input",
+    "role": "label",
+    "depth": 4,
+    "pid": 1699036,
+    "interfaces": [
+      "Accessible",
+      "Component",
+      "Text"
+    ],
+    "text": "Disable input"
+  }
+]

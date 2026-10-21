@@ -1,0 +1,7 @@
+TOGGLE checked=true activations=1
+TOGGLE checked=false activations=2
+DISABLED true
+MODEL checked=true
+CHECKBOX checked=true disabled=true activations=2
+BOUNDS checkbox Rect { x: 24.0, y: 68.0, width: 470.0, height: 44.0 }
+SEMANTICS Some(SemanticNode { role: CheckBox, label: "Enable notifications", value: None, checked: Some(true), disabled: true, min: None, max: None, numeric_value: None })

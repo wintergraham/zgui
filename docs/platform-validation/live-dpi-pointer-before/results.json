@@ -1,0 +1,33 @@
+{
+  "passed": false,
+  "event_counts": [
+    0,
+    1,
+    0,
+    2
+  ],
+  "final_viewport": [
+    1000.0,
+    400.0
+  ],
+  "backend": "X11",
+  "before": {
+    "WINDOW": 6291458,
+    "X": 32,
+    "Y": 80,
+    "WIDTH": 500,
+    "HEIGHT": 200,
+    "SCREEN": 0
+  },
+  "after": {
+    "WINDOW": 6291458,
+    "X": 32,
+    "Y": 80,
+    "WIDTH": 1000,
+    "HEIGHT": 400,
+    "SCREEN": 0
+  },
+  "stationary_pointer": "X=331\nY=120\nSCREEN=0\nWINDOW=2097525",
+  "binary_sha256": "106958674bb80f4e295298f4a82056daf1ac6188958c646911644b1e620ea01b",
+  "script_sha256": "622bf9fb536eb24da2bf4b164d0e4fb20d987f101dcfee41805a977a25cec914"
+}

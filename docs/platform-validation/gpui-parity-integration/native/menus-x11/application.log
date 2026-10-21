@@ -1,0 +1,11 @@
+READY
+ACTION toggle
+CHECKED true
+ACTION save
+SECOND save
+ACTION toggle
+CHECKED false
+ACTION replace
+REPLACED
+ACTION new
+SECOND new

@@ -1,0 +1,11 @@
+VIEWPORT (500.0, 200.0)
+MOVE 250 93
+MOVE 250 93
+MOVE 300 60
+MOVE 300 60
+VIEWPORT (250.0, 100.0)
+VIEWPORT (1000.0, 400.0)
+CLICK right
+WHEEL right
+WHEEL right
+DPI_POINTER left_click=0 right_click=1 left_wheel=0 right_wheel=2

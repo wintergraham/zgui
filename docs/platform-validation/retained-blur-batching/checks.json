@@ -1,0 +1,104 @@
+[
+  {
+    "name": "workspace",
+    "command": [
+      "cargo",
+      "test",
+      "--workspace",
+      "--all-targets",
+      "--locked"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "doctests",
+    "command": [
+      "cargo",
+      "test",
+      "--workspace",
+      "--doc",
+      "--locked"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--workspace",
+      "--all-targets",
+      "--locked",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "format",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "build-effects",
+    "command": [
+      "cargo",
+      "build",
+      "-p",
+      "zgui-desktop",
+      "--example",
+      "effects",
+      "--locked"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "native-effects",
+    "command": [
+      "python3",
+      "scripts/effects_smoke.py",
+      "/tmp/zgui-target/debug/examples/effects",
+      "--output",
+      "/home/ubuntu/GitHub/zgui/docs/platform-validation/retained-blur-batching/native-effects"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "native-host",
+    "command": [
+      "xvfb-run",
+      "-a",
+      "cargo",
+      "test",
+      "-p",
+      "zgui-desktop",
+      "--lib",
+      "host_suspend_recreates_native_resources_and_retains_editor_state",
+      "--locked",
+      "--",
+      "--ignored",
+      "--test-threads=1"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "macos",
+    "command": [
+      "cargo",
+      "check",
+      "--workspace",
+      "--all-targets",
+      "--target",
+      "aarch64-apple-darwin",
+      "--locked"
+    ],
+    "exit_code": 0
+  }
+]

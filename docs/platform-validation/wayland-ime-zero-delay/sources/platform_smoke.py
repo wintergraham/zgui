@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Validate zgui on isolated X11 HiDPI and headless Weston Wayland desktops.
+
+Uses already-built gallery/windows examples. Each private compositor is stopped
+on exit. This checks native behavior, not hardware GPU performance.
+"""
+import argparse
+import json
+import os
+import pathlib
+import select
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+
+def stop(process):
+    if process and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
+def x11(args, output):
+    for tool in ("Xvfb", "openbox", "xdotool"):
+        if not shutil.which(tool):
+            raise RuntimeError(f"missing native validation tool: {tool}")
+    xvfb = wm = None
+    with (output / "xvfb.log").open("w") as log:
+        try:
+            xvfb = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0",
+                                     "2304x1800x24", "-ac"], stdout=subprocess.PIPE,
+                                    stderr=log, text=True)
+            if not select.select([xvfb.stdout], [], [], 10)[0]:
+                raise RuntimeError("Xvfb did not report a display number")
+            display = ":" + xvfb.stdout.readline().strip()
+            if display == ":":
+                raise RuntimeError("Xvfb failed to start")
+            env = dict(os.environ, DISPLAY=display, XDG_RUNTIME_DIR="/tmp",
+                       DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent")
+            env.pop("WAYLAND_DISPLAY", None)
+            with (output / "openbox.log").open("w") as wm_log:
+                wm = subprocess.Popen(["openbox"], env=env, stdout=wm_log, stderr=wm_log)
+                time.sleep(.5)
+                results = []
+                for scale in (1.5, 2.0):
+                    screenshot = output / f"x11-scale-{scale:g}.png"
+                    command = [sys.executable, str(pathlib.Path(__file__).with_name("desktop_smoke.py")),
+                               str(args.gallery), "--display", display, "--scale", str(scale),
+                               "--screenshot", str(screenshot)]
+                    run = subprocess.run(command, env=env, text=True, capture_output=True, timeout=40)
+                    if run.returncode:
+                        raise RuntimeError(run.stdout + run.stderr)
+                    print(run.stdout.strip(), flush=True)
+                    results.append({"backend": "X11", "scale": scale,
+                                    "result": run.stdout.strip(), "screenshot": screenshot.name})
+                return results
+        finally:
+            stop(wm)
+            stop(xvfb)
+
+
+def wayland(args, output):
+    for tool in ("weston", "weston-screenshooter"):
+        if not shutil.which(tool):
+            raise RuntimeError(f"missing native validation tool: {tool}")
+    compositor = gallery = None
+    with tempfile.TemporaryDirectory(prefix="zgui-wayland-") as runtime:
+        env = dict(os.environ, XDG_RUNTIME_DIR=runtime, WAYLAND_DISPLAY="zgui-test",
+                   DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent")
+        env.pop("DISPLAY", None)
+        env.pop("WINIT_X11_SCALE_FACTOR", None)
+        with (output / "weston-process.log").open("w") as log:
+            try:
+                compositor = subprocess.Popen(["weston", "--backend=headless", "--renderer=pixman",
+                    "--width=1280", "--height=960", "--idle-time=0", "--no-config", "--debug",
+                    "--socket=zgui-test", f"--log={output / 'weston.log'}"], env=env,
+                    stdout=log, stderr=log)
+                deadline = time.monotonic() + 10
+                while not pathlib.Path(runtime, "zgui-test").exists():
+                    if compositor.poll() is not None or time.monotonic() > deadline:
+                        raise RuntimeError("Weston failed to create its Wayland socket")
+                    time.sleep(.05)
+                gallery_env = dict(env, ZGUI_SECONDS="5", ZGUI_SNAPSHOT="1")
+                gallery = subprocess.Popen([str(args.gallery)], env=gallery_env,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                time.sleep(2)
+                if gallery.poll() is not None:
+                    raise RuntimeError("Wayland gallery exited before capture:\n" + gallery.stdout.read())
+                shots = set(output.glob("*.png"))
+                capture = subprocess.run(["weston-screenshooter"], env=dict(env, XDG_PICTURES_DIR=str(output)),
+                    cwd=output, text=True, capture_output=True, timeout=10)
+                if capture.returncode:
+                    raise RuntimeError(capture.stdout + capture.stderr)
+                screenshots = set(output.glob("*.png")) - shots
+                if not screenshots:
+                    raise RuntimeError("Weston capture produced no PNG")
+                screenshot = sorted(screenshots)[0]
+                target = output / "wayland-gallery.png"
+                screenshot.rename(target)
+                from PIL import Image
+                with Image.open(target) as image:
+                    colors = image.convert("RGB").getcolors(image.width * image.height)
+                    background_pixels = next((count for count, color in colors if color == (16, 20, 28)), 0)
+                    if background_pixels < 10000:
+                        raise AssertionError(f"Wayland screenshot lacks the gallery surface: {background_pixels} theme pixels")
+                text, _ = gallery.communicate(timeout=15)
+                (output / "wayland-gallery.log").write_text(text)
+                if gallery.returncode or 'SEMANTIC "Name"' not in text:
+                    raise RuntimeError("Wayland gallery did not close normally:\n" + text)
+                if args.windows:
+                    lifecycle = subprocess.run([str(args.windows), "--smoke-test"], env=env,
+                        text=True, capture_output=True, timeout=20)
+                    if lifecycle.returncode or "multi-window smoke passed" not in lifecycle.stdout:
+                        raise RuntimeError(lifecycle.stdout + lifecycle.stderr)
+                    (output / "wayland-windows.log").write_text(lifecycle.stdout + lifecycle.stderr)
+                print("PASS: Wayland native presentation, semantic snapshot, timed close, window lifecycle", flush=True)
+                return {"backend": "Wayland", "compositor": "Weston headless pixman",
+                        "theme_background_pixels": background_pixels, "screenshot": target.name,
+                        "input_validation": "No seat: physical keyboard/pointer/IME not tested"}
+            finally:
+                stop(gallery)
+                stop(compositor)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("gallery", type=pathlib.Path)
+    parser.add_argument("--windows", type=pathlib.Path)
+    parser.add_argument("--output", type=pathlib.Path, default=pathlib.Path("/tmp/zgui-platform-validation"))
+    parser.add_argument("--backend", choices=("all", "x11", "wayland"), default="all")
+    args = parser.parse_args()
+    args.gallery = args.gallery.resolve()
+    if args.windows:
+        args.windows = args.windows.resolve()
+    output = args.output.resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    results = []
+    if args.backend in ("all", "x11"):
+        results.extend(x11(args, output))
+    if args.backend in ("all", "wayland"):
+        results.append(wayland(args, output))
+    (output / "results.json").write_text(json.dumps(results, indent=2) + "\n")
+
+
+if __name__ == "__main__":
+    main()

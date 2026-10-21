@@ -1,0 +1,71 @@
+{
+  "captured_utc": "2026-09-22T14:21:04.039520+00:00",
+  "build": [
+    "cargo",
+    "build",
+    "-p",
+    "zgui-desktop",
+    "--example",
+    "read_only",
+    "--example",
+    "external_ime",
+    "--example",
+    "native_ime",
+    "--locked"
+  ],
+  "runs": [
+    {
+      "command": [
+        "/usr/bin/python3",
+        "scripts/read_only_smoke.py",
+        "/tmp/zgui-target/debug/examples/read_only",
+        "--output",
+        "/home/ubuntu/GitHub/zgui/docs/platform-validation/read-only/read_only"
+      ],
+      "binary_sha256": "59e38e71e9d5f940609f361115e2560725bc2a3b6622600a25fed696e09f20f1"
+    },
+    {
+      "command": [
+        "/usr/bin/python3",
+        "scripts/external_ime_smoke.py",
+        "/tmp/zgui-target/debug/examples/external_ime",
+        "--output",
+        "/home/ubuntu/GitHub/zgui/docs/platform-validation/read-only/external_ime"
+      ],
+      "binary_sha256": "dfcd7da7cc4e18b31dac175c57be3b0fa04476e3b1fa28da30fad614ebdc6952"
+    },
+    {
+      "command": [
+        "/usr/bin/python3",
+        "scripts/native_ime_smoke.py",
+        "/tmp/zgui-target/debug/examples/native_ime",
+        "--output",
+        "/home/ubuntu/GitHub/zgui/docs/platform-validation/read-only/native_ime"
+      ],
+      "binary_sha256": "b312332daf2157c0fadcaf40adb7e78112c4bc9569700e3c815f996f8d5efcd1"
+    },
+    {
+      "command": [
+        "/usr/bin/python3",
+        "scripts/external_ime_smoke.py",
+        "/tmp/zgui-target/debug/examples/external_ime",
+        "--read-only-test",
+        "--output",
+        "/home/ubuntu/GitHub/zgui/docs/platform-validation/read-only/readonly_ime"
+      ],
+      "binary_sha256": "dfcd7da7cc4e18b31dac175c57be3b0fa04476e3b1fa28da30fad614ebdc6952"
+    }
+  ],
+  "source_archive_sha256": "485845f20aec38d64a55b2ca59a5202fa5b55932df29770a84ded41c067a46f1",
+  "source_inputs": 153,
+  "source_unchanged": true,
+  "backend": "owned Xvfb/Openbox, private services, Mesa llvmpipe Vulkan",
+  "environment": {
+    "CARGO_TARGET_DIR": "/tmp/zgui-target",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0",
+    "LD_LIBRARY_PATH": "/tmp/zgui-ci-loader-check/build/loader",
+    "CARGO_BUILD_JOBS": "1"
+  },
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)"
+}

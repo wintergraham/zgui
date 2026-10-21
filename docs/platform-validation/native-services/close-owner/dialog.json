@@ -1,0 +1,60 @@
+{
+  "id": 7,
+  "type": "floating_con",
+  "orientation": "none",
+  "percent": 1.0,
+  "urgent": false,
+  "marks": [],
+  "focused": true,
+  "layout": "none",
+  "border": "csd",
+  "current_border_width": 2,
+  "rect": {
+    "x": 0,
+    "y": 0,
+    "width": 1200,
+    "height": 800
+  },
+  "deco_rect": {
+    "x": 0,
+    "y": 0,
+    "width": 0,
+    "height": 0
+  },
+  "window_rect": {
+    "x": 0,
+    "y": 0,
+    "width": 1200,
+    "height": 800
+  },
+  "geometry": {
+    "x": 0,
+    "y": 0,
+    "width": 1203,
+    "height": 971
+  },
+  "name": "Open fixture",
+  "window": null,
+  "nodes": [],
+  "floating_nodes": [],
+  "focus": [],
+  "fullscreen_mode": 0,
+  "sticky": false,
+  "floating": "user_on",
+  "scratchpad_state": "none",
+  "pid": 1442692,
+  "app_id": "xdg-desktop-portal-gtk",
+  "foreign_toplevel_identifier": "dd929f09ea5e67742ffa1acc460f83b1",
+  "visible": true,
+  "max_render_time": 0,
+  "allow_tearing": false,
+  "shell": "xdg_shell",
+  "inhibit_idle": false,
+  "sandbox_engine": null,
+  "sandbox_app_id": null,
+  "sandbox_instance_id": null,
+  "idle_inhibitors": {
+    "user": "none",
+    "application": "none"
+  }
+}

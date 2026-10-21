@@ -1,0 +1,15 @@
+{
+  "script_sha256": "a91d6c99021095e7f1cfb08fca515245760f88aad8ab9b49f4cacd6894fbfdb6",
+  "binary_sha256": "89d70c52c1a0c2b1908caaf7bab6739646757dfd1262de6f07a8d3aaf26b40bb",
+  "argv": [
+    "docs/platform-validation/wayland-ime-native-burst/sources/wayland_native_burst.py",
+    "/tmp/zgui-target/debug/examples/native_ime",
+    "--sessions",
+    "2",
+    "--bursts",
+    "2",
+    "--output",
+    "docs/platform-validation/wayland-ime-native-burst/run"
+  ],
+  "python": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]"
+}

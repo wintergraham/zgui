@@ -1,0 +1,31 @@
+{
+  "captured_utc": "2026-09-22T11:49:28.026537+00:00",
+  "binary_sha256": "6e24640ed199a19a3570736cc28a76b5a42aaa082d476fdb4295ee637a79aaf0",
+  "source_archive_sha256": "30301d2ce006857b7a152ac6ce36deb469fdd85f8d0a9543f7be9852fc810a00",
+  "source_inputs": 120,
+  "source_unchanged_during_build_and_smoke": true,
+  "build": [
+    "cargo",
+    "build",
+    "-p",
+    "zgui-desktop",
+    "--example",
+    "line_height",
+    "--locked"
+  ],
+  "run": [
+    "python3",
+    "scripts/line_height_smoke.py",
+    "/tmp/zgui-target/debug/examples/line_height",
+    "--output",
+    "/home/ubuntu/GitHub/zgui/docs/platform-validation/line-height"
+  ],
+  "environment": {
+    "CARGO_TARGET_DIR": "/tmp/zgui-target",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0",
+    "LD_LIBRARY_PATH": "/tmp/zgui-ci-loader-check/build/loader"
+  },
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "backend": "X11 / Openbox / Xvfb / Mesa llvmpipe"
+}

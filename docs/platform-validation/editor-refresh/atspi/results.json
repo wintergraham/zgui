@@ -1,0 +1,21 @@
+{
+  "passed": true,
+  "backend": "live AccessKit Unix AT-SPI bridge / private D-Bus / owned X11",
+  "checks": [
+    "tree roles and names",
+    "focus action and event",
+    "text reading",
+    "caret and selection actions",
+    "native typing reflected in text interface",
+    "button activation",
+    "numeric value mutation",
+    "checkbox state",
+    "disabled and reenabled input",
+    "bridge deactivation and fresh-state reactivation"
+  ],
+  "final_text": "Grace",
+  "final_value": 65.0,
+  "events_observed": 43,
+  "process_id": 1699036,
+  "limitation": "AT-SPI bus-client validation; not an Orca end-user usability test."
+}

@@ -1,0 +1,49 @@
+CMake Warning (dev) at /tmp/zgui-fcitx-preedit/tools/usr/share/ECM/modules/ECMFindModuleHelpers.cmake:113 (message):
+  Your project should require at least CMake 3.16.0 to use
+  FindXKBCommon.cmake
+Call Stack (most recent call first):
+  cmake/FindXKBCommon.cmake:4 (ecm_find_package_version_check)
+  CMakeLists.txt:150 (find_package)
+This warning is for project developers.  Use -Wno-dev to suppress it.
+
+CMake Warning (dev) at /tmp/zgui-fcitx-preedit/tools/usr/share/ECM/modules/ECMFindModuleHelpers.cmake:113 (message):
+  Your project should require at least CMake 3.16.0 to use FindWayland.cmake
+Call Stack (most recent call first):
+  /tmp/zgui-fcitx-preedit/tools/usr/share/ECM/find-modules/FindWayland.cmake:63 (ecm_find_package_version_check)
+  CMakeLists.txt:178 (find_package)
+This warning is for project developers.  Use -Wno-dev to suppress it.
+
+CMake Warning (dev) at /tmp/zgui-fcitx-preedit/tools/usr/share/ECM/modules/ECMFindModuleHelpers.cmake:113 (message):
+  Your project should require at least CMake 3.16.0 to use
+  FindWaylandScanner.cmake
+Call Stack (most recent call first):
+  /tmp/zgui-fcitx-preedit/tools/usr/share/ECM/find-modules/FindWaylandScanner.cmake:82 (ecm_find_package_version_check)
+  CMakeLists.txt:179 (find_package)
+This warning is for project developers.  Use -Wno-dev to suppress it.
+
+-- The following OPTIONAL packages have been found:
+
+ * Systemd, A system and service manager for Linux, <http://www.freedesktop.org/wiki/Software/systemd>
+ * Execinfo
+
+-- The following REQUIRED packages have been found:
+
+ * ECM
+ * DL
+ * LibIntl
+ * LibUUID, uuid library in util-linux, <http://www.kernel.org/pub/linux/utils/util-linux/>
+ * Pthread
+ * Gettext
+ * Expat
+ * XKBCommon, Keyboard handling library using XKB data, <http://xkbcommon.org>
+ * IsoCodes
+ * XKeyboardConfig
+ * nlohmann_json
+ * Wayland (required version >= 1.22), C library implementation of the Wayland protocol: a protocol for a compositor to talk to its clients, <https://wayland.freedesktop.org/>
+ * WaylandScanner, Executable that converts XML protocol files to C code, <https://wayland.freedesktop.org/>
+ * PkgConfig
+ * WaylandProtocols (required version >= 1.39)
+
+-- Configuring done (0.7s)
+-- Generating done (0.1s)
+-- Build files have been written to: /tmp/zgui-fcitx-preedit/build

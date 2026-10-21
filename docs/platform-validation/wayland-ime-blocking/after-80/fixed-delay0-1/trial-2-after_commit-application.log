@@ -1,0 +1,36 @@
+IME Preedit("n", Some((0, 1))) elapsed=4.061907
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="n" elapsed=4.061922
+BLOCK_END position=after-cursor observed_ms=80.361 elapsed=4.142283
+PRESENT_BEGIN stage=ime-after-cursor elapsed=4.142317
+PRESENT_END stage=ime-after-cursor observed_ms=1.182 elapsed=4.143499
+IME Preedit("ni", Some((0, 2))) elapsed=4.143619
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="ni" elapsed=4.143639
+BLOCK_END position=after-cursor observed_ms=80.070 elapsed=4.223709
+PRESENT_BEGIN stage=ime-after-cursor elapsed=4.223742
+PRESENT_END stage=ime-after-cursor observed_ms=1.412 elapsed=4.225154
+IME Preedit("ni h", Some((0, 4))) elapsed=4.225295
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="ni h" elapsed=4.225304
+BLOCK_END position=after-cursor observed_ms=80.076 elapsed=4.305380
+PRESENT_BEGIN stage=ime-after-cursor elapsed=4.305429
+PRESENT_END stage=ime-after-cursor observed_ms=1.239 elapsed=4.306668
+IME Preedit("ni ha", Some((0, 5))) elapsed=4.306677
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="ni ha" elapsed=4.306687
+BLOCK_END position=after-cursor observed_ms=80.073 elapsed=4.386759
+PRESENT_BEGIN stage=ime-after-cursor elapsed=4.386797
+PRESENT_END stage=ime-after-cursor observed_ms=1.087 elapsed=4.387884
+IME Preedit("ni hao", Some((0, 6))) elapsed=4.388003
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="ni hao" elapsed=4.388014
+BLOCK_END position=after-cursor observed_ms=80.076 elapsed=4.468090
+PRESENT_BEGIN stage=ime-after-cursor elapsed=4.468126
+PRESENT_END stage=ime-after-cursor observed_ms=1.043 elapsed=4.469169
+IME Preedit("", None) elapsed=6.289764
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="" elapsed=6.289781
+BLOCK_END position=after-cursor observed_ms=80.066 elapsed=6.369848
+PRESENT_BEGIN stage=ime-after-cursor elapsed=6.369880
+PRESENT_END stage=ime-after-cursor observed_ms=1.016 elapsed=6.370897
+IME Commit("你好") elapsed=6.370904
+IME Preedit("", None) elapsed=6.370913
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="" elapsed=6.370917
+BLOCK_END position=after-cursor observed_ms=80.063 elapsed=6.450980
+PRESENT_BEGIN stage=ime-after-cursor elapsed=6.451000
+PRESENT_END stage=ime-after-cursor observed_ms=1.114 elapsed=6.452114

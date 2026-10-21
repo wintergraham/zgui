@@ -1,0 +1,24 @@
+READY mode=fixed
+FOCUS true
+RECT_REQUEST x=40 delay_ms=0 elapsed=0.002493
+RECT x=40 y=80 width=1 height=24 elapsed=0.002514
+IME Enabled elapsed=0.008023
+IME Preedit("n", Some((0, 1))) elapsed=0.813992
+IME Preedit("ni", Some((0, 2))) elapsed=0.827896
+IME Preedit("ni h", Some((0, 4))) elapsed=0.827909
+IME Preedit("ni ha", Some((0, 5))) elapsed=0.827912
+IME Preedit("ni hao", Some((0, 6))) elapsed=0.858028
+IME Preedit("", None) elapsed=2.904527
+IME Commit("你好") elapsed=2.904537
+IME Preedit("", None) elapsed=2.904543
+RESET
+IME Preedit("n", Some((0, 1))) elapsed=4.054054
+IME Preedit("ni", Some((0, 2))) elapsed=4.099049
+IME Preedit("ni h", Some((0, 4))) elapsed=4.146231
+IME Preedit("ni ha", Some((0, 5))) elapsed=4.189480
+IME Preedit("ni hao", Some((0, 6))) elapsed=4.233762
+IME Preedit("", None) elapsed=6.280043
+IME Commit("你好") elapsed=6.280053
+IME Preedit("", None) elapsed=6.280058
+RESET
+FINAL fixed=true committed="" preedit=""

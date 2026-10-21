@@ -1,0 +1,19 @@
+IME Preedit("n", Some((0, 1))) elapsed=0.793270
+RECT_REQUEST x=54 delay_ms=40 elapsed=0.793281
+IME Preedit("ni", Some((0, 2))) elapsed=0.800180
+RECT_REQUEST x=68 delay_ms=40 elapsed=0.800186
+IME Preedit("ni h", Some((0, 4))) elapsed=0.800189
+RECT_REQUEST x=96 delay_ms=40 elapsed=0.800191
+IME Preedit("ni ha", Some((0, 5))) elapsed=0.802329
+RECT_REQUEST x=110 delay_ms=40 elapsed=0.802334
+RECT x=110 y=80 width=1 height=24 elapsed=0.833363
+IME Preedit("ni hao", Some((0, 6))) elapsed=0.843371
+RECT_REQUEST x=124 delay_ms=40 elapsed=0.843377
+RECT x=124 y=80 width=1 height=24 elapsed=0.883439
+IME Preedit("", None) elapsed=2.891151
+RECT_REQUEST x=40 delay_ms=40 elapsed=2.891163
+IME Commit("你好") elapsed=2.891167
+RECT_REQUEST x=40 delay_ms=40 elapsed=2.891172
+IME Preedit("", None) elapsed=2.891174
+RECT_REQUEST x=40 delay_ms=40 elapsed=2.891177
+RECT x=40 y=80 width=1 height=24 elapsed=2.931332

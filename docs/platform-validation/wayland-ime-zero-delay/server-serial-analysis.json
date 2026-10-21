@@ -1,0 +1,260 @@
+{
+  "native/zgui-delay0-1/sway.log": {
+    "transactions": [
+      {
+        "line": 3020,
+        "timestamp_ms": 749762.598,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "n"
+      },
+      {
+        "line": 3038,
+        "timestamp_ms": 749762.729,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni"
+      },
+      {
+        "line": 3053,
+        "timestamp_ms": 749762.788,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni h"
+      },
+      {
+        "line": 3058,
+        "timestamp_ms": 749762.803,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni ha"
+      },
+      {
+        "line": 3063,
+        "timestamp_ms": 749762.818,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni hao"
+      },
+      {
+        "line": 3102,
+        "timestamp_ms": 751619.625,
+        "object_id": "16",
+        "serial": 3,
+        "issued_done_count": 3,
+        "serial_matches": true,
+        "commit_string": "你好"
+      },
+      {
+        "line": 3105,
+        "timestamp_ms": 751619.642,
+        "object_id": "16",
+        "serial": 3,
+        "issued_done_count": 3,
+        "serial_matches": true
+      },
+      {
+        "line": 3210,
+        "timestamp_ms": 752796.412,
+        "object_id": "16",
+        "serial": 5,
+        "issued_done_count": 5,
+        "serial_matches": true,
+        "set_preedit_string": "n"
+      },
+      {
+        "line": 3251,
+        "timestamp_ms": 752805.404,
+        "object_id": "16",
+        "serial": 5,
+        "issued_done_count": 6,
+        "serial_matches": false,
+        "set_preedit_string": "ni"
+      },
+      {
+        "line": 3268,
+        "timestamp_ms": 752805.541,
+        "object_id": "16",
+        "serial": 5,
+        "issued_done_count": 6,
+        "serial_matches": false,
+        "set_preedit_string": "ni h"
+      },
+      {
+        "line": 3271,
+        "timestamp_ms": 752805.559,
+        "object_id": "16",
+        "serial": 5,
+        "issued_done_count": 6,
+        "serial_matches": false,
+        "set_preedit_string": "ni ha"
+      },
+      {
+        "line": 3274,
+        "timestamp_ms": 752805.578,
+        "object_id": "16",
+        "serial": 5,
+        "issued_done_count": 6,
+        "serial_matches": false,
+        "set_preedit_string": "ni hao"
+      },
+      {
+        "line": 3298,
+        "timestamp_ms": 754797.275,
+        "object_id": "16",
+        "serial": 6,
+        "issued_done_count": 6,
+        "serial_matches": true,
+        "commit_string": "你好"
+      },
+      {
+        "line": 3301,
+        "timestamp_ms": 754797.291,
+        "object_id": "16",
+        "serial": 6,
+        "issued_done_count": 6,
+        "serial_matches": true
+      }
+    ],
+    "serial_mismatches": 4
+  },
+  "standalone/moving-delay0-1/sway.log": {
+    "transactions": [
+      {
+        "line": 489,
+        "timestamp_ms": 757610.09,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "n"
+      },
+      {
+        "line": 507,
+        "timestamp_ms": 757610.291,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni"
+      },
+      {
+        "line": 522,
+        "timestamp_ms": 757610.397,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni h"
+      },
+      {
+        "line": 527,
+        "timestamp_ms": 757610.432,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni ha"
+      },
+      {
+        "line": 532,
+        "timestamp_ms": 757610.452,
+        "object_id": "16",
+        "serial": 2,
+        "issued_done_count": 2,
+        "serial_matches": true,
+        "set_preedit_string": "ni hao"
+      },
+      {
+        "line": 612,
+        "timestamp_ms": 759464.138,
+        "object_id": "16",
+        "serial": 7,
+        "issued_done_count": 7,
+        "serial_matches": true,
+        "commit_string": "你好"
+      },
+      {
+        "line": 615,
+        "timestamp_ms": 759464.159,
+        "object_id": "16",
+        "serial": 7,
+        "issued_done_count": 7,
+        "serial_matches": true
+      },
+      {
+        "line": 683,
+        "timestamp_ms": 760615.776,
+        "object_id": "16",
+        "serial": 8,
+        "issued_done_count": 8,
+        "serial_matches": true,
+        "set_preedit_string": "n"
+      },
+      {
+        "line": 723,
+        "timestamp_ms": 760627.039,
+        "object_id": "16",
+        "serial": 8,
+        "issued_done_count": 9,
+        "serial_matches": false,
+        "set_preedit_string": "ni"
+      },
+      {
+        "line": 740,
+        "timestamp_ms": 760627.169,
+        "object_id": "16",
+        "serial": 8,
+        "issued_done_count": 9,
+        "serial_matches": false,
+        "set_preedit_string": "ni h"
+      },
+      {
+        "line": 743,
+        "timestamp_ms": 760627.182,
+        "object_id": "16",
+        "serial": 8,
+        "issued_done_count": 9,
+        "serial_matches": false,
+        "set_preedit_string": "ni ha"
+      },
+      {
+        "line": 746,
+        "timestamp_ms": 760627.192,
+        "object_id": "16",
+        "serial": 8,
+        "issued_done_count": 9,
+        "serial_matches": false,
+        "set_preedit_string": "ni hao"
+      },
+      {
+        "line": 768,
+        "timestamp_ms": 762615.436,
+        "object_id": "16",
+        "serial": 9,
+        "issued_done_count": 9,
+        "serial_matches": true,
+        "commit_string": "你好"
+      },
+      {
+        "line": 771,
+        "timestamp_ms": 762615.454,
+        "object_id": "16",
+        "serial": 9,
+        "issued_done_count": 9,
+        "serial_matches": true
+      }
+    ],
+    "serial_mismatches": 4
+  }
+}

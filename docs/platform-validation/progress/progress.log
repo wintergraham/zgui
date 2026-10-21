@@ -1,0 +1,9 @@
+STATE 1 value=0.250 width=400
+STATE 2 value=1.000 width=400
+STATE 3 value=1.000 width=600
+STATE 4 value=0.250 width=600
+STATE 5 value=0.250 width=200
+STATE 6 value=0.000 width=200
+PROGRESS value=0.000 width=200 stage=6
+BOUNDS progress Rect { x: 24.0, y: 68.0, width: 200.0, height: 40.0 }
+SEMANTICS Some(SemanticNode { role: Progress, label: "Download", value: None, checked: None, disabled: false, min: Some(0.0), max: Some(1.0), numeric_value: Some(0.0) })

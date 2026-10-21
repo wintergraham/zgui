@@ -1,0 +1,50 @@
+{
+  "date": "2026-09-27",
+  "commit": "92fd6a41161e51f00b369906ef07409403f06e94",
+  "scene": "heavy",
+  "source_dirty": true,
+  "trials": 24,
+  "samples": 6509,
+  "updates": {
+    "min": 59.7,
+    "max": 59.95
+  },
+  "environment": "Apple M5 Max (Mac17,6), macOS 26.4 (25E246), Metal; on AC Power",
+  "host_note": "A personal Mac in use: other applications kept running, so this host was not isolated.",
+  "memory": "Physical footprint (as Activity Monitor reports it: resident memory plus GPU memory the process owns on unified memory); resident size also recorded.",
+  "protocol": {
+    "requested_seconds": 20,
+    "warmup_seconds": 5,
+    "sampled_seconds": 15,
+    "interval_seconds": 0.05,
+    "repeats": 3,
+    "frameworks": [
+      "zgui",
+      "gpui"
+    ],
+    "acceptance_updates_per_second": [
+      58,
+      61
+    ]
+  },
+  "frameworks": {
+    "zgui": "92fd6a41161e51f00b369906ef07409403f06e94",
+    "gpui": "0.2.2"
+  },
+  "csv_sha256": "1fd0a45faa6a3018daf1fef246ee7ec7aa44c3d6b996012a9629e5718ddc2f73",
+  "source_csv_sha256": "1fd0a45faa6a3018daf1fef246ee7ec7aa44c3d6b996012a9629e5718ddc2f73",
+  "binaries": {
+    "zgui": {
+      "sha256": "bb10c80115f89f0d27b3a737fd9ed3af84e3a0d71175efdcca4e0cc1c358ebe8",
+      "bytes": 10845408
+    },
+    "gpui": {
+      "sha256": "48129b82aa2415c116af118d6bb4b017da2be0f7fe85fc6ed6e111e83f5acc02",
+      "bytes": 4621920
+    }
+  },
+  "excluded_frameworks": {
+    "quickgui": "Adapter panicked at startup: text renderer batch index 32 exceeded its 32-batch pool."
+  },
+  "source_note": "Measured working tree based on 92fd6a4, before adapters were committed. The original diff hash omitted untracked adapter files; their hashes are documented separately in the result README. This is not a clean-commit measurement."
+}

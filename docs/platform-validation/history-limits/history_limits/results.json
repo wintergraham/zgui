@@ -1,0 +1,34 @@
+{
+  "passed": true,
+  "backend": "owned X11/Xvfb/Openbox",
+  "reports": {
+    "initial": {
+      "limited": false,
+      "model": ""
+    },
+    "typed": {
+      "limited": false,
+      "model": "abc"
+    },
+    "first_undo": {
+      "limited": false,
+      "model": "ab"
+    },
+    "reduced": {
+      "limited": true,
+      "model": "ab"
+    },
+    "redo": {
+      "limited": true,
+      "model": "abc"
+    },
+    "bounded_undo": {
+      "limited": true,
+      "model": "ab"
+    },
+    "exhausted_undo": {
+      "limited": true,
+      "model": "ab"
+    }
+  }
+}

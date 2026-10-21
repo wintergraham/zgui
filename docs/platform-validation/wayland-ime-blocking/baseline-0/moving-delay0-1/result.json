@@ -1,0 +1,158 @@
+{
+  "mode": "moving",
+  "cursor_delay_ms": 0,
+  "preedit_block_ms": 0,
+  "preedit_block_position": "before-cursor",
+  "present_on_ime": true,
+  "server_protocol_trace": true,
+  "session": 1,
+  "client_display_unset": true,
+  "trials": [
+    {
+      "trial": 1,
+      "condition": "cold",
+      "warm_definition": "Prior burst completed in the same input-method process; no engine switch or refocus.",
+      "burst": "nihao",
+      "xdotool_delay_ms": 90,
+      "burst_wall_seconds": 0.229873008094728,
+      "observation_seconds": 2.0,
+      "client_preedits": [
+        "n",
+        "ni hao"
+      ],
+      "engine_preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao"
+      ],
+      "client_commits": [
+        "\u4f60\u597d"
+      ],
+      "engine_commits": [
+        "\u4f60\u597d"
+      ],
+      "application_preedits": [
+        "n",
+        "ni hao"
+      ],
+      "application_commits": [
+        "\u4f60\u597d"
+      ],
+      "full_preedit": true,
+      "unicode_commit": true,
+      "outcome": "delivered",
+      "client_cursor_updates": [
+        "54, 80, 1, 24",
+        "124, 80, 1, 24"
+      ],
+      "engine_transaction_serials": [
+        "2",
+        "2",
+        "2",
+        "2",
+        "3"
+      ],
+      "client_done_serials": [
+        "2",
+        "3"
+      ],
+      "client_state_commit_count": 2,
+      "engine_key_events": [
+        "14, 411789713, 49, 1",
+        "15, 411789736, 49, 0",
+        "16, 411789758, 23, 1",
+        "17, 411789781, 23, 0",
+        "18, 411789804, 35, 1",
+        "19, 411789827, 35, 0",
+        "20, 411789849, 30, 1",
+        "21, 411789872, 30, 0",
+        "22, 411789894, 24, 1",
+        "23, 411789917, 24, 0"
+      ],
+      "input_method_done_count": 2
+    },
+    {
+      "trial": 2,
+      "condition": "warm",
+      "warm_definition": "Prior burst completed in the same input-method process; no engine switch or refocus.",
+      "burst": "nihao",
+      "xdotool_delay_ms": 90,
+      "burst_wall_seconds": 0.23034772742539644,
+      "observation_seconds": 2.0,
+      "client_preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao"
+      ],
+      "engine_preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao"
+      ],
+      "client_commits": [
+        "\u4f60\u597d"
+      ],
+      "engine_commits": [
+        "\u4f60\u597d"
+      ],
+      "application_preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao"
+      ],
+      "application_commits": [
+        "\u4f60\u597d"
+      ],
+      "full_preedit": true,
+      "unicode_commit": true,
+      "outcome": "delivered",
+      "client_cursor_updates": [
+        "54, 80, 1, 24",
+        "68, 80, 1, 24",
+        "96, 80, 1, 24",
+        "110, 80, 1, 24",
+        "124, 80, 1, 24"
+      ],
+      "engine_transaction_serials": [
+        "5",
+        "6",
+        "7",
+        "8",
+        "9"
+      ],
+      "client_done_serials": [
+        "5",
+        "6",
+        "7",
+        "8",
+        "9"
+      ],
+      "client_state_commit_count": 5,
+      "engine_key_events": [
+        "43, 411793101, 49, 1",
+        "44, 411793124, 49, 0",
+        "45, 411793147, 23, 1",
+        "46, 411793169, 23, 0",
+        "47, 411793192, 35, 1",
+        "48, 411793215, 35, 0",
+        "49, 411793238, 30, 1",
+        "50, 411793261, 30, 0",
+        "51, 411793284, 24, 1",
+        "52, 411793306, 24, 0"
+      ],
+      "input_method_done_count": 5
+    }
+  ],
+  "limitations": [
+    "Diagnostic only; no delayed event injection or serial-cancellation guarantee.",
+    "Cold means a fresh private Fcitx process and empty user data, not a cold OS page cache."
+  ]
+}

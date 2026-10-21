@@ -1,0 +1,69 @@
+{
+  "passed": true,
+  "backend": "owned X11/Xvfb/Openbox",
+  "reports": {
+    "initial": {
+      "enabled": true,
+      "source": "seed",
+      "destination": "",
+      "anchor": 4,
+      "focus": 4
+    },
+    "typing_blocked": {
+      "enabled": true,
+      "source": "seed",
+      "destination": "",
+      "anchor": 4,
+      "focus": 4
+    },
+    "selection": {
+      "enabled": true,
+      "source": "seed",
+      "destination": "",
+      "anchor": 1,
+      "focus": 2
+    },
+    "copy_cut": {
+      "enabled": true,
+      "source": "seed",
+      "destination": "",
+      "anchor": 0,
+      "focus": 4
+    },
+    "copied": {
+      "enabled": true,
+      "source": "seed",
+      "destination": "seed",
+      "anchor": 0,
+      "focus": 4
+    },
+    "paste_blocked": {
+      "enabled": true,
+      "source": "seed",
+      "destination": "seed",
+      "anchor": 4,
+      "focus": 4
+    },
+    "editable": {
+      "enabled": false,
+      "source": "seed!",
+      "destination": "seed",
+      "anchor": 5,
+      "focus": 5
+    },
+    "undo_blocked": {
+      "enabled": true,
+      "source": "seed!",
+      "destination": "seed",
+      "anchor": 2,
+      "focus": 2
+    },
+    "external": {
+      "enabled": true,
+      "source": "external",
+      "destination": "seed",
+      "anchor": 8,
+      "focus": 8
+    }
+  }
+}

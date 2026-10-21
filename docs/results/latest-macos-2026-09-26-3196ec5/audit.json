@@ -1,0 +1,46 @@
+{
+ "accepted": true,
+ "trials": 36,
+ "samples": 9466,
+ "active_ticks_per_requested_second": {
+  "min": 59.65,
+  "max": 59.95
+ },
+ "commit": "3196ec584d0067058689f3ead649e5717b6e0f28",
+ "started_utc": "2026-09-26T16:39:16.345864+00:00",
+ "finished_utc": "2026-09-26T16:58:42.907287+00:00",
+ "environment": {
+  "machine": "Mac17,6",
+  "chip": "Apple M5 Max",
+  "cores": 18,
+  "memory_bytes": 137438953472,
+  "macos": "26.4 (25E246)",
+  "power": "AC Power",
+  "rust": "rustc 1.96.0 (ac68faa20 2026-05-25)"
+ },
+ "binaries": {
+  "zgui": {
+   "sha256": "ce3d2a1ab70cf709363bc656fcd4852555c4c4fee04e78b27b0a6357e0974f76",
+   "bytes": 10847824
+  },
+  "gpui": {
+   "sha256": "6ac63e78ed966cef86bcb5d2a52c11ab5e5ddae8e2ff09e442ab29838a2ea6c4",
+   "bytes": 4588656
+  },
+  "quickgui": {
+   "sha256": "23e5e04c69ffa04b86410ff1c911aa035aa1e1a678b9b4478d12c3b690e9a9a3",
+   "bytes": 12974960
+  }
+ },
+ "protocol": {
+  "requested_seconds": 20,
+  "warmup_seconds": 5,
+  "sampled_seconds": 15,
+  "interval_seconds": 0.05,
+  "repeats": 3,
+  "acceptance_updates_per_second": [
+   58,
+   61
+  ]
+ }
+}

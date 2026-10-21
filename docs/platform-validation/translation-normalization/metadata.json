@@ -1,0 +1,47 @@
+{
+  "captured_utc": "2026-09-22T13:28:07.237807+00:00",
+  "build": [
+    "cargo",
+    "build",
+    "-p",
+    "zgui-desktop",
+    "--example",
+    "hidden_updates",
+    "--example",
+    "image_fit",
+    "--locked"
+  ],
+  "runs": [
+    {
+      "command": [
+        "/usr/bin/python3",
+        "scripts/image_fit_smoke.py",
+        "/tmp/zgui-target/debug/examples/image_fit",
+        "--output",
+        "/home/ubuntu/GitHub/zgui/docs/platform-validation/translation-normalization/image_fit"
+      ],
+      "binary_sha256": "499fbeb412c0a5ee208cb82ecb6471c308db0984a0e845cf52e743ca5e6e145c"
+    },
+    {
+      "command": [
+        "/usr/bin/python3",
+        "scripts/hidden_updates_smoke.py",
+        "/tmp/zgui-target/debug/examples/hidden_updates",
+        "--output",
+        "/home/ubuntu/GitHub/zgui/docs/platform-validation/translation-normalization/hidden_updates"
+      ],
+      "binary_sha256": "3ef40739b04f6c25066b1b45b9164a5ab1656a688fb6264a300985dc848e0c3d"
+    }
+  ],
+  "source_archive_sha256": "d13a81c69c32e3997e8c8c8fbec2973a91807208a23942636c2e436e53444391",
+  "source_inputs": 138,
+  "source_unchanged": true,
+  "backend": "owned Xvfb/Openbox, private services, Mesa llvmpipe Vulkan",
+  "environment": {
+    "CARGO_TARGET_DIR": "/tmp/zgui-target",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0",
+    "LD_LIBRARY_PATH": "/tmp/zgui-ci-loader-check/build/loader"
+  },
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)"
+}

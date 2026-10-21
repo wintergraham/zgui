@@ -1,0 +1,2 @@
+dbus-daemon[1441572]: [session uid=1000 pid=1441572 pidfd=4] Connection :1.0 (uid=1000 pid=1442714 comm="dbus-monitor --session type='method_call',interfac" label="unconfined") became a monitor.
+dbus-daemon[1441572]: [session uid=1000 pid=1441572 pidfd=4] Monitoring connection :1.0 closed.

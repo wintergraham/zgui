@@ -1,0 +1,12 @@
+
+(/usr/libexec/xdg-desktop-portal:1643410): xdg-desktop-portal-WARNING **: 21:44:32.070: Document portal fuse mount point unknown: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.portal.Documents was not provided by any .service files
+
+(/usr/libexec/xdg-desktop-portal:1643410): xdg-desktop-portal-WARNING **: 21:44:32.081: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+
+(/usr/libexec/xdg-desktop-portal:1643410): xdg-desktop-portal-WARNING **: 21:44:32.081: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+
+(/usr/libexec/xdg-desktop-portal:1643410): xdg-desktop-portal-WARNING **: 21:44:32.081: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+[W][21:44:32.083691] pw.conf      | [          conf.c: 1182 try_load_conf()] can't load config client.conf: No such file or directory
+[E][21:44:32.083733] pw.conf      | [          conf.c: 1215 pw_conf_load_conf_for_context()] can't load config client.conf: No such file or directory
+
+(/usr/libexec/xdg-desktop-portal:1643410): xdg-desktop-portal-WARNING **: 21:44:32.083: Failed to connect to PipeWire: Couldn't create PipeWire context

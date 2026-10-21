@@ -1,0 +1,185 @@
+{
+  "observations": [
+    {
+      "condition": "baseline-0",
+      "mode": "moving",
+      "temperature": "cold",
+      "full_preedit": true,
+      "unicode_commit": true,
+      "outcome": "delivered",
+      "client_preedits": [
+        "n",
+        "ni hao"
+      ]
+    },
+    {
+      "condition": "baseline-0",
+      "mode": "moving",
+      "temperature": "warm",
+      "full_preedit": true,
+      "unicode_commit": true,
+      "outcome": "delivered",
+      "client_preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao"
+      ]
+    },
+    {
+      "condition": "baseline-0",
+      "mode": "fixed",
+      "temperature": "cold",
+      "full_preedit": true,
+      "unicode_commit": true,
+      "outcome": "delivered",
+      "client_preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao"
+      ]
+    },
+    {
+      "condition": "baseline-0",
+      "mode": "fixed",
+      "temperature": "warm",
+      "full_preedit": true,
+      "unicode_commit": true,
+      "outcome": "delivered",
+      "client_preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao"
+      ]
+    },
+    {
+      "condition": "before-80",
+      "mode": "moving",
+      "temperature": "cold",
+      "full_preedit": true,
+      "unicode_commit": true,
+      "outcome": "delivered",
+      "client_preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao"
+      ]
+    },
+    {
+      "condition": "before-80",
+      "mode": "moving",
+      "temperature": "warm",
+      "full_preedit": true,
+      "unicode_commit": true,
+      "outcome": "delivered",
+      "client_preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao"
+      ]
+    },
+    {
+      "condition": "before-80",
+      "mode": "fixed",
+      "temperature": "cold",
+      "full_preedit": true,
+      "unicode_commit": true,
+      "outcome": "delivered",
+      "client_preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao"
+      ]
+    },
+    {
+      "condition": "before-80",
+      "mode": "fixed",
+      "temperature": "warm",
+      "full_preedit": true,
+      "unicode_commit": true,
+      "outcome": "delivered",
+      "client_preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao"
+      ]
+    },
+    {
+      "condition": "after-80",
+      "mode": "moving",
+      "temperature": "cold",
+      "full_preedit": true,
+      "unicode_commit": true,
+      "outcome": "delivered",
+      "client_preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao"
+      ]
+    },
+    {
+      "condition": "after-80",
+      "mode": "moving",
+      "temperature": "warm",
+      "full_preedit": true,
+      "unicode_commit": true,
+      "outcome": "delivered",
+      "client_preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao"
+      ]
+    },
+    {
+      "condition": "after-80",
+      "mode": "fixed",
+      "temperature": "cold",
+      "full_preedit": true,
+      "unicode_commit": true,
+      "outcome": "delivered",
+      "client_preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao"
+      ]
+    },
+    {
+      "condition": "after-80",
+      "mode": "fixed",
+      "temperature": "warm",
+      "full_preedit": true,
+      "unicode_commit": true,
+      "outcome": "delivered",
+      "client_preedits": [
+        "n",
+        "ni",
+        "ni h",
+        "ni ha",
+        "ni hao"
+      ]
+    }
+  ],
+  "full_preedit": 12,
+  "unicode_commit": 12,
+  "delivery_failures": 0,
+  "source_and_binary_hashes_verified": true
+}

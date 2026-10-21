@@ -1,0 +1,260 @@
+[
+  {
+    "type": "object:state-changed:defunct",
+    "name": "zgui accessibility probe",
+    "detail1": 1,
+    "detail2": 0
+  },
+  {
+    "type": "object:state-changed:active",
+    "name": "zgui accessibility probe",
+    "detail1": 1,
+    "detail2": 0
+  },
+  {
+    "type": "object:state-changed:focused",
+    "name": "zgui accessibility probe",
+    "detail1": 1,
+    "detail2": 0
+  },
+  {
+    "type": "object:state-changed:focusable",
+    "name": "zgui accessibility probe",
+    "detail1": 0,
+    "detail2": 0
+  },
+  {
+    "type": "object:state-changed:focused",
+    "name": "AT-SPI name",
+    "detail1": 1,
+    "detail2": 0
+  },
+  {
+    "type": "object:text-caret-moved",
+    "name": "AT-SPI name",
+    "detail1": 3,
+    "detail2": 0
+  },
+  {
+    "type": "object:state-changed:focused",
+    "name": "zgui accessibility probe",
+    "detail1": 0,
+    "detail2": 0
+  },
+  {
+    "type": "object:text-caret-moved",
+    "name": "AT-SPI name",
+    "detail1": 1,
+    "detail2": 0
+  },
+  {
+    "type": "object:text-caret-moved",
+    "name": "AT-SPI name",
+    "detail1": 3,
+    "detail2": 0
+  },
+  {
+    "type": "object:text-changed:delete",
+    "name": "AT-SPI name",
+    "detail1": 0,
+    "detail2": 3
+  },
+  {
+    "type": "object:text-changed:insert",
+    "name": "AT-SPI name",
+    "detail1": 0,
+    "detail2": 1
+  },
+  {
+    "type": "object:text-caret-moved",
+    "name": "AT-SPI name",
+    "detail1": 1,
+    "detail2": 0
+  },
+  {
+    "type": "object:text-changed:insert",
+    "name": "AT-SPI name",
+    "detail1": 1,
+    "detail2": 1
+  },
+  {
+    "type": "object:text-caret-moved",
+    "name": "AT-SPI name",
+    "detail1": 2,
+    "detail2": 0
+  },
+  {
+    "type": "object:text-changed:insert",
+    "name": "AT-SPI name",
+    "detail1": 2,
+    "detail2": 1
+  },
+  {
+    "type": "object:text-caret-moved",
+    "name": "AT-SPI name",
+    "detail1": 3,
+    "detail2": 0
+  },
+  {
+    "type": "object:text-changed:insert",
+    "name": "AT-SPI name",
+    "detail1": 3,
+    "detail2": 1
+  },
+  {
+    "type": "object:text-caret-moved",
+    "name": "AT-SPI name",
+    "detail1": 4,
+    "detail2": 0
+  },
+  {
+    "type": "object:text-changed:insert",
+    "name": "AT-SPI name",
+    "detail1": 4,
+    "detail2": 1
+  },
+  {
+    "type": "object:text-caret-moved",
+    "name": "AT-SPI name",
+    "detail1": 5,
+    "detail2": 0
+  },
+  {
+    "type": "object:text-changed:delete",
+    "name": "Count: 1",
+    "detail1": 7,
+    "detail2": 1
+  },
+  {
+    "type": "object:text-changed:insert",
+    "name": "Count: 1",
+    "detail1": 7,
+    "detail2": 1
+  },
+  {
+    "type": "object:property-change:accessible-name",
+    "name": "Count: 1",
+    "detail1": 0,
+    "detail2": 0
+  },
+  {
+    "type": "object:property-change:accessible-value",
+    "name": "AT-SPI amount",
+    "detail1": 0,
+    "detail2": 0
+  },
+  {
+    "type": "object:state-changed:checked",
+    "name": "AT-SPI option",
+    "detail1": 1,
+    "detail2": 0
+  },
+  {
+    "type": "object:text-changed:delete",
+    "name": "\u2611",
+    "detail1": 0,
+    "detail2": 1
+  },
+  {
+    "type": "object:text-changed:insert",
+    "name": "\u2611",
+    "detail1": 0,
+    "detail2": 1
+  },
+  {
+    "type": "object:property-change:accessible-name",
+    "name": "\u2611",
+    "detail1": 0,
+    "detail2": 0
+  },
+  {
+    "type": "object:state-changed:enabled",
+    "name": "AT-SPI name",
+    "detail1": 0,
+    "detail2": 0
+  },
+  {
+    "type": "object:state-changed:sensitive",
+    "name": "AT-SPI name",
+    "detail1": 0,
+    "detail2": 0
+  },
+  {
+    "type": "object:state-changed:read-only",
+    "name": "AT-SPI name",
+    "detail1": 1,
+    "detail2": 0
+  },
+  {
+    "type": "object:state-changed:focusable",
+    "name": "zgui accessibility probe",
+    "detail1": 1,
+    "detail2": 0
+  },
+  {
+    "type": "object:state-changed:focused",
+    "name": "zgui accessibility probe",
+    "detail1": 1,
+    "detail2": 0
+  },
+  {
+    "type": "object:state-changed:focused",
+    "name": "AT-SPI name",
+    "detail1": 0,
+    "detail2": 0
+  },
+  {
+    "type": "object:state-changed:enabled",
+    "name": "AT-SPI name",
+    "detail1": 1,
+    "detail2": 0
+  },
+  {
+    "type": "object:state-changed:sensitive",
+    "name": "AT-SPI name",
+    "detail1": 1,
+    "detail2": 0
+  },
+  {
+    "type": "object:state-changed:read-only",
+    "name": "AT-SPI name",
+    "detail1": 0,
+    "detail2": 0
+  },
+  {
+    "type": "object:state-changed:defunct",
+    "name": "zgui accessibility probe",
+    "detail1": 1,
+    "detail2": 0
+  },
+  {
+    "type": "object:state-changed:focused",
+    "name": "AT-SPI count",
+    "detail1": 1,
+    "detail2": 0
+  },
+  {
+    "type": "object:state-changed:defunct",
+    "name": "AT-SPI count",
+    "detail1": 1,
+    "detail2": 0
+  },
+  {
+    "type": "object:text-changed:delete",
+    "name": "Count: 3",
+    "detail1": 7,
+    "detail2": 1
+  },
+  {
+    "type": "object:text-changed:insert",
+    "name": "Count: 3",
+    "detail1": 7,
+    "detail2": 1
+  },
+  {
+    "type": "object:property-change:accessible-name",
+    "name": "Count: 3",
+    "detail1": 0,
+    "detail2": 0
+  }
+]

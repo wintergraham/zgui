@@ -1,0 +1,264 @@
+{
+  "commit": "9d118f8ac8e42b4d5d127ca4c24224985781cef4",
+  "measurement_date_utc": "2026-09-25",
+  "measurement_start_utc": "2026-09-25T03:17:06.875330+00:00",
+  "measurement_last_observation_utc": "2026-09-25T03:29:10.533940+00:00",
+  "trials": 36,
+  "samples": 10806,
+  "tick_gate_passed": true,
+  "active_ticks_per_requested_second": {
+    "min": 58.6,
+    "max": 59.95
+  },
+  "groups": [
+    {
+      "framework": "zgui",
+      "mode": "idle",
+      "repeats": 3,
+      "cpu_percent_one_core": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "rss_mib": {
+        "median": 106.703125,
+        "min": 105.40234375,
+        "max": 107.4296875
+      },
+      "workload_ticks": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      }
+    },
+    {
+      "framework": "gpui",
+      "mode": "idle",
+      "repeats": 3,
+      "cpu_percent_one_core": {
+        "median": 0.19942095558562484,
+        "min": 0.1331747835494569,
+        "max": 0.1996917752809058
+      },
+      "rss_mib": {
+        "median": 105.6953125,
+        "min": 105.57421875,
+        "max": 105.72265625
+      },
+      "workload_ticks": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      }
+    },
+    {
+      "framework": "quickgui",
+      "mode": "idle",
+      "repeats": 3,
+      "cpu_percent_one_core": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.13252878299521362
+      },
+      "rss_mib": {
+        "median": 129.72265625,
+        "min": 129.546875,
+        "max": 129.73828125
+      },
+      "workload_ticks": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      }
+    },
+    {
+      "framework": "zgui",
+      "mode": "stream",
+      "repeats": 3,
+      "cpu_percent_one_core": {
+        "median": 92.00725458052749,
+        "min": 91.95717711772475,
+        "max": 94.0016977847589
+      },
+      "rss_mib": {
+        "median": 112.30607232441471,
+        "min": 111.95404947916667,
+        "max": 112.83299479166666
+      },
+      "workload_ticks": {
+        "median": 1199.0,
+        "min": 1199.0,
+        "max": 1199.0
+      }
+    },
+    {
+      "framework": "gpui",
+      "mode": "stream",
+      "repeats": 3,
+      "cpu_percent_one_core": {
+        "median": 215.62416480591565,
+        "min": 212.91788022506807,
+        "max": 217.79726661231692
+      },
+      "rss_mib": {
+        "median": 108.14108072916666,
+        "min": 107.91334635416666,
+        "max": 108.96342447916666
+      },
+      "workload_ticks": {
+        "median": 1193.0,
+        "min": 1178.0,
+        "max": 1199.0
+      }
+    },
+    {
+      "framework": "quickgui",
+      "mode": "stream",
+      "repeats": 3,
+      "cpu_percent_one_core": {
+        "median": 169.9690770295892,
+        "min": 169.22407706205905,
+        "max": 170.1036579074437
+      },
+      "rss_mib": {
+        "median": 133.90192984271522,
+        "min": 133.53415697674419,
+        "max": 134.52311306063123
+      },
+      "workload_ticks": {
+        "median": 1198.0,
+        "min": 1198.0,
+        "max": 1199.0
+      }
+    },
+    {
+      "framework": "zgui",
+      "mode": "scroll",
+      "repeats": 3,
+      "cpu_percent_one_core": {
+        "median": 134.23653873688636,
+        "min": 129.3657840475455,
+        "max": 141.21471688363718
+      },
+      "rss_mib": {
+        "median": 112.21875,
+        "min": 111.01859375,
+        "max": 113.203125
+      },
+      "workload_ticks": {
+        "median": 1198.0,
+        "min": 1198.0,
+        "max": 1198.0
+      }
+    },
+    {
+      "framework": "gpui",
+      "mode": "scroll",
+      "repeats": 3,
+      "cpu_percent_one_core": {
+        "median": 208.9599718290833,
+        "min": 205.12020229695983,
+        "max": 212.29742162908138
+      },
+      "rss_mib": {
+        "median": 107.0603125,
+        "min": 106.46875,
+        "max": 107.116875
+      },
+      "workload_ticks": {
+        "median": 1197.0,
+        "min": 1187.0,
+        "max": 1199.0
+      }
+    },
+    {
+      "framework": "quickgui",
+      "mode": "scroll",
+      "repeats": 3,
+      "cpu_percent_one_core": {
+        "median": 163.3591787131018,
+        "min": 163.26886135626,
+        "max": 166.77681746491118
+      },
+      "rss_mib": {
+        "median": 136.6015625,
+        "min": 136.0,
+        "max": 137.89860620847176
+      },
+      "workload_ticks": {
+        "median": 1199.0,
+        "min": 1198.0,
+        "max": 1199.0
+      }
+    },
+    {
+      "framework": "zgui",
+      "mode": "both",
+      "repeats": 3,
+      "cpu_percent_one_core": {
+        "median": 174.47720660420893,
+        "min": 163.24665958267667,
+        "max": 175.12286844601184
+      },
+      "rss_mib": {
+        "median": 112.58567621237458,
+        "min": 112.44228156354515,
+        "max": 112.70056438127091
+      },
+      "workload_ticks": {
+        "median": 1199.0,
+        "min": 1191.0,
+        "max": 1199.0
+      }
+    },
+    {
+      "framework": "gpui",
+      "mode": "both",
+      "repeats": 3,
+      "cpu_percent_one_core": {
+        "median": 213.3335832038775,
+        "min": 212.83947799420434,
+        "max": 217.93975068629487
+      },
+      "rss_mib": {
+        "median": 108.41796875,
+        "min": 108.20516927083334,
+        "max": 108.89763020833334
+      },
+      "workload_ticks": {
+        "median": 1193.0,
+        "min": 1172.0,
+        "max": 1194.0
+      }
+    },
+    {
+      "framework": "quickgui",
+      "mode": "both",
+      "repeats": 3,
+      "cpu_percent_one_core": {
+        "median": 174.0175347119322,
+        "min": 170.36146377511042,
+        "max": 175.82463853789818
+      },
+      "rss_mib": {
+        "median": 137.6757036423841,
+        "min": 137.4749013704319,
+        "max": 138.04592763704318
+      },
+      "workload_ticks": {
+        "median": 1199.0,
+        "min": 1196.0,
+        "max": 1199.0
+      }
+    }
+  ],
+  "caveats": [
+    "Ticks count logical updates, not presented frames.",
+    "Unrelated cargo/rustc/rust-lld builds occurred during this shared-host series; it is not isolated benchmarking.",
+    "Shared host shows unrelated zeron/git/gh activity; ps CPU is lifetime-averaged, not interval contention.",
+    "LP_NUM_THREADS=4 applies to each Mesa worker pool; QuickGUI capture shows two pools.",
+    "Software Vulkan on Xvfb does not establish native macOS, hardware-GPU or universal performance rankings.",
+    "A measured0% CPU means no accounted CPU increment between endpoint samples, not proof of literally zero cycles."
+  ],
+  "source_vendor_files": 87
+}

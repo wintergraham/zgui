@@ -1,0 +1,19 @@
+IME Preedit("n", Some((0, 1))) elapsed=0.865549
+PRESENT_BEGIN stage=ime-before-cursor elapsed=0.865569
+PRESENT_END stage=ime-before-cursor observed_ms=4.119 elapsed=0.869688
+RECT_REQUEST x=54 delay_ms=0 elapsed=0.869697
+RECT x=54 y=80 width=1 height=24 elapsed=0.869729
+IME Preedit("ni hao", Some((0, 6))) elapsed=0.902828
+PRESENT_BEGIN stage=ime-before-cursor elapsed=0.902845
+PRESENT_END stage=ime-before-cursor observed_ms=0.922 elapsed=0.903767
+RECT_REQUEST x=124 delay_ms=0 elapsed=0.903775
+RECT x=124 y=80 width=1 height=24 elapsed=0.903798
+IME Preedit("", None) elapsed=2.949596
+PRESENT_BEGIN stage=ime-before-cursor elapsed=2.949617
+PRESENT_END stage=ime-before-cursor observed_ms=1.132 elapsed=2.950749
+RECT_REQUEST x=40 delay_ms=0 elapsed=2.950775
+RECT x=40 y=80 width=1 height=24 elapsed=2.950820
+IME Commit("你好") elapsed=2.950827
+IME Preedit("", None) elapsed=2.950838
+PRESENT_BEGIN stage=ime-before-cursor elapsed=2.950846
+PRESENT_END stage=ime-before-cursor observed_ms=13.771 elapsed=2.964616

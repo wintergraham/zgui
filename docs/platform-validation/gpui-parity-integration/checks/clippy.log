@@ -1,0 +1,25 @@
+    Checking zgui v0.1.0 (/home/ubuntu/GitHub/zgui/crates/zgui)
+    Checking zgui-gpu v0.1.0 (/home/ubuntu/GitHub/zgui/crates/zgui-gpu)
+    Checking zgui-workload v0.1.0 (/home/ubuntu/GitHub/zgui/comparisons/workload)
+    Checking zgui-desktop v0.1.0 (/home/ubuntu/GitHub/zgui/crates/zgui-desktop)
+error: a `Vec` of `Range` that is only one element
+   --> crates/zgui/src/rich_text.rs:237:13
+    |
+237 |             vec![0..2],
+    |             ^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#single_range_in_vec_init
+    = note: `-D clippy::single-range-in-vec-init` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::single_range_in_vec_init)]`
+help: if you wanted a `Vec` that contains the entire range, try
+    |
+237 -             vec![0..2],
+237 +             (0..2).collect::<std::vec::Vec<usize>>(),
+    |
+help: if you wanted a `Vec` of len 2, try
+    |
+237 -             vec![0..2],
+237 +             vec![0; 2],
+    |
+
+error: could not compile `zgui` (lib test) due to 1 previous error

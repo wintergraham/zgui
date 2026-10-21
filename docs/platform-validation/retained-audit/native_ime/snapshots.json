@@ -1,0 +1,245 @@
+[
+  {
+    "stage": 1,
+    "first": "",
+    "second": "",
+    "origin": {
+      "x": 192,
+      "y": 221,
+      "width": 640,
+      "height": 340
+    },
+    "candidates": [
+      {
+        "x": 270,
+        "y": 322,
+        "width": 327,
+        "height": 64
+      }
+    ],
+    "display_first": "\u4f60\u597d",
+    "caret_first": {
+      "x": 78.0,
+      "y": 70.0,
+      "width": 1.0,
+      "height": 31.0
+    },
+    "display_second": "",
+    "caret_second": {
+      "x": 34.0,
+      "y": 162.0,
+      "width": 1.0,
+      "height": 31.0
+    }
+  },
+  {
+    "stage": 2,
+    "first": "\u4f60\u597d",
+    "second": "",
+    "origin": {
+      "x": 192,
+      "y": 221,
+      "width": 640,
+      "height": 340
+    },
+    "candidates": [],
+    "display_first": "\u4f60\u597d",
+    "caret_first": {
+      "x": 78.0,
+      "y": 70.0,
+      "width": 1.0,
+      "height": 31.0
+    },
+    "display_second": "",
+    "caret_second": {
+      "x": 34.0,
+      "y": 162.0,
+      "width": 1.0,
+      "height": 31.0
+    }
+  },
+  {
+    "stage": 3,
+    "first": "\u4f60\u597d",
+    "second": "",
+    "origin": {
+      "x": 192,
+      "y": 221,
+      "width": 640,
+      "height": 340
+    },
+    "candidates": [
+      {
+        "x": 292,
+        "y": 322,
+        "width": 311,
+        "height": 64
+      }
+    ],
+    "display_first": "\u4f60\u597d\u4e2d",
+    "caret_first": {
+      "x": 100.0,
+      "y": 70.0,
+      "width": 1.0,
+      "height": 31.0
+    },
+    "display_second": "",
+    "caret_second": {
+      "x": 34.0,
+      "y": 162.0,
+      "width": 1.0,
+      "height": 31.0
+    }
+  },
+  {
+    "stage": 4,
+    "first": "\u4f60\u597d",
+    "second": "",
+    "origin": {
+      "x": 192,
+      "y": 221,
+      "width": 640,
+      "height": 340
+    },
+    "candidates": [],
+    "display_first": "\u4f60\u597d",
+    "caret_first": {
+      "x": 78.0,
+      "y": 70.0,
+      "width": 1.0,
+      "height": 31.0
+    },
+    "display_second": "",
+    "caret_second": {
+      "x": 34.0,
+      "y": 162.0,
+      "width": 1.0,
+      "height": 31.0
+    }
+  },
+  {
+    "stage": 5,
+    "first": "\u4f60\u597d",
+    "second": "",
+    "origin": {
+      "x": 192,
+      "y": 221,
+      "width": 640,
+      "height": 340
+    },
+    "candidates": [
+      {
+        "x": 292,
+        "y": 322,
+        "width": 301,
+        "height": 64
+      }
+    ],
+    "display_first": "\u4f60\u597d\u6211",
+    "caret_first": {
+      "x": 100.0,
+      "y": 70.0,
+      "width": 1.0,
+      "height": 31.0
+    },
+    "display_second": "",
+    "caret_second": {
+      "x": 34.0,
+      "y": 162.0,
+      "width": 1.0,
+      "height": 31.0
+    }
+  },
+  {
+    "stage": 6,
+    "first": "\u4f60\u597d",
+    "second": "",
+    "origin": {
+      "x": 192,
+      "y": 221,
+      "width": 640,
+      "height": 340
+    },
+    "candidates": [
+      {
+        "x": 292,
+        "y": 322,
+        "width": 301,
+        "height": 64
+      }
+    ],
+    "display_first": "\u4f60\u597d",
+    "caret_first": {
+      "x": 78.0,
+      "y": 70.0,
+      "width": 1.0,
+      "height": 31.0
+    },
+    "display_second": "",
+    "caret_second": {
+      "x": 34.0,
+      "y": 162.0,
+      "width": 1.0,
+      "height": 31.0
+    }
+  },
+  {
+    "stage": 7,
+    "first": "\u4f60\u597d",
+    "second": "",
+    "origin": {
+      "x": 192,
+      "y": 221,
+      "width": 640,
+      "height": 340
+    },
+    "candidates": [
+      {
+        "x": 270,
+        "y": 414,
+        "width": 363,
+        "height": 64
+      }
+    ],
+    "display_first": "\u4f60\u597d",
+    "caret_first": {
+      "x": 78.0,
+      "y": 70.0,
+      "width": 1.0,
+      "height": 31.0
+    },
+    "display_second": "\u4e16\u754c",
+    "caret_second": {
+      "x": 78.0,
+      "y": 162.0,
+      "width": 1.0,
+      "height": 31.0
+    }
+  },
+  {
+    "stage": 8,
+    "first": "\u4f60\u597d",
+    "second": "\u4e16\u754c",
+    "origin": {
+      "x": 192,
+      "y": 221,
+      "width": 640,
+      "height": 340
+    },
+    "candidates": [],
+    "display_first": "\u4f60\u597d",
+    "caret_first": {
+      "x": 78.0,
+      "y": 70.0,
+      "width": 1.0,
+      "height": 31.0
+    },
+    "display_second": "\u4e16\u754c",
+    "caret_second": {
+      "x": 78.0,
+      "y": 162.0,
+      "width": 1.0,
+      "height": 31.0
+    }
+  }
+]

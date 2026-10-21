@@ -1,0 +1,4 @@
+LEADING 1 height=24 y=96 anchor=11 focus=11 model="First line\nSecond line\nThird line"
+LEADING 2 height=42 y=114 anchor=11 focus=11 model="First line\nSecond line\nThird line"
+LEADING 3 height=12 y=84 anchor=11 focus=11 model="First line\nSecond line\nThird line"
+LEADING 4 height=28 y=100 anchor=11 focus=11 model="First line\nSecond line\nThird line"

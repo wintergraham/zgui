@@ -1,0 +1,57 @@
+{
+  "source_sha256": {
+    "comparisons/gpui/Cargo.lock": "7e20062b7b4b199653c34eef629ebbc98f78b42b67591533428c4b8889631493",
+    "comparisons/gpui/Cargo.toml": "b104901ed3be3c6ac4a6a44ab81c8ae8c3f2eae4586dd42fb74018f31c0a2719",
+    "comparisons/gpui/src/bin/animate.rs": "0f7595b6aeb3846c19cc209135fd0ad925e79fa26b2f8c1a935fccc1e5231c67",
+    "comparisons/gpui/src/bin/busy.rs": "ae554a7538f163a1d584b8d70125fd402bec1f23e93426dd171c5ba9980ba4a9",
+    "comparisons/gpui/src/main.rs": "91cbecae887e2e389abb180ed7caad9d047021ac00723276e1c545c86ee9d62b",
+    "comparisons/quickgui/Cargo.lock": "b0c6e8be6339695ecc1ec3567d62a8cd17e0399243aeb1199b70baa1e2faccd9",
+    "comparisons/quickgui/Cargo.toml": "c85e635fc77640b25f1d302ae8bfc7c3a5054cc8373f65e69281e78a51f28155",
+    "comparisons/quickgui/src/main.rs": "5da35a62bfe752afff856024e86825ad596c9b060afdf450775edda09e3caeed",
+    "comparisons/workload/Cargo.toml": "28d29c5865f680ef0a45407f490e38c4291d64be154d9d0e5defba0c9c714ce6",
+    "comparisons/workload/src/lib.rs": "601b414ebc9af821d703a2f6d2e381754689cb9a62430315c8351f495be92f41"
+  },
+  "binaries": {
+    "gpui": {
+      "path": "/tmp/zgui-latest-linux-2026-09-25-fcfcc9a-bin/zgui-compare-gpui",
+      "sha256": "3f1a317aeda4169b11f6cf224545df05252747e08f8a612a3e3bec09ad336282",
+      "bytes": 17801944,
+      "build_exit_code": 0
+    },
+    "quickgui": {
+      "path": "/tmp/zgui-latest-linux-2026-09-25-fcfcc9a-bin/zgui-compare-quickgui",
+      "sha256": "50bfe6c2d06858529297c229953f99a547c62dca7689974e604abebe7e2dd5e1",
+      "bytes": 25245568,
+      "build_exit_code": 0
+    }
+  },
+  "build_commands": {
+    "zgui": [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      "-p",
+      "zgui-desktop",
+      "--example",
+      "component_workload"
+    ],
+    "gpui": [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      "--manifest-path",
+      "comparisons/gpui/Cargo.toml"
+    ],
+    "quickgui": [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      "--manifest-path",
+      "comparisons/quickgui/Cargo.toml"
+    ]
+  },
+  "freshly_rebuilt": true
+}

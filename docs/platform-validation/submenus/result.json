@@ -1,0 +1,56 @@
+{
+  "platform": "X11/Xvfb",
+  "scale": 1,
+  "result": "pass",
+  "checks": [
+    "Right opens child without closing parent",
+    "Left closes only child and restores trigger",
+    "Enter and pointer open child",
+    "viewport resize flips side placement",
+    "Escape closes only child",
+    "action closes chain before callback",
+    "focus restores root anchor",
+    "single click activates parent through child scope",
+    "outside click closes chain without background activation",
+    "automatic close"
+  ],
+  "samples": [
+    {
+      "stage": 1
+    },
+    {
+      "stage": 2
+    },
+    {
+      "stage": 3
+    },
+    {
+      "stage": 4
+    },
+    {
+      "stage": 5
+    },
+    {
+      "stage": 6
+    },
+    {
+      "stage": 7
+    },
+    {
+      "stage": 8
+    },
+    {
+      "stage": 9
+    },
+    {
+      "stage": 10
+    },
+    {
+      "stage": 11
+    },
+    {
+      "stage": 12
+    }
+  ],
+  "limitations": "Software rendering; does not validate macOS or hardware GPUs."
+}

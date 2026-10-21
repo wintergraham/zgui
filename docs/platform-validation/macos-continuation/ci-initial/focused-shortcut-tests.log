@@ -1,0 +1,42 @@
+   Compiling objc2 v0.6.4
+   Compiling libc v0.2.189
+   Compiling dispatch2 v0.3.1
+   Compiling block2 v0.6.2
+   Compiling objc2-foundation v0.3.2
+   Compiling objc2-core-foundation v0.3.2
+   Compiling objc2-metal v0.3.2
+   Compiling objc2-core-graphics v0.3.2
+   Compiling objc2-core-video v0.3.2
+   Compiling zgui v0.1.0 (/Users/wing/Documents/GitHub/zgui/crates/zgui)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.97s
+     Running tests/editor_paging.rs (target/debug/deps/editor_paging-c7291f6987b220ff)
+
+running 7 tests
+test capture_handler_can_prevent_paging_without_changing_selection_or_scroll ... ok
+test paging_keeps_preferred_column_through_short_lines_and_arrow_navigation ... ok
+test wrapped_unicode_paging_reuses_shapes_and_keeps_visual_end_affinity ... ok
+test paging_cancels_preedit_but_single_line_and_modified_keys_are_unhandled ... ok
+test paging_uses_padded_resized_viewport_and_preserves_history_and_shift_anchor ... ok
+test paging_reaches_empty_and_trailing_line_boundaries_and_allows_read_only ... ok
+test fractional_pitch_exact_last_row_landing_preserves_column ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/editor_read_only.rs (target/debug/deps/editor_read_only-4cba179d3543ade1)
+
+running 2 tests
+test entering_read_only_cancels_composition_once_and_preserves_undo_history ... ok
+test read_only_blocks_mutations_but_keeps_selection_copy_and_external_models ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/editor_streaming_history.rs (target/debug/deps/editor_streaming_history-24f469acb2b76a75)
+
+running 4 tests
+test unicode_model_replacements_round_trip_original_selection_and_cancel_preedit ... ok
+test long_document_streaming_retains_small_updates_under_default_and_small_budgets ... ok
+test minimal_replacement_budget_counts_both_changed_sides_and_preserves_redo_branch ... ok
+test external_ui_model_streaming_uses_delta_history_and_commits_undo_back_to_model ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+

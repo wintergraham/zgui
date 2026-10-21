@@ -1,0 +1,162 @@
+{
+  "platform": "X11/Xvfb",
+  "scale": 1,
+  "result": "pass",
+  "checks": [
+    "native wheel scroll",
+    "content clip and padding",
+    "external offset clamp",
+    "shrink child count",
+    "viewport resize clamp",
+    "scroll semantics",
+    "automatic close"
+  ],
+  "pixel_samples": [
+    {
+      "stage": 1,
+      "height": 160,
+      "count": 8,
+      "padding_pixels": [
+        [
+          32,
+          48,
+          64
+        ],
+        [
+          32,
+          48,
+          64
+        ],
+        [
+          32,
+          48,
+          64
+        ],
+        [
+          32,
+          48,
+          64
+        ]
+      ],
+      "offset": 112.0,
+      "validated_content_pixels": 144
+    },
+    {
+      "stage": 2,
+      "height": 160,
+      "count": 8,
+      "padding_pixels": [
+        [
+          32,
+          48,
+          64
+        ],
+        [
+          32,
+          48,
+          64
+        ],
+        [
+          32,
+          48,
+          64
+        ],
+        [
+          32,
+          48,
+          64
+        ]
+      ],
+      "offset": 176.0,
+      "validated_content_pixels": 144
+    },
+    {
+      "stage": 3,
+      "height": 160,
+      "count": 3,
+      "padding_pixels": [
+        [
+          32,
+          48,
+          64
+        ],
+        [
+          32,
+          48,
+          64
+        ],
+        [
+          32,
+          48,
+          64
+        ],
+        [
+          32,
+          48,
+          64
+        ]
+      ],
+      "offset": 0.0,
+      "validated_content_pixels": 144
+    },
+    {
+      "stage": 4,
+      "height": 160,
+      "count": 3,
+      "padding_pixels": [
+        [
+          32,
+          48,
+          64
+        ],
+        [
+          32,
+          48,
+          64
+        ],
+        [
+          32,
+          48,
+          64
+        ],
+        [
+          32,
+          48,
+          64
+        ]
+      ],
+      "offset": 0.0,
+      "validated_content_pixels": 144
+    },
+    {
+      "stage": 5,
+      "height": 240,
+      "count": 8,
+      "padding_pixels": [
+        [
+          32,
+          48,
+          64
+        ],
+        [
+          32,
+          48,
+          64
+        ],
+        [
+          32,
+          48,
+          64
+        ],
+        [
+          32,
+          48,
+          64
+        ]
+      ],
+      "offset": 96.0,
+      "validated_content_pixels": 224
+    }
+  ],
+  "limitations": "Software rendering; does not validate macOS or hardware GPUs."
+}

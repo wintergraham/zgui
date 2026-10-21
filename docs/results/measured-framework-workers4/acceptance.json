@@ -1,0 +1,19 @@
+{
+  "accepted_for_comparison": true,
+  "scope": "Observed process CPU/RSS under the recorded shared-host four-worker Mesa software-renderer condition only",
+  "all_processes_exited_successfully": true,
+  "required_active_updates_per_second": [
+    58,
+    61
+  ],
+  "observed_active_updates_per_second": [
+    59.4,
+    59.95
+  ],
+  "trials": 36,
+  "samples": 10808,
+  "failed_trials": [],
+  "unrelated_builds_observed": true,
+  "causal_attribution": "No isolated attribution to worker count or shared-host builds; passing logical-update gate does not prove presentation parity.",
+  "independent_verification": "Raw/CSV audit passed; 228 archived sources; 169 current and 8 reference build inputs match archived/current sources and all frozen binary hashes."
+}

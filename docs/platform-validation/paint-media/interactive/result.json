@@ -1,0 +1,46 @@
+[
+  {
+    "example": "paint_styles",
+    "passed": true,
+    "changed_bounds": [
+      0,
+      0,
+      130,
+      160
+    ],
+    "binary_sha256": "bfe926b433ecc5bb82ba88f13bbc4705878d3b593c6c7b26ab487db6bc1951f5"
+  },
+  {
+    "example": "canvas",
+    "passed": true,
+    "changed_bounds": [
+      284,
+      47,
+      691,
+      157
+    ],
+    "binary_sha256": "4d1eb17311f29e1e0be8c6fa4f1a38d9167ed6d21bbad87bf3d610b61435b5e4"
+  },
+  {
+    "example": "svg_transform",
+    "passed": true,
+    "changed_bounds": [
+      42,
+      22,
+      210,
+      168
+    ],
+    "binary_sha256": "078df38a0a9a430745ff6e6f51f2081d1848f2b57b0aabcee2cd68fce970e883"
+  },
+  {
+    "example": "animated_image",
+    "passed": true,
+    "changed_bounds": [
+      32,
+      150,
+      272,
+      310
+    ],
+    "binary_sha256": "a4f2d976e27b507671f0d8def0a0166e0ce6b3c015aa69d37ce59c03f63a7750"
+  }
+]

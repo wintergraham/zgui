@@ -1,0 +1,16 @@
+{
+ "framework": "quickgui",
+ "mode": "idle",
+ "repeat": 2,
+ "wall_seconds": 15.0259,
+ "cpu_seconds": 0.0004,
+ "cpu_percent_one_core": 0.0029,
+ "mean_footprint_bytes": 171327542,
+ "peak_footprint_bytes": 395625312,
+ "mean_rss_bytes": 93544666,
+ "peak_rss_bytes": 93634560,
+ "samples": 263,
+ "workload_ticks": 0,
+ "exit_code": -15,
+ "terminated_after_report": true
+}

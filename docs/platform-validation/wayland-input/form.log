@@ -1,0 +1,5 @@
+FORM name="Styled bridge" notes="Styled bridge\nSecond line" locked=true wide=true
+BOUNDS name Rect { x: 24.0, y: 92.0, width: 580.0, height: 44.0 }
+BOUNDS notes Rect { x: 24.0, y: 174.0, width: 580.0, height: 144.0 }
+BOUNDS editors Rect { x: 24.0, y: 62.0, width: 580.0, height: 256.0 }
+VIEWPORT (1000.0, 700.0)

@@ -1,0 +1,59 @@
+{
+  "platform": "X11/Xvfb",
+  "scale": 1,
+  "result": "pass",
+  "checks": [
+    "zero/quarter/full native pixel extent",
+    "grow/shrink allocation",
+    "padding clip",
+    "inherited fill color",
+    "NaN normalization",
+    "progress semantics",
+    "automatic close"
+  ],
+  "pixel_samples": [
+    {
+      "stage": 0,
+      "width": 400,
+      "fraction": 0,
+      "visible_fill_pixels": 0
+    },
+    {
+      "stage": 1,
+      "width": 400,
+      "fraction": 0.25,
+      "visible_fill_pixels": 98
+    },
+    {
+      "stage": 2,
+      "width": 400,
+      "fraction": 1,
+      "visible_fill_pixels": 392
+    },
+    {
+      "stage": 3,
+      "width": 600,
+      "fraction": 1,
+      "visible_fill_pixels": 592
+    },
+    {
+      "stage": 4,
+      "width": 600,
+      "fraction": 0.25,
+      "visible_fill_pixels": 148
+    },
+    {
+      "stage": 5,
+      "width": 200,
+      "fraction": 0.25,
+      "visible_fill_pixels": 48
+    },
+    {
+      "stage": 6,
+      "width": 200,
+      "fraction": 0,
+      "visible_fill_pixels": 0
+    }
+  ],
+  "limitations": "Software rendering; does not validate macOS or hardware GPUs."
+}

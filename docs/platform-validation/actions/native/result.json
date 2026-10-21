@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "backend": "X11/Xvfb",
+  "saved_models": [
+    "base",
+    "basex",
+    "basex",
+    "basex",
+    "basexxz"
+  ],
+  "cases": [
+    "F5 dispatch",
+    "native prefix text timeout",
+    "matched character chord",
+    "function key chord",
+    "mismatch text replay"
+  ],
+  "external_file_drag_tested": false
+}

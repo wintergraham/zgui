@@ -1,0 +1,38 @@
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 30 tests
+test image_and_svg_decoding_are_bounded_and_alpha_correct ... ok
+test scene_installs_native_text_geometry ... ok
+test shaped_hit_caret_and_disjoint_bidi_selection_use_visual_clusters ... ok
+test isolated_opacity_composites_once_and_retains_transformed_subtrees ... ok
+test text_metrics_match_editor_line_pitch ... ok
+test rounded_border_shadow_images_and_background_damage ... ok
+test glyph_atlas_grows_only_when_a_frame_needs_more_capacity ... ok
+test fluent_text_padding_and_background_render_as_one_box ... ok
+test declarative_virtual_rows_clip_padding_and_repair_scroll_damage ... ok
+test image_cache_reclaims_removed_nodes_and_rejects_oversized_allocations ... ok
+test layer_texture_budget_fails_before_allocation_and_recovers_after_removal ... ok
+test declarative_images_repaint_source_and_allocated_content_without_padding_bleed ... ok
+test declarative_slider_damage_clears_old_thumb_and_resized_surface ... ok
+test decorated_container_paints_background_before_children ... ok
+test blur_inside_isolated_layer_rebuilds_on_backdrop_mutation ... ok
+test declarative_editors_keep_styled_text_caret_and_selection_correct_when_resized ... ok
+test backdrop_blur_reconstructs_without_feedback ... ok
+test composed_fluent_styles_render_and_repaint_without_relayout ... ok
+test shared_device_and_fonts_outlive_individual_renderers_with_lazy_atlases ... ok
+test nested_layers_apply_opacity_at_each_boundary_and_invalidate_ancestors ... ok
+test focused_scroll_descendant_is_revealed_with_correct_damage ... ok
+test isolated_overflow_and_fractional_translation_reuse_content ... ok
+test font_selection_changes_pixels_and_measurement_without_stale_cached_glyphs ... ok
+test declarative_scroll_clips_children_and_repairs_damage_without_relayout ... ok
+test horizontal_scroll_clips_padding_and_repairs_compositor_damage ... ok
+test retained_damage_alpha_text_and_scale ... ok
+test declarative_progress_composites_fill_without_layout_or_padding_bleed ... ok
+test overlay_scrollbar_thumb_translates_and_clears_when_content_shrinks ... ok
+test virtual_keyboard_end_home_repaint_only_retained_visible_rows ... ok
+test thousand_streaming_frames_keep_caches_bounded_and_reuse_vertices ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.96s
+
+[Inferior 1 (process 2957611) exited normally]

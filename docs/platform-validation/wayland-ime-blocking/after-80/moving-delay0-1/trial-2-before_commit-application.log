@@ -1,0 +1,35 @@
+IME Preedit("n", Some((0, 1))) elapsed=4.057563
+RECT_REQUEST x=54 delay_ms=0 elapsed=4.057580
+RECT x=54 y=80 width=1 height=24 elapsed=4.057620
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="n" elapsed=4.057625
+BLOCK_END position=after-cursor observed_ms=80.068 elapsed=4.137694
+PRESENT_BEGIN stage=ime-after-cursor elapsed=4.137722
+PRESENT_END stage=ime-after-cursor observed_ms=1.206 elapsed=4.138928
+IME Preedit("ni", Some((0, 2))) elapsed=4.139052
+RECT_REQUEST x=68 delay_ms=0 elapsed=4.139061
+RECT x=68 y=80 width=1 height=24 elapsed=4.139089
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="ni" elapsed=4.139094
+BLOCK_END position=after-cursor observed_ms=80.698 elapsed=4.219793
+PRESENT_BEGIN stage=ime-after-cursor elapsed=4.219837
+PRESENT_END stage=ime-after-cursor observed_ms=1.670 elapsed=4.221507
+IME Preedit("ni h", Some((0, 4))) elapsed=4.221652
+RECT_REQUEST x=96 delay_ms=0 elapsed=4.221663
+RECT x=96 y=80 width=1 height=24 elapsed=4.221695
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="ni h" elapsed=4.221700
+BLOCK_END position=after-cursor observed_ms=80.068 elapsed=4.301768
+PRESENT_BEGIN stage=ime-after-cursor elapsed=4.301810
+PRESENT_END stage=ime-after-cursor observed_ms=1.675 elapsed=4.303485
+IME Preedit("ni ha", Some((0, 5))) elapsed=4.303508
+RECT_REQUEST x=110 delay_ms=0 elapsed=4.303551
+RECT x=110 y=80 width=1 height=24 elapsed=4.303593
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="ni ha" elapsed=4.303598
+BLOCK_END position=after-cursor observed_ms=80.066 elapsed=4.383664
+PRESENT_BEGIN stage=ime-after-cursor elapsed=4.383704
+PRESENT_END stage=ime-after-cursor observed_ms=1.534 elapsed=4.385237
+IME Preedit("ni hao", Some((0, 6))) elapsed=4.385361
+RECT_REQUEST x=124 delay_ms=0 elapsed=4.385372
+RECT x=124 y=80 width=1 height=24 elapsed=4.385407
+BLOCK_BEGIN position=after-cursor requested_ms=80 preedit="ni hao" elapsed=4.385412
+BLOCK_END position=after-cursor observed_ms=80.066 elapsed=4.465478
+PRESENT_BEGIN stage=ime-after-cursor elapsed=4.465512
+PRESENT_END stage=ime-after-cursor observed_ms=1.499 elapsed=4.467012

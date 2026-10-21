@@ -1,0 +1,36 @@
+IME Preedit("n", Some((0, 1))) elapsed=4.064617
+BLOCK_BEGIN position=before-cursor requested_ms=80 preedit="n" elapsed=4.064632
+BLOCK_END position=before-cursor observed_ms=80.023 elapsed=4.144655
+PRESENT_BEGIN stage=ime-before-cursor elapsed=4.144682
+PRESENT_END stage=ime-before-cursor observed_ms=1.070 elapsed=4.145752
+IME Preedit("ni", Some((0, 2))) elapsed=4.145884
+BLOCK_BEGIN position=before-cursor requested_ms=80 preedit="ni" elapsed=4.145894
+BLOCK_END position=before-cursor observed_ms=80.067 elapsed=4.225961
+PRESENT_BEGIN stage=ime-before-cursor elapsed=4.225992
+PRESENT_END stage=ime-before-cursor observed_ms=1.403 elapsed=4.227395
+IME Preedit("ni h", Some((0, 4))) elapsed=4.227550
+BLOCK_BEGIN position=before-cursor requested_ms=80 preedit="ni h" elapsed=4.227560
+BLOCK_END position=before-cursor observed_ms=80.067 elapsed=4.307628
+PRESENT_BEGIN stage=ime-before-cursor elapsed=4.307680
+PRESENT_END stage=ime-before-cursor observed_ms=1.266 elapsed=4.308945
+IME Preedit("ni ha", Some((0, 5))) elapsed=4.308955
+BLOCK_BEGIN position=before-cursor requested_ms=80 preedit="ni ha" elapsed=4.308966
+BLOCK_END position=before-cursor observed_ms=80.067 elapsed=4.389033
+PRESENT_BEGIN stage=ime-before-cursor elapsed=4.389070
+PRESENT_END stage=ime-before-cursor observed_ms=1.252 elapsed=4.390323
+IME Preedit("ni hao", Some((0, 6))) elapsed=4.390445
+BLOCK_BEGIN position=before-cursor requested_ms=80 preedit="ni hao" elapsed=4.390466
+BLOCK_END position=before-cursor observed_ms=80.069 elapsed=4.470536
+PRESENT_BEGIN stage=ime-before-cursor elapsed=4.470571
+PRESENT_END stage=ime-before-cursor observed_ms=1.383 elapsed=4.471954
+IME Preedit("", None) elapsed=6.291462
+BLOCK_BEGIN position=before-cursor requested_ms=80 preedit="" elapsed=6.291488
+BLOCK_END position=before-cursor observed_ms=80.071 elapsed=6.371559
+PRESENT_BEGIN stage=ime-before-cursor elapsed=6.371590
+PRESENT_END stage=ime-before-cursor observed_ms=1.203 elapsed=6.372793
+IME Commit("你好") elapsed=6.372803
+IME Preedit("", None) elapsed=6.372812
+BLOCK_BEGIN position=before-cursor requested_ms=80 preedit="" elapsed=6.372817
+BLOCK_END position=before-cursor observed_ms=80.067 elapsed=6.452884
+PRESENT_BEGIN stage=ime-before-cursor elapsed=6.452923
+PRESENT_END stage=ime-before-cursor observed_ms=1.087 elapsed=6.454010

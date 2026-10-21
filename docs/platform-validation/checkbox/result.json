@@ -1,0 +1,14 @@
+{
+  "platform": "X11/Xvfb",
+  "scale": 1,
+  "result": "pass",
+  "checks": [
+    "pointer label activation",
+    "Space toggle",
+    "disabled activation suppressed",
+    "external model write",
+    "checkbox semantics",
+    "automatic close"
+  ],
+  "limitations": "Software rendering; does not validate macOS or hardware GPUs."
+}

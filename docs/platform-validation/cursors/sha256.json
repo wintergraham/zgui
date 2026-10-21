@@ -1,0 +1,12 @@
+{
+  "README.md": "8c30811945459f0c399126fd8ba79423ef102195c223fdc047b84d0b77bb2c4a",
+  "accepted/application.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "accepted/cursor-observations.json": "8be9323db38fd1d1d051f36934420b3a8b31f41408017e33c417938b7e3cdf63",
+  "accepted/result.json": "e61de7bc704d056d29a943c48694f6b6d8bdbabaf5f68f53013891f1d936e2c7",
+  "accepted/window.png": "53ce73d9f47cf0619740e9cca09422a9d615a3234c74d09c2225443dcc4c385d",
+  "cursors_smoke.py": "77fdd728893a178f7c53202e5ff33e33cf018a681c4d6c6962876d61eda25586",
+  "initial-oracle-failure/application.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "initial-oracle-failure/cursor-observations.json": "8be9323db38fd1d1d051f36934420b3a8b31f41408017e33c417938b7e3cdf63",
+  "repeated-oracle-failure/application.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "repeated-oracle-failure/cursor-observations.json": "8be9323db38fd1d1d051f36934420b3a8b31f41408017e33c417938b7e3cdf63"
+}

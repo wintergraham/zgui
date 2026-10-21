@@ -1,0 +1,20 @@
+[
+  {
+    "mode": "idle",
+    "framework": "zgui",
+    "adapter": "components",
+    "renderer": "gpu",
+    "ticks": 0,
+    "mounted_rows": 17,
+    "elapsed_seconds": 2.0
+  },
+  {
+    "mode": "both",
+    "framework": "zgui",
+    "adapter": "components",
+    "renderer": "gpu",
+    "ticks": 119,
+    "mounted_rows": 19,
+    "elapsed_seconds": 2.001
+  }
+]

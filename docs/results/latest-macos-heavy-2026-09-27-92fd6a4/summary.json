@@ -1,0 +1,324 @@
+{
+ "groups": [
+  {
+   "framework": "zgui",
+   "mode": "idle",
+   "repeats": 3,
+   "cpu_percent_one_core": {
+    "median": 0.0023,
+    "min": 0.0017,
+    "max": 0.0031
+   },
+   "mean_footprint_bytes": {
+    "median": 95635436.0,
+    "min": 95506430.0,
+    "max": 95943278.0
+   },
+   "peak_footprint_bytes": {
+    "median": 101614408.0,
+    "min": 101581664.0,
+    "max": 101745504.0
+   },
+   "mean_rss_bytes": {
+    "median": 108140966.0,
+    "min": 107993286.0,
+    "max": 108273693.0
+   },
+   "peak_rss_bytes": {
+    "median": 108232704.0,
+    "min": 108085248.0,
+    "max": 108380160.0
+   },
+   "workload_ticks": {
+    "median": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "wall_seconds": {
+    "median": 15.053,
+    "min": 15.0389,
+    "max": 15.0547
+   }
+  },
+  {
+   "framework": "zgui",
+   "mode": "stream",
+   "repeats": 3,
+   "cpu_percent_one_core": {
+    "median": 10.9069,
+    "min": 10.6089,
+    "max": 11.2035
+   },
+   "mean_footprint_bytes": {
+    "median": 309677249.0,
+    "min": 309537175.0,
+    "max": 311183879.0
+   },
+   "peak_footprint_bytes": {
+    "median": 313803592.0,
+    "min": 313738056.0,
+    "max": 315458400.0
+   },
+   "mean_rss_bytes": {
+    "median": 111909050.0,
+    "min": 111741757.0,
+    "max": 113225420.0
+   },
+   "peak_rss_bytes": {
+    "median": 112689152.0,
+    "min": 111804416.0,
+    "max": 113295360.0
+   },
+   "workload_ticks": {
+    "median": 1199.0,
+    "min": 1197.0,
+    "max": 1199.0
+   },
+   "wall_seconds": {
+    "median": 15.0329,
+    "min": 15.0223,
+    "max": 15.0514
+   }
+  },
+  {
+   "framework": "zgui",
+   "mode": "scroll",
+   "repeats": 3,
+   "cpu_percent_one_core": {
+    "median": 3.9848,
+    "min": 3.9774,
+    "max": 3.9918
+   },
+   "mean_footprint_bytes": {
+    "median": 304395785.0,
+    "min": 304096939.0,
+    "max": 304818806.0
+   },
+   "peak_footprint_bytes": {
+    "median": 307020664.0,
+    "min": 306807672.0,
+    "max": 307413856.0
+   },
+   "mean_rss_bytes": {
+    "median": 110065273.0,
+    "min": 109706445.0,
+    "max": 110426795.0
+   },
+   "peak_rss_bytes": {
+    "median": 110313472.0,
+    "min": 110018560.0,
+    "max": 110690304.0
+   },
+   "workload_ticks": {
+    "median": 1199.0,
+    "min": 1197.0,
+    "max": 1199.0
+   },
+   "wall_seconds": {
+    "median": 15.0075,
+    "min": 15.0006,
+    "max": 15.0434
+   }
+  },
+  {
+   "framework": "zgui",
+   "mode": "both",
+   "repeats": 3,
+   "cpu_percent_one_core": {
+    "median": 11.484,
+    "min": 11.2794,
+    "max": 11.5338
+   },
+   "mean_footprint_bytes": {
+    "median": 310145211.0,
+    "min": 309966457.0,
+    "max": 312190340.0
+   },
+   "peak_footprint_bytes": {
+    "median": 314491768.0,
+    "min": 314491744.0,
+    "max": 316654456.0
+   },
+   "mean_rss_bytes": {
+    "median": 112539952.0,
+    "min": 112413217.0,
+    "max": 115073990.0
+   },
+   "peak_rss_bytes": {
+    "median": 112902144.0,
+    "min": 112869376.0,
+    "max": 115539968.0
+   },
+   "workload_ticks": {
+    "median": 1199.0,
+    "min": 1196.0,
+    "max": 1199.0
+   },
+   "wall_seconds": {
+    "median": 15.0204,
+    "min": 15.0176,
+    "max": 15.0223
+   }
+  },
+  {
+   "framework": "gpui",
+   "mode": "idle",
+   "repeats": 3,
+   "cpu_percent_one_core": {
+    "median": 0.3678,
+    "min": 0.3664,
+    "max": 0.3683
+   },
+   "mean_footprint_bytes": {
+    "median": 109063888.0,
+    "min": 87973988.0,
+    "max": 113442008.0
+   },
+   "peak_footprint_bytes": {
+    "median": 134578944.0,
+    "min": 90899176.0,
+    "max": 242189032.0
+   },
+   "mean_rss_bytes": {
+    "median": 76797952.0,
+    "min": 76652172.0,
+    "max": 77639841.0
+   },
+   "peak_rss_bytes": {
+    "median": 76890112.0,
+    "min": 76775424.0,
+    "max": 77774848.0
+   },
+   "workload_ticks": {
+    "median": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "wall_seconds": {
+    "median": 15.0264,
+    "min": 15.0023,
+    "max": 15.0567
+   }
+  },
+  {
+   "framework": "gpui",
+   "mode": "stream",
+   "repeats": 3,
+   "cpu_percent_one_core": {
+    "median": 20.5559,
+    "min": 19.8882,
+    "max": 20.9862
+   },
+   "mean_footprint_bytes": {
+    "median": 280381250.0,
+    "min": 280339471.0,
+    "max": 281904025.0
+   },
+   "peak_footprint_bytes": {
+    "median": 282346216.0,
+    "min": 281412328.0,
+    "max": 282460904.0
+   },
+   "mean_rss_bytes": {
+    "median": 77391238.0,
+    "min": 77267378.0,
+    "max": 77427955.0
+   },
+   "peak_rss_bytes": {
+    "median": 79085568.0,
+    "min": 77463552.0,
+    "max": 79151104.0
+   },
+   "workload_ticks": {
+    "median": 1197.0,
+    "min": 1194.0,
+    "max": 1198.0
+   },
+   "wall_seconds": {
+    "median": 15.0137,
+    "min": 15.0063,
+    "max": 15.0486
+   }
+  },
+  {
+   "framework": "gpui",
+   "mode": "scroll",
+   "repeats": 3,
+   "cpu_percent_one_core": {
+    "median": 13.2195,
+    "min": 13.1476,
+    "max": 13.9466
+   },
+   "mean_footprint_bytes": {
+    "median": 280262098.0,
+    "min": 280032180.0,
+    "max": 280610564.0
+   },
+   "peak_footprint_bytes": {
+    "median": 281740008.0,
+    "min": 281527016.0,
+    "max": 283034368.0
+   },
+   "mean_rss_bytes": {
+    "median": 77686412.0,
+    "min": 77435188.0,
+    "max": 77898783.0
+   },
+   "peak_rss_bytes": {
+    "median": 79478784.0,
+    "min": 79233024.0,
+    "max": 79708160.0
+   },
+   "workload_ticks": {
+    "median": 1196.0,
+    "min": 1195.0,
+    "max": 1197.0
+   },
+   "wall_seconds": {
+    "median": 15.0241,
+    "min": 15.023,
+    "max": 15.0546
+   }
+  },
+  {
+   "framework": "gpui",
+   "mode": "both",
+   "repeats": 3,
+   "cpu_percent_one_core": {
+    "median": 20.9406,
+    "min": 20.9367,
+    "max": 21.2722
+   },
+   "mean_footprint_bytes": {
+    "median": 283503584.0,
+    "min": 283008398.0,
+    "max": 289052954.0
+   },
+   "peak_footprint_bytes": {
+    "median": 284328680.0,
+    "min": 284279552.0,
+    "max": 291767040.0
+   },
+   "mean_rss_bytes": {
+    "median": 78521623.0,
+    "min": 78517012.0,
+    "max": 79085332.0
+   },
+   "peak_rss_bytes": {
+    "median": 79151104.0,
+    "min": 78790656.0,
+    "max": 80478208.0
+   },
+   "workload_ticks": {
+    "median": 1197.0,
+    "min": 1195.0,
+    "max": 1197.0
+   },
+   "wall_seconds": {
+    "median": 15.0258,
+    "min": 15.0098,
+    "max": 15.0433
+   }
+  }
+ ]
+}

@@ -1,0 +1,33 @@
+{
+  "platform": "X11/Xvfb",
+  "scale": 1,
+  "result": "pass",
+  "checks": [
+    "Tab horizontal reveal",
+    "ShiftTab horizontal reveal",
+    "native button7 horizontal wheel",
+    "manualwheel no snapback",
+    "viewport resize clamp",
+    "focused pixels",
+    "automatic close"
+  ],
+  "pixel_samples": [
+    {
+      "stage": 1,
+      "visible_focus_columns": 80
+    },
+    {
+      "stage": 2,
+      "visible_focus_columns": 80
+    },
+    {
+      "stage": 3,
+      "visible_focus_columns": 0
+    },
+    {
+      "stage": 4,
+      "visible_focus_columns": 0
+    }
+  ],
+  "limitations": "Software rendering; does not validate macOS or hardware GPUs."
+}

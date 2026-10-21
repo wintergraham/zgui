@@ -1,0 +1,37 @@
+{
+  "archive": "docs/platform-validation/initialization/source.tar.gz",
+  "archive_sha256": "5fb16c1919ad93700015469d0891810613423b13fc10034135ca71e314c3e454",
+  "before_sha256": "1578a36782fa92576632c68a3ace8a1aae39e500902a7044fd6078c7902ad3f9",
+  "after_sha256": "784c38bc6383ec111268a0c710632e44084b557d2d07a0e72bf18622a55b0835",
+  "benchmark_sha256": "abe2160c7bd15581ec0257f0943e4d3589229d840004122134dd2b738298febb",
+  "unicode_version": "1.13.3",
+  "repeats": 5,
+  "scope": "Exact TextEditor modules only; headless external set_text, not GUI/framework comparison",
+  "started_at_utc": "2026-09-22T14:37:39.235799+00:00",
+  "command": [
+    "/usr/bin/python3",
+    "scripts/editor_streaming_compare.py",
+    "--output",
+    "docs/results/editor-streaming",
+    "--repeats",
+    "5"
+  ],
+  "build_command": [
+    "cargo",
+    "build",
+    "--release",
+    "--offline"
+  ],
+  "build_environment": {
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "per-variant temporary target directory"
+  },
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.97.1\nLLVM version: 22.1.6\n",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+  "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.43",
+  "runner_sha256": "13d9f0e35295a1234f5abfde6f81ccb4bba18e1311a83b7fb2694fd18a96b5d0",
+  "before_binary_sha256": "20ffcaef41faf175f7a161bfacc8df8e82e58ec31e4be2e47779bc45749150c1",
+  "after_binary_sha256": "f887a645bcee0aec93b44b6b1715f962ba02a25a2e56633a42af3ded480c2368",
+  "finished_at_utc": "2026-09-22T14:37:49.845311+00:00"
+}

@@ -1,0 +1,7 @@
+{
+  "result": "pass",
+  "owner_close_releases_parent": true,
+  "portal_close_observed": true,
+  "closed_callback_suppressed": true,
+  "application_survives_owner": true
+}

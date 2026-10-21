@@ -1,0 +1,38 @@
+{
+  "default": {
+    "width": 16,
+    "height": 16,
+    "name": null,
+    "sha256": "314b42bf34138a331b0e088dc5231bd2a53f848b4c654d3da3b119cce6b72cf9"
+  },
+  "move": {
+    "width": 24,
+    "height": 24,
+    "name": "move",
+    "sha256": "849af2466ad1de9b620436d70a30686967b46aeea7300a7abdbda9445573f14f"
+  },
+  "disabled": {
+    "width": 24,
+    "height": 24,
+    "name": "not-allowed",
+    "sha256": "fe862782675fa407165e75ef20c4a989467260c0bf318191c988df42dc9c9f30"
+  },
+  "crosshair": {
+    "width": 24,
+    "height": 24,
+    "name": "crosshair",
+    "sha256": "fbf685acb1d251885ee1d50c6eec78f615c8737d0033ef4f65515a624c92db8e"
+  },
+  "wait": {
+    "width": 24,
+    "height": 24,
+    "name": null,
+    "sha256": "4f44283f1a05ce09c4e4b66a17bfb04247ed2a0f78428aa6330f0f7084d25895"
+  },
+  "restored": {
+    "width": 24,
+    "height": 24,
+    "name": "default",
+    "sha256": "849af2466ad1de9b620436d70a30686967b46aeea7300a7abdbda9445573f14f"
+  }
+}

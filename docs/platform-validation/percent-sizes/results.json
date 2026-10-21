@@ -1,0 +1,166 @@
+{
+  "passed": true,
+  "backend": "owned X11/Xvfb/Openbox",
+  "reports": [
+    {
+      "viewport": [
+        640.0,
+        420.0
+      ],
+      "split": {
+        "x": 20.0,
+        "y": 56.0,
+        "width": 600.0,
+        "height": 344.0
+      },
+      "left": {
+        "x": 20.0,
+        "y": 56.0,
+        "width": 300.0,
+        "height": 344.0
+      },
+      "right": {
+        "x": 320.0,
+        "y": 56.0,
+        "width": 300.0,
+        "height": 344.0
+      },
+      "caret": {
+        "x": 42.945313,
+        "y": 68.0,
+        "width": 1.0,
+        "height": 23.0
+      },
+      "focus": 1,
+      "model": "AResize this window. Both panels keep half the available width, and this editor wraps without losing its text or selection."
+    },
+    {
+      "viewport": [
+        440.0,
+        340.0
+      ],
+      "split": {
+        "x": 20.0,
+        "y": 56.0,
+        "width": 400.0,
+        "height": 264.0
+      },
+      "left": {
+        "x": 20.0,
+        "y": 56.0,
+        "width": 200.0,
+        "height": 264.0
+      },
+      "right": {
+        "x": 220.0,
+        "y": 56.0,
+        "width": 200.0,
+        "height": 264.0
+      },
+      "caret": {
+        "x": 42.945313,
+        "y": 68.0,
+        "width": 1.0,
+        "height": 23.0
+      },
+      "focus": 1,
+      "model": "AResize this window. Both panels keep half the available width, and this editor wraps without losing its text or selection."
+    },
+    {
+      "viewport": [
+        440.0,
+        340.0
+      ],
+      "split": {
+        "x": 20.0,
+        "y": 56.0,
+        "width": 400.0,
+        "height": 264.0
+      },
+      "left": {
+        "x": 20.0,
+        "y": 56.0,
+        "width": 200.0,
+        "height": 264.0
+      },
+      "right": {
+        "x": 220.0,
+        "y": 56.0,
+        "width": 200.0,
+        "height": 264.0
+      },
+      "caret": {
+        "x": 42.976563,
+        "y": 68.0,
+        "width": 1.0,
+        "height": 23.0
+      },
+      "focus": 1,
+      "model": "BAResize this window. Both panels keep half the available width, and this editor wraps without losing its text or selection."
+    },
+    {
+      "viewport": [
+        800.0,
+        500.0
+      ],
+      "split": {
+        "x": 20.0,
+        "y": 56.0,
+        "width": 760.0,
+        "height": 424.0
+      },
+      "left": {
+        "x": 20.0,
+        "y": 56.0,
+        "width": 380.0,
+        "height": 424.0
+      },
+      "right": {
+        "x": 400.0,
+        "y": 56.0,
+        "width": 380.0,
+        "height": 424.0
+      },
+      "caret": {
+        "x": 42.976563,
+        "y": 68.0,
+        "width": 1.0,
+        "height": 23.0
+      },
+      "focus": 1,
+      "model": "BAResize this window. Both panels keep half the available width, and this editor wraps without losing its text or selection."
+    },
+    {
+      "viewport": [
+        800.0,
+        500.0
+      ],
+      "split": {
+        "x": 20.0,
+        "y": 56.0,
+        "width": 760.0,
+        "height": 424.0
+      },
+      "left": {
+        "x": 20.0,
+        "y": 56.0,
+        "width": 380.0,
+        "height": 424.0
+      },
+      "right": {
+        "x": 400.0,
+        "y": 56.0,
+        "width": 380.0,
+        "height": 424.0
+      },
+      "caret": {
+        "x": 43.171875,
+        "y": 68.0,
+        "width": 1.0,
+        "height": 23.0
+      },
+      "focus": 1,
+      "model": "CBAResize this window. Both panels keep half the available width, and this editor wraps without losing its text or selection."
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+    Blocking waiting for file lock on build directory
+   Compiling zgui-gpu v0.1.0 (/home/ubuntu/GitHub/zgui/crates/zgui-gpu)
+    Finished `test` profile [unoptimized] target(s) in 4.19s
+     Running unittests src/lib.rs (/tmp/zgui-target/debug/deps/zgui_gpu-e8f70934c50d83fa)
+
+running 7 tests
+test surface::tests::lost_recreates_before_configuring_and_acquires_replacement ... ok
+test surface::tests::outdated_preserves_surface_and_reconfigures ... ok
+test surface::tests::persistent_surface_changes_remain_bounded_on_each_host_retry ... ok
+test surface::tests::recovered_surface_can_skip_then_succeed_on_a_later_call ... ok
+test surface::tests::recreation_and_acquisition_errors_propagate_without_retry ... ok
+test surface::tests::repeated_surface_changes_yield_and_can_recover_on_a_later_turn ... ok
+test surface::tests::skipped_frames_are_distinct_and_do_not_retry_or_configure ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.00s
+

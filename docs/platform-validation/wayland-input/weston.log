@@ -1,0 +1,39 @@
+Date: 2026-09-22 UTC
+[10:58:34.106] weston 14.0.2
+               https://wayland.freedesktop.org
+               Bug reports to: https://gitlab.freedesktop.org/wayland/weston/issues/
+               Build: 14.0.2
+[10:58:34.106] Command line: weston --backend=x11 --renderer=pixman --shell=kiosk-shell.so --no-config --socket=zgui-input --width=900 --height=650 --idle-time=0
+[10:58:34.106] OS: Linux, 7.0.0-28-generic, #28-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 21 01:01:36 UTC 2026, x86_64
+[10:58:34.106] Flight recorder: enabled
+[10:58:34.106] Starting with no config file.
+[10:58:34.106] Output repaint window is 7 ms maximum.
+[10:58:34.106] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/x11-backend.so'
+[10:58:34.107] Using Pixman renderer
+[10:58:34.111] Registered plugin API 'weston_windowed_output_api_x11_v2' of size 16
+[10:58:34.111] Color manager: no-op
+                 protocol support: no
+[10:58:34.111] Output 'screen0' attempts EOTF mode SDR and colorimetry mode default.
+[10:58:34.111] Output 'screen0' using color profile: stock sRGB color profile
+[10:58:34.111] Found visual, bits per value: 8, red_mask: 00ff0000, green_mask: 0000ff00, blue_mask: 000000ff
+[10:58:34.111] Visual depth is 24
+[10:58:34.111] Found format for depth 24, bpp: 32
+[10:58:34.111] Will use x8r8g8b8 format for SHM surfaces
+[10:58:34.111] x11 output 900x650, window id 4194309
+[10:58:34.111] Output 'screen0' enabled with head(s) screen0
+[10:58:34.111] Compositor capabilities:
+               arbitrary surface rotation: yes
+               screen capture uses y-flip: no
+               cursor planes: no
+               arbitrary resolutions: no
+               view mask clipping: yes
+               explicit sync: no
+               color operations: no
+               presentation clock: CLOCK_MONOTONIC_RAW, id 4
+               presentation clock resolution: 0.000000001 s
+[10:58:34.111] Loading module '/usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so'
+[10:58:37.992] Found visual, bits per value: 8, red_mask: 00ff0000, green_mask: 0000ff00, blue_mask: 000000ff
+[10:58:37.992] Visual depth is 24
+[10:58:37.992] Found format for depth 24, bpp: 32
+[10:58:37.992] Will use x8r8g8b8 format for SHM surfaces
+[10:58:46.748] caught signal 15

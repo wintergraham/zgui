@@ -1,0 +1,12 @@
+{
+  "url": "https://zgui-performance.pages.dev",
+  "deployment": "https://b869ec6e.zgui-performance.pages.dev",
+  "desktop_width": 1440,
+  "mobile_width": 390,
+  "workloads_checked": 4,
+  "table_medians_checked": 12,
+  "page_errors": [],
+  "horizontal_page_overflow": false,
+  "published_csv_json_bytes_match_local": true,
+  "note": "Browser uses local Playwright with system Chrome. urllib returned403 but curl and browser checks returned200 and verified content."
+}

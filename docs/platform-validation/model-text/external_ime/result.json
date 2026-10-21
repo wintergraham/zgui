@@ -1,0 +1,62 @@
+{
+  "result": "pass",
+  "backend": "X11 XIM / private IBus libpinyin",
+  "checks": [
+    "external model replacement during genuine preedit",
+    "preedit cancelled without focus change",
+    "Return does not commit cancelled candidate",
+    "ordinary Backspace resumes",
+    "ordinary digit input resumes without engine switch",
+    "fresh native composition and Unicode commit"
+  ],
+  "snapshots": [
+    {
+      "stage": "external_replacement",
+      "replaced": true,
+      "preedit": false,
+      "focus": true,
+      "focus_changes": 3,
+      "model": "replacement"
+    },
+    {
+      "stage": "old_candidate_does_not_commit",
+      "replaced": true,
+      "preedit": false,
+      "focus": true,
+      "focus_changes": 3,
+      "model": "replacement"
+    },
+    {
+      "stage": "ordinary_backspace",
+      "replaced": true,
+      "preedit": false,
+      "focus": true,
+      "focus_changes": 3,
+      "model": "replacemen"
+    },
+    {
+      "stage": "ordinary_input",
+      "replaced": true,
+      "preedit": false,
+      "focus": true,
+      "focus_changes": 3,
+      "model": "replacemen7"
+    },
+    {
+      "stage": "new_preedit",
+      "replaced": true,
+      "preedit": true,
+      "focus": true,
+      "focus_changes": 3,
+      "model": "replacemen7"
+    },
+    {
+      "stage": "new_commit",
+      "replaced": true,
+      "preedit": false,
+      "focus": true,
+      "focus_changes": 3,
+      "model": "replacemen7\u4f60\u597d"
+    }
+  ]
+}

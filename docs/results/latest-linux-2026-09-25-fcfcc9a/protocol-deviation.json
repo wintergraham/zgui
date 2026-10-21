@@ -1,0 +1,6 @@
+{
+  "recorded_at_utc": "2026-09-25T20:29:36.294043+00:00",
+  "before_first_trial": true,
+  "deviation": "Clean-start build gate changed from refusal to warning after repeated unrelated-build blockers. Active builds at start; explicitly contended shared-host measurement.",
+  "unchanged": "All workloads, repeat counts, sampling, durations, source/binary proofs, and58\u201361 logical updates acceptance gates unchanged."
+}

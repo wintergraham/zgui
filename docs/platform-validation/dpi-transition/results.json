@@ -1,0 +1,252 @@
+{
+  "passed": true,
+  "compositor": "sway version 1.11",
+  "backend": "native Wayland / owned Sway X11 / Xvfb / pixman",
+  "transitions": [
+    {
+      "stage": 1,
+      "scale": 1,
+      "output": {
+        "id": 3,
+        "type": "output",
+        "orientation": "none",
+        "percent": 1.0,
+        "urgent": false,
+        "marks": [],
+        "layout": "output",
+        "border": "none",
+        "current_border_width": 0,
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 1200,
+          "height": 800
+        },
+        "deco_rect": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "window_rect": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "geometry": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "name": "X11-1",
+        "window": null,
+        "nodes": [],
+        "floating_nodes": [],
+        "focus": [
+          4
+        ],
+        "fullscreen_mode": 0,
+        "sticky": false,
+        "floating": null,
+        "scratchpad_state": null,
+        "primary": false,
+        "make": "The X.Org Foundation",
+        "model": "11.0",
+        "serial": "Unknown",
+        "modes": [],
+        "non_desktop": false,
+        "active": true,
+        "dpms": true,
+        "power": true,
+        "scale": 1.0,
+        "scale_filter": "nearest",
+        "transform": "normal",
+        "adaptive_sync_status": "enabled",
+        "current_workspace": "1",
+        "current_mode": {
+          "width": 1200,
+          "height": 800,
+          "refresh": 0
+        },
+        "max_render_time": 0,
+        "allow_tearing": false,
+        "focused": true,
+        "subpixel_hinting": "unknown"
+      },
+      "screenshot_size": [
+        1200,
+        800
+      ],
+      "editor_fill_pixel_width": 398
+    },
+    {
+      "stage": 2,
+      "scale": 2,
+      "output": {
+        "id": 3,
+        "type": "output",
+        "orientation": "none",
+        "percent": 1.0,
+        "urgent": false,
+        "marks": [],
+        "layout": "output",
+        "border": "none",
+        "current_border_width": 0,
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 600,
+          "height": 400
+        },
+        "deco_rect": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "window_rect": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "geometry": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "name": "X11-1",
+        "window": null,
+        "nodes": [],
+        "floating_nodes": [],
+        "focus": [
+          4
+        ],
+        "fullscreen_mode": 0,
+        "sticky": false,
+        "floating": null,
+        "scratchpad_state": null,
+        "primary": false,
+        "make": "The X.Org Foundation",
+        "model": "11.0",
+        "serial": "Unknown",
+        "modes": [],
+        "non_desktop": false,
+        "active": true,
+        "dpms": true,
+        "power": true,
+        "scale": 2.0,
+        "scale_filter": "nearest",
+        "transform": "normal",
+        "adaptive_sync_status": "enabled",
+        "current_workspace": "1",
+        "current_mode": {
+          "width": 1200,
+          "height": 800,
+          "refresh": 0
+        },
+        "max_render_time": 0,
+        "allow_tearing": false,
+        "focused": true,
+        "subpixel_hinting": "unknown"
+      },
+      "screenshot_size": [
+        1200,
+        800
+      ],
+      "editor_fill_pixel_width": 796
+    },
+    {
+      "stage": 3,
+      "scale": 1,
+      "output": {
+        "id": 3,
+        "type": "output",
+        "orientation": "none",
+        "percent": 1.0,
+        "urgent": false,
+        "marks": [],
+        "layout": "output",
+        "border": "none",
+        "current_border_width": 0,
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 1200,
+          "height": 800
+        },
+        "deco_rect": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "window_rect": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "geometry": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "name": "X11-1",
+        "window": null,
+        "nodes": [],
+        "floating_nodes": [],
+        "focus": [
+          4
+        ],
+        "fullscreen_mode": 0,
+        "sticky": false,
+        "floating": null,
+        "scratchpad_state": null,
+        "primary": false,
+        "make": "The X.Org Foundation",
+        "model": "11.0",
+        "serial": "Unknown",
+        "modes": [],
+        "non_desktop": false,
+        "active": true,
+        "dpms": true,
+        "power": true,
+        "scale": 1.0,
+        "scale_filter": "nearest",
+        "transform": "normal",
+        "adaptive_sync_status": "enabled",
+        "current_workspace": "1",
+        "current_mode": {
+          "width": 1200,
+          "height": 800,
+          "refresh": 0
+        },
+        "max_render_time": 0,
+        "allow_tearing": false,
+        "focused": true,
+        "subpixel_hinting": "unknown"
+      },
+      "screenshot_size": [
+        1200,
+        800
+      ],
+      "editor_fill_pixel_width": 398
+    }
+  ],
+  "reports": [
+    "DPI viewport=(1200.0, 800.0) editor=Rect { x: 20.0, y: 54.0, width: 400.0, height: 44.0 } caret=Rect { x: 37.6, y: 62.0, width: 1.0, height: 23.0 } selection=1 model=\"A0123456789\"",
+    "DPI viewport=(600.0, 400.0) editor=Rect { x: 20.0, y: 54.0, width: 400.0, height: 44.0 } caret=Rect { x: 37.6, y: 62.0, width: 1.0, height: 23.0 } selection=1 model=\"BA0123456789\"",
+    "DPI viewport=(1200.0, 800.0) editor=Rect { x: 20.0, y: 54.0, width: 400.0, height: 44.0 } caret=Rect { x: 37.6, y: 62.0, width: 1.0, height: 23.0 } selection=1 model=\"CBA0123456789\""
+  ],
+  "client_pid": 1270311,
+  "native_scale_notifications": [
+    "120",
+    "240",
+    "120"
+  ]
+}

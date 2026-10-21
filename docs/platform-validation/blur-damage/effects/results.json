@@ -1,0 +1,76 @@
+{
+  "passed": true,
+  "backend": "owned X11/Xvfb/Openbox",
+  "timed_close": true,
+  "reports": {
+    "initial": {
+      "opacity": 0.88,
+      "blur": 10.0,
+      "fade": 0.0,
+      "animate": false,
+      "x": 120.0
+    },
+    "no_blur": {
+      "opacity": 0.88,
+      "blur": 0.0,
+      "fade": 0.0,
+      "animate": false,
+      "x": 120.0
+    },
+    "fade": {
+      "opacity": 0.88,
+      "blur": 0.0,
+      "fade": 80.0,
+      "animate": false,
+      "x": 120.0
+    },
+    "hidden": {
+      "opacity": 0.0,
+      "blur": 0.0,
+      "fade": 80.0,
+      "animate": false,
+      "x": 120.0
+    },
+    "restored": {
+      "opacity": 1.0,
+      "blur": 0.0,
+      "fade": 80.0,
+      "animate": false,
+      "x": 120.0
+    },
+    "blur_restored": {
+      "opacity": 1.0,
+      "blur": 24.0,
+      "fade": 80.0,
+      "animate": false,
+      "x": 120.0
+    },
+    "moving": {
+      "opacity": 1.0,
+      "blur": 24.0,
+      "fade": 80.0,
+      "animate": true,
+      "x": 141.2692
+    },
+    "paused": {
+      "opacity": 1.0,
+      "blur": 24.0,
+      "fade": 80.0,
+      "animate": false,
+      "x": 87.6707
+    },
+    "still_paused": {
+      "opacity": 1.0,
+      "blur": 24.0,
+      "fade": 80.0,
+      "animate": false,
+      "x": 87.6707
+    }
+  },
+  "changed_pixels": {
+    "blur": 159,
+    "fade": 118720,
+    "opacity": 89721,
+    "animation": 56864
+  }
+}
