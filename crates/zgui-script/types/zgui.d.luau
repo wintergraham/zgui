@@ -50,11 +50,18 @@ declare extern type Element with
 	height: number?
 	x: number?
 	y: number?
+	-- Holds keyboard focus.
+	focused: boolean
 	function has_class(self, class: string): boolean
 	-- Keyboard focus to the element, or the first focusable node inside it
-	-- (an input's editor); false when nothing there takes focus.
+	-- (an input's editor), once the handler's writes settle (an input it
+	-- reveals can take it); blur releases focus on or inside it.
 	function focus(self): boolean
-	function blur(self): ()
+	function blur(self): boolean
+	-- An input's selection in bytes of its text, applied after the
+	-- handler's writes (so text set in the same handler is selected).
+	function select(self, anchor: number, focus: number?): boolean
+	function select_all(self): boolean
 end
 declare extern type Path with
 	function move(self, x: number, y: number): Path
@@ -415,9 +422,14 @@ type Props = {
 	class: string?,
 	ref: (Ref | { Ref })?,
 	focusable: boolean?,
-	-- CSS pointer-events: "none" lets the pointer through to what is under
-	-- the node (descendants with handlers still take it).
-	pointer_events: ("none" | "auto" | boolean)?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- CSS pointer-events, inherited: false ("none") lets the pointer through
+	-- the node and everything in it to what is below; true ("auto") takes it
+	-- again under such an ancestor (a layer's menus and panels).
+	pointer_events: P<boolean>? | "none" | "auto",
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
 	disabled: (boolean | State | (() -> boolean) | Styles)?,
 	hover: Styles?,
 	active: Styles?,

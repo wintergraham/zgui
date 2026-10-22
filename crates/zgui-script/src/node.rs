@@ -39,9 +39,10 @@ pub(crate) struct Node {
     pub refs: Vec<Rc<Ref>>,
     pub events: Events,
     pub focusable: Option<bool>,
-    /// `pointer_events = "none"`: the pointer passes through.
-    pub pointer_events: Option<bool>,
+    pub keep_focus: bool,
+    pub selection_color: Option<zgui::scene::Color>,
     pub disabled: Option<Source>,
+    pub pointer_events: Option<Source>,
     /// `layout = "height"`: the node's size follows its content, animated.
     pub layout: Option<LayoutAnim>,
     /// `mask = { bitmap, w, h, x, y }`: the content shows through the
@@ -244,8 +245,10 @@ impl Node {
             refs: Vec::new(),
             events: Events::default(),
             focusable: None,
-            pointer_events: None,
+            keep_focus: false,
+            selection_color: None,
             disabled: None,
+            pointer_events: None,
             layout: None,
             mask: None,
             shader: None,
@@ -1144,17 +1147,12 @@ fn fill(lua: &Lua, mut node: Node, table: Option<&Table>) -> mlua::Result<Node> 
                 }
             },
             "focusable" => node.focusable = Some(lua.unpack(value)?),
-            "pointer_events" => {
-                node.pointer_events = Some(match &value {
-                    mlua::Value::Boolean(b) => *b,
-                    mlua::Value::String(s) if s.to_str()?.as_ref() as &str == "none" => false,
-                    mlua::Value::String(s) if s.to_str()?.as_ref() as &str == "auto" => true,
-                    _ => {
-                        return Err(mlua::Error::runtime(
-                            "`pointer_events` takes \"none\" or \"auto\"",
-                        ));
-                    }
-                })
+            "keep_focus" => node.keep_focus = lua.unpack(value)?,
+            "selection_color" => {
+                let text: String = lua.unpack(value)?;
+                node.selection_color = Some(parse_color(&text).ok_or_else(|| {
+                    mlua::Error::runtime(format!("selection_color: not a color: {text}"))
+                })?);
             }
             "bg_shader" => {
                 let mlua::Value::UserData(ud) = &value else {
@@ -1298,6 +1296,22 @@ fn fill(lua: &Lua, mut node: Node, table: Option<&Table>) -> mlua::Result<Node> 
                         }
                     };
                 }
+            }
+            "pointer_events" => {
+                // CSS spellings too: "none" is false, "auto" true.
+                let value = match &value {
+                    mlua::Value::String(s) => match &*s.to_str()? {
+                        "none" => mlua::Value::Boolean(false),
+                        "auto" => mlua::Value::Boolean(true),
+                        _ => {
+                            return Err(mlua::Error::runtime(
+                                "`pointer_events` takes a boolean, \"none\" or \"auto\"",
+                            ));
+                        }
+                    },
+                    _ => value,
+                };
+                node.pointer_events = Some(source(lua, Ty::Bool, "pointer_events", value)?);
             }
             "disabled" if !matches!(value, mlua::Value::Table(_)) => {
                 node.disabled = Some(source(lua, Ty::Bool, "disabled", value)?);

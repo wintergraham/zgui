@@ -795,3 +795,21 @@ fn color_filters_animate_on_the_compositor() {
     let e = h.ui.scene.borrow().effects(node);
     close(e.brightness, 1.2, "done");
 }
+
+#[test]
+fn removing_a_target_leaves_timers_running() {
+    // A timer animates nothing, so removing some other target's animations
+    // must not cancel it (anime.js `utils.remove` affects its targets only).
+    let mut h = Harness::inline(
+        r##"local log = ui.state("log", "")
+        local other = ui.state("other", 0)
+        local keep = anime.createTimer { duration = 100, onComplete = function() log:set("done") end }
+        anime.animate(other, { value = 10, duration = 1000 })
+        anime.utils.remove(other)
+        return ui.text { "[{log}]", id = "log" }"##,
+    );
+    for _ in 0..20 {
+        h.frame();
+    }
+    assert_eq!(h.text("log"), "[done]");
+}

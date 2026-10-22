@@ -61,6 +61,8 @@ return function(S, K, D)
         props.rounded = props.rounded or 10
         props.shadow = SHADOW
         props.focusable = true
+        -- The menu layer lets the pointer through; its panels take it.
+        props.pointer_events = true
         props.opacity = 0
         props.on_mount = function(el)
             anime.animate(el, { opacity = 1, scale = { 0.96, 1 }, duration = 200, ease = "outExpo" })
@@ -676,12 +678,12 @@ return function(S, K, D)
         id = "menu_layer", pointer_events = "none",
         ui.div(fill { id = "menu_dim", bg = "#00000059", pointer_events = "none",
             opacity = ui.tween(ui.computed(function() return S.menu:get() == "search" and 1 or 0 end), { duration = 0.16 }) }),
-        ui.div(fill { id = "menu_catcher", hidden = function() return S.menu:get() == "" end, on_press = close }),
+        ui.div(fill { id = "menu_catcher", pointer_events = true, hidden = function() return S.menu:get() == "" end, on_press = close }),
         ui.presence(function()
             local m = S.menu:get()
             return m ~= "" and m or nil
         end, function(m) return BUILD[m]() end, fill { pointer_events = "none", exit = { opacity = 0, duration = 120, ease = "inQuad" } }),
-        ui.div(fill { id = "dropdown_catcher", hidden = function() return drop:get() == "" end, on_press = function() drop:set("") end }),
+        ui.div(fill { id = "dropdown_catcher", pointer_events = true, hidden = function() return drop:get() == "" end, on_press = function() drop:set("") end }),
         ui.presence(function()
             local d = drop:get()
             return d ~= "" and d or nil

@@ -115,6 +115,20 @@ impl Element {
     pub fn node(&self) -> Option<NodeId> {
         self.handle.get().map(NodeHandle::node)
     }
+    /// Sets an input's selection once the handler's writes have settled, so
+    /// text given in the same handler is what gets selected.
+    fn select(&self, event: zgui::input::InputEvent) -> bool {
+        let Some(handle) = self.handle.get().cloned() else {
+            return false;
+        };
+        let Some(runtime) = handle.runtime() else {
+            return false;
+        };
+        runtime.defer(move || {
+            handle.dispatch(event);
+        });
+        true
+    }
     pub fn scene(&self) -> Option<Rc<RefCell<Scene>>> {
         let scene = self.scene.get()?.upgrade()?;
         let contains = scene.borrow().contains(self.node()?);
@@ -731,19 +745,46 @@ impl UserData for ElementUd {
         fields.add_field_method_get("height", |_, e| Ok(e.0.read(|s, id| s.bounds(id).height)));
         fields.add_field_method_get("x", |_, e| Ok(e.0.read(|s, id| s.bounds(id).x)));
         fields.add_field_method_get("y", |_, e| Ok(e.0.read(|s, id| s.bounds(id).y)));
+        fields.add_field_method_get("focused", |_, e| {
+            Ok(e.0.handle.get().is_some_and(NodeHandle::is_focused))
+        });
     }
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("has_class", |_, e, class: String| {
             Ok(e.0.classes.iter().any(|c| **c == *class))
         });
+        // Keyboard focus, as a click or Tab gives it (an input, a button),
+        // once the handler's writes have settled: an input the same handler
+        // reveals can take it.
         methods.add_method("focus", |_, e, ()| {
-            Ok(e.0.handle.get().is_some_and(NodeHandle::focus))
+            let Some(handle) = e.0.handle.get().cloned() else {
+                return Ok(false);
+            };
+            let Some(runtime) = handle.runtime() else {
+                return Ok(false);
+            };
+            runtime.defer(move || {
+                handle.focus();
+            });
+            Ok(true)
         });
         methods.add_method("blur", |_, e, ()| {
-            if let Some(handle) = e.0.handle.get() {
-                handle.blur();
-            }
-            Ok(())
+            Ok(e.0.handle.get().is_some_and(NodeHandle::blur))
+        });
+        // An input's selection, in bytes of its text: `select(0, #text)`, or a
+        // caret with one argument. Out-of-range offsets are clamped.
+        methods.add_method("select", |_, e, (anchor, focus): (usize, Option<usize>)| {
+            let event = zgui::input::InputEvent::SetTextSelection {
+                anchor,
+                focus: focus.unwrap_or(anchor),
+            };
+            Ok(e.0.select(event))
+        });
+        methods.add_method("select_all", |_, e, ()| {
+            Ok(e.0.select(zgui::input::InputEvent::SetTextSelection {
+                anchor: 0,
+                focus: usize::MAX,
+            }))
         });
     }
 }

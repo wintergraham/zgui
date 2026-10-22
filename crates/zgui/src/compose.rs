@@ -261,6 +261,7 @@ pub struct View {
     reactive_style: Option<Box<dyn FnMut() -> Styles>>,
     disabled: Option<Box<dyn FnMut() -> bool>>,
     read_only: Option<Box<dyn FnMut() -> bool>>,
+    selection_color: Option<crate::scene::Color>,
     click: Option<Box<dyn FnMut()>>,
     events: Vec<EventListener>,
     keymap: crate::actions::Keymap,
@@ -269,7 +270,8 @@ pub struct View {
     pub(crate) context_menu_style: Option<Styles>,
     pub(crate) context_menu_below: Option<bool>,
     focusable: Option<bool>,
-    pointer_events: Option<bool>,
+    keeps_focus: bool,
+    pointer_events: Option<Box<dyn FnMut() -> Option<bool>>>,
     id: Option<String>,
     scrollbar: Option<bool>,
     follow_end: Option<bool>,
@@ -348,6 +350,7 @@ impl View {
             reactive_style: None,
             disabled: None,
             read_only: None,
+            selection_color: None,
             click: None,
             events: Vec::new(),
             keymap: crate::actions::Keymap::new(),
@@ -356,6 +359,7 @@ impl View {
             context_menu_style: None,
             context_menu_below: None,
             focusable: None,
+            keeps_focus: false,
             pointer_events: None,
             id: None,
             scrollbar: None,
@@ -442,16 +446,28 @@ impl View {
         })
     }
     /// Override whether this root accepts focus and participates in Tab traversal.
-    /// CSS `pointer-events`: false lets the pointer through the view, and
-    /// through descendants without listeners of their own, to what is under
-    /// it (a full-window layer that holds a popover).
-    pub fn pointer_events(mut self, enabled: bool) -> Self {
-        self.pointer_events = Some(enabled);
-        self
-    }
     /// Registering an event listener alone does not make a passive view focusable.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.focusable = Some(focusable);
+        self
+    }
+    /// Pressing this view leaves keyboard focus where it is (an editor's
+    /// popup chrome keeps the caret), instead of moving it to the nearest
+    /// focusable ancestor or clearing it. Clicks still activate.
+    pub fn keeps_focus(mut self, keeps: bool) -> Self {
+        self.keeps_focus = keeps;
+        self
+    }
+    /// CSS `pointer-events`, inherited by descendants: `false` lets the
+    /// pointer through this view to what is below (an empty overlay layer),
+    /// `true` takes it again under such an ancestor.
+    pub fn pointer_events(mut self, on: bool) -> Self {
+        self.pointer_events = Some(Box::new(move || Some(on)));
+        self
+    }
+    /// `pointer_events`, following reactive state (`None` inherits).
+    pub fn pointer_events_when(mut self, on: impl FnMut() -> Option<bool> + 'static) -> Self {
+        self.pointer_events = Some(Box::new(on));
         self
     }
     pub fn hover(mut self, style: impl FnOnce(Styles) -> Styles) -> Self {
@@ -480,6 +496,11 @@ impl View {
     }
     /// Keep an editor selectable and focusable while preventing user edits.
     /// External model updates remain permitted. Only editor roots accept this.
+    /// The fill behind an editor's selected text.
+    pub fn selection_color(mut self, color: crate::scene::Color) -> Self {
+        self.selection_color = Some(color);
+        self
+    }
     pub fn read_only(mut self, read_only: bool) -> Self {
         self.read_only = Some(Box::new(move || read_only));
         self
@@ -534,6 +555,7 @@ impl View {
         if self.focusable.is_some() {
             inner.focusable = self.focusable;
         }
+        inner.keeps_focus |= self.keeps_focus;
         if self.pointer_events.is_some() {
             inner.pointer_events = self.pointer_events;
         }
@@ -2150,6 +2172,9 @@ fn mount_element(
             let editor = editor.clone();
             ui.bind(root, move || editor.set_read_only(read_only()));
         }
+        if let Some(color) = view.selection_color {
+            editor.set_selection_color(color);
+        }
         let typography = environment.typography.clone();
         ui.bind(root, move || {
             let style = typography.get();
@@ -2222,12 +2247,15 @@ fn mount_element(
     }
     let mut options = ui.input.options(root).unwrap_or_default();
     options.focusable = focusable;
-    if let Some(enabled) = view.pointer_events {
-        options.pass_through = !enabled;
-    }
-    if view.focusable.is_some() || view.pointer_events.is_some() || ui.input.options(root).is_some()
-    {
+    options.keeps_focus = view.keeps_focus;
+    if view.focusable.is_some() || view.keeps_focus || ui.input.options(root).is_some() {
         ui.input.set_options(root, options);
+    }
+    if let Some(mut pointer_events) = view.pointer_events.take() {
+        let input = ui.input.clone();
+        ui.bind(root, move || {
+            input.set_pointer_events(root, pointer_events())
+        });
     }
     update_button_labels(ui, root);
     for mounted in view.mounted {
@@ -2876,8 +2904,9 @@ impl NodeHandle {
             ui.retain(self.node, resource);
         }
     }
-    /// Move keyboard focus to the node, or to the first focusable node inside
-    /// it (a field's editor). False when nothing there can take focus.
+    /// Move keyboard focus to the node, as a click or Tab would, or else to
+    /// the first focusable node inside it (a field's editor). False when
+    /// nothing there can take focus (disabled, removed, already focused).
     pub fn focus(&self) -> bool {
         let Some(ui) = self.ui.upgrade() else {
             return false;
@@ -2894,18 +2923,36 @@ impl NodeHandle {
         }
         false
     }
-    /// Clear keyboard focus when it is on the node or inside it.
-    pub fn blur(&self) {
+    /// Release focus if it is on the node or inside it.
+    pub fn blur(&self) -> bool {
         let Some(ui) = self.ui.upgrade() else {
-            return;
+            return false;
         };
         let inside = ui.input.focused().is_some_and(|focused| {
             let scene = ui.scene.borrow();
             focused == self.node
                 || (scene.contains(focused) && scene.ancestors(focused).any(|n| n == self.node))
         });
-        if inside {
-            ui.input.focus(&ui.scene, None);
+        inside && ui.input.focus(&ui.scene, None)
+    }
+    /// The reactive runtime the node's UI runs on.
+    pub fn runtime(&self) -> Option<crate::reactive::Runtime> {
+        self.ui.upgrade().map(|ui| ui.runtime.clone())
+    }
+    pub fn is_focused(&self) -> bool {
+        self.ui
+            .upgrade()
+            .is_some_and(|ui| ui.input.focused() == Some(self.node))
+    }
+    /// Deliver `event` to the node as if it were targeted (a text selection,
+    /// a value), running its listeners and default handling.
+    pub fn dispatch(&self, event: crate::input::InputEvent) -> bool {
+        let Some(ui) = self.ui.upgrade() else {
+            return false;
+        };
+        ui.scene.borrow().contains(self.node) && {
+            ui.input.dispatch_to(&ui.scene, self.node, event);
+            true
         }
     }
 }

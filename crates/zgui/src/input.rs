@@ -250,6 +250,14 @@ impl EventContext {
     pub fn capture_pointer(&mut self) {
         self.capture = Some(Some(self.current_target));
     }
+    /// Capture to this listener's node unless a listener nearer the target
+    /// already did: a press handler on an ancestor keeps the pointer it
+    /// pressed through (a draggable bar under its own row of controls).
+    pub fn capture_pointer_unless_taken(&mut self) {
+        if self.capture.is_none() {
+            self.capture_pointer();
+        }
+    }
     pub fn release_pointer(&mut self) {
         self.capture = Some(None);
     }
@@ -260,12 +268,16 @@ impl EventContext {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NodeInput {
     pub focusable: bool,
-    /// CSS `pointer-events: none`: the pointer passes through the node, and
-    /// through descendants that have no listeners of their own, to what is
-    /// under it.
-    pub pass_through: bool,
     pub disabled: bool,
     pub tab_index: i32,
+    /// Pressing the node (or what it holds) leaves focus where it is, as
+    /// `mousedown` with `preventDefault` does on the web: chrome inside an
+    /// editor's popup that must not take the caret away.
+    pub keeps_focus: bool,
+    /// CSS `pointer-events`, inherited: `Some(false)` lets the pointer
+    /// through the node and what it holds to whatever is below, unless a
+    /// descendant sets `Some(true)` again; `None` inherits.
+    pub pointer_events: Option<bool>,
 }
 type Callback = Rc<RefCell<dyn FnMut(&mut EventContext)>>;
 struct Entry {
@@ -1156,16 +1168,33 @@ impl InputDispatcher {
             focus_changed: old != self.focused(),
         }
     }
+    /// Set (or clear, `None`) a node's inherited `pointer-events`.
+    pub fn set_pointer_events(&self, node: NodeId, value: Option<bool>) {
+        self.state
+            .borrow_mut()
+            .options
+            .entry(node)
+            .or_default()
+            .pointer_events = value;
+    }
+    /// Whether the pointer can target `node`: its own or nearest ancestor's
+    /// `pointer_events`, true when none says.
+    fn receives_pointer(&self, scene: &Scene, node: NodeId) -> bool {
+        let state = self.state.borrow();
+        std::iter::once(node)
+            .chain(scene.ancestors(node))
+            .find_map(|id| state.options.get(&id).and_then(|o| o.pointer_events))
+            .unwrap_or(true)
+    }
     fn hit_target(&self, scene: &Scene, x: f32, y: f32) -> Option<NodeId> {
         let mut fallback = None;
-        'hits: for hit in scene.hit_test_all(x, y) {
+        for hit in scene.hit_test_all(x, y) {
+            if !self.receives_pointer(scene, hit) {
+                continue;
+            }
             let mut node = Some(hit);
             while let Some(id) = node {
-                let options = self.options(id);
-                if options.is_some_and(|options| options.pass_through) {
-                    continue 'hits;
-                }
-                if options.is_some_and(|options| options.disabled) {
+                if self.options(id).is_some_and(|options| options.disabled) {
                     return None;
                 }
                 if self.has_listeners(id) {
@@ -1430,14 +1459,20 @@ impl InputDispatcher {
                     self.state.borrow_mut().pressed = target;
                     let mut node = target.filter(|id| self.enabled(&scene.borrow(), *id));
                     let mut focus = None;
+                    let mut keep = false;
                     while let Some(id) = node {
-                        if self.options(id).is_some_and(|o| o.focusable) {
+                        let options = self.options(id);
+                        if options.is_some_and(|o| o.focusable) {
                             focus = Some(id);
+                            break;
+                        }
+                        if options.is_some_and(|o| o.keeps_focus) {
+                            keep = true;
                             break;
                         }
                         node = scene.borrow().parent(id);
                     }
-                    if target.is_some() || self.focus_scope().is_none() {
+                    if !keep && (target.is_some() || self.focus_scope().is_none()) {
                         self.focus(scene, focus);
                     }
                 }

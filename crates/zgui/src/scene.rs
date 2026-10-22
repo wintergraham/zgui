@@ -3217,7 +3217,19 @@ impl Scene {
                     let (cx, cy) = match layout {
                         Layout::Row => (cursor + m.left, cross + m.top),
                         Layout::Column => (cross + m.left, cursor + m.top),
-                        Layout::Overlay => (cross + m.left, m.top),
+                        // Stacked children each take `justify` vertically on
+                        // their own, as the retained (Taffy) path places them.
+                        Layout::Overlay => {
+                            let free = inner_h - h - m.top - m.bottom;
+                            let main = match style.justify {
+                                Justify::Center | Justify::SpaceAround | Justify::SpaceEvenly => {
+                                    free / 2.0
+                                }
+                                Justify::End => free,
+                                _ => 0.0,
+                            };
+                            (cross + m.left, main + m.top)
+                        }
                     };
                     children.push((*child, Rect::new(cx + padding.left, cy + padding.top, w, h)));
                     child_constraints.push(Some(asked[i]));
@@ -4838,6 +4850,44 @@ mod absolute_layout_tests {
             assert_eq!(
                 (scene.bounds(parent).width, scene.bounds(parent).height),
                 expected
+            );
+        }
+    }
+    #[test]
+    fn overlay_children_take_justify_vertically_inside_a_row() {
+        // An icon box centred both ways, inside a flex row (the fast path).
+        for (justify, expected) in [
+            (Justify::Start, 0.),
+            (Justify::Center, 3.),
+            (Justify::End, 6.),
+        ] {
+            let mut scene = Scene::new(200., 100.);
+            scene.set_kind(scene.root(), NodeKind::Container(Layout::Row));
+            let boxed = scene.append(
+                scene.root(),
+                NodeKind::Container(Layout::Overlay),
+                Style {
+                    width: Some(20.),
+                    height: Some(20.),
+                    align: Align::Center,
+                    justify,
+                    ..Style::default()
+                },
+            );
+            let icon = scene.append(
+                boxed,
+                NodeKind::Rect(Color(255, 0, 0, 255)),
+                Style {
+                    width: Some(14.),
+                    height: Some(14.),
+                    ..Style::default()
+                },
+            );
+            scene.flush();
+            assert_eq!(
+                scene.bounds(icon),
+                Rect::new(3., expected, 14., 14.),
+                "{justify:?}"
             );
         }
     }

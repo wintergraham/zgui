@@ -1161,7 +1161,9 @@ local function stage(i)
 			local finder = s.id == "finder"
 			return ui.div {
 				w_full = true, h_full = true, bg = "#00000040",
-				pointer_events = finder and "none" or nil,
+				-- The wrapper lets the pointer through; the dim takes it back to
+				-- close the panel, except over Finder.
+				pointer_events = finder and "none" or "auto",
 				on_click = not finder and function() close_panel(false) end or nil,
 			}
 		end, {
@@ -1235,7 +1237,7 @@ local function keymap_view()
 	end
 	return ui.column {
 		w_full = true, h_full = true, bg = "#000000B3", items = "center", justify = "center",
-		on_click = function() keymap:set(false) end,
+		pointer_events = "auto", on_click = function() keymap:set(false) end,
 		ui.column {
 			id = "keymap", w = 1080, p = 28, gap = 22, rounded = 16, bg = C.panel, border = 1, border_color = C.line,
 			shadow = { y = 30, blur = 80, color = "#000000A0" },
