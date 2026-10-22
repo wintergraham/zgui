@@ -666,6 +666,9 @@ pub(crate) struct Surfaces {
     overlay_shown: Option<(Option<Rect>, bool, f32)>,
     /// The page that held keyboard focus at the last check.
     focus: Option<NodeId>,
+    /// zgui's keyboard focus at the last check: a change since is zgui's own
+    /// (Tab, a script's `focus()`), which a host's platform view follows.
+    zgui_focus: Option<NodeId>,
     shared: Rc<RefCell<Shared>>,
 }
 /// A native view's cuts and what they hold, as diagnostics read them.
@@ -837,6 +840,7 @@ impl Surfaces {
             overlay_host,
             overlay_shown: None,
             focus: None,
+            zgui_focus: None,
             shared,
         })
     }
@@ -1273,6 +1277,7 @@ impl Surfaces {
     }
     /// Agree zgx's focus with AppKit's first responder (see `NativeHost::sync_focus`).
     pub fn sync_focus(&mut self, ui: &Ui, natives: &NativeViews) {
+        self.follow_zgui_focus(ui, natives);
         let responder = self
             .parent
             .window()
@@ -1313,6 +1318,40 @@ impl Surfaces {
                 ui.input.focus(&ui.scene, None);
             }
             _ => {}
+        }
+        self.zgui_focus = ui.input.focused();
+    }
+    /// A host's own view (`NativeContent::Platform`) has no controller to
+    /// take focus as a page's does: when zgui moved focus onto its node, it
+    /// becomes first responder, and when zgui moved focus off it while it
+    /// held AppKit's, the window's content view takes it back.
+    fn follow_zgui_focus(&mut self, ui: &Ui, natives: &NativeViews) {
+        let now = ui.input.focused();
+        if now == self.zgui_focus {
+            return;
+        }
+        self.zgui_focus = now;
+        let Some(window) = self.parent.window() else {
+            return;
+        };
+        let platform = |node: NodeId| {
+            matches!(natives.content(node), Some(NativeContent::Platform(_)))
+                .then(|| {
+                    self.clips
+                        .iter()
+                        .find(|(other, _)| *other == node)
+                        .and_then(|(_, clip)| clip.content.clone())
+                })
+                .flatten()
+        };
+        if let Some(view) = now.and_then(platform) {
+            if !has_focus(&view) {
+                window.makeFirstResponder(Some(&view));
+            }
+        } else if let Some(view) = self.focus.and_then(platform)
+            && has_focus(&view)
+        {
+            window.makeFirstResponder(Some(&self.parent));
         }
     }
     /// Let `diagnostics` read these surfaces.

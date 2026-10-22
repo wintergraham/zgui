@@ -138,6 +138,7 @@ pub(crate) struct Lowering {
     /// The app's commands, for a command palette listing them.
     #[cfg(feature = "components")]
     pub commands: Rc<crate::command::Commands>,
+    pub natives: Rc<crate::Natives>,
 }
 
 pub(crate) fn lower(node: &Rc<Node>, low: &Rc<Lowering>) -> View {
@@ -1091,6 +1092,18 @@ fn kind_view(
         }
         Kind::WebView(spec) => web_view_of(spec, vm, low),
         Kind::Terminal(term) => zgx::terminal::terminal(term),
+        Kind::Native(key) => {
+            let (key, vm, natives) = (resolve_owned(key), vm.clone(), low.natives.clone());
+            zgx::web_view::native_view_when(move || {
+                let key = match resolve(&key, Ty::Str, None, &vm) {
+                    Some(Lit::Str(key)) => key.to_string(),
+                    _ => String::new(),
+                };
+                natives
+                    .get(&key)
+                    .ok_or_else(|| format!("Native view · {key} (not provided)"))
+            })
+        }
         Kind::Canvas(draw, options) => {
             let (draw, vm) = (draw.clone(), vm.clone());
             let theme = match cx.as_deref().map(Context::theme) {
