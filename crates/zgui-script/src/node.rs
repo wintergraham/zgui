@@ -49,9 +49,11 @@ pub(crate) struct Node {
     /// Handlers, boxed: most nodes have none (read them with `events()`).
     pub events: Option<Box<Events>>,
     pub focusable: Option<bool>,
-    /// `pointer_events = "none"`: the pointer passes through. A literal, a
-    /// state or a function (true or `"auto"` stops it, false or `"none"`
-    /// lets it through).
+    /// `keep_focus = true`: pressing the node leaves focus where it is.
+    pub keep_focus: bool,
+    /// `pointer_events = "none"`: the pointer passes through the node and
+    /// all it holds, as CSS's inherits. A literal, a state or a function
+    /// (true or `"auto"` stops it again, false or `"none"` lets it through).
     pub pointer_events: Option<Source>,
     pub disabled: Option<Source>,
     /// `layout = "height"`: the node's size follows its content, animated.
@@ -413,6 +415,7 @@ impl Node {
             refs: Vec::new(),
             events: None,
             focusable: None,
+            keep_focus: false,
             pointer_events: None,
             disabled: None,
             layout: None,
@@ -2122,6 +2125,7 @@ fn fill_from(
                 }
             },
             "focusable" => node.focusable = Some(lua.unpack(value)?),
+            "keep_focus" => node.keep_focus = lua.unpack(value)?,
             "window_drag" => node.window_drag = lua.unpack(value)?,
             "selectable" => node.selectable = lua.unpack(value)?,
             "selection_color" | "selected_text_color" => {

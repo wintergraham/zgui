@@ -528,6 +528,8 @@ declare extern type Element with
 	height: number?
 	x: number?
 	y: number?
+	-- Whether keyboard focus is on the element itself.
+	focused: boolean
 	-- Keyboard focus to the element or its first focusable descendant
 	-- (shown ones only); whether it took.
 	function focus(self): boolean
@@ -1208,6 +1210,10 @@ export type NodeProps = {
 	variants: (Variants | ((choice: any) -> Variants))?,
 	ref: (Ref | { Ref })?,
 	focusable: boolean?,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: boolean?,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -1237,9 +1243,11 @@ export type NodeProps = {
 	focus_group: ("vertical" | "horizontal" | "both")?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
-	-- CSS pointer-events: "none" (or false) lets the pointer through to what
-	-- is under the node (presses, hover, the wheel, drops, a native view);
-	-- descendants with handlers still take it. A state or function follows.
+	-- CSS pointer-events: "none" (or false) lets the pointer through the
+	-- node and everything in it, handlers included, to what is under it
+	-- (presses, hover, the wheel, drops, a native view); a descendant's
+	-- "auto" (or true) takes it back, as CSS inherits it. A state or
+	-- function follows.
 	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
 	window_drag: boolean?,
 	-- The pointer selects the text in it and everything it holds, as on a

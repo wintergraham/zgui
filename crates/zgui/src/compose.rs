@@ -352,6 +352,10 @@ pub(crate) struct Rare {
     pub(crate) context_menu_below: Option<bool>,
     /// Whether the pointer stops at the view (`pointer_events`), followed.
     pointer_events: Option<Box<dyn FnMut() -> bool>>,
+    /// CSS's inherited `pointer-events` (`pointer_events_inherited`), followed.
+    pointer_events_inherited: Option<Box<dyn FnMut() -> Option<bool>>>,
+    /// Pressing the view leaves focus where it is (`keeps_focus`).
+    keeps_focus: bool,
     scrollbar: Option<bool>,
     follow_end: Option<bool>,
     animation: Option<animation::Animated>,
@@ -432,6 +436,10 @@ impl Rare {
         if self.pointer_events.is_some() {
             inner.pointer_events = self.pointer_events;
         }
+        if self.pointer_events_inherited.is_some() {
+            inner.pointer_events_inherited = self.pointer_events_inherited;
+        }
+        inner.keeps_focus |= self.keeps_focus;
         if self.read_only.is_some() {
             inner.read_only = self.read_only;
         }
@@ -845,6 +853,25 @@ impl View {
     /// `pointer_events`, followed: it changes as what `enabled` reads does.
     pub fn pointer_events_when(mut self, enabled: impl FnMut() -> bool + 'static) -> Self {
         self.rare_mut().pointer_events = Some(Box::new(enabled));
+        self
+    }
+    /// CSS's `pointer-events` as it inherits: `Some(false)` lets the pointer
+    /// through this view and everything in it, listeners included, to what
+    /// is below (a closed menu's rows); `Some(true)` takes it again under
+    /// such an ancestor; `None` inherits. `pointer_events` instead stops at
+    /// the first view with listeners.
+    pub fn pointer_events_inherited_when(
+        mut self,
+        on: impl FnMut() -> Option<bool> + 'static,
+    ) -> Self {
+        self.rare_mut().pointer_events_inherited = Some(Box::new(on));
+        self
+    }
+    /// Pressing this view leaves keyboard focus where it is (an editor's
+    /// popup chrome keeps the caret), instead of moving it to the nearest
+    /// focusable ancestor or clearing it. Clicks still activate.
+    pub fn keeps_focus(mut self, keeps: bool) -> Self {
+        self.rare_mut().keeps_focus = keeps;
         self
     }
     /// Override whether this root accepts focus and participates in Tab traversal.
@@ -2873,6 +2900,8 @@ struct Opened {
     conditional: Vec<RegionBuilder>,
     row_text: Option<crate::selection::RowText>,
     pointer_events: Option<Box<dyn FnMut() -> bool>>,
+    pointer_events_inherited: Option<Box<dyn FnMut() -> Option<bool>>>,
+    keeps_focus: bool,
     accessible_label: Option<String>,
     accessibility: Option<Box<Accessibility>>,
     mounted: Vec<Box<dyn FnOnce(NodeHandle)>>,
@@ -3915,6 +3944,10 @@ fn open_element(
             .unwrap_or_default(),
         row_text: rare.as_deref_mut().and_then(|r| r.row_text.take()),
         pointer_events: rare.as_deref_mut().and_then(|r| r.pointer_events.take()),
+        pointer_events_inherited: rare
+            .as_deref_mut()
+            .and_then(|r| r.pointer_events_inherited.take()),
+        keeps_focus: rare.as_deref().is_some_and(|r| r.keeps_focus),
         accessible_label: rare.as_deref_mut().and_then(|r| r.accessible_label.take()),
         accessibility: rare.and_then(|r| r.accessibility.take()),
         mounted: view.mounted,
@@ -3941,6 +3974,8 @@ fn close_element(ui: &mut Ui, opened: Opened) -> NodeId {
         conditional,
         mut row_text,
         pointer_events,
+        pointer_events_inherited,
+        keeps_focus,
         accessible_label,
         accessibility,
         mounted,
@@ -3996,8 +4031,13 @@ fn close_element(ui: &mut Ui, opened: Opened) -> NodeId {
     }
     let mut options = ui.input.options(root).unwrap_or_default();
     options.focusable = focusable;
-    if focusable_set || ui.input.options(root).is_some() {
+    options.keeps_focus |= keeps_focus;
+    if focusable_set || keeps_focus || ui.input.options(root).is_some() {
         ui.input.set_options(root, options);
+    }
+    if let Some(mut on) = pointer_events_inherited {
+        let input = ui.input.clone();
+        ui.bind(root, move || input.set_pointer_events(root, on()));
     }
     if let Some(mut enabled) = pointer_events {
         let weak = ui.downgrade();
@@ -5216,6 +5256,12 @@ impl NodeHandle {
             pending.extend(ui.scene.borrow().children(node).iter().rev().copied());
         }
         false
+    }
+    /// Whether keyboard focus is on the node itself.
+    pub fn is_focused(&self) -> bool {
+        self.ui
+            .upgrade()
+            .is_some_and(|ui| ui.input.focused() == Some(self.node))
     }
     /// Clear keyboard focus when it is on the node or inside it.
     pub fn blur(&self) {

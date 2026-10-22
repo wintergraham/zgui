@@ -167,22 +167,6 @@ pub fn canvas(style: &QuadStyle, width: f32, height: f32) -> Result<Canvas, GpuE
     }
     Ok(canvas)
 }
-/// How much of a box shadow covers a point at signed `distance` from its
-/// box (negative inside): the box blurred by a Gaussian of `sigma`
-/// (`BoxShadow::blur_radius`, half the CSS blur), 0.5·erfc(d / (sigma·√2)),
-/// so half at the edge. `draw.wgsl` computes the same.
-pub fn shadow_coverage(distance: f32, sigma: f32) -> f32 {
-    if sigma <= 0.001 {
-        return if distance <= 0. { 1. } else { 0. };
-    }
-    let x = distance / (sigma * std::f32::consts::SQRT_2);
-    let x2 = x * x;
-    // Winitzki's erf, within about 1e-4.
-    let erf =
-        x.signum() * (1. - (-x2 * (1.273_239_5 + 0.147 * x2) / (1. + 0.147 * x2)).exp()).sqrt();
-    0.5 - 0.5 * erf
-}
-
 /// Corner radius used by analytic outer shadows, with the same per-corner policy.
 pub fn shadow_corners(style: &QuadStyle, width: f32, height: f32, spread: f32) -> [f32; 4] {
     let c = style
@@ -201,29 +185,4 @@ pub fn shadow_corners(style: &QuadStyle, width: f32, height: f32, spread: f32) -
         height,
     )
     .map(|r| r.0)
-}
-
-#[cfg(test)]
-mod shadow_tests {
-    use super::shadow_coverage;
-    #[test]
-    fn shadow_coverage_is_a_blurred_edge() {
-        // Half at the box's edge, as a blurred box is (not fully opaque up
-        // to it, which drew a hard, dark band).
-        assert!((shadow_coverage(0., 12.) - 0.5).abs() < 1e-3);
-        // One sigma out and in: erfc(1/√2)/2 ≈ 0.159.
-        assert!((shadow_coverage(12., 12.) - 0.1587).abs() < 2e-3);
-        assert!((shadow_coverage(-12., 12.) - 0.8413).abs() < 2e-3);
-        // Gone by three sigmas, falling all the way.
-        assert!(shadow_coverage(36., 12.) < 0.002);
-        let mut last = 1.;
-        for d in -40..40 {
-            let c = shadow_coverage(d as f32, 12.);
-            assert!(c <= last + 1e-6);
-            last = c;
-        }
-        // No blur: a hard edge.
-        assert_eq!(shadow_coverage(0.5, 0.), 0.);
-        assert_eq!(shadow_coverage(-0.5, 0.), 1.);
-    }
 }
