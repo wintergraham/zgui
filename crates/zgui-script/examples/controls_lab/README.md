@@ -38,10 +38,10 @@ rtk cargo test --release -p zgui-script --test controls_lab
 rtk cargo build --release -p zgui-script --example controls_lab
 ```
 
-The software layout capture was inspected. A visible native window has not
-been launched; macOS GPU rendering and native titlebar appearance remain for
-the parent integration pass. The headless fallback text measurer differs from
-the window's native font shaper, so the software capture is a layout check.
+The software layout capture and the visible macOS GPU window were inspected.
+Native text entry, clearing a field and the Save loading feedback were checked
+in the running window. The headless fallback text measurer differs from the
+window's native font shaper, so the software capture is a layout check.
 
 Known differences: dither noise and tint swatch colors approximate the source;
 text editing uses the engine's caret rather than the web demo's gliding caret.
@@ -49,3 +49,7 @@ Nested popovers use the engine's below-anchor placement. Menu exits use native
 portal dismissal. Slow motion covers button and loading playback; retained
 selection and navigation bindings keep their authored timing. Inline demo
 actions have the same local preview scope as the source page.
+
+At narrow widths the header hides secondary labels so Slow motion and Reduce
+motion remain inside the window. The responsive regression check covers both
+header controls at the 620px minimum width.

@@ -51,6 +51,10 @@ declare extern type Element with
 	x: number?
 	y: number?
 	function has_class(self, class: string): boolean
+	-- Keyboard focus to the element, or the first focusable node inside it
+	-- (an input's editor); false when nothing there takes focus.
+	function focus(self): boolean
+	function blur(self): ()
 end
 declare extern type Path with
 	function move(self, x: number, y: number): Path
@@ -411,6 +415,9 @@ type Props = {
 	class: string?,
 	ref: (Ref | { Ref })?,
 	focusable: boolean?,
+	-- CSS pointer-events: "none" lets the pointer through to what is under
+	-- the node (descendants with handlers still take it).
+	pointer_events: ("none" | "auto" | boolean)?,
 	disabled: (boolean | State | (() -> boolean) | Styles)?,
 	hover: Styles?,
 	active: Styles?,

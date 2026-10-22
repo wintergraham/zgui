@@ -561,7 +561,7 @@ impl Raster {
                             }]
                         });
                         let alpha =
-                            (-0.5 * (d.max(0.) / shadow.blur_radius.max(0.001)).powi(2)).exp();
+                            zgui_gpu::decoration::shadow_coverage(d, shadow.blur_radius.max(0.));
                         blend(
                             &mut self.pixels[y * self.width + x],
                             shadow.color,
