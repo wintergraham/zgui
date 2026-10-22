@@ -1180,7 +1180,14 @@ impl InputDispatcher {
     /// Whether the pointer can target `node`: its own or nearest ancestor's
     /// `pointer_events`, true when none says.
     fn receives_pointer(&self, scene: &Scene, node: NodeId) -> bool {
-        let state = self.state.borrow();
+        Self::pointer_events_of(&self.state.borrow(), scene, node)
+    }
+    /// `receives_pointer`, or `None` while dispatch holds the input state.
+    pub fn try_receives_pointer(&self, scene: &Scene, node: NodeId) -> Option<bool> {
+        let state = self.state.try_borrow().ok()?;
+        Some(Self::pointer_events_of(&state, scene, node))
+    }
+    fn pointer_events_of(state: &State, scene: &Scene, node: NodeId) -> bool {
         std::iter::once(node)
             .chain(scene.ancestors(node))
             .find_map(|id| state.options.get(&id).and_then(|o| o.pointer_events))

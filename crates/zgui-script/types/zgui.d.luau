@@ -493,6 +493,9 @@ type Props = {
 	on_new_window: ((url: string) -> ())?,
 	-- Terminals: the session (`ui.term(id)`).
 	term: Term?,
+	-- Native views: the name the host provides the view under
+	-- (`ScriptHost::native`); state or a function swaps it in place.
+	key: P<string>?,
 	-- Drag and drop within the window; payloads are plain values.
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
@@ -802,6 +805,7 @@ declare ui: {
 	web: (opts: WebOptions?) -> Web,
 	terminal: Container,
 	term: (id: string, opts: TermOptions?) -> Term,
+	native: Container,
 	command: (opts: CommandOptions) -> (),
 	checkbox: Container,
 	input: Container,

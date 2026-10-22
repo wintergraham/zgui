@@ -72,6 +72,27 @@ impl Default for Limits {
 
 pub(crate) type Actions = Rc<RefCell<HashMap<String, Rc<dyn Fn(Value)>>>>;
 
+/// Native views the host provides by key (`ScriptHost::native`), placed by
+/// `ui.native { key = … }`. They outlive reloads.
+pub(crate) struct Natives {
+    views: RefCell<HashMap<String, zgui::native_view::NativeContent>>,
+    /// Bumped on every change: `ui.native` nodes look their key up again.
+    revision: Signal<u64>,
+}
+impl Natives {
+    fn new(runtime: &Runtime) -> Self {
+        Self {
+            views: RefCell::default(),
+            revision: runtime.signal(0),
+        }
+    }
+    /// `key`'s content, tracking changes to what is provided.
+    pub(crate) fn get(&self, key: &str) -> Option<zgui::native_view::NativeContent> {
+        self.revision.get();
+        self.views.borrow().get(key).cloned()
+    }
+}
+
 /// One script's VM.
 /// `.luaurc`'s `aliases` in `dir`, resolved against it.
 fn read_aliases(dir: &std::path::Path) -> HashMap<String, PathBuf> {
@@ -290,6 +311,8 @@ struct Inner {
     terms: Rc<term::Terms>,
     /// App commands (`ui.command`) the last successful load declared.
     commands: Rc<command::Commands>,
+    /// Host-provided native views (`ui.native`): they outlive reloads.
+    natives: Rc<Natives>,
 }
 
 /// Loads an application script and its plugins and mounts what they describe.
@@ -347,6 +370,7 @@ impl ScriptHost {
             required: RefCell::default(),
             terms: Rc::default(),
             commands: Rc::new(command::Commands::new(runtime)),
+            natives: Rc::new(Natives::new(runtime)),
         }))
     }
     fn configure(self, f: impl FnOnce(&mut Inner)) -> Self {
@@ -378,6 +402,25 @@ impl ScriptHost {
             .actions
             .borrow_mut()
             .insert(name.into(), Rc::new(action));
+    }
+    /// Provides a native view under `key`, for scripts to place with
+    /// `ui.native { key = key, … }`: laid out, clipped, rounded and faded as
+    /// any node, with zgui content drawn over it on the overlay plane. On
+    /// macOS the desktop host mounts `NativeContent::Platform(Rc::new(view))`
+    /// for a `Retained<NSView>`, and sets the view's frame to the node's box
+    /// in window points. Providing other content for a key swaps the view in
+    /// place; it is kept across reloads until `remove_native`.
+    pub fn native(&self, key: impl Into<String>, content: zgui::native_view::NativeContent) {
+        self.0.natives.views.borrow_mut().insert(key.into(), content);
+        self.0.natives.revision.update(|r| *r += 1);
+    }
+    /// Stops providing `key`'s view (its nodes show a placeholder); what it was.
+    pub fn remove_native(&self, key: &str) -> Option<zgui::native_view::NativeContent> {
+        let removed = self.0.natives.views.borrow_mut().remove(key);
+        if removed.is_some() {
+            self.0.natives.revision.update(|r| *r += 1);
+        }
+        removed
     }
     /// State shared by the application and every script (`ui.shared`). Rust
     /// can publish model data here and observe what scripts write.
@@ -564,6 +607,7 @@ impl ScriptHost {
                 elements: self.0.elements.clone(),
                 runtime: self.0.runtime.clone(),
                 assets: self.0.assets.clone(),
+                natives: self.0.natives.clone(),
             }),
         })
     }

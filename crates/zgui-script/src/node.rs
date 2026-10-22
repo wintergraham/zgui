@@ -298,6 +298,7 @@ impl Node {
             Kind::Canvas(_) => "canvas",
             Kind::WebView(_) => "webview",
             Kind::Terminal(_) => "terminal",
+            Kind::Native(_) => "native",
             Kind::Checkbox { .. } => "checkbox",
             Kind::Input { .. } => "input",
             Kind::Progress { .. } => "progress",
@@ -433,6 +434,9 @@ pub(crate) enum Kind {
     /// `ui.terminal { term = ui.term(id) }`: a terminal session, shown
     /// where the node is.
     Terminal(zgui::terminal::Terminal),
+    /// `ui.native { key = "page" }`: the native view the host provides
+    /// under the key (`ScriptHost::native`); the key may be state.
+    Native(Source),
     Checkbox {
         label: String,
         value: Signal<Value>,
@@ -2105,6 +2109,22 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
                 Node::new(owner(lua)?, Kind::Terminal(term)),
                 Some(&table),
             )?;
+            node_ud(lua, node)
+        })?,
+    )?;
+    ui.set(
+        "native",
+        lua.create_function(|lua, table: Table| {
+            let key = match table.get::<mlua::Value>("key")? {
+                mlua::Value::Nil => {
+                    return Err(mlua::Error::runtime(
+                        "ui.native needs `key`, the name the host provides its view under",
+                    ));
+                }
+                key => source(lua, Ty::Str, "key", key)?,
+            };
+            table.raw_set("key", mlua::Value::Nil)?;
+            let node = fill(lua, Node::new(owner(lua)?, Kind::Native(key)), Some(&table))?;
             node_ud(lua, node)
         })?,
     )?;

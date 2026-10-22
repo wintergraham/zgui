@@ -62,6 +62,15 @@ impl NativeContent {
             Self::Platform(_) => "Native view".into(),
         }
     }
+    /// Whether both show the same page, session or platform view.
+    pub fn same(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Web(a), Self::Web(b)) => a.ptr_eq(b),
+            (Self::Terminal(a), Self::Terminal(b)) => a.ptr_eq(b),
+            (Self::Platform(a), Self::Platform(b)) => std::ptr::addr_eq(Rc::as_ptr(a), Rc::as_ptr(b)),
+            _ => false,
+        }
+    }
 }
 
 struct Entry {
@@ -849,6 +858,14 @@ impl PlaneSplit {
         }
         let root = scene.root();
         for hit in scene.hit_test_all(x, y) {
+            // `pointer_events = false` content (a dim, a layer of popovers)
+            // lets the pointer through to what is under it, a page included;
+            // a page under such an ancestor takes none.
+            match input.try_receives_pointer(scene, hit) {
+                Some(true) => {}
+                Some(false) => continue,
+                None => return PointerRoute::Ui,
+            }
             if self.overlay.contains_key(&hit) {
                 return PointerRoute::Ui;
             }

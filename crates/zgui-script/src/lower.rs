@@ -38,6 +38,7 @@ pub(crate) struct Lowering {
     pub elements: Rc<crate::element::Elements>,
     pub runtime: zgui::reactive::Runtime,
     pub assets: Rc<Assets>,
+    pub natives: Rc<crate::Natives>,
 }
 
 pub(crate) fn lower(node: &Rc<Node>, low: &Rc<Lowering>) -> View {
@@ -307,6 +308,18 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
         }
         Kind::WebView(spec) => web_view_of(spec, vm, low),
         Kind::Terminal(term) => zgui::terminal::terminal(term),
+        Kind::Native(key) => {
+            let (key, vm, natives) = (resolve_owned(key), vm.clone(), low.natives.clone());
+            zgui::web_view::native_view_when(move || {
+                let key = match resolve(&key, Ty::Str, None, &vm) {
+                    Some(Lit::Str(key)) => key.to_string(),
+                    _ => String::new(),
+                };
+                natives
+                    .get(&key)
+                    .ok_or_else(|| format!("Native view · {key} (not provided)"))
+            })
+        }
         Kind::Canvas(draw) => {
             let (draw, vm) = (draw.clone(), vm.clone());
             canvas(move |(w, h)| {

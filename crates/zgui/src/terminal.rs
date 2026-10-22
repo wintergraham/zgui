@@ -189,6 +189,10 @@ impl std::fmt::Debug for Terminal {
     }
 }
 impl Terminal {
+    /// Whether both are the same session.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
     pub fn new(runtime: &Runtime, options: TerminalOptions) -> Self {
         let id = NEXT_ID.with(|next| {
             let id = next.get() + 1;
