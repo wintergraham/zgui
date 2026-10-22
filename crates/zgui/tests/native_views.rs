@@ -573,3 +573,52 @@ fn closing_a_page_drops_its_platform_page_while_handles_remain() {
     assert!(!kept.is_attached());
     assert!(backend.0.borrow().is_empty() && again.0.borrow().is_empty());
 }
+
+#[test]
+fn a_host_view_takes_the_pointer_through_pass_through_paint_and_focus() {
+    use zgui::native_view::NativeContent;
+    let mut ui = Ui::new(800., 600.);
+    let natives = supported();
+    let through = ui.signal(true);
+    let layer = through.clone();
+    let view = ui.mount(provide(
+        natives.clone(),
+        overlay()
+            .w(800.)
+            .h(600.)
+            .child(
+                zgui::web_view::native_view(NativeContent::Platform(Rc::new(())))
+                    .id("page")
+                    .w(800.)
+                    .h(600.),
+            )
+            // A dim painted over the page.
+            .child(
+                div()
+                    .absolute()
+                    .left(0.)
+                    .top(0.)
+                    .w(800.)
+                    .h(600.)
+                    .bg(rgba(0x0000_0040))
+                    .pointer_events_inherited_when(move || Some(!layer.get())),
+            ),
+    ));
+    ui.prepare_frame();
+    let page = view.find("page").unwrap();
+    let at = |ui: &Ui| {
+        let (split, _) = {
+            let scene = ui.scene.borrow();
+            PlaneSplit::compute(&scene, &natives.nodes(), &PlaneSplit::default())
+        };
+        let scene = ui.scene.borrow();
+        split.route(&scene, &ui.input, 400., 300.)
+    };
+    // `pointer_events = false` paint over it lets the pointer through.
+    assert_eq!(at(&ui), PointerRoute::Native(page));
+    through.set(false);
+    ui.prepare_frame();
+    assert_eq!(at(&ui), PointerRoute::Ui);
+    // Its node takes focus, so a host can mirror a click in the view.
+    assert!(ui.input.focus(&ui.scene, Some(page)));
+}

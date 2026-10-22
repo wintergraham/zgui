@@ -62,6 +62,15 @@ impl NativeContent {
             Self::Platform(_) => "Native view".into(),
         }
     }
+    /// Whether both show the same page, session or platform view.
+    pub fn same(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Web(a), Self::Web(b)) => a.ptr_eq(b),
+            (Self::Terminal(a), Self::Terminal(b)) => a.ptr_eq(b),
+            (Self::Platform(a), Self::Platform(b)) => std::ptr::addr_eq(Rc::as_ptr(a), Rc::as_ptr(b)),
+            _ => false,
+        }
+    }
 }
 
 struct Entry {

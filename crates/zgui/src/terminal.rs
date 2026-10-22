@@ -279,6 +279,10 @@ impl std::fmt::Debug for Terminal {
     }
 }
 impl Terminal {
+    /// Whether both are the same session.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
     /// A controller whose session starts with `options` once a platform terminal is
     /// attached; its state lives in `runtime`.
     pub fn new(runtime: &Runtime, options: TerminalOptions) -> Self {

@@ -1818,6 +1818,12 @@ export type SubmenuProps = Merge<ContainerProps, {
 	-- when the pointer moves onto it.
 	trigger: Node?,
 }>
+-- `ui.native { key = "page" }`: the native view the host provides under
+-- `key` (`ScriptHost::native`); state or a function swaps it in place.
+export type NativeProps = Merge<Props, {
+	key: Reactive<string>,
+}>
+
 export type WebViewProps = Merge<Props, Merge<WebOptions, {
 	-- A `ui.web()` controller, so the page outlives the node; the options
 	-- above make one otherwise.
@@ -1953,6 +1959,7 @@ declare ui: {
 	svg: (props: SvgProps) -> Node,
 	canvas: (props: CanvasProps) -> Node,
 	webview: (props: WebViewProps) -> Node,
+	native: (props: NativeProps) -> Node,
 	-- `ui.web(opts)`: a page for this run. `ui.web(id, opts)`: the host's
 	-- page for `id`, made with `opts` the first time, kept across reloads.
 	web: ((opts: WebOptions?) -> Web) & ((id: string, opts: WebOptions?) -> Web),

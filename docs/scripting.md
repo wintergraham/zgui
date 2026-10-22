@@ -120,6 +120,7 @@ The component library's elements (`ui.data_grid`, `ui.tree`, `ui.calendar`, `ui.
 | `canvas { draw = function(c, w, h) … end }` | runs again when its size or the state it reads changes |
 | `webview { src = "https://…", … }` | a native web page (WKWebView on macOS) laid out, rounded, clipped and faded like any node, with zgui content (frosted popovers too) drawn over it; see [Web views](#web-views) |
 | `terminal { term = ui.term(id) }` | a terminal session (a Ghostty surface, with the desktop host's `ghostty` feature) placed like a web view; see [Terminals](#terminals) |
+| `native { key = "page" }` | a native view the host provides (an `NSView` on macOS) placed like a web view; see [Native views](#native-views) |
 | `checkbox`, `input`, `textarea`, `progress`, `slider` | `{ label, value = state }`; `slider` takes `min`, `max`; `input` and `textarea` take `placeholder` (text shown while the value is empty: a string, state or function), `placeholder_color` and `select_on_focus = true` (focus selects all the text: an address bar) |
 | `show(cond, node, else)` | `cond`: state, function or boolean. What it shows lays out as if it stood in its place (its `grow`, `self`, percentages and `absolute` insets reach the parent), as for `switch` and `presence` |
 | `switch(state, { key = node, … }, default)` | |
@@ -164,6 +165,25 @@ return ui.terminal { term = term, grow = 1, rounded = 10, on_focus = function() 
 ```
 
 The session's `title` (what the program set), `pwd` (the shell's directory), `process` (the foreground program's name), `pid`, `focused`, `bell`, `progress`, `exited`, `columns` and `rows` are tracked like state. Methods: `focus()`, `blur()`, `input(text)` (as typed), `paste(text)`, `binding(action)` (a Ghostty binding action: `"copy_to_clipboard"`, `"clear_screen"`, `"increase_font_size:1"`), `needs_confirm()` (whether closing ends something other than an idle shell) and `close()`. Events, as options: `on_title`, `on_pwd`, `on_process`, `on_exit(code)`, `on_close(alive)`, `on_bell`, `on_command(exit_code, ms)` (shell integration) and `on_notify(title, body)`. `progress_error` says the last progress report (OSC 9;4) was an error. `status` is what the program reports of itself through the [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status) (OSC 7501), when it does: `state` (`"idle"`, `"working"`, `"done"`, `"blocked"`, `"error"`), `kind` (what a blocked program waits for: `"permission"`, `"question"`, `"auth"`), `progress`, `app`, `title`, `msg`, `child_blocked` (a sub-task is blocked) and `since` (Unix seconds); `nil` otherwise. A terminal host fills it in; zgui-desktop's terminal example keeps a session's reports in its session server. The terminal reads its own keyboard, IME and mouse; app shortcuts reach the app through its menus (see [Commands](#commands-and-host-actions)). `zgui-desktop/examples/terminal` is a multiplexer written this way.
+
+### Native views
+
+The host can hand scripts a platform view of its own (on macOS any `NSView`: an embedded browser's page container, a video layer) with `ScriptHost::native(key, content)`, and a script places it with `ui.native { key = "page", … }`. The node is laid out, clipped, rounded and faded like any other, and zgui content painted after it (menus, popovers, a floating composer, frosted glass) draws above it on the overlay plane. The host sets the view's frame to the node's box in window points every frame. Pointer input over the view goes to the view, except where zgui draws over it or an interactive zgui node is in front; `pointer_events = false` content over it lets the pointer through to it. Keyboard focus follows: a click in the view focuses its node (blurring a focused input), and `element:focus()` or Tab onto the node makes the view first responder.
+
+```rust
+// Rust: provide the view (kept across reloads; providing another swaps it in place).
+host.native("page", NativeContent::Platform(Rc::new(ns_view))); // a Retained<NSView>
+```
+
+```lua
+local tab = ui.state("tab", "tab:1")
+return ui.overlay { grow = 1,
+    ui.native { key = tab, w_full = true, h_full = true, rounded = 12 },   -- state: switching tabs swaps the view
+    ui.row { absolute = true, bottom = 16, left = 16, right = 16, composer() },  -- drawn over the page
+}
+```
+
+`key` may be state or a function. A key the host has not provided (or removed with `ScriptHost::remove_native`), like any native node without a platform backend (headless, tests), shows a labelled box.
 
 ### Commands and host actions
 

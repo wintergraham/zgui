@@ -28,9 +28,9 @@
 //! reactive ([`WebView::state`] and its accessors) and platform events reach
 //! [`WebView::on_event`] subscribers on the UI thread at a safe point.
 use crate::{
-    compose::{View, component, div, text},
+    compose::{NodeHandle, View, component, div, switch, text},
     input::InputEvent,
-    native_view::{NativeContent, NativeViews},
+    native_view::{NativeContent, NativeRegistration, NativeViews},
     reactive::{Runtime, Signal},
     style::Styled,
 };
@@ -480,6 +480,10 @@ impl std::fmt::Debug for WebView {
     }
 }
 impl WebView {
+    /// Whether both are the same controller.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
     /// A controller for a page made with `options`. Commands queue until a
     /// platform page attaches (`attach`).
     pub fn new(runtime: &Runtime, options: WebViewOptions) -> Self {
@@ -788,23 +792,108 @@ pub fn native_view(content: NativeContent) -> View {
     };
     native(content, web, None)
 }
+/// A node showing what `content` returns, following its tracked reads (the
+/// active tab's page, a view the host makes later). When it returns other
+/// content the node stays, with its layout, clips and paint order, and the
+/// host swaps the platform view inside it. `Err(label)` shows a placeholder
+/// box with that label, as content does without a platform backend.
+pub fn native_view_when(
+    mut content: impl FnMut() -> Result<NativeContent, String> + 'static,
+) -> View {
+    component(move |cx| {
+        let natives = cx.try_service::<NativeViews>();
+        let supported = natives.as_ref().is_some_and(|natives| natives.supported());
+        let runtime = cx.runtime();
+        let current: Rc<RefCell<Option<NativeContent>>> = Rc::default();
+        // What the placeholder says; None while a platform view shows.
+        let label: Signal<Option<String>> = runtime.signal(None);
+        let shown = label.clone();
+        let focused = current.clone();
+        div()
+            .focusable(true)
+            .on_event(move |event| {
+                let Some(focus) = focused.borrow().as_ref().and_then(Focusable::of) else {
+                    return;
+                };
+                match event.event {
+                    InputEvent::Focus if !focus.focused() => focus.focus(true),
+                    InputEvent::Blur if focus.focused() => focus.focus(false),
+                    _ => {}
+                }
+            })
+            .child(switch(
+                move || shown.get(),
+                |label, _| match label {
+                    Some(label) => placeholder_box(text(label)),
+                    None => div(),
+                },
+            ))
+            .on_mount(move |handle| {
+                let node = handle.node();
+                let painter = handle.clone();
+                let registration: RefCell<Option<NativeRegistration>> = RefCell::default();
+                let effect = runtime.clone().effect(move || {
+                    let next = content();
+                    if let (Ok(next), Some(now)) = (&next, &*current.borrow())
+                        && next.same(now)
+                    {
+                        return;
+                    }
+                    // The old view goes before the new one comes.
+                    drop(registration.borrow_mut().take());
+                    let (painted, placeholder) = match &next {
+                        Ok(content) => {
+                            if let Some(natives) = &natives {
+                                *registration.borrow_mut() =
+                                    Some(natives.register(node, content.clone()));
+                            }
+                            (supported, (!supported).then(|| content.label()))
+                        }
+                        Err(missing) => (false, Some(missing.clone())),
+                    };
+                    platform_painted(&painter, painted);
+                    *current.borrow_mut() = next.ok();
+                    label.set(placeholder);
+                });
+                handle.retain(effect);
+            })
+    })
+}
+/// Mark the node painted by the platform (its own paint skipped), now or,
+/// while the scene is borrowed, at the next safe point.
+fn platform_painted(handle: &NodeHandle, painted: bool) {
+    let Some(scene) = handle.scene() else {
+        return;
+    };
+    match scene.try_borrow_mut() {
+        Ok(mut scene) => scene.set_platform_painted(handle.node(), painted),
+        Err(_) => {
+            let handle = handle.clone();
+            crate::native_view::post(move || platform_painted(&handle, painted));
+        }
+    }
+}
 /// What takes keyboard focus with a native node.
 enum Focusable {
     Web(WebView),
     Terminal(crate::terminal::Terminal),
+    /// A host's own view: AppKit's first responder follows the node's focus
+    /// in the desktop host (`Surfaces::sync_focus`).
+    Platform,
 }
 impl Focusable {
     fn of(content: &NativeContent) -> Option<Self> {
         match content {
             NativeContent::Web(web) => Some(Self::Web(web.clone())),
             NativeContent::Terminal(term) => Some(Self::Terminal(term.clone())),
-            NativeContent::Platform(_) => None,
+            NativeContent::Platform(_) => Some(Self::Platform),
         }
     }
     fn focused(&self) -> bool {
         match self {
             Self::Web(web) => web.focused(),
             Self::Terminal(term) => term.focused(),
+            Self::Platform => true,
         }
     }
     fn focus(&self, on: bool) {
@@ -813,6 +902,7 @@ impl Focusable {
             (Self::Web(web), false) => web.blur(),
             (Self::Terminal(term), true) => term.focus(),
             (Self::Terminal(term), false) => term.blur(),
+            (Self::Platform, _) => {}
         }
     }
 }
@@ -887,6 +977,10 @@ fn placeholder(content: NativeContent) -> View {
         }
         NativeContent::Platform(_) => text(content.label()),
     };
+    placeholder_box(label)
+}
+/// A labelled box filling a native node.
+fn placeholder_box(label: crate::compose::View) -> View {
     div()
         .absolute()
         .left(0.)

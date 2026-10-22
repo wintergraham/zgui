@@ -2363,3 +2363,56 @@ fn closed_overlays_in_a_long_list_cost_no_nodes() {
     many.click("close");
     assert_eq!(nodes(&mut many), opened, "closed again, it is kept");
 }
+
+#[test]
+fn native_views_come_from_the_host_by_key_and_survive_reloads() {
+    use std::any::Any;
+    use zgui::native_view::NativeContent;
+    let mut h = Harness::inline(
+        r##"local key = ui.state("key", "page")
+        return ui.column {
+            ui.native { id = "page", key = key, w = 200, h = 100, rounded = 12 },
+            ui.button { id = "other", w = 20, h = 20, on_click = function() key:set("other") end },
+        }"##,
+    );
+    // The view the host mounts for `node`, if any.
+    let shown = |h: &mut Harness| -> Option<Rc<dyn Any>> {
+        let node = h.find("page")?;
+        match h.natives.content(node) {
+            Some(NativeContent::Platform(view)) => Some(view),
+            _ => None,
+        }
+    };
+    let same = |a: &Rc<dyn Any>, b: &Rc<dyn Any>| std::ptr::addr_eq(Rc::as_ptr(a), Rc::as_ptr(b));
+    // Not provided yet: a labelled box, sized like any node.
+    assert_eq!(h.width("page"), 200.);
+    assert!(h.natives.is_empty());
+    assert_eq!(h.text("page"), "Native view · page (not provided)");
+
+    // Provided after the script mounted: the same node shows it.
+    let page: Rc<dyn Any> = Rc::new("page view");
+    h.host.native("page", NativeContent::Platform(page.clone()));
+    h.frame();
+    assert!(shown(&mut h).is_some_and(|v| same(&v, &page)));
+    // Headless, so still a placeholder, now naming the content.
+    assert_eq!(h.text("page"), "Native view");
+
+    // A reload keeps it.
+    h.host.reload().unwrap();
+    h.frame();
+    assert!(shown(&mut h).is_some_and(|v| same(&v, &page)));
+    assert_eq!(h.natives.nodes().len(), 1);
+
+    // The key is state: switching it swaps the view in place.
+    h.click("other");
+    h.frame();
+    assert!(h.natives.is_empty());
+    assert_eq!(h.text("page"), "Native view · other (not provided)");
+    let other: Rc<dyn Any> = Rc::new("other view");
+    h.host.native("other", NativeContent::Platform(other.clone()));
+    h.frame();
+    assert!(shown(&mut h).is_some_and(|v| same(&v, &other)));
+    assert!(h.host.remove_native("other").is_some());
+    h.frame();
+    assert!(h.natives.is_empty());
+}
