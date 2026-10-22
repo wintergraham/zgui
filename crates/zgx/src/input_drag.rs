@@ -419,6 +419,9 @@ impl InputDispatcher {
             }) {
                 continue;
             }
+            if !self.receives_pointer(scene, hit) {
+                continue;
+            }
             let mut node = Some(hit);
             while let Some(id) = node {
                 // `pointer_events = "none"`: drops land on what is under it.

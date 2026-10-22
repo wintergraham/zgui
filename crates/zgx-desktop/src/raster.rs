@@ -573,24 +573,34 @@ impl Raster {
                 let (x0, y0, x1, y1) = self.region(visible);
                 for y in y0..y1 {
                     for x in x0..x1 {
-                        let d = rounded_distance(x as f32 + 0.5, y as f32 + 0.5, core, {
+                        let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                        let corner = {
                             let corners = zgx_gpu::decoration::shadow_corners(
                                 &style,
                                 core.width,
                                 core.height,
                                 shadow.spread.max(0.),
                             );
-                            let right = x as f32 + 0.5 > core.x + core.width * 0.5;
-                            let bottom = y as f32 + 0.5 > core.y + core.height * 0.5;
+                            let right = px > core.x + core.width * 0.5;
+                            let bottom = py > core.y + core.height * 0.5;
                             corners[match (right, bottom) {
                                 (false, false) => 0,
                                 (true, false) => 1,
                                 (true, true) => 2,
                                 (false, true) => 3,
                             }]
-                        });
-                        let alpha =
-                            zgx_gpu::decoration::shadow_coverage(d, shadow.blur_radius.max(0.));
+                        };
+                        // As the GPU shader: the blurred box, outside the
+                        // element's own box only (CSS box-shadow).
+                        let radius = corner.clamp(0., core.width.min(core.height) * 0.5);
+                        let outside = rounded_distance(
+                            px,
+                            py,
+                            bounds,
+                            (radius - shadow.spread.max(0.)).max(0.),
+                        );
+                        let alpha = box_shadow(core, px, py, shadow.blur_radius.max(0.001), radius)
+                            * (0.5 + outside).clamp(0., 1.);
                         blend(
                             &mut self.pixels[y * self.width + x],
                             shadow.color,
@@ -1985,4 +1995,36 @@ fn selected_ink(
             )
         })
         .unwrap_or(color)
+}
+
+/// A Gaussian-blurred rounded box's coverage at (`x`, `y`): Evan Wallace's
+/// closed form, exact across x through erf, four samples down y. The GPU
+/// shader (`zgui_box_shadow`) computes the same.
+fn box_shadow(core: Rect, x: f32, y: f32, sigma: f32, corner: f32) -> f32 {
+    fn erf(x: f32) -> f32 {
+        let (s, a) = (x.signum(), x.abs());
+        let y = 1. + (0.278393 + (0.230389 + 0.078108 * a * a) * a) * a;
+        let y = y * y;
+        s - s / (y * y)
+    }
+    let (half_x, half_y) = (core.width * 0.5, core.height * 0.5);
+    let (px, py) = (x - core.x - half_x, y - core.y - half_y);
+    let across = |y: f32| {
+        let delta = (half_y - corner - y.abs()).min(0.);
+        let curved = half_x - corner + (corner * corner - delta * delta).max(0.).sqrt();
+        let k = std::f32::consts::FRAC_1_SQRT_2 / sigma;
+        0.5 * (erf((px + curved) * k) - erf((px - curved) * k))
+    };
+    let (low, high) = (py - half_y, py + half_y);
+    let start = (-3. * sigma).clamp(low, high);
+    let end = (3. * sigma).clamp(low, high);
+    let step = (end - start) * 0.25;
+    let mut value = 0.;
+    let mut t = start + step * 0.5;
+    for _ in 0..4 {
+        value +=
+            across(py - t) * (-t * t / (2. * sigma * sigma)).exp() * (0.398_942_3 / sigma) * step;
+        t += step;
+    }
+    value.clamp(0., 1.)
 }

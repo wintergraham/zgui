@@ -58,11 +58,13 @@ an M-series Mac). Paused or stopped, the window requests no frames.
 Engine additions this example needed:
 
 - `pointer_events = "none"`: the full-window menu layer and the hover card
-  let the pointer through to what is under them.
+  let the pointer through to what is under them; the menu panels and
+  click-catchers inside the layer take it back with `pointer_events = true`.
 - Box shadows: the quad shader drew a shadow at full strength up to the box
   and fell off as a Gaussian of the distance, a hard dark band. It now
-  covers 0.5·erfc(d / σ√2), half at the edge, as a blurred box does; the
-  software rasterizer shares the formula.
+  draws the rounded box blurred by a Gaussian (half at a straight edge),
+  outside the element's own box only, as CSS does; the software
+  rasterizer shares the formula.
 - `el:focus()` / `el:blur()`: the search field takes focus as it opens.
 - Property order: Lua tables have no key order, so `border` could reset
   `border_sides`, and `p` could override `px`, at random. Longhands now

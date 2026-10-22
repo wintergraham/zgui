@@ -16,7 +16,7 @@ use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBlendFactor, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLCompileOptions,
-    MTLDevice, MTLLibrary, MTLLoadAction, MTLPixelFormat, MTLPrimitiveType,
+    MTLDevice, MTLLanguageVersion, MTLLibrary, MTLLoadAction, MTLPixelFormat, MTLPrimitiveType,
     MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLRenderPipelineDescriptor,
     MTLRenderPipelineState, MTLScissorRect, MTLStoreAction, MTLTexture, MTLVertexDescriptor,
     MTLVertexFormat, MTLVertexStepFunction,
@@ -786,8 +786,9 @@ impl Library {
                 )
             })
             .collect();
+        let (version, lang_version) = msl_version();
         let options = naga::back::msl::Options {
-            lang_version: (2, 4),
+            lang_version,
             per_entry_point_map,
             inline_samplers: vec![naga::back::msl::sampler::InlineSampler {
                 coord: naga::back::msl::sampler::Coord::Normalized,
@@ -819,11 +820,15 @@ impl Library {
             .zip(translated.entry_point_names)
             .filter_map(|(entry, name)| Some((entry.name.clone(), name.ok()?)))
             .collect();
+        // Compiled as wgpu compiles the same module, so both paths draw the
+        // same bytes.
+        let compile = MTLCompileOptions::new();
+        compile.setLanguageVersion(version);
+        if objc2::available!(macos = 11.0) {
+            compile.setPreserveInvariance(true);
+        }
         let library = device
-            .newLibraryWithSource_options_error(
-                &NSString::from_str(&msl),
-                Some(&MTLCompileOptions::new()),
-            )
+            .newLibraryWithSource_options_error(&NSString::from_str(&msl), Some(&compile))
             .map_err(|e| failed(e.to_string()))?;
         Ok(Self {
             library,
@@ -897,5 +902,20 @@ impl Library {
         device
             .newRenderPipelineStateWithDescriptor_error(&descriptor)
             .map_err(|e| GpuError(format!("direct Metal pipeline: {e}")))
+    }
+}
+
+/// The Metal language version wgpu's Metal backend targets on this system
+/// (`wgpu-hal` `PrivateCapabilities::msl_version`), with naga's spelling.
+/// Translating and compiling with it keeps direct frames identical to wgpu's.
+fn msl_version() -> (MTLLanguageVersion, (u8, u8)) {
+    if objc2::available!(macos = 15.0) {
+        (MTLLanguageVersion::Version3_2, (3, 2))
+    } else if objc2::available!(macos = 14.0) {
+        (MTLLanguageVersion::Version3_1, (3, 1))
+    } else if objc2::available!(macos = 13.0) {
+        (MTLLanguageVersion::Version3_0, (3, 0))
+    } else {
+        (MTLLanguageVersion::Version2_4, (2, 4))
     }
 }

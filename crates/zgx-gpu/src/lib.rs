@@ -3834,7 +3834,10 @@ impl GpuRenderer {
                             let outer = core.expand(shadow.blur_radius.max(0.) * 3.);
                             quads.push(Quad {
                                 rect: [outer.x, outer.y, outer.width, outer.height],
-                                uv: [0.; 4],
+                                // The shader rebuilds the element's own box from
+                                // the shadow's offset and spread, to paint only
+                                // outside it, as CSS does.
+                                uv: [shadow.offset.x, shadow.offset.y, 0., 0.],
                                 color: rgba(shadow.color, item.effects.opacity),
                                 fade: [core.x, core.y, core.width, core.height],
                                 options: [0., 0., 0., 1.],
@@ -3842,7 +3845,7 @@ impl GpuRenderer {
                                     style.radius + shadow.spread.max(0.),
                                     0.,
                                     shadow.blur_radius.max(0.001),
-                                    0.,
+                                    shadow.spread.max(0.),
                                 ],
                                 border: decoration::shadow_corners(
                                     style,

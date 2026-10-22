@@ -999,6 +999,11 @@ impl PlaneSplit {
         }
         let root = scene.root();
         'hits: for hit in scene.hit_test_all(x, y) {
+            match input.try_receives_pointer(scene, hit) {
+                None => return PointerRoute::Ui,
+                Some(false) => continue,
+                Some(true) => {}
+            }
             // Content the pointer passes through (`pointer_events = "none"`,
             // up to the first node with listeners) is not there for input,
             // even painted over the native view.

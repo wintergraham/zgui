@@ -463,6 +463,14 @@ impl EventContext {
     pub fn capture_pointer(&mut self) {
         self.capture = Some(Some(self.current_target));
     }
+    /// Capture to this listener's node unless a listener nearer the target
+    /// already did: a press handler on an ancestor keeps the pointer it
+    /// pressed through (a draggable bar under its own row of controls).
+    pub fn capture_pointer_unless_taken(&mut self) {
+        if self.capture.is_none() {
+            self.capture_pointer();
+        }
+    }
     /// Release a pointer capture.
     pub fn release_pointer(&mut self) {
         self.capture = Some(None);
@@ -498,8 +506,28 @@ pub struct NodeInput {
     /// Its place in Tab order, as HTML's `tabindex`: positive indices first,
     /// in order, then 0s in document order; negative leaves Tab order.
     pub tab_index: i32,
+    /// Pressing the node (or what it holds) leaves focus where it is, as
+    /// `mousedown` with `preventDefault` does on the web: chrome inside an
+    /// editor's popup that must not take the caret away.
+    pub keeps_focus: bool,
+    /// CSS `pointer-events`, inherited: `Some(false)` lets the pointer
+    /// through the node and everything it holds, listeners included, to
+    /// whatever is below, unless a descendant sets `Some(true)` again;
+    /// `None` inherits. (`pass_through` stops at the first listener.)
+    pub pointer_events: Option<bool>,
 }
 type Callback = Rc<RefCell<dyn FnMut(&mut EventContext)>>;
+/// Whether inherited `pointer_events` lets the pointer target `node`.
+fn receives_pointer(
+    options: &crate::scene::NodeMap<NodeInput>,
+    scene: &Scene,
+    node: NodeId,
+) -> bool {
+    std::iter::once(node)
+        .chain(scene.ancestors(node))
+        .find_map(|id| options.get(&id).and_then(|o| o.pointer_events))
+        .unwrap_or(true)
+}
 struct Entry {
     token: u64,
     callback: Callback,
@@ -1908,9 +1936,31 @@ impl InputDispatcher {
             focus_changed: old != self.focused(),
         }
     }
+    /// Set (or clear, `None`) a node's inherited `pointer_events`.
+    pub fn set_pointer_events(&self, node: NodeId, value: Option<bool>) {
+        let mut state = self.state.borrow_mut();
+        let options = state.options.entry(node).or_default();
+        if options.pointer_events != value {
+            options.pointer_events = value;
+        }
+    }
+    /// Whether the pointer can target `node` by inherited `pointer_events`:
+    /// its own or its nearest ancestor's, true when none says.
+    pub(crate) fn receives_pointer(&self, scene: &Scene, node: NodeId) -> bool {
+        let state = self.state.borrow();
+        receives_pointer(&state.options, scene, node)
+    }
+    /// `receives_pointer`, or `None` while dispatch holds the input state.
+    pub fn try_receives_pointer(&self, scene: &Scene, node: NodeId) -> Option<bool> {
+        let state = self.state.try_borrow().ok()?;
+        Some(receives_pointer(&state.options, scene, node))
+    }
     fn hit_target(&self, scene: &Scene, x: f32, y: f32) -> Option<NodeId> {
         let mut fallback = None;
         'hits: for hit in scene.hit_test_all(x, y) {
+            if !self.receives_pointer(scene, hit) {
+                continue;
+            }
             let mut node = Some(hit);
             while let Some(id) = node {
                 let options = self.options(id);
@@ -2267,14 +2317,20 @@ impl InputDispatcher {
                     self.state.borrow_mut().pressed = target;
                     let mut node = target.filter(|id| self.enabled(&scene.borrow(), *id));
                     let mut focus = None;
+                    let mut keep = false;
                     while let Some(id) = node {
-                        if self.options(id).is_some_and(|o| o.focusable) {
+                        let options = self.options(id);
+                        if options.is_some_and(|o| o.focusable) {
                             focus = Some(id);
+                            break;
+                        }
+                        if options.is_some_and(|o| o.keeps_focus) {
+                            keep = true;
                             break;
                         }
                         node = scene.borrow().parent(id);
                     }
-                    if target.is_some() || self.focus_scope().is_none() {
+                    if !keep && (target.is_some() || self.focus_scope().is_none()) {
                         self.focus(scene, focus);
                     }
                 }

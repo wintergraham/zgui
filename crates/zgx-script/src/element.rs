@@ -966,10 +966,16 @@ impl UserData for ElementUd {
         fields.add_field_method_get("height", |_, e| Ok(e.0.read(|s, id| s.bounds(id).height)));
         fields.add_field_method_get("x", |_, e| Ok(e.0.read(|s, id| s.bounds(id).x)));
         fields.add_field_method_get("y", |_, e| Ok(e.0.read(|s, id| s.bounds(id).y)));
+        fields.add_field_method_get("focused", |_, e| {
+            Ok(e.0.handle.get().is_some_and(NodeHandle::is_focused))
+        });
     }
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        // Keyboard focus to the node or its first focusable descendant.
-        methods.add_method("focus", |_, e, ()| {
+        // Keyboard focus to the node or its first focusable descendant, once
+        // the handler's writes have settled: an input the same handler
+        // reveals can take it.
+        methods.add_method("focus", |lua, e, ()| {
+            settle(lua);
             Ok(e.0.handle.get().is_some_and(NodeHandle::focus))
         });
         // A list's row in view: `el:scroll_to_row(i, { align = "center" })`,
