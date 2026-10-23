@@ -641,6 +641,12 @@ fn sleep_until(at: std::time::Instant) {
         std::thread::sleep(at - now);
     }
 }
+/// How long after input frames stay at the display's full rate.
+const INPUT_FULL_RATE: std::time::Duration = std::time::Duration::from_millis(250);
+fn trace_latency() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("ZGUI_TRACE_LATENCY").is_some())
+}
 /// The refresh point steady frames present at (see `Host::refresh_grid`),
 /// and when they render before it.
 #[cfg(target_os = "macos")]
@@ -858,6 +864,11 @@ struct Host {
     presentation: Presentation,
     native_occluded: bool,
     frame_paced: bool,
+    /// Until when input keeps frames at the display's full rate (`INPUT_FULL_RATE`).
+    input_until: Option<std::time::Instant>,
+    /// `ZGUI_TRACE_LATENCY=1`: when the oldest pointer move not yet shown arrived;
+    /// logged as input-to-present latency when its frame presents.
+    input_at: Option<std::time::Instant>,
     present_ready: bool,
     frames: FrameClock,
     #[cfg(target_os = "macos")]
@@ -1016,6 +1027,8 @@ impl Host {
             presentation: Presentation::default(),
             native_occluded: false,
             frame_paced: false,
+            input_at: None,
+            input_until: None,
             present_ready: false,
             gpu_stats: crate::gpu_stats::GpuStatsLog::from_env(),
             damage_check: std::env::var_os("ZGUI_DAMAGE_CHECK").map(|_| 0),
@@ -1058,6 +1071,9 @@ impl Host {
         &mut self,
         event: InputEvent,
     ) -> Result<bool, zgui::widgets::LayoutFeedbackError> {
+        // Input shows on the next refresh even while the only animations run at a
+        // reduced rate (a 12 fps dither): see `sync_frames`.
+        self.input_until = Some(std::time::Instant::now() + INPUT_FULL_RATE);
         let result = self
             .context
             .ui
@@ -1254,6 +1270,12 @@ impl Host {
                     }
                 }
                 if status == zgui_gpu::PresentationStatus::Presented {
+                    if let Some(at) = self.input_at.take() {
+                        eprintln!(
+                            "[latency] pointer to present {:.1} ms",
+                            at.elapsed().as_secs_f64() * 1000.
+                        );
+                    }
                     self.present_ready = false;
                     let now = std::time::Instant::now();
                     self.trim_at = Some(now + TRIM_DELAY);
@@ -1819,6 +1841,9 @@ impl Host {
                 };
             }
             WindowEvent::CursorMoved { position, .. } => {
+                if self.input_at.is_none() && trace_latency() {
+                    self.input_at = Some(std::time::Instant::now());
+                }
                 let p = position.to_logical::<f32>(self.scale_factor);
                 self.cursor = (p.x, p.y);
                 self.pointer_inside = true;
@@ -2115,11 +2140,15 @@ impl Host {
         #[cfg(target_os = "macos")]
         if let Some(link) = &mut self.display_link {
             let refresh = 1. / self.frame_interval.as_secs_f64();
-            // Scrolling always runs at the display's full rate.
+            // Scrolling and other input run at the display's full rate: frames
+            // paced to a reduced rate (animations that asked for one) would
+            // otherwise hold what input changed until their next tick, a drag
+            // shown at 12 fps up to 80 ms late.
+            let inputting = self.input_until.is_some_and(|until| now < until);
             let rate = self
                 .frames
                 .demanded_rate(refresh)
-                .filter(|rate| !scrolling && *rate < refresh - 0.5);
+                .filter(|rate| !scrolling && !inputting && *rate < refresh - 0.5);
             // Animating at the display's rate, the link paces every frame:
             // locked to the display, frames reach the window server one a
             // refresh, where a timer's wake-ups wander by milliseconds and

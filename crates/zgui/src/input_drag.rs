@@ -128,6 +128,11 @@ impl InputDispatcher {
     }
     fn drag_hit(&self, scene: &Scene, x: f32, y: f32, preview: Option<NodeId>) -> Option<NodeId> {
         for hit in scene.hit_test_all(x, y) {
+            // As pointer targeting does: a `pointer_events = false` layer (an overlay host over the window) is no
+            // destination and must not shadow the ones under it.
+            if !self.receives_pointer(scene, hit) {
+                continue;
+            }
             if preview.is_some_and(|preview| {
                 hit == preview || scene.ancestors(hit).any(|id| id == preview)
             }) {

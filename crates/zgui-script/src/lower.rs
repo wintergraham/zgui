@@ -783,11 +783,13 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
     }
     // The node's handle, for local pointer coordinates and elements.
     let handle: Rc<OnceCell<NodeHandle>> = Rc::default();
-    if node.events.any_input() {
-        view = with_events(view, node, vm, low, handle.clone());
-    }
+    // Drag first: its press arms the gesture before a press handler's capture would leave it unarmed (a pressable row
+    // that is also a drag source).
     if node.events.any_drag() || node.events.drag_preview.is_some() {
         view = with_drag(view, node, vm, low, handle.clone());
+    }
+    if node.events.any_input() {
+        view = with_events(view, node, vm, low, handle.clone());
     }
     if let Some(style) = &node.events.context_menu_style {
         view = view.context_menu_style(apply_all(Styles::new(), style));
@@ -1096,11 +1098,22 @@ fn layout_box(
             let element = Target::Element(target.clone());
             let mut from = Vec::new();
             let mut to = Vec::new();
+            let mut snap = Vec::new();
+            // A height-only box whose width changed reflowed (its container
+            // resized: a panel opening, a sidebar dragged); that isn't a
+            // content change to animate, so it takes its new height at once.
+            let reflowed = grow_h
+                && !grow_w
+                && previous.is_some_and(|(width, _)| (width - size.0).abs() > 0.5);
             for (on, prop, now, before) in [
                 (grow_h, Prop::Mb, size.1, previous.map(|p| p.1)),
                 (grow_w, Prop::Mr, size.0, previous.map(|p| p.0)),
             ] {
                 if !on {
+                    continue;
+                }
+                if reflowed && prop == Prop::Mb {
+                    snap.push((element.clone(), Property::Style(prop), V::Num(0.), None));
                     continue;
                 }
                 let shown = match before {
@@ -1117,6 +1130,10 @@ fn layout_box(
                     None,
                 ));
                 to.push((element.clone(), Property::Style(prop), V::Num(0.)));
+            }
+            if !snap.is_empty() {
+                engine.remove_targets(std::slice::from_ref(&element));
+                engine.set_now(snap);
             }
             if to.is_empty() {
                 return;

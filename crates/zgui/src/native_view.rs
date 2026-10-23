@@ -816,7 +816,12 @@ impl PlaneSplit {
             return plane == Plane::Base;
         }
         match (item.isolated, plane) {
-            (true, Plane::Base) => self.base_layers.contains(&item.id),
+            // The walk only visits paint near native views: a layer it never
+            // reached (a button scaling as it is pressed, away from the page)
+            // is all base. One only on the overlay draws nothing here.
+            (true, Plane::Base) => {
+                self.base_layers.contains(&item.id) || !self.overlay_layers.contains(&item.id)
+            }
             (true, Plane::Overlay) => self.overlay_layers.contains(&item.id),
             (false, Plane::Base) => !self.overlay.contains_key(&item.id),
             (false, Plane::Overlay) => self.overlay.contains_key(&item.id),
