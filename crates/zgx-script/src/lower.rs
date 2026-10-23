@@ -2099,11 +2099,14 @@ fn styled(
         || events.drag_preview.is_some())
     .then(Rc::default);
     let handle_for = || handle.clone().expect("made for what reads it");
-    if events.any_input() {
-        view = with_events(view, node, vm, low, handle_for());
-    }
+    // Drag first: its press arms the gesture before a press handler's
+    // capture would leave it unarmed (a pressable row that is also a drag
+    // source).
     if events.any_drag() || events.drag_preview.is_some() {
         view = with_drag(view, node, vm, low, handle_for());
+    }
+    if events.any_input() {
+        view = with_events(view, node, vm, low, handle_for());
     }
     if let Some(style) = &node.events().context_menu_style {
         view = view.context_menu_style(apply_all(Styles::new(), style));
@@ -2563,6 +2566,10 @@ fn layout_box(inner: View, layout: &LayoutAnim, vm: &Rc<Vm>, low: &Rc<Lowering>)
                     from.push((element.clone(), side.clone(), V::Num(-margin), None));
                     to.push((element.clone(), side, V::Num(0.)));
                 }
+            }
+            if !snap.is_empty() {
+                engine.remove_targets(std::slice::from_ref(&element));
+                engine.set_now(snap);
             }
             if !snap.is_empty() {
                 engine.remove_targets(std::slice::from_ref(&element));
