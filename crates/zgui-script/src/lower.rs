@@ -1781,13 +1781,18 @@ fn layout_box(inner: View, layout: &LayoutAnim, vm: &Rc<Vm>, low: &Rc<Lowering>)
             let mut from = Vec::new();
             let mut to = Vec::new();
             let mut snap = Vec::new();
-            // A height-only box whose width changed reflowed: its container
-            // resized (a panel opening, a sidebar dragged), its content did
-            // not change. That takes the new height at once rather than
-            // easing to it, which would slide what follows the box.
+            // A height-only box rewrapped by its container (a panel opening,
+            // a sidebar dragged) takes its new height at once rather than
+            // easing to it, which would slide what follows the box. That is a
+            // width change the height answers the other way (narrower and
+            // taller, wider and no taller); content that grows (a bubble
+            // fitting its text) widens and lengthens it together, and eases.
             let reflowed = grow_h
                 && !grow_w
-                && previous.is_some_and(|(width, _)| (width - size.0).abs() > 0.5);
+                && previous.is_some_and(|(width, height)| {
+                    let (dw, dh) = (size.0 - width, size.1 - height);
+                    dw.abs() > 0.5 && dw * dh <= 0.
+                });
             for (on, prop, side, now, before) in [
                 (
                     grow_h,

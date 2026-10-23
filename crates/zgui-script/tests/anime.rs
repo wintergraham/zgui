@@ -613,6 +613,46 @@ fn layout_boxes_take_a_reflow_at_once() {
 }
 
 #[test]
+fn layout_boxes_still_ease_content_that_widens_them() {
+    // A box sized by its content (a bubble) that gains a wider line grows in
+    // both directions: that is new content, not a reflow, so it eases.
+    let mut h = Harness::inline(
+        r##"local more = ui.state("more", false)
+        local function cells(n)
+            local out = {}
+            for _ = 1, n do table.insert(out, ui.div { w = 20, h = 20, shrink = 0 }) end
+            return ui.row(out)
+        end
+        return ui.column {
+            ui.column { id = "box", layout = "height", layout_ease = "linear", layout_duration = 100,
+                cells(1),
+                ui.show(function() return more:get() end, cells(2)) },
+            ui.div { id = "below", w = 10, h = 10 },
+            ui.button { id = "more", w = 10, h = 10, on_click = function() more:set(true) end },
+        }"##,
+    );
+    let y = |h: &mut Harness| {
+        let node = h.find("below").unwrap();
+        h.ui.scene.borrow().bounds(node).y
+    };
+    h.ui.prepare_frame();
+    h.settle();
+    h.ui.prepare_frame();
+    assert_eq!(y(&mut h), 20.);
+    h.click("more");
+    h.ui.prepare_frame();
+    h.settle();
+    h.frame();
+    h.run_ms(50.);
+    h.ui.prepare_frame();
+    let mid = y(&mut h);
+    assert!(mid > 20. && mid < 40., "eases toward 40, at {mid}");
+    h.run_ms(100.);
+    h.ui.prepare_frame();
+    assert_eq!(y(&mut h), 40.);
+}
+
+#[test]
 fn capped_clips_ask_for_frames_only_at_their_rate() {
     let mut h = Harness::inline(
         r##"anime.animate("#d", { x = { 0, 100 }, duration = 1000, loop = true, frameRate = 12 })
