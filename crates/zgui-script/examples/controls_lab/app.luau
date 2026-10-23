@@ -11,6 +11,7 @@ local reduced = ui.state("reduce_motion", false)
 local slow = ui.state("slow", 1)
 local pageOffset = ui.state("page_offset", 0)
 local viewport = ui.state("viewport", { w = 1180, h = 900 })
+local compact = ui.computed(function() return viewport:get().w <= 820 end)
 local function ms(n) return reduced:peek() and 1 or n * slow:peek() end
 local function spring() return reduced:peek() and "linear" or anime.createSpring { stiffness = 520, damping = 30 } end
 local function tween(source, opts)
@@ -477,13 +478,15 @@ return ui.overlay { id = "controls_lab", w_full = true, h_full = true, bg = C.wi
     on_resize = function(size) columns:set(size.w <= 820 and 1 or 2); viewport:set(size) end,
     on_key = extra.on_key,
     ui.column { w_full = true, h_full = true,
-        ui.row { w_full = true, h = 48, pl = 88, pr = 24, gap = 18, items = "center", bg = C.window,
+        ui.row { id = "lab_header", w_full = true, h = 48, pl = 88, pr = 24,
+            gap = function() return compact:get() and 10 or 18 end, items = "center", bg = C.window,
             ui.row { grow = 1, h_full = true, gap = 18, items = "center", on_press = ui.action("drag_window"),
-                ui.text { "ASK", font = "Geist Mono", text_size = 10, color = C.muted, letter_spacing = 1.2 },
-                txt("Motion Lab", 13), ui.div { px = 10, py = 4, rounded = 6, bg = C.selected, txt("Components", 12) } },
-            caption("Slow"),
+                ui.text { "ASK", hidden = compact, font = "Geist Mono", text_size = 10, color = C.muted, letter_spacing = 1.2 },
+                ui.text { "Motion Lab", hidden = compact, text_size = 13, color = C.text },
+                ui.div { px = 10, py = 4, rounded = 6, bg = C.selected, txt("Components", 12) } },
+            ui.text { "Slow", hidden = compact, text_size = 12, color = C.secondary },
             ui.slider { id = "slow_motion", value = slow, min = 1, max = 10, w = 90, h = 20 },
-            ui.text { function() return string.format("%.1f×", slow:get()) end, w = 36, text_size = 12, color = C.secondary },
+            ui.text { function() return string.format("%.1f×", slow:get()) end, hidden = compact, w = 36, text_size = 12, color = C.secondary },
             ui.checkbox { id = "lab_reduce", label = "Reduce motion", value = reduced, text_size = 12 },
         },
         ui.div { h = 1, w_full = true, bg = C.subtle },

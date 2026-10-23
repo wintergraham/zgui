@@ -2616,6 +2616,7 @@ impl GpuRenderer {
                                 core.width,
                                 core.height,
                             );
+                            // Three sigmas out (`blur_radius` is the sigma).
                             let outer = core.expand(shadow.blur_radius.max(0.) * 3.);
                             quads.push(Quad {
                                 rect: [outer.x, outer.y, outer.width, outer.height],

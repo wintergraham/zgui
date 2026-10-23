@@ -906,6 +906,8 @@ struct Host {
     ime_geometry: Option<Rect>,
     ime_target: Option<NodeId>,
     gpu_stats: Option<crate::gpu_stats::GpuStatsLog>,
+    /// `ZGUI_PROFILE=1`: each frame's phase times, for the frame profiler.
+    profile: Option<crate::profile::FrameProfile>,
     /// `ZGUI_DAMAGE_CHECK=1`: compare every damaged frame with a full
     /// repaint and report stale pixels (slow; for debugging damage).
     damage_check: Option<u64>,
@@ -981,6 +983,7 @@ impl Host {
             file_surface: None,
             menu_binding,
             _menu_listener: menu_listener,
+            profile: crate::profile::FrameProfile::from_env(&options.title),
             options,
             state: WindowState::default(),
             context,
@@ -1127,6 +1130,21 @@ impl Host {
         }
     }
     fn draw(&mut self) -> Result<(), Box<dyn Error>> {
+        if let Some(profile) = &mut self.profile {
+            profile.begin_draw();
+        }
+        let drawn = self.draw_frame();
+        if let Some(profile) = &mut self.profile {
+            profile.end_draw();
+        }
+        drawn
+    }
+    fn lap(&mut self, phase: crate::profile::Phase) {
+        if let Some(profile) = &mut self.profile {
+            profile.lap(phase);
+        }
+    }
+    fn draw_frame(&mut self) -> Result<(), Box<dyn Error>> {
         self.sync_ime_cancellation();
         let Some(window) = self.window.clone() else {
             self.context.ui.cancel_interactions();
@@ -1160,6 +1178,7 @@ impl Host {
             .advance_interactions(std::time::Instant::now())?;
         self.context.ui.try_prepare_frame()?;
         self.sync_ime_cancellation();
+        self.lap(crate::profile::Phase::Layout);
         let scene = self.context.ui.scene.clone();
         let mut scene = scene.borrow_mut();
         let report = scene.flush();
@@ -1186,6 +1205,9 @@ impl Host {
             extended = [damage, &planned[..]].concat();
             &extended[..]
         };
+        if let Some(profile) = &mut self.profile {
+            profile.lap(crate::profile::Phase::Paint);
+        }
         if !damage.is_empty() {
             if self.frame_paced && !self.present_ready {
                 // Layout/model work proceeds, but defer GPU work until a frame
@@ -1200,10 +1222,17 @@ impl Host {
                     let at = self.latch.hold(std::time::Instant::now(), origin, period);
                     sleep_until(at);
                     self.latch.rendering(std::time::Instant::now());
+                    if let Some(profile) = &mut self.profile {
+                        profile.lap(crate::profile::Phase::Wait);
+                    }
                 }
                 if let Some(renderer) = &mut self.renderer {
                     let stats = renderer.render(&scene, damage)?;
                     self.native.render(&scene, damage)?;
+                    if let Some(profile) = &mut self.profile {
+                        profile.lap(crate::profile::Phase::Render);
+                        profile.rendered(&stats, report.layout_nodes);
+                    }
                     if let Some(frame) = &mut self.damage_check {
                         *frame += 1;
                         check_damage(renderer, &scene, damage, &full, size.width as usize, *frame)?;
@@ -1235,23 +1264,38 @@ impl Host {
                 let transaction = self.native.begin();
                 self.native.present_overlay()?;
                 let renderer = self.renderer.as_mut().expect("checked above");
+                // The refresh wait inside the handover is waiting, not presenting.
+                #[allow(unused_mut)]
+                let mut held = std::time::Duration::ZERO;
                 let status = renderer.present_with_notify(|| {
                     window.pre_present_notify();
                     #[cfg(target_os = "macos")]
                     if let Some((origin, period)) = grid {
-                        sleep_until(latch.decide(std::time::Instant::now(), origin, period));
+                        let at = latch.decide(std::time::Instant::now(), origin, period);
+                        let from = std::time::Instant::now();
+                        sleep_until(at);
+                        held = from.elapsed();
                     }
                 })?;
                 self.native.apply();
                 drop(transaction);
                 #[cfg(target_os = "macos")]
-                {
+                let gpu = {
                     self.presented_at = Some(std::time::Instant::now());
-                    if let Some(gpu) = renderer.take_gpu_time()
+                    let gpu = renderer.take_gpu_time();
+                    if let Some(gpu) = gpu
                         && grid.is_some()
                     {
                         self.latch.ran(gpu);
                     }
+                    gpu
+                };
+                #[cfg(not(target_os = "macos"))]
+                let gpu = None;
+                if let Some(profile) = &mut self.profile {
+                    profile.lap(crate::profile::Phase::Present);
+                    profile.moved(crate::profile::Phase::Present, crate::profile::Phase::Wait, held);
+                    profile.presented(gpu);
                 }
                 if status == zgui_gpu::PresentationStatus::Presented {
                     self.present_ready = false;
@@ -1593,7 +1637,12 @@ impl Host {
                     .set(window.drag_window().err().map(|e| e.to_string()));
             }
             WindowCommand::RefreshInfo => self.context.window_info.refresh(window),
-            WindowCommand::Title(title) => window.set_title(&title),
+            WindowCommand::Title(title) => {
+                if let Some(profile) = &self.profile {
+                    profile.title(&title);
+                }
+                window.set_title(&title)
+            }
             WindowCommand::Size(width, height) => {
                 let (width, height) = self
                     .options
@@ -1702,6 +1751,16 @@ impl Host {
         self.force = true;
     }
     fn window_event(&mut self, event: WindowEvent) -> Result<(), Box<dyn Error>> {
+        if let Some(profile) = &mut self.profile {
+            profile.enter(crate::profile::Phase::Input);
+        }
+        let handled = self.handle_window_event(event);
+        if let Some(profile) = &mut self.profile {
+            profile.leave();
+        }
+        handled
+    }
+    fn handle_window_event(&mut self, event: WindowEvent) -> Result<(), Box<dyn Error>> {
         if matches!(
             event,
             WindowEvent::Moved(_)
@@ -1951,6 +2010,16 @@ impl Host {
         }
     }
     fn update(&mut self) -> Result<bool, Box<dyn Error>> {
+        if let Some(profile) = &mut self.profile {
+            profile.enter(crate::profile::Phase::Update);
+        }
+        let updated = self.update_tasks();
+        if let Some(profile) = &mut self.profile {
+            profile.leave();
+        }
+        updated
+    }
+    fn update_tasks(&mut self) -> Result<bool, Box<dyn Error>> {
         // Native views' reports (navigation, script replies), and keyboard
         // focus they took or gave back, at this safe point.
         zgui::native_view::deliver_posted();

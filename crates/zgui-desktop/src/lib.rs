@@ -78,3 +78,4 @@ pub use zgui_gpu::text::FontData;
 
 mod file_drop;
 mod gpu_stats;
+mod profile;

@@ -269,6 +269,7 @@ pub struct View {
     pub(crate) context_menu_style: Option<Styles>,
     pub(crate) context_menu_below: Option<bool>,
     focusable: Option<bool>,
+    pointer_events: Option<bool>,
     id: Option<String>,
     scrollbar: Option<bool>,
     follow_end: Option<bool>,
@@ -355,6 +356,7 @@ impl View {
             context_menu_style: None,
             context_menu_below: None,
             focusable: None,
+            pointer_events: None,
             id: None,
             scrollbar: None,
             follow_end: None,
@@ -440,6 +442,13 @@ impl View {
         })
     }
     /// Override whether this root accepts focus and participates in Tab traversal.
+    /// CSS `pointer-events`: false lets the pointer through the view, and
+    /// through descendants without listeners of their own, to what is under
+    /// it (a full-window layer that holds a popover).
+    pub fn pointer_events(mut self, enabled: bool) -> Self {
+        self.pointer_events = Some(enabled);
+        self
+    }
     /// Registering an event listener alone does not make a passive view focusable.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.focusable = Some(focusable);
@@ -524,6 +533,9 @@ impl View {
         }
         if self.focusable.is_some() {
             inner.focusable = self.focusable;
+        }
+        if self.pointer_events.is_some() {
+            inner.pointer_events = self.pointer_events;
         }
         inner.styles.merge(&self.styles);
         inner.children.extend(self.children);
@@ -2210,7 +2222,11 @@ fn mount_element(
     }
     let mut options = ui.input.options(root).unwrap_or_default();
     options.focusable = focusable;
-    if view.focusable.is_some() || ui.input.options(root).is_some() {
+    if let Some(enabled) = view.pointer_events {
+        options.pass_through = !enabled;
+    }
+    if view.focusable.is_some() || view.pointer_events.is_some() || ui.input.options(root).is_some()
+    {
         ui.input.set_options(root, options);
     }
     update_button_labels(ui, root);
@@ -2858,6 +2874,38 @@ impl NodeHandle {
             && ui.scene.borrow().contains(self.node)
         {
             ui.retain(self.node, resource);
+        }
+    }
+    /// Move keyboard focus to the node, or to the first focusable node inside
+    /// it (a field's editor). False when nothing there can take focus.
+    pub fn focus(&self) -> bool {
+        let Some(ui) = self.ui.upgrade() else {
+            return false;
+        };
+        let mut pending = vec![self.node];
+        while let Some(node) = pending.pop() {
+            if !ui.scene.borrow().contains(node) {
+                continue;
+            }
+            if ui.input.focus(&ui.scene, Some(node)) {
+                return true;
+            }
+            pending.extend(ui.scene.borrow().children(node).iter().rev().copied());
+        }
+        false
+    }
+    /// Clear keyboard focus when it is on the node or inside it.
+    pub fn blur(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let inside = ui.input.focused().is_some_and(|focused| {
+            let scene = ui.scene.borrow();
+            focused == self.node
+                || (scene.contains(focused) && scene.ancestors(focused).any(|n| n == self.node))
+        });
+        if inside {
+            ui.input.focus(&ui.scene, None);
         }
     }
 }

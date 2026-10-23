@@ -736,5 +736,14 @@ impl UserData for ElementUd {
         methods.add_method("has_class", |_, e, class: String| {
             Ok(e.0.classes.iter().any(|c| **c == *class))
         });
+        methods.add_method("focus", |_, e, ()| {
+            Ok(e.0.handle.get().is_some_and(NodeHandle::focus))
+        });
+        methods.add_method("blur", |_, e, ()| {
+            if let Some(handle) = e.0.handle.get() {
+                handle.blur();
+            }
+            Ok(())
+        });
     }
 }

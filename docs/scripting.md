@@ -21,7 +21,7 @@ cx.render(host.view());
 
 State is Rust-owned and keyed, so a reload keeps it. Each script gets its own sandboxed VM (read-only globals, a 32 MiB heap limit and a time budget per call, counted in the CPU time the script uses, so a busy machine does not fail it), which makes plugins safe to load next to the application. A failed reload keeps the last good interface running and shows the error, with file and line, until a good save.
 
-Examples: `hot_reload` (an app and two plugins), `stream_luau` / `stream_rust` (the same window in Luau and Rust, compared by `examples/stream/measure.sh`), `anime_showcase` (the animation API), `anime_bench` (per-frame engine cost).
+Examples: `hot_reload` (an app and two plugins), `frame_profiler` (a profiler window with its menus, popovers and tooltips), `stream_luau` / `stream_rust` (the same window in Luau and Rust, compared by `examples/stream/measure.sh`), `anime_showcase` (the animation API), `anime_bench` (per-frame engine cost), `quick_ask` (Ask's Quick ask panel over four mock apps: context chips, keyboard map, drag and drop).
 
 ## Types
 
@@ -126,12 +126,15 @@ Any property can be a value, a state, a function (rerun when what it reads chang
 - Transforms: `x y scale scale_x scale_y rotate skew skew_x skew_y origin` (degrees; origin as fractions of the node).
 - `hover`, `active`, `focus`, `disabled` take tables of plain values; `disabled = state` disables.
 - `id`, `class = "a b"`, `ref = ui.ref()` make a node reachable by selectors and animations.
+- `pointer_events = "none"` (CSS `pointer-events: none`) lets the pointer through the node, and through descendants without handlers of their own, to what is under it: a full-window layer that holds popovers and tooltips, a hover card over a chart.
+
+Lua tables have no key order, so a property that refines another applies after it whatever order the keys come in: `p = 0, px = 8` pads the sides, `border = 1, border_sides = { 1, 0, 0, 0 }` draws only the top, and `rounded` gives way to `corners` and `rounded_tl`.
 
 Colors are `"#rgb"`, `"#rrggbb"`, `"#rrggbbaa"`, `rgb()`, `rgba()`, `hsl()`, a few names, or `0xrrggbb`. `gradient = { angle = 135, stops = { "#f80", "#08f" } }` (CSS `linear-gradient` angles: 0 runs bottom to top, 90 left to right, the default 180 top to bottom; stops may be `{ offset, color }`); `shadow = { x = 0, y = 8, blur = 24, spread = 0, color = "#0006" }` (keyed) or a list of them (CSS `box-shadow` values: `blur` is the CSS blur radius); `corners = { tl, tr, br, bl }`, or single corners `rounded_tl rounded_tr rounded_br rounded_bl` (animatable as `borderTopLeftRadius` and so on); `border_sides = { top, right, bottom, left }` sets each side's width (a dock open at the bottom: `{ 1, 1, 0, 1 }`); `border_over = true` paints the border over the node's children (an image's frame) instead of under them.
 
 ### Events
 
-`on_click`, `on_press` (primary pointer-down), `on_release`, `on_hover(inside)`, `on_pointer_move({ x, y, local_x, local_y })`, `on_key({ key, shift, ctrl, alt, meta, repeat })` (return `true` to consume it), `on_key_up(key)`, `on_focus`, `on_blur`, `on_wheel({ dx, dy })`, `on_mount(element)`, and `on_resize({ w, h }, element)`, called when layout gives the node a new size (and at its first layout), as a ResizeObserver reports: decide from real sizes (a row that wraps, text that overflows) rather than estimates. Elements read their laid-out `width`, `height`, `x` and `y`. Handlers take a function or a Rust-run action: `ui.set(s, v)`, `ui.toggle(s)`, `ui.add(s, n)`, or `ui.action(name, arg)` for a function registered with `ScriptHost::action`.
+`on_click`, `on_press` (primary pointer-down), `on_release`, `on_hover(inside)`, `on_pointer_move({ x, y, local_x, local_y })`, `on_key({ key, shift, ctrl, alt, meta, repeat })` (return `true` to consume it), `on_key_up(key)`, `on_focus`, `on_blur`, `on_wheel({ dx, dy })`, `on_mount(element)`, and `on_resize({ w, h }, element)`, called when layout gives the node a new size (and at its first layout), as a ResizeObserver reports: decide from real sizes (a row that wraps, text that overflows) rather than estimates. Elements read their laid-out `width`, `height`, `x` and `y`, and `el:focus()` / `el:blur()` move keyboard focus (to the element, or the first focusable node inside it, as an input's editor): a search field focuses itself in `on_mount`. Handlers take a function or a Rust-run action: `ui.set(s, v)`, `ui.toggle(s)`, `ui.add(s, n)`, or `ui.action(name, arg)` for a function registered with `ScriptHost::action`.
 
 ### State and components
 
