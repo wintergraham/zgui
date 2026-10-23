@@ -244,9 +244,12 @@ impl Dialog {
                 y: ((vh - height) / 2.0).max(0.0),
             },
         );
+        let surface = ui
+            .theme_scope()
+            .color_untracked(crate::theme::tok::SURFACE_OVERLAY);
         ui.scene
             .borrow_mut()
-            .append(body, NodeKind::Rect(ui.theme.surface), fixed(width, height));
+            .append(body, NodeKind::Rect(surface), fixed(width, height));
         let mut semantics = SemanticNode::new(Role::Dialog, title);
         semantics.modal = true;
         ui.semantics.borrow_mut().set(root, semantics);
@@ -300,6 +303,8 @@ impl Dialog {
                 NodeInput {
                     focusable: true,
                     disabled: !visible,
+                    pass_through: input.options(root).is_some_and(|o| o.pass_through),
+                    pointer_events: input.options(root).and_then(|o| o.pointer_events),
                     ..NodeInput::default()
                 },
             );
@@ -455,7 +460,9 @@ impl Popover {
             node,
             Transform {
                 x: 0.0,
-                y: self.items.borrow().len() as f32 * ui.theme.control_height,
+                y: self.items.borrow().len() as f32
+                    * ui.theme_scope()
+                        .number_untracked(crate::theme::tok::CONTROL_HEIGHT),
             },
         );
         ui.semantics

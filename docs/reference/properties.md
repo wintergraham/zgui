@@ -1,0 +1,205 @@
+# Properties
+
+What every element takes besides its children and its own options. A property is a value, a state holding one, a function returning one (run again when the state it reads changes), or a [binding](anime.md#bindings): `Reactive<T>`. Literal values apply once; anything that can change shares one reactive style per node.
+
+```luau
+-- Each style property, as elements take it:
+w: Reactive<Length>?
+bg: Reactive<Color>?
+-- …and as `hover`, `active`, `focus`, `disabled` and `context_menu_style` take it:
+hover: Styles?
+```
+
+`focus` is CSS's `:focus-visible`: it applies when focus came from the keyboard (or a script, before any click), on a text field however it got focus, and once a key goes to the focused node; a clicked button takes focus without it.
+
+The types: `Color` is `"#rgb"`, `"#rrggbb"`, `"#rrggbbaa"`, `"rgb(…)"`, `"rgba(…)"`, `"hsl(…)"`, a few names, or a number `0xrrggbb`. `Length` is points or a string: `"50%"` (of the containing block), `"12px"`, and `"auto"` for margins. `Pair` is `{ a, b }` or one number for both. Unless a row says otherwise a property has no default: the node has none of it.
+
+## Size and position
+
+| Property | Type | Default | |
+| --- | --- | --- | --- |
+| `w`, `h` | `Length` | its content's size | border-box: the border and padding are inside |
+| `size` | `Pair` | | `w` and `h` at once |
+| `min_w`, `max_w`, `min_h`, `max_h` | `Length` | | |
+| `w_full`, `h_full` | `boolean` | `false` | `w = "100%"`, `h = "100%"` |
+| `aspect` | `number` | | width over height; supplies the missing side |
+| `absolute` | `boolean` | `false` | out of the flow, placed by insets (see [Position](#position)) |
+| `relative` | `boolean` | `false` | a containing block for absolute descendants |
+| `top`, `left`, `right`, `bottom` | `Length` | | insets of an absolute node |
+
+## Spacing
+
+| Property | Type | Default | |
+| --- | --- | --- | --- |
+| `p`, `px`, `py`, `pt`, `pr`, `pb`, `pl` | `Length` | `0` (a button: `px = 12, py = 8`) | padding; later keys refine earlier ones, a percentage counts from the containing block's width |
+| `m`, `mx`, `my`, `mt`, `mr`, `mb`, `ml` | `Length` | `0` | margins; `"auto"` takes the remaining space |
+| `gap` | `number` | `0` (a button: `6`) | between children |
+| `gap_x`, `gap_y` | `Length` | | per axis (a grid's or a wrapping row's) |
+
+## Flex and grid
+
+| Property | Type | Default | |
+| --- | --- | --- | --- |
+| `direction` | `"row" \| "row_reverse" \| "column" \| "column_reverse"` | `column` (`row` in a row) | |
+| `grow` | `number` | `0` | share of the free space along the parent's axis |
+| `shrink` | `number` | `0` | share of an overflow given up; `0` means it never shrinks |
+| `basis` | `Length` | its size | |
+| `flex_wrap`, `wrap_reverse` | `boolean` | `false` | wrap children onto lines |
+| `items` | `"start" \| "center" \| "end" \| "baseline" \| "stretch"` | `"start"` (overlay: `"stretch"`) | children across the axis |
+| `justify` | `"start" \| "center" \| "end" \| "between" \| "around" \| "evenly" \| "stretch"` | `"start"` | children along it |
+| `self` | `"start" \| "center" \| "end" \| "baseline" \| "stretch"` | the parent's `items` | this child across the parent's axis |
+| `content` | `"start" \| "center" \| "end" \| "stretch" \| "between" \| "around" \| "evenly"` | `"start"` | wrapped lines |
+| `grid` | `boolean` | `false` | lay children out in a grid of equal tracks |
+| `cols`, `rows` | `number` | | the grid's equal tracks |
+| `col_start`, `row_start` | `number` | the next free cell | one-based grid lines; negative count from the end |
+| `col_span`, `row_span` | `number` | `1` | |
+| `col_span_full`, `row_span_full` | `boolean` | `false` | span every track |
+| `overflow`, `overflow_x`, `overflow_y` | `"visible" \| "hidden" \| "clip"` | `"visible"` (scroll views: `"hidden"`) | `"hidden"` and `"clip"` clip paint and hit testing |
+| `hidden` | `boolean` | `false` | out of layout and input, keeping its state |
+| `invisible` | `boolean` | `false` | not drawn, keeping its space |
+
+## Paint
+
+| Property | Type | Default | |
+| --- | --- | --- | --- |
+| `bg` | `Color` | none (button, input, slider, progress: `#232e40`) | |
+| `gradient` | `Gradient` | | `{ "#f80", "#08f" }` or `{ angle = 135, stops = { … } }`; stops are colors (evenly spaced) or `{ offset, color }`; CSS angles: 0 runs bottom to top, 90 left to right, 180 (the default) top to bottom |
+| `color` | `Color` | `#e5edf7` | text, and a progress bar's fill and a slider's thumb; inherited |
+| `rounded` | `number` | `0` (controls: `6`) | corner radius |
+| `corners` | `Corners` | | `{ tl, tr, br, bl }`, as a list or keyed |
+| `rounded_tl`, `rounded_tr`, `rounded_br`, `rounded_bl` | `number` | | one corner, refining `rounded` or `corners` |
+| `border` | `number` | `0` | width, inside the box |
+| `border_sides` | `Sides` | | `{ top, right, bottom, left }` widths: a dock open at the bottom is `{ 1, 1, 0, 1 }` |
+| `border_color` | `Color` | | |
+| `border_over` | `boolean` | `false` | paint the border over the children, taking no room (a ring) |
+| `border_dash` | `Pair` | solid | `{ length, gap }` |
+| `shadow` | `Shadow` | none | `{ x, y, blur, spread, color }` (CSS `box-shadow`; `color` `#0000005a` by default), a list of them, or `false` |
+| `outline`, `outline_color`, `outline_offset` | `number`, `Color`, `number` | none, black, `0` | an outline around the box (CSS's): its width, colour, and where it starts outside the box; a negative offset puts it over the edge (an inset focus ring is `outline = 1, outline_offset = -1`) |
+| `inset_shadow` | `Shadow` | none | shadows inside the box (CSS's `inset`), over its fill and under its border and children: the box less itself moved by `x`, `y` and shrunk by `spread`, cut to its corners; drawn sharp (`blur` is not applied). A 1-point top highlight is `{ x = 0, y = 1, color = "#ffffff1f" }` |
+| `opacity` | `number` | `1` | 0 to 1 |
+| `brightness`, `contrast`, `saturate` | `number` | `1` | CSS filter functions over the node and its subtree |
+| `blur` | `number` | `0` | blurs the node's content (CSS `filter: blur()`) |
+| `backdrop_blur` | `number` | `0` | blurs what is behind it: frosted glass |
+| `fade` | `Pair` | | a clipping view's top and bottom edges fade over those widths |
+| `fade_x` | `Pair` | | its left and right edges |
+| `fade_sides` | `Sides` | | each edge: `{ top, right, bottom, left }` |
+| `layer` | `boolean` | `false` | paint the subtree into its own layer |
+| `fit` | `"fill" \| "contain" \| "cover" \| "none" \| "scale_down"` | `"fill"` | how an image fills its box |
+| `tint` | `Color` | | recolors an SVG (a state or function re-tints it) |
+| `cursor` | `Cursor` | `"default"` | `"pointer"`, `"text"`, `"vertical_text"`, `"crosshair"`, `"move"`, `"grab"`, `"grabbing"`, `"not_allowed"`, `"wait"`, `"progress"`, `"help"`, `"context_menu"`, `"copy"`, `"alias"`, `"no_drop"`, `"all_scroll"`, `"col_resize"`, `"row_resize"`, `"ew_resize"`, `"ns_resize"`, `"nesw_resize"`, `"nwse_resize"`, `"zoom_in"`, `"zoom_out"` |
+
+## Background images, masks, shader fills, clip insets
+
+| Property | Type | Default | |
+| --- | --- | --- | --- |
+| `bg_image` | `string` | | a PNG or JPEG path (relative to the script), state or function: drawn over `bg`, under the border and children, cut by the corners |
+| `bg_fit` | `"cover" \| "contain" \| "fill" \| "none" \| "scale_down"` | `"cover"` | a literal only |
+| `mask` | `Bitmap \| { bitmap, w, h, x, y, sweep }` | | the content shows through `ui.bitmap`'s alpha, drawn at `w`×`h` (the bitmap's size) from (`x`, `y`); animate `maskX`, `maskY`, or `sweep = { x, y, duration, frame_rate }` to have the engine move it by (`x`, `y`) every `duration` ms, over and over, with no script per step |
+| `bg_shader` | `Shader` | | `ui.shader(wgsl, { fps })` fills the box per pixel (see [Images and canvas](media.md)) |
+| `shader_params` | `{ Color \| { number } }` | zeros | up to four vec4s: colors (0 to 1) or lists of numbers; animate `shaderTime`, `shaderParam0` to `shaderParam15` |
+| `clip_inset` | `Sides` | | paints only inside the box shrunk by `{ top, right, bottom, left }` (CSS `clip-path: inset()`); animate `clipTop`, `clipRight`, `clipBottom`, `clipLeft` |
+
+## Size and position animation
+
+| Property | Type | Default | |
+| --- | --- | --- | --- |
+| `layout` | `"height" \| "width" \| "size" \| "position" \| boolean` | none | `"height"` (or `true`), `"width"`, `"size"`: the space the node takes eases to its new size, while it lays out at that size at once; `"position"`: it slides when layout moves it |
+| `layout_id` | `string` | | a node mounting while (or as) another with the same id is mounted starts at that one's box and moves to its own; ids are per script |
+| `layout_ease` | `Easing` | a spring, 0.4 s, bounce 0.1 | |
+| `layout_duration` | `number` | the ease's | ms |
+| `layout_enter` | `boolean` | `false` | grow from nothing when it mounts |
+| `layout_clip` | `boolean` | `false` | clip the content to the animated space |
+
+[Dynamic content](dynamic.md) covers `each`'s `animate`, which slides rows the same way.
+
+## Text
+
+| Property | Type | Default | |
+| --- | --- | --- | --- |
+| `text_size` | `number` | `16` | inherited, as all of these |
+| `weight` | `number` | `400` | `bold = true` is 700 |
+| `bold`, `italic` | `boolean` | `false` | |
+| `align` | `"start" \| "left" \| "center" \| "right"` | `"start"` | |
+| `font` | `string` | the system's | `"mono"` (`"monospace"`), `"sans"` (`"sans-serif"`), `"serif"`, or a family name the host registered |
+| `wrap` | `boolean` | `false` | wrap at the box's width |
+| `truncate` | `boolean` | `false` | one line ending in "…" |
+| `lines` | `number` | all | clamp to that many lines |
+| `line_height` | `number` | the font's | points |
+| `letter_spacing` | `number` | `0` | points |
+| `tabular` | `boolean` | `false` | tabular figures: every digit one width, so a changing number holds still |
+| `underline` | `boolean` | `false` | underlined text, inherited (CSS's `text-decoration`): `hover = { underline = true }` underlines a link button's label |
+| `underline_offset` | `number` | a tenth of the text size | points below the baseline the underline sits; inherited |
+
+## Transforms
+
+`x`, `y` (`number`, points), `scale`, `scale_x`, `scale_y` (`number`, `1`), `rotate`, `skew`, `skew_x`, `skew_y` (`number`, degrees) and `origin` (`Pair`, fractions of the node, `{ 0.5, 0.5 }`). They apply after layout: the node keeps its place in the flow, and hit testing follows the transform. Rotation, scale and skew paint the subtree into a cached layer.
+
+## Pseudo-states, window dragging, identity
+
+| Property | Type | Default | |
+| --- | --- | --- | --- |
+| `hover`, `active`, `focus` | `Styles` | (controls: a hover color and an accent focus ring) | styles while the pointer is over it, while it is pressed, while it has keyboard focus; `focus = { border = 0 }` turns a control's ring off |
+| `disabled` | `boolean \| state \| function \| Styles` | `false` | a condition disables the node (and what is inside); a table is the styles it shows while disabled |
+| `window_drag` | `boolean` | `false` | a press on it, or on what inside takes no input, moves the window; a double click zooms it (CSS `-webkit-app-region: drag`) |
+| `tooltip` | `string` or a node | none | shown over it while the pointer rests on it: after 300 ms, at once within a second of another tooltip; gone when the pointer leaves or presses. Text takes the theme's look (an overlay card, small text); a node is the app's own content. It fades in over 140 ms and out over 100 ms, at once when it takes over from another; one shows at a time. It takes no focus and lets the pointer through |
+| `tooltip_placement` | `Placement` | above, centred, 6 points off | where the tooltip sits (as a popover's `placement`) |
+| `tooltip_interactive` | `boolean` | `false` | a hover card the pointer can move into and click in: it stays while the pointer is over the node or the card (a moment's grace to cross between them) |
+| `id` | `string` | | for selectors (`"#id"`) and the inspector |
+| `class` | `string` | | space-separated, for selectors (`".name"`) |
+| `ref` | `Ref \| { Ref }` | | see [State](state.md#refs) |
+| `focusable` | `boolean` | controls: `true` | takes keyboard focus |
+| `pointer_events` | `"none"`, `"auto"`, `boolean`, or a state or function of one | `"auto"` | `"none"` or `false` lets the pointer pass through to what is under the node (presses, hover, the wheel, drops, and a web view or terminal, even where the node paints over it); descendants with their own handlers still receive input |
+
+## Position
+
+An `absolute = true` node leaves the flow and positions against its containing block: the nearest ancestor with `relative = true`, searched from its parent up but not past an `absolute` ancestor (which contains its own absolute descendants); with none, its parent. `left`, `top`, `right` and `bottom` count from that block's padding box, inside its border; percentages are of its size; both insets on an axis without a size stretch the node between them; an axis without insets keeps it at its parent's content origin (plus `ml`/`mt`). `show`, `switch`, `each` and `presence` wrap their content in a node of their own, so mark the ancestor you mean `relative` rather than relying on being its direct child. Transforms and scroll offsets never change the containing block: an absolute node moves with them, and still paints in its parent's place, under its clips.
+
+## Example
+
+```lua
+local liked = ui.state("liked", false)
+return ui.column {
+	p = 24,
+	ui.column {
+		relative = true,
+		w = 280,
+		p = 16,
+		gap = 8,
+		rounded = 14,
+		gradient = { angle = 135, stops = { "#232e40", "#1a2230" } },
+		border = 1,
+		border_color = "#ffffff1a",
+		shadow = { y = 8, blur = 24, color = "#00000066" },
+		ui.text { "Ada Lovelace", text_size = 18, weight = 600 },
+		ui.text {
+			"Wrote the first program for a machine that did not yet exist.",
+			wrap = true,
+			lines = 2,
+			color = "#8b95a5",
+			line_height = 20,
+		},
+		ui.button {
+			self = "end",
+			rounded = 999,
+			bg = function()
+				return if liked:get() then "#e5534b" else "#2f4058"
+			end,
+			hover = { brightness = 1.15 },
+			active = { scale = 0.96 },
+			on_click = ui.toggle(liked),
+			"Like",
+		},
+		-- Pinned to the card's corner, whatever comes before it.
+		ui.div { absolute = true, top = 10, right = 10, w = 8, h = 8, rounded = 4, bg = "#3fb950" },
+	},
+}
+```
+
+## Gotchas
+
+- A state or function whose value does not fit the property (a string for `w` that is not a length, a boolean for `bg`) is ignored at run time; a literal that does not fit is an error. In the editor both are type errors.
+- `hover`, `active`, `focus`, `disabled` and `context_menu_style` take plain values: a state, function or binding in them is an error. To animate on hover, animate the base style from `on_hover`.
+- Children start at the start: no stretching (`items = "start"`), no shrinking (`shrink = 0`), no wrapping text (`wrap = false`).
+- `gap` is points only; `gap_x` and `gap_y` take percentages.
+- A transparent border still takes its width; a ring that must not move content is `border_over = true`.
+- `bg_fit` and the shape of `mask`, `bg_shader` and `shader_params` are read once, as literals.

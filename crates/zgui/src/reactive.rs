@@ -53,6 +53,8 @@ struct Inner {
     flushing: Cell<bool>,
     deferred: RefCell<Vec<Box<dyn FnOnce()>>>,
     holds: Cell<usize>,
+    /// One value per type that belongs to this runtime (`Runtime::extension`).
+    extensions: RefCell<Vec<(TypeId, Rc<dyn Any>)>>,
 }
 
 /// An explicit runtime avoids global state and supports multiple independent UI roots.
@@ -117,6 +119,35 @@ impl Runtime {
         };
         self.flush();
         effect
+    }
+    /// As [`Runtime::effect`], but the first run happens before this returns
+    /// even inside a batch or a flush, where `effect` queues it behind what
+    /// is running: a value derived by it is readable at once (a computed
+    /// made while a component builds, which `on_mount` then reads).
+    pub fn effect_now(&self, callback: impl FnMut() + 'static) -> Effect {
+        if self.inner.batch_depth.get() == 0 && !self.inner.flushing.get() {
+            return self.effect(callback);
+        }
+        let id = self.inner.next.get();
+        self.inner
+            .next
+            .set(id.checked_add(1).expect("effect identifiers exhausted"));
+        let callback: Callback = Rc::new(RefCell::new(Box::new(callback)));
+        self.inner.effects.borrow_mut().insert(
+            id,
+            EffectRecord {
+                callback: callback.clone(),
+                dependencies: Vec::new(),
+                run: 1,
+            },
+        );
+        let previous = self.inner.active.replace(Some(id));
+        callback.borrow_mut()();
+        self.inner.active.set(previous);
+        Effect {
+            id,
+            runtime: Rc::downgrade(&self.inner),
+        }
     }
     /// Defers effects until the outermost batch finishes; mutations remain visible.
     pub fn batch<R>(&self, f: impl FnOnce() -> R) -> R {
@@ -221,12 +252,13 @@ impl Runtime {
                     continue;
                 };
                 let run = record.run;
-                if record.dependencies.iter().all(|d| d.run == run) {
+                // `KEPT` is above every run: read this run, or kept.
+                if record.dependencies.iter().all(|d| d.run >= run) {
                     continue;
                 }
                 let mut stale = Vec::new();
                 record.dependencies.retain(|d| {
-                    let keep = d.run == run;
+                    let keep = d.run >= run;
                     if !keep {
                         stale.push(d.source.clone());
                     }
@@ -243,6 +275,41 @@ impl Runtime {
     }
     pub fn effect_count(&self) -> usize {
         self.inner.effects.borrow().len()
+    }
+    /// The runtime's one value of type `T`, made by `init` the first time
+    /// it is asked for, so that independent parts of an application (its
+    /// `Ui`, a script host) share it without passing it around. It lives as
+    /// long as the runtime; hold a [`WeakRuntime`] in it, not a `Runtime`.
+    pub fn extension<T: 'static>(&self, init: impl FnOnce(&Runtime) -> T) -> Rc<T> {
+        let id = TypeId::of::<T>();
+        let found = self
+            .inner
+            .extensions
+            .borrow()
+            .iter()
+            .find(|(key, _)| *key == id)
+            .map(|(_, value)| value.clone());
+        if let Some(value) = found {
+            return value.downcast().expect("extension type");
+        }
+        let value = Rc::new(init(self));
+        self.inner
+            .extensions
+            .borrow_mut()
+            .push((id, value.clone() as Rc<dyn Any>));
+        value
+    }
+    /// A handle that does not keep the runtime alive.
+    pub fn downgrade(&self) -> WeakRuntime {
+        WeakRuntime(Rc::downgrade(&self.inner))
+    }
+}
+/// A [`Runtime`] that may have been dropped.
+#[derive(Clone, Default)]
+pub struct WeakRuntime(Weak<Inner>);
+impl WeakRuntime {
+    pub fn upgrade(&self) -> Option<Runtime> {
+        self.0.upgrade().map(|inner| Runtime { inner })
     }
 }
 
@@ -287,8 +354,21 @@ impl<T> Clone for Signal<T> {
         }
     }
 }
+/// The run mark of a subscription kept whatever its effect reads
+/// (`Signal::subscribe`).
+const KEPT: u64 = u64::MAX;
 impl<T: 'static> Signal<T> {
     fn track(&self) {
+        self.track_as(false);
+    }
+    /// Subscribe the running effect for as long as it lives, whether or not
+    /// later runs read the signal: for an effect that reads it on most
+    /// runs, untracked, which saves tracking it each time.
+    pub(crate) fn subscribe(&self) {
+        self.track_as(true);
+    }
+    #[inline(always)]
+    fn track_as(&self, kept: bool) {
         let Some(runtime) = self.inner.runtime.upgrade() else {
             return;
         };
@@ -302,10 +382,12 @@ impl<T: 'static> Signal<T> {
             return;
         };
         let key = Rc::as_ptr(&self.inner).cast::<()>();
-        let run = record.run;
+        let run = if kept { KEPT } else { record.run };
         // Effects read few signals; a linear scan beats any set lookup.
         if let Some(existing) = record.dependencies.iter_mut().find(|d| d.key == key) {
-            existing.run = run;
+            if existing.run != KEPT {
+                existing.run = run;
+            }
         } else if self.inner.subscribers.borrow_mut().insert(id) {
             let dependency: Rc<dyn Dependency> = self.inner.clone();
             record.dependencies.push(Subscription {
@@ -314,6 +396,10 @@ impl<T: 'static> Signal<T> {
                 run,
             });
         }
+    }
+    /// Whether any effect reads it.
+    pub(crate) fn is_observed(&self) -> bool {
+        !self.inner.subscribers.borrow().is_empty()
     }
     /// Whether both handles are the same signal.
     pub fn same(&self, other: &Self) -> bool {
@@ -477,6 +563,32 @@ mod tests {
         branch.set(1);
         assert_eq!(branch_runs.get(), 2);
         assert_eq!(child_runs.get(), 3);
+    }
+    #[test]
+    fn subscriptions_kept_without_reading() {
+        let runtime = Runtime::new();
+        let kept = runtime.signal(0);
+        let read = runtime.signal(0);
+        let runs = Rc::new(Cell::new(0));
+        let effect = runtime.effect({
+            let (kept, read, runs) = (kept.clone(), read.clone(), runs.clone());
+            move || {
+                runs.set(runs.get() + 1);
+                if runs.get() == 1 {
+                    kept.subscribe();
+                }
+                read.get();
+            }
+        });
+        // Later runs do not read `kept`, and stay subscribed to it.
+        read.set(1);
+        kept.set(1);
+        kept.set(2);
+        assert_eq!(runs.get(), 4);
+        drop(effect);
+        kept.set(3);
+        assert_eq!(runs.get(), 4);
+        assert!(!kept.is_observed());
     }
     #[test]
     fn batching_equality_dynamic_dependencies_and_disposal() {

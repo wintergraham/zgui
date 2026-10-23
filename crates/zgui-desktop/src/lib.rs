@@ -24,6 +24,7 @@ mod clipboard;
 pub mod file_dialog;
 mod native_events;
 mod native_prompt;
+mod platform;
 #[cfg(target_os = "linux")]
 mod portal_dialog;
 #[cfg(target_os = "linux")]
@@ -31,9 +32,10 @@ mod portal_parent;
 mod url;
 #[cfg(target_os = "linux")]
 mod wayland_files;
+mod window_chrome;
 mod window_info;
 pub use app_menu::{
-    AppMenu, AppMenuEntry, AppMenuError, MenuAccelerator, MenuAction, app_menu_bar,
+    AppMenu, AppMenuEntry, AppMenuError, MenuAccelerator, MenuAction, StandardItem, app_menu_bar,
     has_native_app_menu,
 };
 pub use file_dialog::{
@@ -42,6 +44,7 @@ pub use file_dialog::{
 pub use native_events::{ApplicationEvent, ApplicationEventError};
 pub use native_prompt::{PromptButtons, PromptLevel, PromptOptions, PromptResponse};
 pub use url::{OpenUrlError, open_url};
+pub use window_chrome::{Glass, GlassMaterial, Titlebar};
 pub use window_info::{DisplayInfo, DisplaySelector, WindowBounds, WindowCapabilities, WindowInfo};
 mod native_host;
 #[cfg(target_os = "macos")]
@@ -52,6 +55,11 @@ mod frame_source;
 mod native_ime;
 pub mod presentation;
 pub mod raster;
+pub mod terminal_process;
+pub use terminal_process::{
+    ForegroundProcess, resolve_terminal_processes, terminal_processes_changed,
+    terminal_processes_pushed,
+};
 
 pub mod accessibility;
 

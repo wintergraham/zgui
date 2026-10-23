@@ -309,7 +309,7 @@ struct Resort {
     fresh: HashSet<String>,
 }
 
-pub fn sidebar(cx: &mut Context, state: &App, window: zgui_desktop::WindowHandle) -> View {
+pub fn sidebar(cx: &mut Context, state: &App) -> View {
     let anim = state.anim.clone();
     let visible: Rc<dyn Fn() -> Vec<String>> = {
         let rows = state.rows.clone();
@@ -350,7 +350,7 @@ pub fn sidebar(cx: &mut Context, state: &App, window: zgui_desktop::WindowHandle
         cx.retain(effect);
     }
 
-    let titlebar = titlebar_strip(cx, state, window);
+    let titlebar = titlebar_strip(cx, state);
     let list = session_list(cx, state, &visible, &resort);
     let banner = star_banner(cx);
     let footer = footer(cx, &anim);
@@ -367,6 +367,9 @@ pub fn sidebar(cx: &mut Context, state: &App, window: zgui_desktop::WindowHandle
             left: 0.,
         })
         .border_color(BORDER)
+        // Zeron's hairline rides a tone layer under the column, taking no
+        // room from it: the rows keep the full 256.
+        .border_over(true)
         .child(titlebar)
         // With the project filter hidden, Zeron keeps a 4 px spacer.
         .child(div().w_full().h(4.).shrink_0())
@@ -379,7 +382,7 @@ pub fn sidebar(cx: &mut Context, state: &App, window: zgui_desktop::WindowHandle
 
 /// The 38 px strip over the sidebar: a window drag region carrying the
 /// control cluster (toggle, back / forward, +) and the "…" view options.
-fn titlebar_strip(cx: &mut Context, state: &App, window: zgui_desktop::WindowHandle) -> View {
+fn titlebar_strip(cx: &mut Context, state: &App) -> View {
     let anim = state.anim.clone();
     let toggle = window_button(cx, &anim, sidebar_glyph(1., 16., TEXT_MUTED), || {});
     let plus = {
@@ -432,7 +435,6 @@ fn titlebar_strip(cx: &mut Context, state: &App, window: zgui_desktop::WindowHan
                     .left(SIDEBAR_WIDTH - 8. - 24.)
                     .top(CLUSTER_TOP),
             ),
-        window,
     )
 }
 

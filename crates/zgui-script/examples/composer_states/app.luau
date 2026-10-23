@@ -522,14 +522,18 @@ local function inset_stroke(inst, props)
 		inst.rev:get()
 		return inst.spec
 	end
-	props.border_over = true
 	props.border_color = function()
 		return s().stroke
 	end
 	if type(n.strokeWidth) == "table" then
+		-- Per-side strokes are CSS borders in the lab: inside the box, they
+		-- push the content in, as zgui's borders do.
 		local sw = n.strokeWidth
 		props.border_sides = { z(sw.top or 0), z(sw.right or 0), z(sw.bottom or 0), z(sw.left or 0) }
 	else
+		-- An inside stroke drawn over the content (a photo's frame), taking
+		-- no room.
+		props.border_over = true
 		props.border = function()
 			local m = s()
 			return (m.stroke and type(m.strokeWidth) == "number") and z(m.strokeWidth) or 0
@@ -888,12 +892,6 @@ local function frame_view(inst)
 		local m = s()
 		local t, r, b, l = pad(m)
 		local v = ({ t, r, b, l })[i]
-		-- Per-side strokes are real CSS borders in the lab: inside the box,
-		-- they push the content in (an outline does not).
-		if type(m.strokeWidth) == "table" then
-			local sw = m.strokeWidth
-			v += ({ sw.top or 0, sw.right or 0, sw.bottom or 0, sw.left or 0 })[i]
-		end
 		if att then
 			v += ({ 10, 0, 10, 8 })[i]
 		end
@@ -2711,7 +2709,7 @@ return ui.column {
 		pr = 12,
 		gap = 6,
 		items = "center",
-		on_press = ui.action("drag_window"),
+		window_drag = true,
 		ui.text { "Composer", font = SANS, text_size = 15, weight = 500, color = C.text },
 		ui.text {
 			function()

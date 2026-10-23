@@ -12,7 +12,11 @@ fn fixture() -> (Ui, EditorHandle, Rc<Cell<usize>>) {
     install_shaper(&mut ui, calls.clone(), 1.);
     let value = ui.signal("abcdefghijabcdefghij\nx\nabcdefghijabcdefghij\nlast\n".repeat(4));
     let editor = ui.text_input(ui.root(), "Editor", value, 100., true);
-    editor.set_typography(ui.theme.text, 10., FontStyle::default());
+    editor.set_typography(
+        ui.theme().color(zgui::theme::tok::TEXT_PRIMARY),
+        10.,
+        FontStyle::default(),
+    );
     editor.set_wrap(true);
     ui.prepare_frame();
     ui.input.focus(&ui.scene, Some(editor.node));
@@ -104,7 +108,11 @@ fn text_font_pitch_wrap_and_allocated_width_invalidate_reused_geometry() {
     editor.set_typography(Color(123, 45, 67, 255), 10., FontStyle::default());
     ui.prepare_frame();
     assert_eq!(calls.get(), 0, "color does not change shaping");
-    editor.set_typography(ui.theme.text, 12., FontStyle::default());
+    editor.set_typography(
+        ui.theme().color(zgui::theme::tok::TEXT_PRIMARY),
+        12.,
+        FontStyle::default(),
+    );
     ui.prepare_frame();
     assert!(calls.replace(0) > 0, "font size change");
     assert_stable(&ui, &editor, &calls);
@@ -126,7 +134,7 @@ fn text_font_pitch_wrap_and_allocated_width_invalidate_reused_geometry() {
             ..FontStyle::default()
         },
     ] {
-        editor.set_typography(ui.theme.text, 12., font);
+        editor.set_typography(ui.theme().color(zgui::theme::tok::TEXT_PRIMARY), 12., font);
         ui.prepare_frame();
         assert!(
             calls.replace(0) > 0,

@@ -813,3 +813,30 @@ fn removing_a_target_leaves_timers_running() {
     }
     assert_eq!(h.text("log"), "[done]");
 }
+
+#[test]
+fn a_loop_no_one_can_see_waits_until_it_shows() {
+    // A spinner inside a closed dialog: mounted, never seen.
+    let mut h = Harness::inline(
+        r##"local open = ui.state("open", false)
+        return ui.column {
+            ui.button { id = "b", w = 20, h = 20, on_click = function() open:set(true) end, "b" },
+            ui.modal { open = open, w = 100, h = 100,
+                ui.div { id = "spin", w = 10, h = 10, bg = "#ff0000",
+                    on_mount = function(el)
+                        anime.animate(el, { x = { 0, 100 }, duration = 1000, loop = true, frameRate = 30 })
+                    end } } }"##,
+    );
+    h.frame();
+    h.run_ms(300.);
+    assert_eq!(h.x("spin"), 0., "unseen, it stands still");
+    assert_eq!(
+        h.clock.demanded_rate(120.),
+        Some(4.),
+        "and the engine only looks now and then"
+    );
+    h.click("b");
+    h.run_ms(300.);
+    assert!(h.x("spin") > 0., "open, it moves: {}", h.x("spin"));
+    assert_eq!(h.clock.demanded_rate(120.), Some(30.));
+}

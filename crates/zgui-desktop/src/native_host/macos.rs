@@ -38,12 +38,14 @@ use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 use objc2_quartz_core::{CALayer, CAShapeLayer, CATransaction};
 use std::{
     cell::{Cell, RefCell},
+    ffi::c_void,
     rc::{Rc, Weak},
 };
 use zgui::{
     input::InputDispatcher,
     native_view::{
-        BackdropPlacement, NativeContent, NativePlacement, NativeViews, PlaneSplit, PointerRoute,
+        BackdropPlacement, NativeContent, NativePlacement, NativeViews, PageReport, PlaneSplit,
+        PointerRoute, PointerStep,
     },
     scene::{NodeId, Rect, RoundRect, Scene},
     widgets::Ui,
@@ -103,6 +105,113 @@ pub(crate) fn forward_secondary_click(view: &NSView, event: &objc2_app_kit::NSEv
     });
 }
 
+/// The router of `content`'s window, if it has native views.
+fn router_of(content: &NSView) -> Option<Rc<Router>> {
+    let key = content as *const NSView as usize;
+    ROUTERS.with(|routers| {
+        routers
+            .borrow()
+            .iter()
+            .find(|(view, _)| *view == key)
+            .and_then(|(_, router)| router.upgrade())
+    })
+}
+
+/// Follow the pointer where zgui's view does not hear it (once per process):
+/// AppKit sends mouse moves to the key window's first responder, so while a
+/// page or a terminal has keyboard focus zgui's view hears none. A local
+/// monitor sees each move before it is sent and takes nothing from it.
+fn watch_pointer() {
+    thread_local! {
+        static WATCHING: Cell<bool> = const { Cell::new(false) };
+    }
+    if WATCHING.replace(true) {
+        return;
+    }
+    let block = block2::RcBlock::new(
+        |event: std::ptr::NonNull<objc2_app_kit::NSEvent>| -> *mut objc2_app_kit::NSEvent {
+            // SAFETY: AppKit passes a valid event for the handler's duration.
+            pointer_moved(unsafe { event.as_ref() }, true);
+            event.as_ptr()
+        },
+    );
+    // The monitor lives as long as the app.
+    let monitor = unsafe {
+        objc2_app_kit::NSEvent::addLocalMonitorForEventsMatchingMask_handler(
+            objc2_app_kit::NSEventMask::MouseMoved,
+            &block,
+        )
+    };
+    std::mem::forget(monitor);
+}
+
+/// A mouse move in a window with native views that zgui's view will not
+/// hear: route it as the host routes the moves it does hear. `monitored`:
+/// AppKit's (not a diagnostic's), heard only by the key window.
+fn pointer_moved(event: &objc2_app_kit::NSEvent, monitored: bool) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    // An inactive window hovers nothing (its host sent zgui a leave).
+    let Some(window) = event
+        .window(mtm)
+        .filter(|window| !monitored || window.isKeyWindow())
+    else {
+        return;
+    };
+    let Some(content) = window.contentView() else {
+        return;
+    };
+    let heard = window.firstResponder().is_some_and(|responder| {
+        std::ptr::eq(
+            Retained::as_ptr(&responder) as *const c_void,
+            Retained::as_ptr(&content) as *const c_void,
+        )
+    });
+    if heard {
+        return;
+    }
+    let Some(router) = router_of(&content) else {
+        return;
+    };
+    let point = content.convertPoint_fromView(event.locationInWindow(), None);
+    let size = content.frame().size;
+    let y = if content.isFlipped() {
+        point.y
+    } else {
+        size.height - point.y
+    };
+    let (x, y) = (point.x as f32, y as f32);
+    if x < 0. || y < 0. || x > size.width as f32 || y > size.height as f32 {
+        return;
+    }
+    let (step, report) = router.track(x, y, false);
+    if step == PointerStep::Move {
+        router.unheard.set(Some((x, y)));
+    }
+    if matches!(step, PointerStep::Over(_)) && report.is_empty() {
+        return;
+    }
+    zgui::native_view::post(move || {
+        report.apply();
+        let Some(scene) = router.scene.upgrade() else {
+            return;
+        };
+        use zgui::input::InputEvent;
+        match step {
+            PointerStep::Move => {
+                router
+                    .input
+                    .dispatch(&scene, InputEvent::PointerMove { x, y });
+            }
+            PointerStep::Leave(_) => {
+                router.input.dispatch(&scene, InputEvent::PointerLeave);
+            }
+            PointerStep::Over(_) => {}
+        }
+    });
+}
+
 /// The cursor zgui shows at `event`'s point in `view`'s window (what it
 /// draws over a native view there: a pane's grip), if it sets one.
 #[allow(dead_code)]
@@ -159,8 +268,18 @@ pub(crate) struct Router {
     pub scene: Weak<RefCell<Scene>>,
     pub input: InputDispatcher,
     pub natives: NativeViews,
+    /// The pointer over native views (zgui's leave, pages' pointers).
+    pub pointer: zgui::native_view::NativePointer,
+    /// The last move the pointer monitor routed to zgui itself, for the
+    /// host's cursor (see `NativeHost::take_unheard_pointer`).
+    pub unheard: Cell<Option<(f32, f32)>>,
 }
 impl Router {
+    /// The pointer moved to window point `(x, y)`: what zgui hears.
+    pub fn track(&self, x: f32, y: f32, held: bool) -> (PointerStep, PageReport) {
+        let route = self.route(x, y);
+        self.pointer.moved(&self.natives, route, held, x, y)
+    }
     fn route(&self, x: f32, y: f32) -> PointerRoute {
         let split = self.natives.split();
         let Some(scene) = self.scene.upgrade() else {
@@ -573,6 +692,93 @@ struct Shared {
     overlay_host: Option<Retained<CALayer>>,
 }
 
+fn ns_window(window: &winit::window::Window) -> Option<Retained<objc2_app_kit::NSWindow>> {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let handle = window.window_handle().ok()?;
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return None;
+    };
+    // SAFETY: winit's content view, alive while its window is.
+    let view = unsafe { Retained::<NSView>::retain(handle.ns_view.as_ptr().cast()) }?;
+    view.window()
+}
+
+/// Turns the window's cursor rects off for good. winit shows zgui's cursor
+/// through a rect over its whole view, and WebKit sets no cursor of its own
+/// (the I-beam over text, the hand over links) while another view's rect is in
+/// force; turning them off only while the pointer was over a page lagged it
+/// by a frame, and a page that missed its moment kept the wrong cursor. zgui
+/// sets its cursors directly instead (`set_cursor`), as WebKit does.
+pub fn disable_cursor_rects(window: &winit::window::Window) {
+    if let Some(ns_window) = ns_window(window) {
+        ns_window.disableCursorRects();
+    }
+}
+
+/// Shows `cursor`, if the pointer is over this window (an app sets the cursor
+/// only for its own windows).
+pub fn set_cursor(window: &winit::window::Window, cursor: winit::window::CursorIcon) {
+    use objc2_app_kit::NSCursor;
+    use winit::window::CursorIcon as C;
+    let Some(ns_window) = ns_window(window) else {
+        return;
+    };
+    let mtm = MainThreadMarker::from(&*ns_window);
+    let under = objc2_app_kit::NSWindow::windowNumberAtPoint_belowWindowWithWindowNumber(
+        objc2_app_kit::NSEvent::mouseLocation(),
+        0,
+        mtm,
+    );
+    if under != ns_window.windowNumber() {
+        return;
+    }
+    // AppKit's unpublished cursors, as winit (and Safari) use them: the
+    // help, zoom, diagonal-resize and busy cursors. The arrow if one is gone.
+    fn private(selector: objc2::runtime::Sel) -> Retained<NSCursor> {
+        let class = NSCursor::class();
+        let responds: bool = unsafe { msg_send![class, respondsToSelector: selector] };
+        let cursor: Option<Retained<NSCursor>> = if responds {
+            unsafe { msg_send![class, performSelector: selector] }
+        } else {
+            None
+        };
+        cursor.unwrap_or_else(NSCursor::arrowCursor)
+    }
+    // The resize cursors' replacements need macOS 15; these work on every version.
+    #[allow(deprecated)]
+    let ns_cursor = match cursor {
+        C::Help => private(objc2::sel!(_helpCursor)),
+        C::ZoomIn => private(objc2::sel!(_zoomInCursor)),
+        C::ZoomOut => private(objc2::sel!(_zoomOutCursor)),
+        C::NeResize => private(objc2::sel!(_windowResizeNorthEastCursor)),
+        C::NwResize => private(objc2::sel!(_windowResizeNorthWestCursor)),
+        C::SeResize => private(objc2::sel!(_windowResizeSouthEastCursor)),
+        C::SwResize => private(objc2::sel!(_windowResizeSouthWestCursor)),
+        C::NeswResize => private(objc2::sel!(_windowResizeNorthEastSouthWestCursor)),
+        C::NwseResize => private(objc2::sel!(_windowResizeNorthWestSouthEastCursor)),
+        // What Safari and Chrome show for both.
+        C::Wait | C::Progress => private(objc2::sel!(busyButClickableCursor)),
+        C::Pointer => NSCursor::pointingHandCursor(),
+        C::Text => NSCursor::IBeamCursor(),
+        C::VerticalText => NSCursor::IBeamCursorForVerticalLayout(),
+        C::Crosshair => NSCursor::crosshairCursor(),
+        C::Grab | C::Move | C::AllScroll => NSCursor::openHandCursor(),
+        C::Grabbing => NSCursor::closedHandCursor(),
+        C::NotAllowed | C::NoDrop => NSCursor::operationNotAllowedCursor(),
+        C::Copy => NSCursor::dragCopyCursor(),
+        C::Alias => NSCursor::dragLinkCursor(),
+        C::ContextMenu => NSCursor::contextualMenuCursor(),
+        C::ColResize | C::EwResize => NSCursor::resizeLeftRightCursor(),
+        C::RowResize | C::NsResize => NSCursor::resizeUpDownCursor(),
+        C::EResize => NSCursor::resizeRightCursor(),
+        C::WResize => NSCursor::resizeLeftCursor(),
+        C::NResize => NSCursor::resizeUpCursor(),
+        C::SResize => NSCursor::resizeDownCursor(),
+        _ => NSCursor::arrowCursor(),
+    };
+    ns_cursor.set();
+}
+
 impl Surfaces {
     pub fn new(window: &winit::window::Window, router: Router) -> Result<Self, String> {
         use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -585,6 +791,7 @@ impl Surfaces {
         let parent: Retained<NSView> =
             unsafe { Retained::retain(handle.ns_view.as_ptr().cast()) }.ok_or("no content view")?;
         let parent_key = Retained::as_ptr(&parent) as usize;
+        watch_pointer();
         let overlay_root = CALayer::new();
         no_actions(&overlay_root);
         let overlay_host = CALayer::new();
@@ -634,6 +841,9 @@ impl Surfaces {
             zgui_focus: None,
             shared,
         })
+    }
+    pub fn router(&self) -> &Router {
+        &self.router
     }
     /// The layer the overlay renderer presents into.
     pub fn overlay_host(&self, scale: f32) -> Retained<CALayer> {
@@ -736,6 +946,8 @@ impl Surfaces {
             let mut term = None;
             let (view, web): (Option<Retained<NSView>>, Option<zgui::web_view::WebView>) =
                 match content {
+                    // A closed page shows nothing (and gets no new page).
+                    NativeContent::Web(web) if web.is_closed() => (None, Some(web.clone())),
                     NativeContent::Web(web) => {
                         let backend = webkit::backend(web, self.mtm);
                         let page = backend
@@ -1332,6 +1544,52 @@ impl NativeDiagnostics {
                     .filter(|content| hit.isDescendantOf(content))
                     .map(|_| *node)
             })
+        })
+        .flatten()
+    }
+    /// Route a mouse move to window point `(x, y)` (y down) as AppKit's
+    /// would be, through the same monitor, without sending any event: an
+    /// `NSEvent` made for the window and handed to the monitor's handler.
+    /// The monitor follows moves zgui's view does not hear (a native view
+    /// has keyboard focus); the host routes the others the same way.
+    pub fn pointer_moved(&self, x: f32, y: f32) {
+        let event = self
+            .with(|shared| {
+                let parent = shared.parent.as_ref()?;
+                let window = parent.window()?;
+                let height = parent.frame().size.height;
+                let flipped = NSPoint::new(
+                    x as f64,
+                    if parent.isFlipped() {
+                        y as f64
+                    } else {
+                        height - y as f64
+                    },
+                );
+                let location = parent.convertPoint_toView(flipped, None);
+                objc2_app_kit::NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+                    objc2_app_kit::NSEventType::MouseMoved,
+                    location,
+                    objc2_app_kit::NSEventModifierFlags::empty(),
+                    0.,
+                    window.windowNumber(),
+                    None,
+                    0,
+                    0,
+                    0.,
+                )
+            })
+            .flatten();
+        if let Some(event) = event {
+            pointer_moved(&event, false);
+        }
+    }
+    /// Whether the pointer is over a native view taking input, as the
+    /// monitor and the host left it.
+    pub fn pointer_over(&self) -> Option<NodeId> {
+        self.with(|shared| {
+            let parent = shared.parent.as_ref()?;
+            router_of(parent)?.pointer.over()
         })
         .flatten()
     }

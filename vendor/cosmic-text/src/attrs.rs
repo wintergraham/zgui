@@ -295,6 +295,16 @@ pub struct Attrs<'a> {
     pub metrics_opt: Option<CacheMetrics>,
     /// Letter spacing (tracking) in EM
     pub letter_spacing_opt: Option<LetterSpacing>,
+    /// zgui: room added before a span's first glyph and after its last, in
+    /// EM (CSS's inline padding: an inline code chip's)
+    pub padding_opt: Option<LetterSpacing>,
+    /// zgui: the optical size variable fonts shape and draw at (their
+    /// `opsz` axis), in pixels: CSS's `font-optical-sizing: auto` sets it to
+    /// the font size. 0 leaves the font's default.
+    pub optical: u16,
+    /// zgui: shown masked, a bullet for each character (a password), each
+    /// bullet keeping its character's place in the text.
+    pub masked: bool,
     pub font_features: FontFeatures,
     pub text_decoration: TextDecoration,
 }
@@ -314,6 +324,9 @@ impl<'a> Attrs<'a> {
             cache_key_flags: CacheKeyFlags::empty(),
             metrics_opt: None,
             letter_spacing_opt: None,
+            padding_opt: None,
+            optical: 0,
+            masked: false,
             font_features: FontFeatures::new(),
             text_decoration: TextDecoration::new(),
         }
@@ -370,6 +383,24 @@ impl<'a> Attrs<'a> {
     /// Set letter spacing (tracking) in EM
     pub const fn letter_spacing(mut self, letter_spacing: f32) -> Self {
         self.letter_spacing_opt = Some(LetterSpacing(letter_spacing));
+        self
+    }
+
+    /// zgui: show the text masked (see `masked`)
+    pub const fn masked(mut self, masked: bool) -> Self {
+        self.masked = masked;
+        self
+    }
+
+    /// zgui: set the optical size (pixels; 0 for the font's default)
+    pub const fn optical(mut self, optical: u16) -> Self {
+        self.optical = optical;
+        self
+    }
+
+    /// zgui: set the span's inline padding (in EM)
+    pub const fn padding(mut self, padding: f32) -> Self {
+        self.padding_opt = Some(LetterSpacing(padding));
         self
     }
 
@@ -452,6 +483,9 @@ pub struct AttrsOwned {
     pub metrics_opt: Option<CacheMetrics>,
     /// Letter spacing (tracking) in EM
     pub letter_spacing_opt: Option<LetterSpacing>,
+    pub padding_opt: Option<LetterSpacing>,
+    pub optical: u16,
+    pub masked: bool,
     pub font_features: FontFeatures,
     pub text_decoration: TextDecoration,
 }
@@ -468,6 +502,9 @@ impl AttrsOwned {
             cache_key_flags: attrs.cache_key_flags,
             metrics_opt: attrs.metrics_opt,
             letter_spacing_opt: attrs.letter_spacing_opt,
+            padding_opt: attrs.padding_opt,
+            optical: attrs.optical,
+            masked: attrs.masked,
             font_features: attrs.font_features.clone(),
             text_decoration: attrs.text_decoration,
         }
@@ -484,6 +521,9 @@ impl AttrsOwned {
             cache_key_flags: self.cache_key_flags,
             metrics_opt: self.metrics_opt,
             letter_spacing_opt: self.letter_spacing_opt,
+            padding_opt: self.padding_opt,
+            optical: self.optical,
+            masked: self.masked,
             font_features: self.font_features.clone(),
             text_decoration: self.text_decoration,
         }

@@ -2,18 +2,12 @@
 //! builds the same window from a Luau script; compare the two with
 //! `examples/stream/measure.sh`.
 //! Run: cargo run --release -p zgui-script --example stream_rust
-#[cfg(target_os = "macos")]
-#[path = "../../zgui-desktop/examples/support/glass.rs"]
-mod glass;
 #[path = "stream/shared.rs"]
 mod shared;
 
 use shared::*;
 use std::rc::Rc;
-use zgui::{
-    compose::prelude::*,
-    input::{InputEvent, PointerButton},
-};
+use zgui::compose::prelude::*;
 use zgui_desktop::Application;
 
 const TITLE: &str = "zgui · stream · Rust";
@@ -41,7 +35,6 @@ fn button_style(view: View, bg: u32, hover: u32) -> View {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     Application::new().window(window(TITLE)).run(|cx| {
-        frost(cx, TITLE);
         let running = cx.ui.signal(false);
         let tokens = cx.ui.signal(0_u64);
         let live = cx.ui.signal(String::new());
@@ -109,7 +102,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         }
 
-        let drag = cx.window.clone();
         let label = running.clone();
         let count = tokens.clone();
         let shown = paragraphs.clone();
@@ -127,17 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .h(TITLEBAR)
                         .items_center()
                         .justify_center()
-                        .on_event(move |event| {
-                            if matches!(
-                                event.event,
-                                InputEvent::PointerDown {
-                                    button: PointerButton::Primary,
-                                    ..
-                                }
-                            ) {
-                                drag.drag_window();
-                            }
-                        })
+                        .window_drag()
                         .child(
                             text("Streaming")
                                 .text_size(13.)

@@ -8,12 +8,16 @@
 use crate::{Vm, node::env};
 use mlua::{Function, Lua, Table, UserData, Value as LuaValue};
 use std::{
+    any::Any,
     cell::RefCell,
     collections::HashMap,
     path::PathBuf,
     rc::{Rc, Weak},
 };
-use zgui::terminal::{Terminal, TerminalEvent, TerminalOptions, TerminalSubscription};
+use zgui::{
+    reactive::{Effect, Runtime, Signal},
+    terminal::{Terminal, TerminalEvent, TerminalOptions, TerminalState, TerminalSubscription},
+};
 
 /// What a session's events call: the latest run's handlers.
 #[derive(Default)]
@@ -42,7 +46,45 @@ const HANDLERS: [&str; 8] = [
 struct Entry {
     term: Terminal,
     handlers: Rc<RefCell<Handlers>>,
+    fields: Rc<Fields>,
     _subscription: TerminalSubscription,
+}
+
+/// The fields of a session's state scripts read, each its own signal: a
+/// read follows its field, not the whole state, so a resize (`columns`,
+/// `rows`) reruns nothing that reads `title` or `process`. Made on the first
+/// read of each, kept up by an effect that compares.
+#[derive(Default)]
+struct Fields(RefCell<HashMap<&'static str, Field>>);
+/// A field's signal (a `Signal<T>`) and the effect keeping it up.
+type Field = (Rc<dyn Any>, Effect);
+impl Fields {
+    fn read<T: Clone + PartialEq + 'static>(
+        &self,
+        runtime: &Runtime,
+        state: &Signal<TerminalState>,
+        name: &'static str,
+        get: fn(&TerminalState) -> T,
+    ) -> T {
+        let known = self.0.borrow().get(name).map(|(signal, _)| signal.clone());
+        let signal = match known.and_then(|signal| signal.downcast::<Signal<T>>().ok()) {
+            Some(signal) => signal,
+            None => {
+                let signal = runtime.signal(state.with_untracked(get));
+                let effect = runtime.untracked(|| {
+                    let (state, field) = (state.clone(), signal.clone());
+                    runtime.effect(move || {
+                        field.set(state.with(get));
+                    })
+                });
+                self.0
+                    .borrow_mut()
+                    .insert(name, (Rc::new(signal.clone()), effect));
+                Rc::new(signal)
+            }
+        };
+        signal.get()
+    }
 }
 /// The host's sessions by id.
 #[derive(Default)]
@@ -55,7 +97,7 @@ impl Terms {
         lua: &Lua,
         id: &str,
         opts: Option<&Table>,
-    ) -> mlua::Result<Terminal> {
+    ) -> mlua::Result<(Terminal, Rc<Fields>)> {
         let env = env(lua)?;
         let mut handlers = Handlers {
             vm: env.vm.clone(),
@@ -76,11 +118,14 @@ impl Terms {
         if let Some(entry) = entries.get(id)
             && !entry.term.is_closed()
         {
-            // A lookup (no options) keeps the handlers; options replace them.
-            if opts.is_some() {
+            // A lookup (no options) keeps the handlers; options replace them,
+            // and say how it starts if nothing has shown it yet (a lookup
+            // made it first, as a list reading every pane's state does).
+            if let Some(opts) = opts {
                 *entry.handlers.borrow_mut() = handlers;
+                entry.term.set_options(options(opts)?);
             }
-            return Ok(entry.term.clone());
+            return Ok((entry.term.clone(), entry.fields.clone()));
         }
         let options = match opts {
             Some(opts) => options(opts)?,
@@ -88,6 +133,7 @@ impl Terms {
         };
         let term = Terminal::new(&env.runtime, options);
         let handlers = Rc::new(RefCell::new(handlers));
+        let fields = Rc::new(Fields::default());
         let subscription = {
             let handlers = Rc::downgrade(&handlers);
             term.on_event(move |event| {
@@ -101,10 +147,11 @@ impl Terms {
             Entry {
                 term: term.clone(),
                 handlers,
+                fields: fields.clone(),
                 _subscription: subscription,
             },
         );
-        Ok(term)
+        Ok((term, fields))
     }
     fn remove(&self, id: &str) {
         let entry = self.entries.borrow_mut().remove(id);
@@ -191,21 +238,61 @@ pub(crate) struct TermUd {
     pub id: String,
     pub term: Terminal,
     terms: Weak<Terms>,
+    fields: Rc<Fields>,
+}
+impl TermUd {
+    /// A state field, tracked alone (see `Fields`).
+    fn field<T: Clone + PartialEq + 'static>(
+        &self,
+        lua: &Lua,
+        name: &'static str,
+        get: fn(&TerminalState) -> T,
+    ) -> mlua::Result<T> {
+        let env = env(lua)?;
+        Ok(self
+            .fields
+            .read(&env.runtime, &self.term.state(), name, get))
+    }
 }
 impl UserData for TermUd {
     fn add_fields<F: mlua::UserDataFields<Self>>(fields: &mut F) {
-        // Reads are tracked: a text or computed that reads them follows them.
+        // Reads are tracked, each field alone: a text or computed that reads
+        // one follows it.
         fields.add_field_method_get("id", |_, t| Ok(t.id.clone()));
-        fields.add_field_method_get("title", |_, t| Ok(t.term.title()));
-        fields.add_field_method_get("pwd", |_, t| Ok(t.term.pwd()));
-        fields.add_field_method_get("process", |_, t| Ok(t.term.process()));
-        fields.add_field_method_get("pid", |_, t| Ok(t.term.state().with(|s| s.pid)));
-        fields.add_field_method_get("focused", |_, t| Ok(t.term.focused()));
-        fields.add_field_method_get("bell", |_, t| Ok(t.term.state().with(|s| s.bell)));
-        fields.add_field_method_get("progress", |_, t| Ok(t.term.state().with(|s| s.progress)));
-        fields.add_field_method_get("exited", |_, t| Ok(t.term.exited()));
-        fields.add_field_method_get("columns", |_, t| Ok(t.term.state().with(|s| s.columns)));
-        fields.add_field_method_get("rows", |_, t| Ok(t.term.state().with(|s| s.rows)));
+        fields.add_field_method_get("title", |lua, t| t.field(lua, "title", |s| s.title.clone()));
+        fields.add_field_method_get("pwd", |lua, t| t.field(lua, "pwd", |s| s.pwd.clone()));
+        fields.add_field_method_get("process", |lua, t| {
+            t.field(lua, "process", |s| s.process.clone())
+        });
+        fields.add_field_method_get("pid", |lua, t| t.field(lua, "pid", |s| s.pid));
+        fields.add_field_method_get("focused", |lua, t| t.field(lua, "focused", |s| s.focused));
+        fields.add_field_method_get("bell", |lua, t| t.field(lua, "bell", |s| s.bell));
+        fields.add_field_method_get("progress", |lua, t| {
+            t.field(lua, "progress", |s| s.progress)
+        });
+        fields.add_field_method_get("progress_error", |lua, t| {
+            t.field(lua, "progress_error", |s| s.progress_error)
+        });
+        // What the program reports of itself (OSC 7501), as a table; nil
+        // until it reports.
+        fields.add_field_method_get("status", |lua, t| {
+            let Some(status) = t.field(lua, "status", |s| s.status.clone())? else {
+                return Ok(mlua::Value::Nil);
+            };
+            let table = lua.create_table()?;
+            table.set("state", status.state.name())?;
+            table.set("kind", status.kind)?;
+            table.set("progress", status.progress)?;
+            table.set("app", status.app)?;
+            table.set("title", status.title)?;
+            table.set("msg", status.msg)?;
+            table.set("child_blocked", status.child_blocked)?;
+            table.set("since", status.since_ms as f64 / 1000.)?;
+            Ok(mlua::Value::Table(table))
+        });
+        fields.add_field_method_get("exited", |lua, t| t.field(lua, "exited", |s| s.exited));
+        fields.add_field_method_get("columns", |lua, t| t.field(lua, "columns", |s| s.columns));
+        fields.add_field_method_get("rows", |lua, t| t.field(lua, "rows", |s| s.rows));
         // `{ x, y }` in points from the top left, or nil outside.
         fields.add_field_method_get("pointer", |lua, t| {
             t.term
@@ -258,6 +345,7 @@ pub(crate) fn install(lua: &Lua, ui: &Table, terms: Rc<Terms>) -> mlua::Result<(
     ui.set(
         "term",
         lua.create_function(move |lua, (id, opts): (String, Option<Table>)| {
+            crate::node::env(lua)?.may(crate::Capability::Terminals, "ui.term")?;
             if let Some(opts) = &opts {
                 for (key, _) in opts.clone().pairs::<String, LuaValue>().flatten() {
                     let known = matches!(key.as_str(), "command" | "cwd" | "env" | "font_size")
@@ -269,11 +357,12 @@ pub(crate) fn install(lua: &Lua, ui: &Table, terms: Rc<Terms>) -> mlua::Result<(
                     }
                 }
             }
-            let term = terms.session(lua, &id, opts.as_ref())?;
+            let (term, fields) = terms.session(lua, &id, opts.as_ref())?;
             Ok(TermUd {
                 id,
                 term,
                 terms: Rc::downgrade(&terms),
+                fields,
             })
         })?,
     )

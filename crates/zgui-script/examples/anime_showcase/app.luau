@@ -153,7 +153,7 @@ return ui.column {
 		h = 40,
 		items = "center",
 		justify = "center",
-		on_press = ui.action("drag_window"),
+		window_drag = true,
 		ui.text { "anime.js · Luau · zgui", text_size = 13, bold = true, color = muted },
 	},
 	ui.scroll {

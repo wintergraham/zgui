@@ -5,7 +5,38 @@ local function icon(paths: string): string
 		.. "</svg>"
 end
 
-return {
+-- The icons by name: a pane's comes from what runs in it (names.luau).
+export type Name =
+	"terminal"
+	| "editor"
+	| "claude"
+	| "openai"
+	| "agent"
+	| "globe"
+	| "gauge"
+	| "branch"
+	| "box"
+	| "run"
+	| "code"
+	| "check"
+	| "doc"
+	| "database"
+	| "back"
+	| "forward"
+	| "refresh"
+	| "stop"
+	| "search"
+	| "browser"
+	| "drag_handle"
+	| "plugin"
+	| "clipboard"
+	| "folder"
+	| "plus"
+	| "close"
+	| "split_right"
+	| "split_down"
+
+local icons: { [Name]: string } = {
 	terminal = icon('<rect x="3" y="4.5" width="18" height="15" rx="3.5"/><path d="M7.5 9.5l3 2.5-3 2.5M12.5 15h4"/>'),
 	editor = icon('<path d="M15 5l4 4L9.5 18.5H5.5v-4z"/><path d="M13 7l4 4"/>'),
 	-- Claude's mark (filled, unlike the line icons).
@@ -23,9 +54,27 @@ return {
 	box = icon('<path d="M12 3.5l7.5 4.2v8.6L12 20.5l-7.5-4.2V7.7z"/><path d="M4.5 7.7L12 12l7.5-4.3M12 12v8.5"/>'),
 	run = icon('<path d="M8 5.5v13l10.5-6.5z"/>'),
 	code = icon('<path d="M8.5 7l-5 5 5 5M15.5 7l5 5-5 5"/>'),
+	check = icon('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
 	doc = icon('<path d="M7 3.5h7l4 4v13H7z"/><path d="M14 3.5v4h4M10 12.5h5M10 16h5"/>'),
 	database = icon(
 		'<ellipse cx="12" cy="6" rx="7" ry="2.5"/><path d="M5 6v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5"/>'
+	),
+
+	-- Zeron's icons (icons.zeron.sh): the same 24-point grid and stroke.
+	back = icon('<g transform="rotate(180 12 12)"><path d="M5 12h14m-5.5-5.5L19 12l-5.5 5.5"/></g>'),
+	forward = icon('<path d="M5 12h14m-5.5-5.5L19 12l-5.5 5.5"/>'),
+	refresh = icon('<path d="M19 9a7.5 7.5 0 0 0-13-3L4 8m0-4v4h4m-3 7a7.5 7.5 0 0 0 13 3l2-2m0 4v-4h-4"/>'),
+	stop = icon('<path d="m6 6 12 12M6 18 18 6"/>'),
+	search = icon('<circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 4.5 4.5"/>'),
+	browser = icon('<circle cx="12" cy="12" r="8"/><ellipse cx="12" cy="12" rx="3.5" ry="8"/><path d="M4 12h16"/>'),
+	clipboard = icon('<rect x="6" y="5" width="12" height="15" rx="2"/><path d="M9.5 3.5h5v3h-5z"/>'),
+	folder = icon('<path d="M4 7.5V18a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9.5a1 1 0 0 0-1-1h-7l-2-2.5H5a1 1 0 0 0-1 1z"/>'),
+	-- A puzzle piece: a plugin, or a panel one adds.
+	plugin = icon(
+		'<path d="M9.5 4.5a2 2 0 0 1 4 0V6H17a1 1 0 0 1 1 1v3.5h-1.5a2 2 0 0 0 0 4H18V18a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-3.5h1.5a2 2 0 0 0 0-4H5V7a1 1 0 0 1 1-1h3.5z"/>'
+	),
+	drag_handle = icon(
+		'<g fill="#fff" stroke="none"><circle cx="9" cy="6" r="1.1"/><circle cx="15" cy="6" r="1.1"/><circle cx="9" cy="12" r="1.1"/><circle cx="15" cy="12" r="1.1"/><circle cx="9" cy="18" r="1.1"/><circle cx="15" cy="18" r="1.1"/></g>'
 	),
 
 	-- Interface.
@@ -34,3 +83,5 @@ return {
 	split_right = icon('<rect x="3.5" y="5" width="17" height="14" rx="3"/><path d="M12 5v14"/>'),
 	split_down = icon('<rect x="3.5" y="5" width="17" height="14" rx="3"/><path d="M3.5 12h17"/>'),
 }
+
+return icons

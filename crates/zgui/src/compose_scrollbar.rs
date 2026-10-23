@@ -4,6 +4,7 @@ use crate::{
     reactive::Signal,
     scene::{Color, Layout, NodeId, NodeKind, QuadStyle, Style, Transform},
     semantics::{Role, ScrollAxis, SemanticNode},
+    theme::tok,
     widgets::Ui,
 };
 
@@ -32,14 +33,17 @@ pub(crate) fn mount(
 ) {
     let overlay = ui.container(owner, Layout::Overlay, Style::default());
     let track = ui.container(overlay, Layout::Overlay, Style::default());
-    let background =
-        ui.scene
-            .borrow_mut()
-            .append(track, NodeKind::Rect(ui.theme.hover), Style::default());
-    let thumb =
-        ui.scene
-            .borrow_mut()
-            .append(track, thumb_kind(ui.theme.accent, THUMB), Style::default());
+    let theme = ui.theme_scope();
+    let background = ui.scene.borrow_mut().append(
+        track,
+        NodeKind::Rect(theme.color_untracked(tok::SCROLLBAR_TRACK)),
+        Style::default(),
+    );
+    let thumb = ui.scene.borrow_mut().append(
+        track,
+        thumb_kind(theme.color_untracked(tok::SCROLLBAR_THUMB), THUMB),
+        Style::default(),
+    );
     let main = move |size: (f32, f32)| if horizontal { size.0 } else { size.1 };
     let event_size = size.clone();
     let event_extent = extent.clone();
@@ -50,8 +54,6 @@ pub(crate) fn mount(
     // Under the pointer, or dragged: the thumb widens and brightens.
     let active = ui.signal(false);
     let write_active = active.clone();
-    let thumb_color = ui.theme.accent;
-    let focused_color = ui.theme.text;
     let mut grab = None;
     ui.on_event(track, true, move |cx| {
         if cx.phase == EventPhase::Capture {
@@ -258,8 +260,13 @@ pub(crate) fn mount(
             (across, along)
         };
         scene.set_style(thumb, fixed(drawn.0, drawn.1));
+        scene.set_kind(
+            background,
+            NodeKind::Rect(theme.color(tok::SCROLLBAR_TRACK)),
+        );
+        let thumb_color = theme.color(tok::SCROLLBAR_THUMB);
         let color = if focused.get() {
-            focused_color
+            theme.color(tok::SCROLLBAR_THUMB_ACTIVE)
         } else if active {
             // Brighter: the colour's alpha raised by three quarters.
             let Color(r, g, b, a) = thumb_color;

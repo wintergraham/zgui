@@ -65,7 +65,20 @@ pub(crate) fn activate(
     logical_parent: Option<NodeId>,
     return_focus: Option<NodeId>,
     focusable: bool,
+    // A submenu: its menu stays live under it.
+    porous: bool,
+    // Focus its first control as it opens (else the panel itself).
+    autofocus: bool,
+    // A non-modal layer (`View::layer`).
+    layer: bool,
 ) {
+    if layer {
+        ui.input.set_layer(portal.overlay, true);
+        let mut options = ui.input.options(portal.overlay).unwrap_or_default();
+        options.pass_through = true;
+        ui.input.set_options(portal.overlay, options);
+    }
+    let raised = std::rc::Rc::new(std::cell::Cell::new(false));
     let overlay = portal.overlay;
     let mut semantics = SemanticNode::new(role, label);
     semantics.modal = role == Role::Dialog;
@@ -165,9 +178,24 @@ pub(crate) fn activate(
             overlay,
             NodeInput {
                 disabled: !desired,
+                pass_through: ui.input.options(overlay).is_some_and(|o| o.pass_through),
+                pointer_events: ui.input.options(overlay).and_then(|o| o.pointer_events),
                 ..Default::default()
             },
         );
+        if layer {
+            // Raised over every dialog as it opens; no focus, no scope.
+            if desired && !raised.get() {
+                let parent = ui.scene.borrow().parent(overlay).unwrap();
+                let mut children = ui.scene.borrow().children(parent).to_vec();
+                children.retain(|node| *node != overlay);
+                children.push(overlay);
+                ui.scene.borrow_mut().reorder_children(parent, &children);
+            }
+            raised.set(desired);
+            visible.set(desired && ui.scene.borrow().contains(overlay));
+            return;
+        }
         if desired {
             let already_active = {
                 let scene = ui.scene.borrow();
@@ -187,7 +215,12 @@ pub(crate) fn activate(
                 if let Some(trigger) = return_focus {
                     ui.input.focus(&ui.scene, Some(trigger));
                 }
-                if !ui.input.push_focus_scope(&ui.scene, overlay) {
+                let pushed = if porous {
+                    ui.input.push_porous_focus_scope(&ui.scene, overlay)
+                } else {
+                    ui.input.push_focus_scope(&ui.scene, overlay)
+                };
+                if !pushed {
                     open.set(false);
                     visible.set(false);
                     return;
@@ -213,7 +246,15 @@ pub(crate) fn activate(
                     }
                     result
                 };
+                // Not focusing a control: the panel holds focus (keys reach it).
+                let candidates = if autofocus { candidates } else { vec![panel] };
                 for candidate in candidates {
+                    if candidate == panel && !autofocus {
+                        if ui.input.focus(&ui.scene, Some(panel)) {
+                            break;
+                        }
+                        continue;
+                    }
                     if (role != Role::Menu
                         || ui
                             .semantics
@@ -251,7 +292,29 @@ pub(crate) fn deactivate(ui: &Ui, overlay: NodeId) {
     }
     ui.input.remove_focus_scope(&ui.scene, overlay);
 }
+/// Where a modal's panel sits in the window: lined up with its start,
+/// centre or end on each axis, inside `insets` (top, right, bottom, left)
+/// from the window's edges. Centred, with no insets, unless set.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ModalPlacement {
+    pub x: crate::compose_popover::Edge,
+    pub y: crate::compose_popover::Edge,
+    pub insets: [f32; 4],
+}
+impl ModalPlacement {
+    pub fn centered() -> Self {
+        Self {
+            x: crate::compose_popover::Edge::Center,
+            y: crate::compose_popover::Edge::Center,
+            insets: [0.; 4],
+        }
+    }
+}
 pub(crate) fn center(ui: &mut Ui, owner: NodeId, position: NodeId) {
+    place(ui, owner, position, ModalPlacement::centered());
+}
+pub(crate) fn place(ui: &mut Ui, owner: NodeId, position: NodeId, at: ModalPlacement) {
+    use crate::compose_popover::Edge;
     let viewport = ui.observe_bounds(ui.root());
     let panel = ui.observe_bounds(position);
     let scene = ui.scene.clone();
@@ -260,8 +323,19 @@ pub(crate) fn center(ui: &mut Ui, owner: NodeId, position: NodeId) {
         let panel = panel.get();
         let mut scene = scene.borrow_mut();
         let prior = scene.transform(position);
-        let x = viewport.x + ((viewport.width - panel.width) / 2.).max(0.);
-        let y = viewport.y + ((viewport.height - panel.height) / 2.).max(0.);
+        let [top, right, bottom, left] = at.insets;
+        let along = |edge: Edge, start: f32, extent: f32, before: f32, after: f32, size: f32| {
+            let room = extent - before - after;
+            start
+                + before
+                + match edge {
+                    Edge::Start => 0.,
+                    Edge::Center => ((room - size) / 2.).max(0.),
+                    Edge::End => (room - size).max(0.),
+                }
+        };
+        let x = along(at.x, viewport.x, viewport.width, left, right, panel.width);
+        let y = along(at.y, viewport.y, viewport.height, top, bottom, panel.height);
         if (x - panel.x).abs() > 0.01 || (y - panel.y).abs() > 0.01 {
             scene.set_transform(
                 position,

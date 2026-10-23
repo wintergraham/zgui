@@ -248,6 +248,93 @@ pub fn yield_now() -> impl Future<Output = ()> {
     Yield(false)
 }
 
+/// A value another thread produces, for a task on the UI thread: the
+/// sender keeps only the latest (values sent before the task reads them
+/// coalesce) and sending wakes the task, so nothing polls while nothing
+/// changes. A background reader of a socket hands the UI what it heard.
+pub fn latest<T: Send + 'static>() -> (LatestSender<T>, LatestReceiver<T>) {
+    let shared = Arc::new(Mutex::new(Latest {
+        value: None,
+        waker: None,
+        senders: 1,
+        receiving: true,
+    }));
+    (LatestSender(shared.clone()), LatestReceiver(shared))
+}
+struct Latest<T> {
+    value: Option<T>,
+    waker: Option<Waker>,
+    senders: usize,
+    receiving: bool,
+}
+/// The sending side of [`latest`]: any thread, cloneable.
+pub struct LatestSender<T>(Arc<Mutex<Latest<T>>>);
+impl<T> LatestSender<T> {
+    /// Replace what waits to be read with `value` and wake the reader.
+    /// False once the receiver is gone (stop producing).
+    pub fn send(&self, value: T) -> bool {
+        let waker = {
+            let mut latest = self.0.lock().unwrap();
+            if !latest.receiving {
+                return false;
+            }
+            latest.value = Some(value);
+            latest.waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+        true
+    }
+}
+impl<T> Clone for LatestSender<T> {
+    fn clone(&self) -> Self {
+        self.0.lock().unwrap().senders += 1;
+        Self(self.0.clone())
+    }
+}
+impl<T> Drop for LatestSender<T> {
+    fn drop(&mut self) {
+        let waker = {
+            let mut latest = self.0.lock().unwrap();
+            latest.senders -= 1;
+            if latest.senders > 0 {
+                return;
+            }
+            latest.waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+/// The receiving side of [`latest`], for one task on the UI thread.
+pub struct LatestReceiver<T>(Arc<Mutex<Latest<T>>>);
+impl<T> LatestReceiver<T> {
+    /// The next value sent (the latest of those sent since the last read),
+    /// or `None` once every sender is gone and nothing waits.
+    pub fn recv(&mut self) -> impl Future<Output = Option<T>> + '_ {
+        std::future::poll_fn(move |cx| {
+            let mut latest = self.0.lock().unwrap();
+            if let Some(value) = latest.value.take() {
+                return Poll::Ready(Some(value));
+            }
+            if latest.senders == 0 {
+                return Poll::Ready(None);
+            }
+            latest.waker = Some(cx.waker().clone());
+            Poll::Pending
+        })
+    }
+}
+impl<T> Drop for LatestReceiver<T> {
+    fn drop(&mut self) {
+        let mut latest = self.0.lock().unwrap();
+        latest.receiving = false;
+        latest.value = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,6 +405,59 @@ mod tests {
         assert!(executor.is_empty());
         waker.wake_by_ref();
         assert!(!executor.has_ready());
+    }
+
+    #[test]
+    fn latest_values_wake_the_reader_and_coalesce() {
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let mut executor = LocalExecutor::with_wake({
+            let wakes = wakes.clone();
+            move || {
+                wakes.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+        let (sender, mut receiver) = latest::<u32>();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        executor.spawn({
+            let seen = seen.clone();
+            async move {
+                while let Some(value) = receiver.recv().await {
+                    seen.borrow_mut().push(value);
+                }
+                seen.borrow_mut().push(0);
+            }
+        });
+        executor.tick();
+        assert!(!executor.has_ready(), "nothing sent: the reader waits");
+        let before = wakes.load(Ordering::Relaxed);
+        // From another thread, three values before the reader runs: one wake,
+        // and only the last arrives.
+        std::thread::spawn({
+            let sender = sender.clone();
+            move || {
+                for value in 1..=3 {
+                    assert!(sender.send(value));
+                }
+            }
+        })
+        .join()
+        .unwrap();
+        assert_eq!(wakes.load(Ordering::Relaxed) - before, 1);
+        executor.tick();
+        assert_eq!(&*seen.borrow(), &[3]);
+        assert!(!executor.has_ready());
+        // Every sender gone: the reader ends.
+        drop(sender);
+        executor.tick();
+        assert_eq!(&*seen.borrow(), &[3, 0]);
+        assert!(executor.is_empty());
+    }
+    #[test]
+    fn latest_senders_stop_once_the_receiver_is_gone() {
+        let (sender, receiver) = latest::<u32>();
+        assert!(sender.send(1));
+        drop(receiver);
+        assert!(!sender.send(2));
     }
 
     #[test]

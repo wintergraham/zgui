@@ -7,7 +7,7 @@ use std::{
     rc::Rc,
     time::{Duration, Instant},
 };
-use zgui_desktop::{WindowContext, WindowOptions};
+use zgui_desktop::{Glass, Titlebar, WindowOptions};
 
 /// One token per 60 Hz period, as the benchmark workload streams.
 pub const PERIOD: Duration = Duration::from_nanos(16_666_667);
@@ -91,35 +91,17 @@ pub fn autostart() -> Option<Duration> {
 const WIDTH: f64 = 760.;
 const HEIGHT: f64 = 560.;
 
-/// A transparent window: the app draws a translucent tint over a blurred
-/// desktop (`frost`).
+/// A translucent tint over a blurred desktop, under inset traffic lights
+/// (macOS), as the other glass examples have.
 pub fn window(title: &str) -> WindowOptions {
     WindowOptions {
         title: title.into(),
         width: WIDTH,
         height: HEIGHT,
-        transparent: true,
         decorations: cfg!(target_os = "macos"),
         min_size: Some((420., 320.)),
+        titlebar: Titlebar::Inset,
+        glass: Some(Glass::default()),
         ..Default::default()
     }
-}
-
-/// macOS: frosted glass behind the window and a transparent titlebar with
-/// inset traffic lights, as the other glass examples have.
-pub fn frost(cx: &mut WindowContext, title: &'static str) {
-    #[cfg(target_os = "macos")]
-    {
-        // The native window is realised after the run closure returns.
-        let window = cx.window.clone();
-        cx.tasks.spawn(async move {
-            zgui::timer::sleep(Duration::from_millis(1)).await;
-            if crate::glass::inset_titlebar(title) {
-                // Content now spans the titlebar; resize so the host sees it.
-                window.set_inner_size(WIDTH, HEIGHT);
-            }
-        });
-    }
-    #[cfg(not(target_os = "macos"))]
-    let _ = (cx, title);
 }

@@ -246,11 +246,16 @@ pub fn estimate(
                     md::Block::Item { depth, run, .. } => {
                         lines(&run.text, 14., 22., width - *depth as f32 * 26. - 26.)
                     }
-                    md::Block::Quote(run) => lines(&run.text, 14., 22., width - 22.) + 12.,
+                    // The 2 px rail, `pl 12`, `pr 10`.
+                    md::Block::Quote(run) => lines(&run.text, 14., 22., width - 24.) + 12.,
+                    // Inside the frame's hairlines.
                     md::Block::Code { run, .. } => {
-                        CODE_HEADER + code_lines(&run.text) as f32 * CODE_LINE + 2. * CODE_PAD_Y
+                        2. + CODE_HEADER
+                            + code_lines(&run.text) as f32 * CODE_LINE
+                            + 2. * CODE_PAD_Y
                     }
-                    md::Block::Table { rows, .. } => (rows.len() + 1) as f32 * 46.,
+                    // 46 px rows, each over its 1 px rule.
+                    md::Block::Table { rows, .. } => (rows.len() + 1) as f32 * 47.,
                     md::Block::Rule => 1.,
                 };
             }
@@ -258,8 +263,9 @@ pub fn estimate(
         }),
         Block::Error(key) => transcript.parts.get(key).map_or(0., |part| {
             let message = part.text.with_untracked(|text| single_line(text));
-            // Wrapper `py 4`, frame `py 8`, the 20 px header and a 6 px gap.
-            8. + 16. + 20. + 6. + lines(&message, 12., ERROR_LINE, width - 20.)
+            // Wrapper `py 4`, frame `py 8` inside its hairlines, the 20 px
+            // header and a 6 px gap.
+            8. + 2. + 16. + 20. + 6. + lines(&message, 12., ERROR_LINE, width - 22.)
         }),
         Block::Group(key) => {
             let members = transcript

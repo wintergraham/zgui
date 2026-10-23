@@ -23,3 +23,33 @@ Winit currently does not implement dynamic visibility or focus requests on Wayla
 Run the interactive example with `cargo run -p zgui-desktop --example window_controls`. On X11 with a window manager, append `-- --smoke-test` to request title, resize, minimize/restore, maximize/restore, hide/show, and close. The example checks actual viewport resize acknowledgments. External X11 property and map-state observations additionally verified minimization, maximization, restoration, hiding and showing; see `platform-validation/window-controls-x11.json`. This does not constitute native macOS or Wayland control validation.
 
 Confirmed hidden, minimized, zero-sized or occluded surfaces skip frame preparation and GPU submission. Pending damage remains until restoration; application tasks and model updates continue. Unknown visibility is treated as drawable, so unsupported compositor queries do not blank the window. A redraw request cannot override explicit native occlusion. `hidden_updates` and `scripts/hidden_updates_smoke.py` check actual X11 unmapped states and latest restored pixels after 40 timed model updates. This does not imply that all reactive application computations stop while hidden.
+
+## Title bars, glass and drag regions
+
+`WindowOptions::titlebar` styles the title bar (macOS; other platforms keep theirs): `Titlebar::Standard`, `Titlebar::Inset` (transparent and untitled, content running under it, the traffic lights inset in a 40-point strip, Electron's `hiddenInset`) or `Titlebar::Hidden` (no title bar and no window buttons, the window keeping its corners and shadow). `WindowOptions::glass` puts a frosted desktop behind the window, cut to its rounded corners: `Glass::new(GlassMaterial::Hud)` (the default), any `GlassMaterial`, and `.plain()` for only the blur, untinted and unsaturated, under an app's own tint. Glass makes the window transparent. Both apply as the window is made, before it shows, keeping the content size asked for; `WindowContext::window_info.corner_radius` then holds the window's corner radius, so content inset from its edge stays concentric with it.
+
+`View::window_drag()` (Luau `window_drag = true`) makes a view a drag region, as `-webkit-app-region: drag`: a primary press on it, or on anything inside it that takes no input, moves the window, and a double click does what a double click on the title bar does (macOS follows the system setting: zoom, minimize or nothing; elsewhere the window toggles maximized). Focusable or pointer-capturing descendants, such as buttons and inputs, keep their presses, and pressing to move the window leaves focus where it was.
+
+```rust,no_run
+use zgui::compose::prelude::*;
+use zgui_desktop::{Application, Glass, Titlebar, WindowOptions};
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    Application::new()
+        .window(WindowOptions {
+            title: "Notes".into(),
+            titlebar: Titlebar::Inset,
+            glass: Some(Glass::default()),
+            ..Default::default()
+        })
+        .run(|cx| {
+            cx.render(
+                column()
+                    .w_full()
+                    .h_full()
+                    .bg(rgba(0x1214168c))
+                    // The strip under the traffic lights moves the window.
+                    .child(div().w_full().h(40.).window_drag()),
+            );
+        })
+}
+```

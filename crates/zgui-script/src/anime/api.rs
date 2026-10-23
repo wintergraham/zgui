@@ -131,6 +131,16 @@ pub(crate) fn animate(
 ) -> mlua::Result<ClipUd> {
     let ctx = ctx(lua)?;
     scoped(&ctx.engine, &params, None)?;
+    // Milliseconds, unless the script set `engine.timeUnit = "s"`.
+    if !ctx.engine.seconds.get()
+        && let Ok(Some(ms)) = params.raw_get::<Option<f64>>("duration")
+    {
+        let looping = !matches!(
+            params.raw_get::<mlua::Value>("loop")?,
+            mlua::Value::Nil | mlua::Value::Boolean(false) | mlua::Value::Integer(0)
+        );
+        crate::check_duration(lua, "duration", ms, looping);
+    }
     let (timing, callbacks, id) = {
         let p = Params {
             own: &params,

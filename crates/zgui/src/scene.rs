@@ -433,6 +433,11 @@ pub fn compose_color(
 pub enum Layout {
     Row,
     Column,
+    /// Children stacked in the whole content box, as CSS grid lays out items
+    /// sharing one area: each sized against it and aligned in it on its own,
+    /// across by `Style::align` and down by `Style::justify` (`Stretch` on
+    /// either fills that axis unless the child sizes itself there). Its size
+    /// is its largest in-flow child's.
     Overlay,
 }
 /// A rectangular outer shadow. Blur radius is the Gaussian sigma in logical pixels.
@@ -502,6 +507,25 @@ impl QuadStyle {
             .and_then(|detail| detail.border_widths)
             .unwrap_or(Insets::all(self.border_width))
     }
+    /// The room its border takes in layout (top, right, bottom, left), as
+    /// CSS's `box-sizing: border-box` has it: a box's size includes its
+    /// border, and its padding and children sit inside it. A border painted
+    /// over the content (`border_over`, an inset stroke) takes none; nor do
+    /// outlines. A transparent border still takes its width, so a colour
+    /// change never moves anything.
+    pub fn layout_border(&self) -> Insets {
+        if self.border_over {
+            return Insets::default();
+        }
+        let sides = self.border_sides();
+        let side = |width: f32| if width.is_finite() { width.max(0.) } else { 0. };
+        Insets {
+            top: side(sides.top),
+            right: side(sides.right),
+            bottom: side(sides.bottom),
+            left: side(sides.left),
+        }
+    }
     /// Whether it has a visible border.
     pub fn has_border(&self) -> bool {
         let sides = self.border_sides();
@@ -538,7 +562,10 @@ impl QuadStyle {
 #[derive(Clone, Debug, PartialEq)]
 pub enum NodeKind {
     Container(Layout),
-    /// A decorated container; its background does not participate in child layout.
+    /// A decorated container. Its border takes room inside its box, as CSS's
+    /// `box-sizing: border-box` has it (`QuadStyle::layout_border`): its
+    /// padding and children lay out inside it. The rest of its paint does
+    /// not participate in layout.
     Panel {
         layout: Layout,
         quad: QuadStyle,
@@ -585,6 +612,10 @@ pub enum Align {
     End,
     Stretch,
 }
+/// Distribution along a row's or column's main axis (CSS `justify-content`),
+/// and an overlay's vertical alignment (CSS grid's `align-items`: each child
+/// on its own; the space-distributing values act as `Start` or `Center`, as
+/// they do for one item).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Justify {
     #[default]
@@ -594,6 +625,10 @@ pub enum Justify {
     SpaceBetween,
     SpaceAround,
     SpaceEvenly,
+    /// An overlay's children fill its height, unless they size themselves
+    /// there. Along a row or column it acts as `Start`, as CSS's
+    /// `justify-content: stretch` does in flexbox.
+    Stretch,
 }
 /// A platform text shaper can provide accurate intrinsic and wrapped text metrics.
 pub trait TextMeasurer {
@@ -604,13 +639,27 @@ impl<F: Fn(&str, f32, Option<f32>) -> (f32, f32)> TextMeasurer for F {
         self(text, font_size, max_width)
     }
 }
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct Style {
     /// Opt-in grid, wrapping, richer lengths and positioning.
     pub layout_options: Option<Arc<crate::layout::LayoutOptions>>,
-    /// Remove this child from normal flow and position it at its parent content
+    /// Remove this child from normal flow and position it against its
+    /// containing block: the nearest ancestor that is `relative`, found
+    /// without passing an `absolute` ancestor; otherwise its parent. Its
+    /// insets (`LayoutOptions::inset`) count from that block's padding box
+    /// (inside its border); without any it sits at its parent's content
     /// origin plus margins. It does not contribute to intrinsic parent size.
     pub absolute: bool,
+    /// A containing block for `absolute` descendants (CSS `position:
+    /// relative`). It changes nothing about this node's own layout.
+    pub relative: bool,
+    /// `width` is this node's intrinsic width rather than a constraint: it
+    /// takes it when nothing else sizes it (a flex basis, fit content), but
+    /// a parent stretching its children overrides it, as it would a box
+    /// sized by its content. A scroll view's and an input's default widths.
+    pub intrinsic_width: bool,
+    /// `height` is its intrinsic height, as `intrinsic_width`.
+    pub intrinsic_height: bool,
     pub width: Option<f32>,
     pub height: Option<f32>,
     /// Fraction of the definite parent content width (1.0 means 100%).
@@ -637,6 +686,14 @@ pub struct Style {
     pub fade_edges_x: [f32; 2],
     /// `fade_insets` at the left and right edges.
     pub fade_insets_x: [f32; 2],
+    /// Fade an edge only as far as content runs past it: a list scrolled to
+    /// its top shows no top band, and the band grows to its width as the
+    /// content scrolls under that edge.
+    pub fade_overflow: bool,
+    /// Lay its edges on whole points: a box placed by percentages or ratios
+    /// (a split pane) keeps crisp borders at every size. Its size follows
+    /// its rounded edges, so boxes that share an edge still meet.
+    pub snap: bool,
     pub min_width: Option<f32>,
     pub max_width: Option<f32>,
     pub min_height: Option<f32>,
@@ -654,6 +711,76 @@ pub struct Style {
     pub text_options: crate::text_layout::TextOptions,
 }
 
+/// As derived, but with the flags and small enums compared together rather
+/// than one branch each: restyles compare a node's whole style every time.
+impl PartialEq for Style {
+    fn eq(&self, other: &Self) -> bool {
+        // Destructured so that a new field cannot be left out.
+        let Style {
+            layout_options,
+            absolute,
+            relative,
+            intrinsic_width,
+            intrinsic_height,
+            width,
+            height,
+            width_percent,
+            height_percent,
+            padding,
+            padding_edges,
+            gap,
+            clip,
+            fade_edges,
+            fade_insets,
+            fade_edges_x,
+            fade_insets_x,
+            fade_overflow,
+            snap,
+            min_width,
+            max_width,
+            min_height,
+            max_height,
+            margin,
+            flex_grow,
+            flex_shrink,
+            align,
+            justify,
+            text_wrap,
+            text_options,
+        } = self;
+        let flags = (*absolute == other.absolute)
+            & (*relative == other.relative)
+            & (*intrinsic_width == other.intrinsic_width)
+            & (*intrinsic_height == other.intrinsic_height)
+            & (*clip == other.clip)
+            & (*fade_overflow == other.fade_overflow)
+            & (*snap == other.snap)
+            & (*text_wrap == other.text_wrap)
+            & (*align == other.align)
+            & (*justify == other.justify);
+        flags
+            && *width == other.width
+            && *height == other.height
+            && *width_percent == other.width_percent
+            && *height_percent == other.height_percent
+            && *padding == other.padding
+            && *padding_edges == other.padding_edges
+            && *gap == other.gap
+            && *fade_edges == other.fade_edges
+            && *fade_insets == other.fade_insets
+            && *fade_edges_x == other.fade_edges_x
+            && *fade_insets_x == other.fade_insets_x
+            && *min_width == other.min_width
+            && *max_width == other.max_width
+            && *min_height == other.min_height
+            && *max_height == other.max_height
+            && *margin == other.margin
+            && *flex_grow == other.flex_grow
+            && *flex_shrink == other.flex_shrink
+            && *text_options == other.text_options
+            && *layout_options == other.layout_options
+    }
+}
 const LAYOUT: u8 = 1;
 const PAINT: u8 = 2;
 const COMPOSITE: u8 = 4;
@@ -717,6 +844,9 @@ struct Node {
     /// Scroll content: a translation is reported as a `ScrollMove` the
     /// renderer may apply by copying pixels (see `set_scroll_copy`).
     scroll_copy: bool,
+    /// Lays out as its last child (`Scene::set_contents`): `style` is then
+    /// derived, its own kept in `Scene::contents_styles`.
+    contents: bool,
 }
 impl Node {
     fn local(&self) -> LocalTransform {
@@ -830,6 +960,65 @@ fn keep_sizes(sizes: &mut Vec<ProbeSize>, evicted: Vec<ProbeSize>) {
     sizes.splice(0..0, evicted);
     sizes.truncate(PROBE_SIZES);
 }
+/// What a contents node lays out as (`Scene::set_contents`): `own` with
+/// `lead`'s place in the parent. Its margins add to the node's own. The
+/// node's visibility and clip stay its own (the lead's would also cut the
+/// lead's own shadow), and hiding it (`display: none`) still hides it.
+fn contents_style(mut own: Style, lead: &Style) -> Style {
+    let extra = own.margin;
+    own.absolute = lead.absolute;
+    own.width = lead.width;
+    own.height = lead.height;
+    own.width_percent = lead.width_percent;
+    own.height_percent = lead.height_percent;
+    own.min_width = lead.min_width;
+    own.max_width = lead.max_width;
+    own.min_height = lead.min_height;
+    own.max_height = lead.max_height;
+    own.flex_grow = lead.flex_grow;
+    own.flex_shrink = lead.flex_shrink;
+    own.margin = Insets {
+        top: lead.margin.top + extra.top,
+        right: lead.margin.right + extra.right,
+        bottom: lead.margin.bottom + extra.bottom,
+        left: lead.margin.left + extra.left,
+    };
+    let mine = own.layout_options.as_deref().copied().unwrap_or_default();
+    own.layout_options = match &lead.layout_options {
+        None if mine.visible.is_none() && mine.clip_x.is_none() && mine.clip_y.is_none() => {
+            match mine.display {
+                Some(crate::layout::Display::None) => own.layout_options,
+                _ => None,
+            }
+        }
+        lead_options => {
+            let mut options = lead_options.as_deref().copied().unwrap_or_default();
+            options.visible = mine.visible;
+            options.clip_x = mine.clip_x;
+            options.clip_y = mine.clip_y;
+            if mine.display == Some(crate::layout::Display::None) {
+                options.display = mine.display;
+            }
+            // Its own margins add to a margin the lead sets as a length.
+            for (side, add) in [
+                (&mut options.margin.top, extra.top),
+                (&mut options.margin.right, extra.right),
+                (&mut options.margin.bottom, extra.bottom),
+                (&mut options.margin.left, extra.left),
+            ] {
+                if let Some(crate::layout::Length::Px(v)) = side {
+                    *v += add;
+                }
+            }
+            match lead_options {
+                Some(lead_options) if **lead_options == options => Some(lead_options.clone()),
+                _ if options.is_empty() => None,
+                _ => Some(Arc::new(options)),
+            }
+        }
+    };
+    own
+}
 fn dimension(value: f32, min: Option<f32>, max: Option<f32>) -> f32 {
     value
         .max(0.0)
@@ -936,6 +1125,18 @@ pub struct PaintItem<'a> {
 }
 type FontMeasurer =
     dyn Fn(&std::sync::Arc<str>, f32, Option<f32>, &crate::text_layout::FontStyle) -> (f32, f32);
+/// A node `Scene::walk` visits.
+#[derive(Clone, Copy, Debug)]
+pub struct WalkItem {
+    pub id: NodeId,
+    /// Levels below the node the walk started from.
+    pub depth: usize,
+    /// Its box as laid out, translated by its own and its ancestors'
+    /// translations.
+    pub bounds: Rect,
+    /// The clip it paints within (its ancestors' clips and the viewport).
+    pub clip: Option<Rect>,
+}
 pub struct Scene {
     identity: u64,
     slots: Vec<Slot>,
@@ -950,6 +1151,9 @@ pub struct Scene {
     damage_grid: Option<DamageGrid>,
     viewport: Rect,
     blur_nodes: Vec<NodeId>,
+    /// `fade_overflow` nodes, with how far their content runs past each edge
+    /// (top, right, bottom, left; at most the band there).
+    overflow_fades: Vec<(NodeId, [f32; 4])>,
     /// Nodes the platform paints (native views): their box is their ink.
     platform_nodes: Vec<NodeId>,
     isolation_count: usize,
@@ -980,6 +1184,16 @@ pub struct Scene {
     /// Nodes holding more than `MEASUREMENT_ALTERNATES` results of this pass,
     /// trimmed when it ends.
     overfull: Vec<NodeId>,
+    /// Nodes with `Style::relative`: none keeps every absolute child placed
+    /// by its parent, with no ancestor walk.
+    relative_count: usize,
+    /// How many nodes are contents nodes (`set_contents`): with none, style
+    /// and child changes skip looking for a contents parent.
+    contents_count: usize,
+    /// Absolute nodes whose containing block is an ancestor above their
+    /// parent: their parents leave them out, and `place_escaped` positions
+    /// them once the block is laid out. May hold duplicates and stale ids.
+    escaped: Vec<NodeId>,
     /// `measure` calls, for tests of how much work layout does.
     #[cfg(test)]
     measure_calls: u64,
@@ -991,6 +1205,12 @@ pub struct Scene {
     /// The moves reported by the last flush, and that flush's serial.
     moves: Vec<ScrollMove>,
     flush_serial: u64,
+    /// The styles contents nodes were given (`set_contents`), where not the
+    /// default: their own paint, clip and margins; the rest of what lays
+    /// them out is their last child's.
+    contents_styles: std::collections::HashMap<NodeId, Style>,
+    /// Subtrees hit testing skips (`set_inert`): usually none.
+    inert: Vec<NodeId>,
 }
 /// Scroll content that moved rigidly by `(dx, dy)` within `clip`. The flush
 /// damaged only what copying the old pixels cannot provide (`exposed`, plus
@@ -1014,7 +1234,7 @@ impl Scene {
         };
         Self {
             identity: NEXT_SCENE_ID
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
                 .expect("scene identity exhausted"),
             slots: vec![Slot {
                 generation: 0,
@@ -1051,6 +1271,7 @@ impl Scene {
                     shader_uniforms: None,
                     promoted: false,
                     scroll_copy: false,
+                    contents: false,
                     layer_revision: 0,
                 }),
             }],
@@ -1062,6 +1283,7 @@ impl Scene {
             damage_grid: None,
             viewport: Rect::new(0.0, 0.0, width, height),
             blur_nodes: Vec::new(),
+            overflow_fades: Vec::new(),
             platform_nodes: Vec::new(),
             pending_moves: Vec::new(),
             moves: Vec::new(),
@@ -1084,11 +1306,35 @@ impl Scene {
             walk_hints: Default::default(),
             layout_roots: Vec::new(),
             overfull: Vec::new(),
+            relative_count: 0,
+            contents_count: 0,
+            escaped: Vec::new(),
             #[cfg(test)]
             measure_calls: 0,
             geometry_revision: 0,
             cursor_styles: 0,
+            contents_styles: Default::default(),
+            inert: Vec::new(),
         }
+    }
+    /// Make `id`'s subtree invisible to hit testing (and so to pointer
+    /// input and cursors): it paints but the pointer reaches what is under
+    /// it. For overlays that annotate the interface, such as the layout
+    /// inspector. Few nodes are inert; none keeps hit testing as it was.
+    pub fn set_inert(&mut self, id: NodeId, inert: bool) {
+        if !self.contains(id) {
+            return;
+        }
+        let known = self.inert.contains(&id);
+        if inert && !known {
+            self.inert.push(id);
+        } else if !inert && known {
+            self.inert.retain(|n| *n != id);
+        }
+        self.geometry_revision = self.geometry_revision.wrapping_add(1);
+    }
+    pub fn is_inert(&self, id: NodeId) -> bool {
+        self.inert.contains(&id)
     }
     /// Stable identity separates renderer caches when a whole scene is replaced.
     pub fn identity(&self) -> u64 {
@@ -1143,7 +1389,25 @@ impl Scene {
         self.slots[id.index as usize].node.as_mut().unwrap()
     }
     pub fn bounds(&self, id: NodeId) -> Rect {
-        self.world(id).0
+        // `world`'s bounds, without the opacity and clip it also works out:
+        // observed bounds are read for every observed node on every frame
+        // that moves anything.
+        let node = self.node(id);
+        let mut transform = node.transform;
+        let mut parent = node.parent;
+        while let Some(id) = parent {
+            let ancestor = self.node(id);
+            transform.x += ancestor.transform.x;
+            transform.y += ancestor.transform.y;
+            parent = ancestor.parent;
+        }
+        node.bounds.translated(transform)
+    }
+    /// Where layout put `id`, in window coordinates, before any translation
+    /// (its own or its ancestors', scrolling included): what moves only when
+    /// layout moves it.
+    pub fn layout_bounds(&self, id: NodeId) -> Rect {
+        self.node(id).bounds
     }
     /// Visible allocation after ancestor opacity, clipping and viewport intersection.
     /// This does not attempt occlusion testing against overlapping siblings.
@@ -1383,8 +1647,70 @@ impl Scene {
     pub fn kind(&self, id: NodeId) -> &NodeKind {
         &self.node(id).kind
     }
+    /// The style `id` was given (a contents node's own, not what it lays
+    /// out as).
     pub fn style(&self, id: NodeId) -> Style {
-        self.node(id).style.clone()
+        if self.node(id).contents {
+            self.contents_styles.get(&id).cloned().unwrap_or_default()
+        } else {
+            self.node(id).style.clone()
+        }
+    }
+    /// Make `id` lay out as its last child would in its place, as CSS
+    /// `display: contents` does: that child's size, flex and position
+    /// properties (percentages, `absolute` and insets resolving against
+    /// `id`'s parent) are `id`'s, its margins add to `id`'s own, and it
+    /// fills `id`'s box, which is its own. Nothing else of `id`'s own layout
+    /// applies (its size, padding, flex or gap); its paint and clip do.
+    /// Children before the last are placed over it at its origin, sized
+    /// within it: content leaving (absolute), say. With no children it lays
+    /// out as its own style says. Control-flow regions holding one view at
+    /// a time use it to stay out of layout.
+    pub fn set_contents(&mut self, id: NodeId, contents: bool) {
+        if self.node(id).contents == contents {
+            return;
+        }
+        if contents {
+            let own = self.node(id).style.clone();
+            self.keep_contents_style(id, own);
+            self.node_mut(id).contents = true;
+            self.contents_count += 1;
+            self.sync_contents(id);
+        } else {
+            let own = self.contents_styles.remove(&id).unwrap_or_default();
+            self.node_mut(id).contents = false;
+            self.contents_count -= 1;
+            self.apply_style(id, own);
+        }
+        // Its own measurement changes kind either way.
+        self.invalidate_layout(id);
+    }
+    pub fn is_contents(&self, id: NodeId) -> bool {
+        self.node(id).contents
+    }
+    /// A contents node's own style; the default (most have it) is not kept.
+    fn keep_contents_style(&mut self, id: NodeId, own: Style) {
+        if own == Style::default() {
+            self.contents_styles.remove(&id);
+        } else {
+            self.contents_styles.insert(id, own);
+        }
+    }
+    /// The style a contents node `id` lays out as, from its own and its
+    /// last child's.
+    fn sync_contents(&mut self, id: NodeId) {
+        let own = self.contents_styles.get(&id).cloned().unwrap_or_default();
+        let style = match self.node(id).children.last() {
+            Some(lead) => contents_style(own, &self.node(*lead).style),
+            None => own,
+        };
+        self.apply_style(id, style);
+    }
+    /// After `parent` gained, lost or reordered children.
+    fn children_changed(&mut self, parent: NodeId) {
+        if self.contents_count > 0 && self.node(parent).contents {
+            self.sync_contents(parent);
+        }
     }
     pub fn effects(&self, id: NodeId) -> Effects {
         self.node(id).effects
@@ -1460,11 +1786,102 @@ impl Scene {
                 hits.push(id);
             }
         }
+        // Inert subtrees paint but are not hit; what is under them is.
+        if !self.inert.is_empty() {
+            hits.retain(|hit| !self.inert.iter().any(|inert| self.is_within(*hit, *inert)));
+        }
         hits.reverse();
         hits
     }
     pub fn hit_test(&self, x: f32, y: f32) -> Option<NodeId> {
         self.hit_test_all(x, y).into_iter().next()
+    }
+    /// Every laid-out node under `from` in paint order, with its translated
+    /// box and the clip it paints within, for diagnostics (the layout
+    /// inspector). `visit` returns whether to descend into the node. Nodes
+    /// hidden by `display: none` or `visible = false` are skipped with their
+    /// subtrees, as are inert ones (`set_inert`). Local transforms (scale,
+    /// rotation, skew) are not applied: boxes are as laid out and translated.
+    pub fn walk(&self, from: NodeId, mut visit: impl FnMut(&WalkItem) -> bool) {
+        if !self.contains(from) {
+            return;
+        }
+        let (parent, clip) = match self.node(from).parent {
+            Some(parent) => {
+                let (bounds, _, clip) = self.world(parent);
+                let node = self.node(parent);
+                let offset = Transform {
+                    x: bounds.x - node.bounds.x,
+                    y: bounds.y - node.bounds.y,
+                };
+                (offset, clipped_bounds(clip, bounds, &node.style))
+            }
+            None => (Transform::default(), Some(self.viewport)),
+        };
+        let mut stack = vec![(from, parent, clip, 0_usize)];
+        while let Some((id, parent, clip, depth)) = stack.pop() {
+            if self.inert.contains(&id) {
+                continue;
+            }
+            let node = self.node(id);
+            if !own_visible(&node.style) {
+                continue;
+            }
+            let transform = Transform {
+                x: parent.x + node.transform.x,
+                y: parent.y + node.transform.y,
+            };
+            let bounds = node.bounds.translated(transform);
+            let item = WalkItem {
+                id,
+                depth,
+                bounds,
+                clip,
+            };
+            if !visit(&item) {
+                continue;
+            }
+            let inner = clipped_bounds(clip, bounds, &node.style);
+            stack.extend(
+                node.children
+                    .iter()
+                    .rev()
+                    .map(|child| (*child, transform, inner, depth + 1)),
+            );
+        }
+    }
+    /// Whether `id` clips its content horizontally and vertically.
+    pub fn clips(&self, id: NodeId) -> (bool, bool) {
+        clip_axes(&self.node(id).style)
+    }
+    /// Whether `id` is scroll content (`set_scroll_copy`): its parent is a
+    /// scroll viewport.
+    pub fn is_scroll_content(&self, id: NodeId) -> bool {
+        self.node(id).scroll_copy
+    }
+    /// The axes (width, height) on which `id` has a percentage size that
+    /// the last layout could not resolve, because its parent's size on that
+    /// axis depends on its content: the percentage fell back to `id`'s own
+    /// content size. A flexed or stretched size does not count.
+    pub fn unresolved_percentages(&self, id: NodeId) -> (bool, bool) {
+        let node = self.node(id);
+        let Some(measurement) = &node.measurement else {
+            return (false, false);
+        };
+        if node.parent.is_none() || node.style.absolute {
+            return (false, false);
+        }
+        let c = measurement.constraints;
+        (
+            node.style.width.is_none()
+                && node.style.width_percent.is_some()
+                && c.percent_width.is_none()
+                && c.force_width.is_none(),
+            node.style.height.is_none()
+                && node.style.height_percent.is_some()
+                && c.percent_height.is_none()
+                && c.force_height.is_none(),
+        )
     }
     /// Uses the same installed font measurer as layout, useful for caret geometry.
     pub fn measure_text(&self, text: &str, font_size: f32, max_width: Option<f32>) -> (f32, f32) {
@@ -1507,6 +1924,7 @@ impl Scene {
         self.damage_subtree(parent);
         self.node_mut(parent).children.copy_from_slice(children);
         self.invalidate_layout(parent);
+        self.children_changed(parent);
         true
     }
     /// Installs the native font engine for editor geometry and intrinsic measurement.
@@ -1742,6 +2160,12 @@ impl Scene {
             _ => None,
         };
         let old_layout = container_layout(&self.node(id).kind);
+        // A panel's border takes room in layout (`QuadStyle::layout_border`).
+        let border = |kind: &NodeKind| match kind {
+            NodeKind::Panel { quad, .. } => quad.layout_border(),
+            _ => Insets::default(),
+        };
+        let old_layout = old_layout.filter(|_| border(&self.node(id).kind) == border(&kind));
         let layout_unchanged = matches!(
             (&self.node(id).kind, &kind),
             (
@@ -1794,6 +2218,8 @@ impl Scene {
             }
         }
         self.node(parent);
+        self.relative_count += usize::from(style.relative);
+        let overflow_fade = style.fade_overflow;
         let node = Node {
             cursor: None,
             parent: Some(parent),
@@ -1822,6 +2248,7 @@ impl Scene {
             shader_uniforms: None,
             promoted: false,
             scroll_copy: false,
+            contents: false,
             layer_revision: 0,
         };
         let id = if let Some(index) = self.free.pop() {
@@ -1842,8 +2269,12 @@ impl Scene {
             }
         };
         self.node_mut(parent).children.push(id);
+        if overflow_fade {
+            self.overflow_fades.push((id, [0.; 4]));
+        }
         self.dirty.push(id);
         self.invalidate_layout(parent);
+        self.children_changed(parent);
         id
     }
     pub fn remove(&mut self, id: NodeId) {
@@ -1853,7 +2284,13 @@ impl Scene {
         let parent = self.node(id).parent.unwrap();
         self.node_mut(parent).children.retain(|child| *child != id);
         self.free_subtree(id);
+        if !self.inert.is_empty() {
+            let mut inert = std::mem::take(&mut self.inert);
+            inert.retain(|n| self.contains(*n));
+            self.inert = inert;
+        }
         self.invalidate_layout(parent);
+        self.children_changed(parent);
         // Hidden windows may retain damage for an arbitrarily long time while
         // virtual rows are replaced. Amortize stale-generation cleanup so that
         // the queue stays proportional to arena capacity, not update count.
@@ -1869,14 +2306,22 @@ impl Scene {
     fn free_subtree(&mut self, id: NodeId) {
         let node = self.slots[id.index as usize].node.take().unwrap();
         self.cursor_styles -= usize::from(node.cursor.is_some());
+        self.relative_count -= usize::from(node.style.relative);
         if node.isolated {
             self.isolation_count -= 1;
+        }
+        if node.contents {
+            self.contents_styles.remove(&id);
+            self.contents_count -= 1;
         }
         self.transformed -= usize::from(node.transformed());
         self.filtered -= usize::from(node.filtered());
         self.promoted_count -= usize::from(node.promoted);
         if node.effects.blur_radius > 0.0 {
             self.blur_nodes.retain(|entry| *entry != id);
+        }
+        if node.style.fade_overflow {
+            self.overflow_fades.retain(|(entry, _)| *entry != id);
         }
         for child in node.children {
             self.free_subtree(child);
@@ -1909,18 +2354,50 @@ impl Scene {
             self.invalidate_layout(id);
         }
     }
-    pub fn set_style(&mut self, id: NodeId, mut style: Style) {
-        if let Some(options) = &style.layout_options
-            && !self
-                .node(id)
-                .style
-                .layout_options
-                .as_ref()
-                .is_some_and(|old| Arc::ptr_eq(old, options))
-        {
-            let normalized = (**options).normalized();
-            if normalized != **options {
-                style.layout_options = Some(Arc::new(normalized));
+    pub fn set_style(&mut self, id: NodeId, style: Style) {
+        self.restyle(id, style, true);
+    }
+    /// `set_style` for a contents node: keep `style` as its own, and lay it
+    /// out as its last child in its place.
+    #[cold]
+    #[inline(never)]
+    fn set_contents_style(&mut self, id: NodeId, style: Style) {
+        let changed = match self.contents_styles.get(&id) {
+            Some(own) => *own != style,
+            None => style != Style::default(),
+        };
+        if changed {
+            self.keep_contents_style(id, style);
+            self.sync_contents(id);
+        }
+    }
+    /// Lay `id` out by `style` (normalized) from now on: what a contents
+    /// node lays out as.
+    fn apply_style(&mut self, id: NodeId, style: Style) {
+        self.restyle(id, style, false);
+    }
+    /// `set_style` (`given`: the style a caller gave `id`, which a contents
+    /// node keeps as its own) or `apply_style`. One function, so that the
+    /// style is used where the caller put it rather than moved again.
+    #[inline(never)]
+    fn restyle(&mut self, id: NodeId, mut style: Style, given: bool) {
+        if given {
+            if let Some(options) = &style.layout_options
+                && !self
+                    .node(id)
+                    .style
+                    .layout_options
+                    .as_ref()
+                    .is_some_and(|old| Arc::ptr_eq(old, options))
+            {
+                let normalized = (**options).normalized();
+                if normalized != **options {
+                    style.layout_options = Some(Arc::new(normalized));
+                }
+            }
+            if self.contents_count > 0 && self.node(id).contents {
+                self.set_contents_style(id, style);
+                return;
             }
         }
         let old = &self.node(id).style;
@@ -1935,16 +2412,32 @@ impl Scene {
             || old.fade_insets != style.fade_insets
             || old.fade_edges_x != style.fade_edges_x
             || old.fade_insets_x != style.fade_insets_x
+            || old.fade_overflow != style.fade_overflow
             || old.padding != style.padding
             || old.padding_edges != style.padding_edges
             || old.text_wrap != style.text_wrap
             || old.text_options != style.text_options
             || old.layout_options != style.layout_options;
+        let overflow_fade = old.fade_overflow != style.fade_overflow;
         if paints {
             self.damage_subtree(id);
         }
+        if overflow_fade {
+            match style.fade_overflow {
+                true => self.overflow_fades.push((id, [0.; 4])),
+                false => self.overflow_fades.retain(|(entry, _)| *entry != id),
+            }
+        }
         if own_visible(&self.node(id).style) != own_visible(&style) {
             self.geometry_revision = self.geometry_revision.wrapping_add(1);
+        }
+        // Which block its absolute descendants position against.
+        let old = &self.node(id).style;
+        let containing = old.relative != style.relative
+            || (self.relative_count > 0 && old.absolute != style.absolute);
+        if old.relative != style.relative {
+            self.relative_count =
+                self.relative_count + usize::from(style.relative) - usize::from(old.relative);
         }
         self.node_mut(id).style = style;
         if paints {
@@ -1952,6 +2445,28 @@ impl Scene {
             self.invalidate(id, PAINT);
         }
         self.invalidate_layout(id);
+        if containing {
+            self.invalidate_absolute_descendants(id);
+        }
+        // A contents parent lays out as its last child.
+        if self.contents_count > 0
+            && let Some(parent) = self.node(id).parent
+            && self.node(parent).contents
+            && self.node(parent).children.last() == Some(&id)
+        {
+            self.sync_contents(parent);
+        }
+    }
+    /// Lay out again every absolute node under `id`, and so its parent: its
+    /// containing block may have changed (see `containing_block`).
+    fn invalidate_absolute_descendants(&mut self, id: NodeId) {
+        let mut stack = self.node(id).children.clone();
+        while let Some(node) = stack.pop() {
+            if self.node(node).style.absolute {
+                self.invalidate_layout(node);
+            }
+            stack.extend_from_slice(&self.node(node).children);
+        }
     }
     pub fn resize(&mut self, width: f32, height: f32) {
         if self.viewport.width == width && self.viewport.height == height {
@@ -2666,6 +3181,60 @@ impl Scene {
         }
         constraints
     }
+    /// The room `id`'s border takes in layout (`QuadStyle::layout_border`).
+    pub(super) fn layout_border(&self, id: NodeId) -> Insets {
+        match &self.node(id).kind {
+            NodeKind::Panel { quad, .. } => quad.layout_border(),
+            _ => Insets::default(),
+        }
+    }
+    /// Where `id`'s content box sits inside its box, from its most recent
+    /// layout: its padding (percentages resolved) plus its border.
+    pub fn content_insets(&self, id: NodeId) -> Insets {
+        let padding = self.padding(id);
+        let border = self.layout_border(id);
+        Insets {
+            top: padding.top.max(0.) + border.top,
+            right: padding.right.max(0.) + border.right,
+            bottom: padding.bottom.max(0.) + border.bottom,
+            left: padding.left.max(0.) + border.left,
+        }
+    }
+    /// The containing block of absolute node `id` when it is not its parent:
+    /// the nearest `relative` ancestor above the parent, the search
+    /// stopping at an `absolute` one (which contains its own absolute
+    /// descendants). `None`: its parent places it, as it does any child.
+    fn containing_block(&self, id: NodeId) -> Option<NodeId> {
+        if self.relative_count == 0 || !self.node(id).style.absolute {
+            return None;
+        }
+        let parent = self.node(id).parent?;
+        let style = &self.node(parent).style;
+        if style.relative || style.absolute {
+            return None;
+        }
+        let mut current = self.node(parent).parent;
+        while let Some(ancestor) = current {
+            let node = self.node(ancestor);
+            if node.style.relative {
+                return Some(ancestor);
+            }
+            if node.style.absolute {
+                return None;
+            }
+            current = node.parent;
+        }
+        None
+    }
+    /// Whether `id`'s parent leaves it out of its own layout, for its
+    /// containing block to place (`place_escaped`).
+    fn escapes(&mut self, id: NodeId) -> bool {
+        let escapes = self.containing_block(id).is_some();
+        if escapes {
+            self.escaped.push(id);
+        }
+        escapes
+    }
     /// Whether `id` resolves percentages against the (width, height) basis
     /// its parent passes (`Constraints::percent_width`, `percent_height`): its
     /// own percentage sizes, limits and padding. Its children's bases come
@@ -2715,6 +3284,10 @@ impl Scene {
         }
         let style = &node.style;
         let (width, height) = match &node.kind {
+            // As its last child, which it measures as.
+            _ if node.contents && !node.children.is_empty() => {
+                self.reads_available(*node.children.last().unwrap())
+            }
             NodeKind::Text { .. } => (
                 style.text_wrap || style.text_options != Default::default(),
                 false,
@@ -2805,6 +3378,9 @@ impl Scene {
             return kept.size;
         }
         let node = self.node(id);
+        if node.contents && !node.children.is_empty() {
+            return self.measure_contents(id, constraints);
+        }
         if let NodeKind::Container(layout) | NodeKind::Panel { layout, .. } = node.kind
             && self.uses_advanced_layout(id)
         {
@@ -2813,11 +3389,18 @@ impl Scene {
         self.node_mut(id).advanced_layout = None;
         let style = self.resolved_leaf_style(id, constraints);
         let padding = style.padding_edges.unwrap_or(Insets::all(style.padding));
+        // A container's layout, and the room its border takes.
+        let (layout, border) = match &self.node(id).kind {
+            NodeKind::Panel { layout, quad } => (Some(*layout), quad.layout_border()),
+            NodeKind::Container(layout) => (Some(*layout), Insets::default()),
+            _ => (None, Insets::default()),
+        };
+        // The content box's insets: padding inside the border (border-box).
         let padding = Insets {
-            top: padding.top.max(0.0),
-            right: padding.right.max(0.0),
-            bottom: padding.bottom.max(0.0),
-            left: padding.left.max(0.0),
+            top: padding.top.max(0.0) + border.top,
+            right: padding.right.max(0.0) + border.right,
+            bottom: padding.bottom.max(0.0) + border.bottom,
+            left: padding.left.max(0.0) + border.left,
         };
         let horizontal_padding = padding.left + padding.right;
         let vertical_padding = padding.top + padding.bottom;
@@ -2849,86 +3432,51 @@ impl Scene {
             .map(|h| (h - vertical_padding).max(0.0));
         let percent_width = explicit_w.map(|w| (w - horizontal_padding).max(0.0));
         let percent_height = explicit_h.map(|h| (h - vertical_padding).max(0.0));
-        let kind = self.node(id).kind.clone();
         let mut children = Vec::new();
         let mut child_constraints = Vec::new();
-        let (mut width, mut height) = match kind {
-            NodeKind::Text {
-                text, font_size, ..
-            } => {
-                let limit = (style.text_wrap || style.text_options != Default::default())
-                    .then_some(available_w)
-                    .flatten();
-                let revision = self.text_shaper_revision;
-                if let Some(size) = self.node(id).text_size.get().find(limit, revision) {
-                    size
-                } else {
-                    let size = if style.text_options != Default::default() {
-                        let runs = if text.is_empty() {
-                            Vec::new()
-                        } else {
-                            vec![crate::rich_text::TextRun {
-                                range: 0..text.len(),
-                                font: self.node(id).font.clone(),
-                                font_size,
-                                ..Default::default()
-                            }]
-                        };
-                        let rich = crate::rich_text::RichText::new(text, runs)
-                            .unwrap()
-                            .with_options(style.text_options);
-                        self.rich_measurer.measure_mounted(&rich, limit)
-                    } else {
-                        let font = &self.node(id).font;
-                        match &self.font_measurer {
-                            Some(measure) => measure(&text, font_size, limit, font),
-                            None => self.measure_text_with_font(&text, font_size, limit, font),
-                        }
-                    };
-                    TextSizes::remember(&self.node(id).text_size, limit, revision, size);
-                    size
-                }
-            }
-            NodeKind::RichText { text } => {
-                let limit = (style.text_wrap || text.options() != Default::default())
-                    .then_some(available_w)
-                    .flatten();
-                // Same cache as plain text: colour-only changes keep layout
-                // (see `set_kind`), so they keep this size too.
-                let revision = self.text_shaper_revision;
-                if let Some(size) = self.node(id).text_size.get().find(limit, revision) {
-                    size
-                } else {
-                    let size = self.rich_measurer.measure_mounted(&text, limit);
-                    TextSizes::remember(&self.node(id).text_size, limit, revision, size);
-                    size
-                }
-            }
-            NodeKind::Rect(_) | NodeKind::Quad(_) | NodeKind::Canvas(_) => (0.0, 0.0),
-            NodeKind::Svg(_) => (24., 24.),
-            NodeKind::Image(image) => (image.width() as f32, image.height() as f32),
-            #[cfg(target_os = "macos")]
-            NodeKind::NativeSurface(frame) => (frame.width() as f32, frame.height() as f32),
-            NodeKind::Container(layout) | NodeKind::Panel { layout, .. } => {
+        let (mut width, mut height) = match layout {
+            None => self.leaf_size(id, &style, available_w),
+            Some(layout) => {
                 let (absolute, ids): (Vec<_>, Vec<_>) = self
                     .node(id)
                     .children
                     .iter()
                     .copied()
                     .partition(|child| self.node(*child).style.absolute);
+                // Those whose containing block is further up are placed by it.
+                let absolute: Vec<_> = match self.relative_count {
+                    0 => absolute,
+                    _ => {
+                        let mut kept = Vec::with_capacity(absolute.len());
+                        for child in absolute {
+                            if !self.escapes(child) {
+                                kept.push(child);
+                            }
+                        }
+                        kept
+                    }
+                };
                 let horizontal = layout == Layout::Row;
-                // The axes a child fills (stretch): the cross axis, both in an
-                // overlay, unless it sizes itself there.
+                // The axes a child fills (stretch), unless it sizes itself
+                // there: a row's or column's cross axis by `align`; an
+                // overlay's width by `align` and its height by `justify`, as
+                // CSS grid's `justify-items` and `align-items` stretch an item
+                // in its area.
+                let (fill_w, fill_h) = match layout {
+                    Layout::Row => (false, style.align == Align::Stretch),
+                    Layout::Column => (style.align == Align::Stretch, false),
+                    Layout::Overlay => (
+                        style.align == Align::Stretch,
+                        style.justify == Justify::Stretch,
+                    ),
+                };
                 let stretches = |s: &Style| {
-                    let fills = style.align == Align::Stretch;
                     (
-                        fills
-                            && layout != Layout::Row
-                            && s.width.is_none()
+                        fill_w
+                            && (s.width.is_none() || s.intrinsic_width)
                             && percentage(s.width_percent, percent_width).is_none(),
-                        fills
-                            && layout != Layout::Column
-                            && s.height.is_none()
+                        fill_h
+                            && (s.height.is_none() || s.intrinsic_height)
                             && percentage(s.height_percent, percent_height).is_none(),
                     )
                 };
@@ -3217,18 +3765,17 @@ impl Scene {
                     let (cx, cy) = match layout {
                         Layout::Row => (cursor + m.left, cross + m.top),
                         Layout::Column => (cross + m.left, cursor + m.top),
-                        // Stacked children each take `justify` vertically on
-                        // their own, as the retained (Taffy) path places them.
                         Layout::Overlay => {
+                            // Each child aligned in the whole box on its own.
                             let free = inner_h - h - m.top - m.bottom;
-                            let main = match style.justify {
+                            let down = match style.justify {
                                 Justify::Center | Justify::SpaceAround | Justify::SpaceEvenly => {
                                     free / 2.0
                                 }
                                 Justify::End => free,
                                 _ => 0.0,
                             };
-                            (cross + m.left, main + m.top)
+                            (cross + m.left, down + m.top)
                         }
                     };
                     children.push((*child, Rect::new(cx + padding.left, cy + padding.top, w, h)));
@@ -3272,6 +3819,103 @@ impl Scene {
             child_constraints,
         );
         (width, height)
+    }
+    /// A leaf's own size: its text's at `available_w` (when it wraps), its
+    /// image's pixels, or none. Reads the kind in place: cloning it took an
+    /// atomic count on every measure of text, images and decorated paint.
+    fn leaf_size(&self, id: NodeId, style: &Style, available_w: Option<f32>) -> (f32, f32) {
+        match &self.node(id).kind {
+            NodeKind::Text {
+                text, font_size, ..
+            } => {
+                let limit = (style.text_wrap || style.text_options != Default::default())
+                    .then_some(available_w)
+                    .flatten();
+                let revision = self.text_shaper_revision;
+                if let Some(size) = self.node(id).text_size.get().find(limit, revision) {
+                    size
+                } else {
+                    let size = if style.text_options != Default::default() {
+                        let runs = if text.is_empty() {
+                            Vec::new()
+                        } else {
+                            vec![crate::rich_text::TextRun {
+                                range: 0..text.len(),
+                                font: self.node(id).font.clone(),
+                                font_size: *font_size,
+                                ..Default::default()
+                            }]
+                        };
+                        let rich = crate::rich_text::RichText::new(text.clone(), runs)
+                            .unwrap()
+                            .with_options(style.text_options);
+                        self.rich_measurer.measure_mounted(&rich, limit)
+                    } else {
+                        let font = &self.node(id).font;
+                        match &self.font_measurer {
+                            Some(measure) => measure(text, *font_size, limit, font),
+                            None => self.measure_text_with_font(text, *font_size, limit, font),
+                        }
+                    };
+                    TextSizes::remember(&self.node(id).text_size, limit, revision, size);
+                    size
+                }
+            }
+            NodeKind::RichText { text } => {
+                let limit = (style.text_wrap || text.options() != Default::default())
+                    .then_some(available_w)
+                    .flatten();
+                // Same cache as plain text: colour-only changes keep layout
+                // (see `set_kind`), so they keep this size too.
+                let revision = self.text_shaper_revision;
+                if let Some(size) = self.node(id).text_size.get().find(limit, revision) {
+                    size
+                } else {
+                    let size = self.rich_measurer.measure_mounted(text, limit);
+                    TextSizes::remember(&self.node(id).text_size, limit, revision, size);
+                    size
+                }
+            }
+            NodeKind::Rect(_) | NodeKind::Quad(_) | NodeKind::Canvas(_) => (0.0, 0.0),
+            NodeKind::Svg(_) => (24., 24.),
+            NodeKind::Image(image) => (image.width() as f32, image.height() as f32),
+            #[cfg(target_os = "macos")]
+            NodeKind::NativeSurface(frame) => (frame.width() as f32, frame.height() as f32),
+            NodeKind::Container(_) | NodeKind::Panel { .. } => {
+                unreachable!("containers lay their children out")
+            }
+        }
+    }
+    /// A contents node (`set_contents`) under `constraints`: its last child
+    /// under the same ones (its style is that child's place), filling it;
+    /// the children before it over it, within its box.
+    fn measure_contents(&mut self, id: NodeId, constraints: Constraints) -> (f32, f32) {
+        self.node_mut(id).advanced_layout = None;
+        let ids = self.node(id).children.clone();
+        let lead = *ids.last().unwrap();
+        let size = self.measure(lead, constraints);
+        let mut children = Vec::with_capacity(ids.len());
+        let mut asked = Vec::with_capacity(ids.len());
+        for child in ids {
+            if child == lead {
+                children.push((child, Rect::new(0., 0., size.0, size.1)));
+                asked.push(Some(constraints));
+                continue;
+            }
+            let margin = self.node(child).style.margin;
+            let within = Constraints {
+                width: Some((size.0 - margin.left - margin.right).max(0.)),
+                height: Some((size.1 - margin.top - margin.bottom).max(0.)),
+                percent_width: Some(size.0),
+                percent_height: Some(size.1),
+                ..Constraints::default()
+            };
+            let (w, h) = self.measure(child, within);
+            children.push((child, Rect::new(margin.left, margin.top, w, h)));
+            asked.push(Some(within));
+        }
+        self.store_measurement(id, constraints, size, children, asked);
+        size
     }
     /// Make a new result current, keeping earlier ones that are still valid.
     /// `child_constraints`: what each child's place was measured under,
@@ -3330,6 +3974,10 @@ impl Scene {
     /// `covered`: an ancestor moved and already damaged this whole subtree at
     /// its old and new positions.
     fn arrange(&mut self, id: NodeId, x: f32, y: f32, report: &mut FrameReport, covered: bool) {
+        let (x, y) = match self.node(id).style.snap {
+            true => self.snap(id, x, y),
+            false => (x, y),
+        };
         let cache = self.node(id).measurement.as_ref().unwrap();
         let bounds = Rect::new(x, y, cache.size.0, cache.size.1);
         if !self.node(id).arrange_dirty && self.node(id).bounds == bounds {
@@ -3361,6 +4009,152 @@ impl Scene {
         }
         self.node_mut(id).dirty &= !LAYOUT;
         self.node_mut(id).arrange_dirty = false;
+    }
+    /// A `snap` node placed at `x`, `y`: its edges on whole points, laid
+    /// out again at the size between them if that differs.
+    fn snap(&mut self, id: NodeId, x: f32, y: f32) -> (f32, f32) {
+        let measurement = self.node(id).measurement.as_ref().unwrap();
+        let (w, h) = measurement.size;
+        let (x0, y0) = (x.round(), y.round());
+        let size = (
+            ((x + w).round() - x0).max(0.),
+            ((y + h).round() - y0).max(0.),
+        );
+        if size != (w, h) {
+            let constraints = Constraints {
+                force_width: Some(size.0),
+                force_height: Some(size.1),
+                ..measurement.constraints
+            };
+            self.measure_full(id, constraints);
+        }
+        (x0, y0)
+    }
+    /// Lay out and place the absolute nodes their parents left out
+    /// (`containing_block`), now that their blocks have their places,
+    /// outermost first: against the block's padding box, as CSS places an
+    /// absolutely positioned box. Insets resolve as taffy resolves them for
+    /// a parent's own absolute children; without any on an axis it sits at
+    /// its parent's content origin. Only scenes with `relative` nodes get
+    /// here, and only their escaping nodes are visited.
+    fn place_escaped(&mut self, report: &mut FrameReport) {
+        use crate::layout::Length;
+        let mut placed: Vec<NodeId> = Vec::new();
+        loop {
+            // Placing one lays its subtree out, which can find more.
+            let mut batch = std::mem::take(&mut self.escaped);
+            batch.retain(|id| {
+                self.contains(*id) && !placed.contains(id) && self.containing_block(*id).is_some()
+            });
+            if batch.is_empty() {
+                break;
+            }
+            batch.sort_by_key(|id| (self.depth(*id), id.index, id.generation));
+            batch.dedup();
+            for id in batch {
+                placed.push(id);
+                let Some(block) = self.containing_block(id) else {
+                    continue;
+                };
+                let parent = self.node(id).parent.expect("absolute nodes have parents");
+                // Under a node laid out hidden, it was placed hidden with it.
+                let mut current = Some(parent);
+                let mut hidden = false;
+                while let Some(ancestor) = current {
+                    let options = self.node(ancestor).style.layout_options.as_deref();
+                    if options.is_some_and(|o| o.display == Some(crate::layout::Display::None)) {
+                        hidden = true;
+                        break;
+                    }
+                    current = (ancestor != block)
+                        .then(|| self.node(ancestor).parent)
+                        .flatten();
+                }
+                if hidden {
+                    continue;
+                }
+                let area = self.node(block).bounds;
+                let border = self.layout_border(block);
+                let (origin_x, origin_y) = (area.x + border.left, area.y + border.top);
+                let width = (area.width - border.left - border.right).max(0.);
+                let height = (area.height - border.top - border.bottom).max(0.);
+                let style = &self.node(id).style;
+                let options = style.layout_options.as_deref().copied().unwrap_or_default();
+                let finite = |v: f32| if v.is_finite() { v } else { 0. };
+                let inset = |value: Option<Length>, basis: f32| match value {
+                    Some(Length::Px(v)) => Some(finite(v)),
+                    Some(Length::Percent(v)) => Some(finite(v) * basis),
+                    _ => None,
+                };
+                // Percentage margins count from the block's width, as CSS's do.
+                let margin = |value: Option<Length>, px: f32| match value {
+                    Some(Length::Px(v)) => finite(v),
+                    Some(Length::Percent(v)) => finite(v) * width,
+                    Some(Length::Auto) => 0.,
+                    None => px,
+                };
+                let (left, right) = (
+                    inset(options.inset.left, width),
+                    inset(options.inset.right, width),
+                );
+                let (top, bottom) = (
+                    inset(options.inset.top, height),
+                    inset(options.inset.bottom, height),
+                );
+                let m = Insets {
+                    top: margin(options.margin.top, style.margin.top),
+                    right: margin(options.margin.right, style.margin.right),
+                    bottom: margin(options.margin.bottom, style.margin.bottom),
+                    left: margin(options.margin.left, style.margin.left),
+                };
+                let sized_w = (style.width.is_some() && !style.intrinsic_width)
+                    || style.width_percent.is_some();
+                let sized_h = (style.height.is_some() && !style.intrinsic_height)
+                    || style.height_percent.is_some();
+                // Both insets on an axis without a size there: it fills between them.
+                let between =
+                    |start: Option<f32>, end: Option<f32>, room: f32, before: f32, after: f32| {
+                        start
+                            .zip(end)
+                            .map(|(s, e)| (room - s - e - before - after).max(0.))
+                    };
+                let room_w =
+                    (width - left.unwrap_or(0.) - right.unwrap_or(0.) - m.left - m.right).max(0.);
+                let room_h =
+                    (height - top.unwrap_or(0.) - bottom.unwrap_or(0.) - m.top - m.bottom).max(0.);
+                let constraints = Constraints {
+                    width: Some(room_w),
+                    height: Some(room_h),
+                    percent_width: Some(width),
+                    percent_height: Some(height),
+                    force_width: if sized_w {
+                        None
+                    } else {
+                        between(left, right, width, m.left, m.right)
+                    },
+                    force_height: if sized_h {
+                        None
+                    } else {
+                        between(top, bottom, height, m.top, m.bottom)
+                    },
+                };
+                let (w, h) = self.measure_full(id, constraints);
+                let start = self.node(parent).bounds;
+                let content = self.content_insets(parent);
+                let x = match (left, right) {
+                    (Some(left), _) => origin_x + left + m.left,
+                    (None, Some(right)) => origin_x + width - right - m.right - w,
+                    (None, None) => start.x + content.left + m.left,
+                };
+                let y = match (top, bottom) {
+                    (Some(top), _) => origin_y + top + m.top,
+                    (None, Some(bottom)) => origin_y + height - bottom - m.bottom - h,
+                    (None, None) => start.y + content.top + m.top,
+                };
+                self.arrange(id, x, y, report, false);
+            }
+        }
+        self.escaped = placed;
     }
     pub(crate) fn geometry_revision(&self) -> u64 {
         self.geometry_revision
@@ -3414,6 +4208,9 @@ impl Scene {
             self.measure_full(self.root, Constraints::default());
             self.arrange(self.root, 0.0, 0.0, &mut report, false);
         }
+        if !self.escaped.is_empty() {
+            self.place_escaped(&mut report);
+        }
         // Probes this pass answered stay only as the next pass's few.
         for id in std::mem::take(&mut self.overfull) {
             if self.contains(id) {
@@ -3459,6 +4256,7 @@ impl Scene {
         }
         self.dirty = dirty;
         self.dirty.clear();
+        self.measure_overflow_fades();
         // Backdrop-filter output depends on pixels behind it, even when its own node is clean.
         if (!self.damage.is_empty() || self.damage_grid.is_some()) && !self.blur_nodes.is_empty() {
             let mut blur_regions: Vec<(Rect, bool)> = self
@@ -3532,6 +4330,77 @@ impl Scene {
                 None => return false,
             }
         }
+    }
+    /// How far each `fade_overflow` node's content runs past its edges, now
+    /// that layout and scrolling have placed it; where that changes a band,
+    /// repaint what the node shows.
+    fn measure_overflow_fades(&mut self) {
+        for index in 0..self.overflow_fades.len() {
+            let (id, before) = self.overflow_fades[index];
+            let node = self.node(id);
+            let own = node.bounds;
+            // What scrolls may sit a level or two down (a scroll view's
+            // viewport fills it and holds the moving content): look past
+            // a lone child as large as the node, adding up translations.
+            let (mut holder, mut shift) = (node, Transform::default());
+            while let [only] = holder.children[..] {
+                let child = self.node(only);
+                let same = (child.bounds.x - own.x).abs() < 0.5
+                    && (child.bounds.y - own.y).abs() < 0.5
+                    && (child.bounds.width - own.width).abs() < 0.5
+                    && (child.bounds.height - own.height).abs() < 0.5;
+                if !same || child.children.is_empty() {
+                    break;
+                }
+                shift.x += child.transform.x;
+                shift.y += child.transform.y;
+                holder = child;
+            }
+            let reach = holder
+                .children
+                .iter()
+                .map(|child| {
+                    let child = self.node(*child);
+                    child.bounds.translated(child.transform).translated(shift)
+                })
+                .reduce(Rect::union);
+            let [top, bottom] = node.style.fade_edges;
+            let [left, right] = node.style.fade_edges_x;
+            let past = match reach {
+                None => [0.; 4],
+                Some(r) => [
+                    own.y - r.y,
+                    r.x + r.width - (own.x + own.width),
+                    r.y + r.height - (own.y + own.height),
+                    own.x - r.x,
+                ],
+            };
+            let past = [0, 1, 2, 3].map(|i| {
+                let band = [top, right, bottom, left][i];
+                // Under half a point is layout rounding, not overflow.
+                if past[i] < 0.5 || !band.is_finite() {
+                    0.
+                } else {
+                    past[i].min(band.max(0.))
+                }
+            });
+            if past == before {
+                continue;
+            }
+            self.overflow_fades[index].1 = past;
+            let (bounds, _, clip) = self.world(id);
+            if let Some(shown) = clip.map_or(Some(bounds), |clip| clip.intersection(bounds)) {
+                self.add_damage(shown);
+            }
+        }
+    }
+    /// A `fade_overflow` node's overflow at each edge (`measure_overflow_fades`).
+    fn overflow_of(&self, id: NodeId, node: &Node) -> Option<[f32; 4]> {
+        if !node.style.fade_overflow {
+            return None;
+        }
+        let found = self.overflow_fades.iter().find(|(entry, _)| *entry == id);
+        Some(found.map_or([0.; 4], |(_, past)| *past))
     }
     /// Turn this frame's scroll translations into moves: damage what a copy
     /// cannot supply, or everything the content painted where a copy is
@@ -3828,7 +4697,7 @@ impl Scene {
                 true => parent_clip,
                 false => clipped_bounds(parent_clip, bounds, &node.style),
             };
-            let child_mask = fade_mask(mask, clip, &node.style);
+            let child_mask = fade_mask(mask, clip, &node.style, self.overflow_of(id, node));
             let mut child_rounded = rounded_clip(rounded, node, bounds);
             // Its clip inset: on its item and descendants here, on the
             // composite of an untransformed layer (after its effect), and
@@ -3944,11 +4813,19 @@ impl Scene {
 }
 /// The mask a node passes to its children: its own when it fades its edges
 /// (over its clip, less `fade_insets`), otherwise the one it inherited.
-fn fade_mask(inherited: Option<FadeMask>, clip: Option<Rect>, style: &Style) -> Option<FadeMask> {
+fn fade_mask(
+    inherited: Option<FadeMask>,
+    clip: Option<Rect>,
+    style: &Style,
+    overflow: Option<[f32; 4]>,
+) -> Option<FadeMask> {
     let [top, bottom] = style.fade_edges;
     let [left, right] = style.fade_edges_x;
-    let bands =
+    let mut bands =
         [top, right, bottom, left].map(|band| if band.is_finite() { band.max(0.) } else { 0. });
+    if let Some(overflow) = overflow {
+        bands = [0, 1, 2, 3].map(|i| bands[i].min(overflow[i]));
+    }
     match clip {
         Some(clip) if bands.iter().any(|band| *band > 0.) => {
             let inset = |inset: f32| if inset.is_finite() { inset.max(0.) } else { 0. };
@@ -4057,7 +4934,12 @@ impl<'a> Iterator for PaintIter<'a> {
         }
         effects.opacity *= parent_opacity;
         let clip = clipped_bounds(Some(parent_clip), bounds, &node.style).unwrap_or(parent_clip);
-        let child_mask = fade_mask(mask, Some(clip), &node.style);
+        let child_mask = fade_mask(
+            mask,
+            Some(clip),
+            &node.style,
+            self.scene.overflow_of(id, node),
+        );
         let inset = node.clip_inset.as_deref().map(|inset| inset.apply(bounds));
         let clip = match inset {
             Some(inset) => clip.intersection(inset).unwrap_or_default(),
@@ -4622,13 +5504,15 @@ mod tests {
 mod measure_work_tests {
     use super::*;
     use crate::layout::{LayoutOptions, Length};
-    /// A stack `depth` deep of layout boxes as zgui-script lowers them: an
-    /// outer column and a middle one stretching their items, laid out by
-    /// taffy (their children set layout options), each holding wrapping
-    /// text, a fixed-width row and the next box. The middle columns of a
-    /// few levels animate a negative bottom margin every frame (entering
-    /// boxes growing open). Returns the scene's measure calls per frame.
-    fn measures_per_frame(depth: usize) -> u64 {
+    /// A stack `depth` deep of layout boxes, each holding wrapping text, a
+    /// fixed-width row and the next box, laid out by taffy (their children
+    /// set layout options). The boxes of a few levels animate a negative
+    /// bottom margin every frame (entering boxes growing open). As
+    /// zgui-script lowered them once (`contents` false): an outer column
+    /// and a middle one stretching their items, the margin on the middle;
+    /// as it does now: a contents node, the margin its own, around the
+    /// box. Returns the scene's measure calls per frame.
+    fn measures_per_frame(depth: usize, contents: bool) -> u64 {
         let mut scene = Scene::new(600., 4000.);
         let shrinkable = Some(Arc::new(LayoutOptions {
             min_width: Some(Length::Px(0.)),
@@ -4646,12 +5530,23 @@ mod measure_work_tests {
             )
         };
         let mut parent = scene.root();
-        let mut middles = Vec::new();
+        let mut animating = Vec::new();
         for level in 0..depth {
-            let outer = column(&mut scene, parent);
-            let middle = column(&mut scene, outer);
+            let (slack, inner) = if contents {
+                let slack = scene.append(
+                    parent,
+                    NodeKind::Container(Layout::Column),
+                    Style::default(),
+                );
+                scene.set_contents(slack, true);
+                (slack, column(&mut scene, slack))
+            } else {
+                let outer = column(&mut scene, parent);
+                let middle = column(&mut scene, outer);
+                (middle, middle)
+            };
             scene.append(
-                middle,
+                inner,
                 NodeKind::Text {
                     text: format!("level {level} says something long enough to wrap").into(),
                     color: Color(255, 255, 255, 255),
@@ -4663,7 +5558,7 @@ mod measure_work_tests {
                     ..Default::default()
                 },
             );
-            let row = scene.append(middle, NodeKind::Container(Layout::Row), Style::default());
+            let row = scene.append(inner, NodeKind::Container(Layout::Row), Style::default());
             for _ in 0..3 {
                 scene.append(
                     row,
@@ -4675,11 +5570,11 @@ mod measure_work_tests {
                     },
                 );
             }
-            middles.push(middle);
-            parent = middle;
+            animating.push(slack);
+            parent = inner;
         }
         scene.flush();
-        let animated: Vec<_> = middles.iter().copied().step_by(4).collect();
+        let animated: Vec<_> = animating.iter().copied().step_by(4).collect();
         let before = scene.measure_calls;
         let frames = 12;
         for frame in 0..frames {
@@ -4694,8 +5589,8 @@ mod measure_work_tests {
     }
     #[test]
     fn nested_animated_margins_measure_their_paths_not_every_probe_combination() {
-        let shallow = measures_per_frame(8);
-        let deep = measures_per_frame(32);
+        let shallow = measures_per_frame(8, false);
+        let deep = measures_per_frame(32, false);
         // Four times as deep, with four times the animated boxes: about
         // sixteen times the work on their paths at most, never the
         // exponential growth of each level re-probing the next.
@@ -4706,6 +5601,21 @@ mod measure_work_tests {
         // A handful of probes per node on a changed path and its children.
         let nodes = 32 * 7;
         assert!(deep < 40 * nodes as u64, "{deep} calls for {nodes} nodes");
+    }
+    #[test]
+    fn contents_layout_boxes_measure_no_more_than_boxes_around_them() {
+        for depth in [8, 32] {
+            let (boxes, contents) = (
+                measures_per_frame(depth, false),
+                measures_per_frame(depth, true),
+            );
+            assert!(
+                contents <= boxes,
+                "depth {depth}: {contents} calls with contents nodes, {boxes} with boxes"
+            );
+        }
+        let (shallow, deep) = (measures_per_frame(8, true), measures_per_frame(32, true));
+        assert!(deep <= 20 * shallow, "{shallow} at depth 8, {deep} at 32");
     }
 }
 #[cfg(test)]
@@ -4925,6 +5835,150 @@ mod absolute_layout_tests {
         scene.flush();
         assert_eq!(scene.bounds(sibling).width, 80.);
         assert!(scene.bounds(text).height > height);
+    }
+    /// A relative block holding a column holding an absolute box pinned to
+    /// the block's bottom right; the block's measure count over a resize.
+    fn escaping(relative: bool) -> (Scene, NodeId, NodeId, u64) {
+        let mut scene = Scene::new(300., 200.);
+        let block = scene.append(
+            scene.root(),
+            NodeKind::Container(Layout::Column),
+            Style {
+                relative,
+                width: Some(200.),
+                height: Some(100.),
+                ..Style::default()
+            },
+        );
+        let middle = scene.append(
+            block,
+            NodeKind::Container(Layout::Column),
+            Style {
+                padding: 5.,
+                ..Style::default()
+            },
+        );
+        let pinned = scene.append(
+            middle,
+            NodeKind::Rect(Color(0, 0, 0, 255)),
+            Style {
+                absolute: true,
+                width: Some(10.),
+                height: Some(10.),
+                layout_options: Some(Arc::new(crate::layout::LayoutOptions {
+                    inset: crate::layout::EdgeLengths {
+                        right: Some(crate::layout::Length::Px(0.)),
+                        bottom: Some(crate::layout::Length::Px(0.)),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })),
+                ..Style::default()
+            },
+        );
+        scene.flush();
+        let before = scene.measure_calls;
+        let mut style = scene.style(block);
+        style.width = Some(250.);
+        scene.set_style(block, style);
+        scene.flush();
+        let calls = scene.measure_calls - before;
+        (scene, block, pinned, calls)
+    }
+    #[test]
+    fn absolute_nodes_escape_to_a_relative_ancestor_only_when_there_is_one() {
+        let (scene, block, pinned, plain_calls) = escaping(false);
+        assert!(scene.escaped.is_empty(), "no relative node: no search");
+        // Its parent places it: the padded middle column's top right.
+        assert_eq!(scene.bounds(pinned), Rect::new(0., 0., 10., 10.));
+        assert_eq!(scene.relative_count, 0);
+        let (mut scene, _, pinned, calls) = escaping(true);
+        assert_eq!(scene.escaped, vec![pinned]);
+        assert_eq!(scene.bounds(pinned), Rect::new(240., 90., 10., 10.));
+        // Placing it is a measure of its own, not a second pass of the rest.
+        assert!(calls <= plain_calls + 1, "{calls} vs {plain_calls}");
+        assert!(scene.flush().is_idle());
+        // Unmarked, its parent places it again.
+        let mut style = scene.style(block);
+        style.relative = false;
+        scene.set_style(block, style);
+        scene.flush();
+        assert_eq!(scene.bounds(pinned), Rect::new(0., 0., 10., 10.));
+        assert!(scene.escaped.is_empty());
+        assert_eq!(scene.relative_count, 0);
+    }
+    /// Every node holds a `Style`: the box-model flags (`relative`,
+    /// `intrinsic_width`, `intrinsic_height`) live in its padding.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn style_stays_its_size() {
+        assert_eq!(std::mem::size_of::<Style>(), 176);
+    }
+    #[test]
+    fn layout_borders_relayout_when_their_width_changes_not_their_colour() {
+        let mut scene = Scene::new(200., 200.);
+        let panel = |width: f32, color: Color| NodeKind::Panel {
+            layout: Layout::Column,
+            quad: QuadStyle {
+                border_width: width,
+                border_color: color,
+                ..QuadStyle::default()
+            },
+        };
+        let frame = scene.append(
+            scene.root(),
+            panel(1., Color(255, 0, 0, 255)),
+            Style::default(),
+        );
+        let child = scene.append(
+            frame,
+            NodeKind::Rect(Color(0, 0, 0, 255)),
+            Style {
+                width: Some(10.),
+                height: Some(10.),
+                ..Style::default()
+            },
+        );
+        scene.flush();
+        assert_eq!(scene.bounds(frame), Rect::new(0., 0., 12., 12.));
+        assert_eq!(scene.bounds(child), Rect::new(1., 1., 10., 10.));
+        scene.set_kind(frame, panel(1., Color(0, 255, 0, 255)));
+        assert_eq!(scene.flush().layout_nodes, 0);
+        scene.set_kind(frame, panel(2., Color(0, 255, 0, 255)));
+        assert!(scene.flush().layout_nodes > 0);
+        assert_eq!(scene.bounds(child), Rect::new(2., 2., 10., 10.));
+        // Painted over its content, it takes no room.
+        let mut quad = QuadStyle {
+            border_width: 2.,
+            border_color: Color(0, 255, 0, 255),
+            border_over: true,
+            ..QuadStyle::default()
+        };
+        scene.set_kind(
+            frame,
+            NodeKind::Panel {
+                layout: Layout::Column,
+                quad: quad.clone(),
+            },
+        );
+        scene.flush();
+        assert_eq!(scene.bounds(child), Rect::new(0., 0., 10., 10.));
+        quad.border_over = false;
+        quad.outline = Some(Outline {
+            width: 3.,
+            color: Color(0, 0, 255, 255),
+            offset: 0.,
+        });
+        quad.border_width = 0.;
+        scene.set_kind(
+            frame,
+            NodeKind::Panel {
+                layout: Layout::Column,
+                quad,
+            },
+        );
+        scene.flush();
+        assert_eq!(scene.bounds(child), Rect::new(0., 0., 10., 10.));
     }
     #[test]
     fn geometry_revision_tracks_layout_and_transforms_but_not_equal_transforms() {

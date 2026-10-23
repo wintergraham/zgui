@@ -46,7 +46,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .p(10.)
                     .text_size(22.)
                     .bg(Color(38, 51, 72, 255))
-                    .focus(|s| s.border(2.).border_color(Color(121, 184, 255, 255)))
+                    .focus(|s| {
+                        s.border(2.)
+                            .border_over(true)
+                            .border_color(Color(121, 184, 255, 255))
+                    })
                     .on_event(move |event| {
                         if event.phase == EventPhase::Target {
                             match &event.event {

@@ -165,20 +165,28 @@ fn atlas_icons_survive_the_atlas_filling_up() {
             .render(&scene, &[Rect::new(0., 0., 160., 120.)])
             .unwrap();
         let (got, want) = (gpu.readback().unwrap(), fresh.readback().unwrap());
-        if got != want {
+        // A recycled atlas holds a glyph in another cell than a fresh one
+        // does. Glyphs sit at fractional y, so both sample the same raster
+        // between rows, and an adapter quantizing bilinear weights (llvmpipe:
+        // to 1/256) can round them differently by cell: alpha one level off,
+        // premultiplied colour two, along the glyph's edges. A lost or stale
+        // icon or glyph differs by far more.
+        let off =
+            |a: &[u8], b: &[u8]| (0..3).any(|i| a[i].abs_diff(b[i]) > 2) || a[3].abs_diff(b[3]) > 1;
+        let count = got
+            .chunks(4)
+            .zip(want.chunks(4))
+            .filter(|(a, b)| a != b)
+            .count();
+        if count > 256 || got.chunks(4).zip(want.chunks(4)).any(|(a, b)| off(a, b)) {
             let diffs: Vec<_> = got
                 .chunks(4)
                 .zip(want.chunks(4))
                 .enumerate()
-                .filter(|(_, (a, b))| a != b)
+                .filter(|(_, (a, b))| off(a, b))
                 .map(|(i, (a, b))| (i % 160, i / 160, a.to_vec(), b.to_vec()))
                 .take(5)
                 .collect();
-            let count = got
-                .chunks(4)
-                .zip(want.chunks(4))
-                .filter(|(a, b)| a != b)
-                .count();
             panic!("step {step}: {count} pixels differ, e.g. {diffs:?}");
         }
     }

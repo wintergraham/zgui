@@ -4,9 +4,6 @@
 //! Run: cargo run --release -p zgui-script --example stream_luau
 //! `ZGUI_HOT_RELOAD=1` also reloads `examples/stream/app.luau` as you edit
 //! it (off by default: polling the file would cost the comparison).
-#[cfg(target_os = "macos")]
-#[path = "../../zgui-desktop/examples/support/glass.rs"]
-mod glass;
 #[path = "stream/shared.rs"]
 mod shared;
 
@@ -20,7 +17,6 @@ const TITLE: &str = "zgui · stream · Luau";
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/stream/app.luau");
     Application::new().window(window(TITLE)).run(move |cx| {
-        frost(cx, TITLE);
         let host = ScriptHost::new(&cx.ui.runtime, script);
         let running = host.shared("running", false);
         let tokens = host.shared("tokens", 0.);
@@ -80,8 +76,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
         host.action("toggle", toggle.clone());
-        let window = cx.window.clone();
-        host.action("drag_window", move |_| window.drag_window());
         host.action("clear", move |_| {
             tokens.set(Value::Num(0.));
             live.set("".into());

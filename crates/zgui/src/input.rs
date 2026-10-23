@@ -171,6 +171,7 @@ pub struct EventContext {
     click_count: u8,
     drag_request: Option<DragRequest>,
     drag_accepted: Option<NodeId>,
+    key_code: Option<Rc<str>>,
 }
 impl EventContext {
     /// `event` at `target`, in the target phase, nothing decided yet.
@@ -189,6 +190,7 @@ impl EventContext {
             click_count: 0,
             drag_request: None,
             drag_accepted: None,
+            key_code: None,
         }
     }
     /// Request a typed drag from this listener during a pointer move.
@@ -227,6 +229,12 @@ impl EventContext {
     pub fn click_count(&self) -> u8 {
         self.click_count
     }
+    /// A key event's physical key, as the DOM's `KeyboardEvent.code`
+    /// (`"KeyA"`, `"Digit1"`, `"BracketLeft"`): the same key whatever the
+    /// layout or modifiers made it type. None when the platform didn't say.
+    pub fn key_code(&self) -> Option<&str> {
+        self.key_code.as_deref()
+    }
     pub fn stop_propagation(&mut self) {
         self.stopped = true;
     }
@@ -246,6 +254,10 @@ impl EventContext {
     /// capture button, defaulting to the primary button when none exists.
     pub(crate) fn capture_requested(&self) -> bool {
         self.capture.is_some()
+    }
+    /// What a listener so far asked capture for: `Some(None)` a release.
+    pub(crate) fn capture_target(&self) -> Option<Option<NodeId>> {
+        self.capture
     }
     pub fn capture_pointer(&mut self) {
         self.capture = Some(Some(self.current_target));
@@ -268,6 +280,10 @@ impl EventContext {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NodeInput {
     pub focusable: bool,
+    /// CSS `pointer-events: none`: the pointer passes through the node, and
+    /// through descendants that have no listeners of their own, to what is
+    /// under it.
+    pub pass_through: bool,
     pub disabled: bool,
     pub tab_index: i32,
     /// Pressing the node (or what it holds) leaves focus where it is, as
@@ -287,6 +303,8 @@ struct Entry {
 struct FocusScope {
     root: NodeId,
     previous: Option<NodeId>,
+    /// What the scope below holds stays live too (a submenu over its menu).
+    porous: bool,
 }
 #[derive(Clone, Copy)]
 struct Click {
@@ -349,13 +367,18 @@ struct State {
     focused: Option<NodeId>,
     captured: Option<NodeId>,
     capture_button: Option<PointerButton>,
-    hovered: Option<NodeId>,
+    /// The hovered node (the pointer's hit target) and its ancestors, up to
+    /// the active modal root: each has had its enter, none its leave yet.
+    hover: Vec<NodeId>,
     /// Where the pointer last was over the window (None: outside it).
     pointer: Option<(f32, f32)>,
     file_hovered: Option<NodeId>,
     pressed: Option<NodeId>,
     key_pressed: Option<(NodeId, Key)>,
     scopes: Vec<FocusScope>,
+    /// Non-modal layers (toasts): what they hold stays live under any modal
+    /// scope (`set_layer`).
+    layers: Vec<NodeId>,
     clicks: ClickTracker,
     drag: Option<drag::DragSession>,
     /// Listeners of the drag's source removed while it went on (a drop that
@@ -363,6 +386,14 @@ struct State {
     drag_orphans: Vec<Callback>,
     /// The source of a drag being finished (its drop and end delivering).
     drag_ending: Option<NodeId>,
+    /// The physical key of the key event being dispatched (`set_key_code`).
+    key_code: Option<Rc<str>>,
+    /// The modifier keys last known held (from the platform's pointer and
+    /// key events): what an activation (a click) was made with.
+    modifiers: Modifiers,
+    /// The last interaction was the pointer (a press), not the keyboard:
+    /// what it focuses shows no focus ring (`focus_visible_now`).
+    pointer_modality: bool,
 }
 #[derive(Clone, Default)]
 pub struct InputDispatcher {
@@ -401,9 +432,6 @@ impl Drop for InputBinding {
                 if s.captured == Some(self.node) {
                     s.captured = None;
                     s.capture_button = None;
-                }
-                if s.hovered == Some(self.node) {
-                    s.hovered = None;
                 }
                 if s.pressed == Some(self.node) {
                     s.pressed = None;
@@ -458,6 +486,17 @@ impl InputDispatcher {
     /// A single wake deadline exists only while a key sequence is ambiguous.
     pub fn next_key_deadline(&self) -> Option<Instant> {
         self.actions.borrow().deadline()
+    }
+    /// Whether what takes focus now shows it (CSS's `:focus-visible`): not
+    /// when the last interaction was a pointer press (a clicked button),
+    /// yes after the keyboard, and at first.
+    pub fn focus_visible_now(&self) -> bool {
+        !self.state.borrow().pointer_modality
+    }
+    /// The physical key (a DOM `KeyboardEvent.code`) of the key events
+    /// dispatched until it's set again: a platform sets it around each.
+    pub fn set_key_code(&self, code: Option<Rc<str>>) {
+        self.state.borrow_mut().key_code = code;
     }
     pub fn has_pending_keys(&self) -> bool {
         self.next_key_deadline().is_some()
@@ -751,6 +790,11 @@ impl InputDispatcher {
         }
         let observer = s.disabled_observers.remove(&node);
         s.options.remove(&node);
+        if removed.is_some() {
+            crate::shrink_sparse(&mut s.entries);
+            crate::shrink_sparse(&mut s.options);
+        }
+        s.layers.retain(|id| *id != node);
         if s.clicks.0.is_some_and(|click| click.target == node) {
             s.clicks.0 = None;
         }
@@ -760,9 +804,6 @@ impl InputDispatcher {
         if s.captured == Some(node) {
             s.captured = None;
             s.capture_button = None;
-        }
-        if s.hovered == Some(node) {
-            s.hovered = None;
         }
         if s.pressed == Some(node) {
             s.pressed = None;
@@ -777,34 +818,121 @@ impl InputDispatcher {
     pub fn focused(&self) -> Option<NodeId> {
         self.state.borrow().focused
     }
+    /// The node under the pointer that takes input (its hit target), while
+    /// it still listens.
     pub fn hovered(&self) -> Option<NodeId> {
-        self.state.borrow().hovered
+        let state = self.state.borrow();
+        state
+            .hover
+            .first()
+            .copied()
+            .filter(|id| state.entries.contains_key(id))
     }
     /// Hover what is under the resting pointer now that layout moved: a
     /// button that slid away from it stops being hovered (and what slid
     /// under it starts) without waiting for the pointer to move. Nothing
     /// changes while a press holds the pointer or a drag is under way.
     pub fn refresh_hover(&self, scene: &Rc<RefCell<Scene>>) {
-        let (pointer, old) = {
+        let pointer = {
             let state = self.state.borrow();
             if state.captured.is_some() || state.drag.is_some() {
                 return;
             }
-            (state.pointer, state.hovered)
+            state.pointer
         };
         let Some((x, y)) = pointer else {
             return;
         };
         let hit = self.hit_target(&scene.borrow(), x, y);
-        if hit == old {
+        self.set_hover(scene, hit);
+    }
+    /// Move hover to `hit` and its ancestors, as the DOM's `mouseenter` and
+    /// `mouseleave` do: a node hears `PointerLeave` once the pointer is
+    /// outside it and all its descendants, and `PointerEnter` once it comes
+    /// inside; moving between descendants tells it nothing. Each node hears
+    /// its own, at the target phase (they do not bubble): the nodes left,
+    /// deepest first, then the nodes entered, outermost first. Costs a walk
+    /// up from `hit` when the hit target changes, nothing when it does not.
+    fn set_hover(&self, scene: &Rc<RefCell<Scene>>, hit: Option<NodeId>) {
+        if self.state.borrow().hover.first().copied() == hit {
             return;
         }
-        self.state.borrow_mut().hovered = hit;
-        if let Some(id) = old.filter(|id| scene.borrow().contains(*id)) {
-            self.route(scene, id, InputEvent::PointerLeave);
+        let mut next = Vec::new();
+        {
+            let scene = scene.borrow();
+            let scope = self.focus_scope();
+            let mut node = hit.filter(|id| scene.contains(*id));
+            while let Some(id) = node {
+                next.push(id);
+                if Some(id) == scope {
+                    break;
+                }
+                node = scene.parent(id);
+            }
         }
-        if let Some(id) = hit {
-            self.route(scene, id, InputEvent::PointerEnter);
+        let entering = {
+            let mut state = self.state.borrow_mut();
+            let old = std::mem::take(&mut state.hover);
+            let common = old
+                .iter()
+                .rev()
+                .zip(next.iter().rev())
+                .take_while(|(a, b)| a == b)
+                .count();
+            let entering: Vec<NodeId> = next[..next.len() - common].to_vec();
+            state.hover = next;
+            drop(state);
+            for &id in &old[..old.len() - common] {
+                self.hover_event(scene, id, InputEvent::PointerLeave);
+            }
+            entering
+        };
+        // A leave handler that moved hover again (it dispatched) owns it now.
+        if self.state.borrow().hover.first().copied() != hit {
+            return;
+        }
+        for &id in entering.iter().rev() {
+            self.hover_event(scene, id, InputEvent::PointerEnter);
+        }
+    }
+    /// Deliver an enter or leave to `node`'s own listeners only.
+    fn hover_event(&self, scene: &Rc<RefCell<Scene>>, node: NodeId, event: InputEvent) {
+        if !scene.borrow().contains(node) {
+            return;
+        }
+        let callbacks: Vec<_> = {
+            let state = self.state.borrow();
+            let Some(entries) = state.entries.get(&node) else {
+                return;
+            };
+            // A disabled node is entered no more; leaving still cleans up.
+            if matches!(event, InputEvent::PointerEnter)
+                && state.options.get(&node).is_some_and(|o| o.disabled)
+            {
+                return;
+            }
+            entries
+                .iter()
+                .map(|e| (e.token, e.callback.clone()))
+                .collect()
+        };
+        let mut ctx = EventContext::new(event, node);
+        for (token, callback) in callbacks {
+            let attached = self
+                .state
+                .borrow()
+                .entries
+                .get(&node)
+                .is_some_and(|entries| entries.iter().any(|entry| entry.token == token));
+            if !attached || !scene.borrow().contains(node) {
+                continue;
+            }
+            if let Ok(mut callback) = callback.try_borrow_mut() {
+                callback(&mut ctx);
+            }
+            if ctx.immediate {
+                break;
+            }
         }
     }
     pub fn is_enabled(&self, scene: &Scene, node: NodeId) -> bool {
@@ -822,11 +950,28 @@ impl InputDispatcher {
         });
     }
     /// The active modal root, if any. Focus and pointer routing stay inside it.
+    /// Make `root` a non-modal layer (toasts): what it holds takes the
+    /// pointer and keys even while a modal holds focus elsewhere.
+    pub fn set_layer(&self, root: NodeId, layer: bool) {
+        let mut s = self.state.borrow_mut();
+        s.layers.retain(|id| *id != root);
+        if layer {
+            s.layers.push(root);
+        }
+    }
     pub fn focus_scope(&self) -> Option<NodeId> {
         self.state.borrow().scopes.last().map(|s| s.root)
     }
     /// Enter a nested modal scope and save the previous focus for restoration.
     pub fn push_focus_scope(&self, scene: &Rc<RefCell<Scene>>, root: NodeId) -> bool {
+        self.push_scope(scene, root, false)
+    }
+    /// As `push_focus_scope`, leaving the scope below live to the pointer
+    /// and keys too: a submenu, whose parent menu's items stay hoverable.
+    pub fn push_porous_focus_scope(&self, scene: &Rc<RefCell<Scene>>, root: NodeId) -> bool {
+        self.push_scope(scene, root, true)
+    }
+    fn push_scope(&self, scene: &Rc<RefCell<Scene>>, root: NodeId, porous: bool) -> bool {
         // Opening a sibling modal may supersede the current scope. Check the
         // node's actual ancestry, without applying the active scope boundary.
         if !self.enabled_without_scope(&scene.borrow(), root)
@@ -844,10 +989,11 @@ impl InputDispatcher {
             return false;
         }
         let previous = self.focused();
-        self.state
-            .borrow_mut()
-            .scopes
-            .push(FocusScope { root, previous });
+        self.state.borrow_mut().scopes.push(FocusScope {
+            root,
+            previous,
+            porous,
+        });
         let next = self.next_focus(&scene.borrow(), false);
         self.focus(scene, next);
         scene.borrow().contains(root)
@@ -947,15 +1093,36 @@ impl InputDispatcher {
             return false;
         }
         let s = self.state.borrow();
-        if let Some(scope) = s.scopes.last() {
+        // A non-modal layer's content is live whatever scope is active.
+        let in_layer = !s.layers.is_empty() && {
             let mut ancestor = Some(node);
-            let mut inside = false;
+            let mut found = false;
             while let Some(id) = ancestor {
-                if id == scope.root {
-                    inside = true;
+                if s.layers.contains(&id) {
+                    found = true;
                     break;
                 }
                 ancestor = scene.parent(id);
+            }
+            found
+        };
+        // Inside the active scope, or, through porous scopes (submenus), any
+        // scope below it.
+        let mut live = s.scopes.iter().rev().peekable();
+        if !in_layer && live.peek().is_some() {
+            let mut inside = false;
+            for scope in live {
+                let mut ancestor = Some(node);
+                while let Some(id) = ancestor {
+                    if id == scope.root {
+                        inside = true;
+                        break;
+                    }
+                    ancestor = scene.parent(id);
+                }
+                if inside || !scope.porous {
+                    break;
+                }
             }
             if !inside {
                 return false;
@@ -1003,7 +1170,13 @@ impl InputDispatcher {
         if count != 0 {
             self.state.borrow_mut().clicks.0 = None;
         }
-        self.route_pointer(scene, target, event, Modifiers::default(), count)
+        // An activation carries the keys held as it was made (a ⌘-click).
+        let held = if matches!(event, InputEvent::Activate) {
+            self.state.borrow().modifiers
+        } else {
+            Modifiers::default()
+        };
+        self.route_pointer(scene, target, event, held, count)
     }
     fn route_pointer(
         &self,
@@ -1028,6 +1201,7 @@ impl InputDispatcher {
                 | InputEvent::PointerEnter
                 | InputEvent::PointerLeave
                 | InputEvent::PointerCancel
+                | InputEvent::Activate
         ) {
             modifiers
         } else {
@@ -1045,9 +1219,13 @@ impl InputDispatcher {
                 id = parent;
             }
         }
+        let key_code = matches!(event, InputEvent::KeyDown { .. } | InputEvent::KeyUp { .. })
+            .then(|| self.state.borrow().key_code.clone())
+            .flatten();
         let mut ctx = EventContext {
             pointer_modifiers,
             click_count,
+            key_code,
             ..EventContext::new(event, target)
         };
         let phases = path
@@ -1195,13 +1373,17 @@ impl InputDispatcher {
     }
     fn hit_target(&self, scene: &Scene, x: f32, y: f32) -> Option<NodeId> {
         let mut fallback = None;
-        for hit in scene.hit_test_all(x, y) {
+        'hits: for hit in scene.hit_test_all(x, y) {
             if !self.receives_pointer(scene, hit) {
                 continue;
             }
             let mut node = Some(hit);
             while let Some(id) = node {
-                if self.options(id).is_some_and(|options| options.disabled) {
+                let options = self.options(id);
+                if options.is_some_and(|options| options.pass_through) {
+                    continue 'hits;
+                }
+                if options.is_some_and(|options| options.disabled) {
                     return None;
                 }
                 if self.has_listeners(id) {
@@ -1238,6 +1420,22 @@ impl InputDispatcher {
         modifiers: Option<Modifiers>,
         bindings: bool,
     ) -> DispatchResult {
+        if let Some(held) = modifiers {
+            self.state.borrow_mut().modifiers = held;
+        }
+        if let InputEvent::KeyDown { modifiers, .. } | InputEvent::KeyUp { modifiers, .. } = &event
+        {
+            self.state.borrow_mut().modifiers = *modifiers;
+        }
+        match &event {
+            InputEvent::PointerDown { .. } => self.state.borrow_mut().pointer_modality = true,
+            InputEvent::KeyDown { modifiers, .. }
+                if !modifiers.meta && !modifiers.control && !modifiers.alt =>
+            {
+                self.state.borrow_mut().pointer_modality = false
+            }
+            _ => {}
+        }
         if self.dispatch_drag(scene, &event) {
             return DispatchResult {
                 default_prevented: true,
@@ -1372,16 +1570,7 @@ impl InputDispatcher {
             event,
             InputEvent::PointerMove { .. } | InputEvent::PointerLeave
         ) {
-            let old = self.state.borrow().hovered;
-            if old != hit {
-                self.state.borrow_mut().hovered = hit;
-                if let Some(id) = old.filter(|id| scene.borrow().contains(*id)) {
-                    self.route(scene, id, InputEvent::PointerLeave);
-                }
-                if let Some(id) = hit {
-                    self.route(scene, id, InputEvent::PointerEnter);
-                }
-            }
+            self.set_hover(scene, hit);
         }
         let target = match &event {
             InputEvent::PointerDown { .. }

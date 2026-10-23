@@ -228,6 +228,101 @@ index 6ae3210..7af9f90 100644
      try checkError(err);
  
      log.debug("shader library loaded time={}us", .{start.untilNow(global.io(), .awake).toMicroseconds()});
+diff --git a/src/terminal/PageList.zig b/src/terminal/PageList.zig
+index f380bd4..0fbe313 100644
+--- a/src/terminal/PageList.zig
++++ b/src/terminal/PageList.zig
+@@ -1658,6 +1658,24 @@ const ReflowCursor = struct {
+             // If the row has a semantic prompt then the blank row is meaningful
+             // so we just consider pretend the first cell of the row isn't empty.
+             if (cols_len == 0 and src_row.semantic_prompt != .none) cols_len = 1;
++
++            // zgui: blank cells that only carry a background (the spaces a
++            // TUI fills its rows with, an erase in a color) are cut at the
++            // new edge rather than wrapped when the row's text fits: a
++            // narrowed full-width band stays one row instead of leaving a
++            // stub of background on the next. A row continuing a wrapped
++            // one starts where that one ended.
++            const room: @TypeOf(cols_len) = if (!src_row.wrap_continuation)
++                self.page.size.cols
++            else if (self.pending_wrap)
++                0
++            else
++                @intCast(self.page.size.cols - self.x);
++            if (cols_len > room) {
++                var text_len = cols_len;
++                while (text_len > 0 and blankLooking(cells[text_len - 1])) text_len -= 1;
++                if (text_len <= room) cols_len = room;
++            }
+         }
+ 
+         // Handle tracked pin adjustments. We also note whether any
+@@ -1924,6 +1942,17 @@ const ReflowCursor = struct {
+         "content.codepoint.data",
+     }, bulk_group_len);
+ 
++    /// zgui: a cell that shows no text: empty, a narrow space, or a
++    /// background color alone (whatever its style).
++    fn blankLooking(cell: pagepkg.Cell) bool {
++        return switch (cell.content_tag) {
++            .codepoint => cell.wide == .narrow and !cell.hyperlink and
++                (cell.content.codepoint.data == 0 or cell.content.codepoint.data == ' '),
++            .codepoint_grapheme => false,
++            .bg_color_palette, .bg_color_rgb => true,
++        };
++    }
++
+     /// The length of the prefix of cells that can be copied at once
+     /// with copyRun: bulk-copyable cells sharing a single style. The
+     /// scan uses masked compares of the raw cell bits (see
+@@ -17460,6 +17489,47 @@ test "PageList resize reflow less cols no wrapped rows" {
+     }
+ }
+ 
++test "PageList resize reflow less cols cuts background-only tails" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++
++    var s = try init(alloc, .{ .cols = 10, .rows = 3 });
++    defer s.deinit();
++    const page = s.pages.first.?.page();
++    // Rows 0 and 1: four letters, then spaces to the edge (a TUI's band).
++    // Row 2: seven letters, then background-only cells.
++    for (0..s.rows) |y| {
++        const text: usize = if (y == 2) 7 else 4;
++        for (0..s.cols) |x| {
++            const rac = page.getRowAndCell(x, y);
++            rac.cell.* = if (x < text) .{
++                .content_tag = .codepoint,
++                .content = .{ .codepoint = .{ .data = 'A' + @as(u21, @intCast(x)) } },
++            } else if (y == 2) .{
++                .content_tag = .bg_color_rgb,
++                .content = .{ .color_rgb = .{ .r = 1, .g = 2, .b = 3 } },
++            } else .{
++                .content_tag = .codepoint,
++                .content = .{ .codepoint = .{ .data = ' ' } },
++            };
++        }
++    }
++
++    try s.resize(.{ .cols = 5, .reflow = true });
++    // The bands fit: a row each. The long row wraps once, its tail cut.
++    try testing.expectEqual(@as(usize, 4), s.totalRows());
++    var it = s.rowIterator(.right_down, .{ .screen = .{} }, null);
++    const firsts = [_]u21{ 'A', 'A', 'A', 'F' };
++    var y: usize = 0;
++    while (it.next()) |offset| : (y += 1) {
++        const rac = offset.rowAndCell();
++        const cells = offset.node.page().getCells(rac.row);
++        try testing.expectEqual(firsts[y], cells[0].content.codepoint.data);
++        try testing.expectEqual(y == 2, rac.row.wrap);
++    }
++    try testing.expectEqual(@as(usize, 4), y);
++}
++
+ test "PageList resize reflow less cols wrapped rows" {
+     const testing = std.testing;
+     const alloc = testing.allocator;
 diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
 index 0162917..b430d3e 100644
 --- a/src/termio/Exec.zig

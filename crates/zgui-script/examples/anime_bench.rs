@@ -2,6 +2,7 @@
 //! engine (Luau API, Rust engine) against the same motion written directly
 //! with zgui signals and reactive styles.
 //! Run: cargo run --release -p zgui-script --example anime_bench
+//! (`ONLY=luau|rust|direct` runs one engine, `FRAMES` sets the frame count.)
 use std::{
     cell::RefCell,
     rc::Rc,
@@ -16,7 +17,12 @@ use zgui::{
 use zgui_script::ScriptHost;
 
 const N: usize = 1000;
-const FRAMES: u32 = 600;
+fn frames() -> u32 {
+    std::env::var("FRAMES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600)
+}
 
 /// Mounts `view`, runs `FRAMES` 120 Hz frames and returns the mean cost of
 /// one frame: tasks (the engine or the Rust driver) plus the scene's flush.
@@ -42,7 +48,7 @@ fn run(
     let interval = Duration::from_secs_f64(1. / 120.);
     let start = Instant::now();
     let (mut animate, mut scene) = (Duration::ZERO, Duration::ZERO);
-    for index in 1..=FRAMES {
+    for index in 1..=frames() {
         let began = Instant::now();
         clock.deliver(Frame {
             index: index as u64,
@@ -58,10 +64,12 @@ fn run(
         animate += animated - began;
         scene += animated.elapsed();
     }
-    (animate / FRAMES, scene / FRAMES, mounted)
+    (animate / frames().max(1), scene / frames().max(1), mounted)
 }
 
 fn main() {
+    let only = std::env::var("ONLY").ok();
+    let want = |n: &str| only.as_deref().is_none_or(|o| o == n);
     // Built in a loop, as a script would.
     let script = format!(
         "anime.animate('.dot', {{ y = 300, opacity = 0.2, duration = 1000, delay = anime.stagger(2), loop = true, alternate = true, ease = 'inOutSine' }})\n\
@@ -70,23 +78,29 @@ fn main() {
          return ui.overlay {{ w = 1200, h = 900, dots }}",
         N - 1
     );
-    let luau = run(
-        |ui| {
-            let host = ScriptHost::inline(&ui.runtime, "bench", script);
-            let evaluated = Instant::now();
-            host.reload().unwrap();
-            eprintln!(
-                "script evaluation {:.2} ms",
-                evaluated.elapsed().as_secs_f64() * 1e3
-            );
-            host.view()
-        },
-        |_, _| {},
-    );
+    let luau = if !want("luau") {
+        Default::default()
+    } else {
+        run(
+            |ui| {
+                let host = ScriptHost::inline(&ui.runtime, "bench", script);
+                let evaluated = Instant::now();
+                host.reload().unwrap();
+                eprintln!(
+                    "script evaluation {:.2} ms",
+                    evaluated.elapsed().as_secs_f64() * 1e3
+                );
+                host.view()
+            },
+            |_, _| {},
+        )
+    };
 
     // The same motion in Rust: a signal per dot, a reactive style reading it.
     let phases: Rc<RefCell<Vec<zgui::reactive::Signal<f32>>>> = Rc::default();
-    let rust =
+    let rust = if !want("rust") {
+        Default::default()
+    } else {
         run(
             {
                 let phases = phases.clone();
@@ -116,50 +130,56 @@ fn main() {
                     }
                 });
             },
-        );
+        )
+    };
     // The floor: the same values written straight to the scene, no engine,
     // signals or styles.
     let nodes: Rc<RefCell<Vec<zgui::scene::NodeId>>> = Rc::default();
-    let direct = run(
-        {
-            let nodes = nodes.clone();
-            move |_| {
-                let children: Vec<View> = (0..N)
-                    .map(|_| div().size(6., 6.).bg(rgb(0x58a6ff)))
-                    .collect();
+    let direct = if !want("direct") {
+        Default::default()
+    } else {
+        run(
+            {
                 let nodes = nodes.clone();
-                overlay()
-                    .size(1200., 900.)
-                    .children(children)
-                    .on_mount(move |handle| {
-                        let scene = handle.scene().unwrap();
-                        nodes
-                            .borrow_mut()
-                            .extend_from_slice(scene.borrow().children(handle.node()));
-                    })
-            }
-        },
-        move |ui, seconds| {
-            let mut scene = ui.scene.borrow_mut();
-            for (i, node) in nodes.borrow().iter().enumerate() {
-                let local = ((seconds * 1000. - i as f32 * 2.) / 1000.).max(0.);
-                let cycle = local % 2.;
-                let p = 0.5
-                    - (std::f32::consts::PI * if cycle > 1. { 2. - cycle } else { cycle }).cos()
-                        / 2.;
-                scene.set_transform(
-                    *node,
-                    zgui::scene::Transform {
-                        x: (i % 40 * 20) as f32,
-                        y: 300. * p,
-                    },
-                );
-                let mut effects = scene.effects(*node);
-                effects.opacity = 1. - 0.8 * p;
-                scene.set_effects(*node, effects);
-            }
-        },
-    );
+                move |_| {
+                    let children: Vec<View> = (0..N)
+                        .map(|_| div().size(6., 6.).bg(rgb(0x58a6ff)))
+                        .collect();
+                    let nodes = nodes.clone();
+                    overlay()
+                        .size(1200., 900.)
+                        .children(children)
+                        .on_mount(move |handle| {
+                            let scene = handle.scene().unwrap();
+                            nodes
+                                .borrow_mut()
+                                .extend_from_slice(scene.borrow().children(handle.node()));
+                        })
+                }
+            },
+            move |ui, seconds| {
+                let mut scene = ui.scene.borrow_mut();
+                for (i, node) in nodes.borrow().iter().enumerate() {
+                    let local = ((seconds * 1000. - i as f32 * 2.) / 1000.).max(0.);
+                    let cycle = local % 2.;
+                    let p = 0.5
+                        - (std::f32::consts::PI * if cycle > 1. { 2. - cycle } else { cycle })
+                            .cos()
+                            / 2.;
+                    scene.set_transform(
+                        *node,
+                        zgui::scene::Transform {
+                            x: (i % 40 * 20) as f32,
+                            y: 300. * p,
+                        },
+                    );
+                    let mut effects = scene.effects(*node);
+                    effects.opacity = 1. - 0.8 * p;
+                    scene.set_effects(*node, effects);
+                }
+            },
+        )
+    };
     println!("{N} elements, y + opacity every frame, mean per frame:");
     let us = |d: Duration| d.as_secs_f64() * 1e6;
     for (name, (animate, scene, mounted)) in [

@@ -236,6 +236,7 @@ fn shape_fallback(
             font_monospace_em_width: font.monospace_em_width(),
             font_id: font.id(),
             font_weight: attrs.weight,
+            font_optical: if font.has_optical() { attrs.optical } else { 0 },
             glyph_id: info.glyph_id.try_into().expect("failed to cast glyph ID"),
             //TODO: color should not be related to shaping
             color_opt: attrs.color_opt,
@@ -316,9 +317,20 @@ fn shape_run(
         &scripts,
         &line[start_run..end_run],
         attrs.weight,
+        attrs.optical,
     );
 
     let font = font_iter.next().expect("no default font found");
+
+    // zgui: masked text (a password) is a bullet for each character, each
+    // keeping its character's bytes, so carets and selections are unchanged.
+    #[cfg(feature = "swash")]
+    if attrs.masked {
+        drop(font_iter);
+        shape_skip_glyphs_as(glyphs, &font, line, attrs_list, start_run, end_run, Some('\u{2022}'));
+        font_system.shape_buffer.scripts = scripts;
+        return;
+    }
 
     let glyph_start = glyphs.len();
     let mut missing = {
@@ -407,6 +419,22 @@ fn shape_run(
 
     // Debug missing font fallbacks
     font_iter.check_missing(&line[start_run..end_run]);
+
+    // zgui: a span's padding widens its first glyph (before it) and its
+    // last (after it), so wrapping, hit testing and backgrounds all count it.
+    for glyph in &mut glyphs[glyph_start..] {
+        let attrs = attrs_list.get_span(glyph.start);
+        let Some(padding) = attrs.padding_opt else {
+            continue;
+        };
+        if glyph.start == 0 || attrs_list.get_span(glyph.start - 1) != attrs {
+            glyph.x_advance += padding.0;
+            glyph.x_offset += padding.0;
+        }
+        if glyph.end >= line.len() || attrs_list.get_span(glyph.end) != attrs {
+            glyph.x_advance += padding.0;
+        }
+    }
 
     /*
     for glyph in glyphs.iter() {
@@ -514,6 +542,7 @@ fn shape_skip(
         &[],
         "",
         attrs.weight,
+        attrs.optical,
     );
 
     let font = font_iter.next().expect("no default font found");
@@ -543,7 +572,7 @@ fn shape_skip(
         let fb_fonts = font_system.get_font_matches(&fb_attrs);
         let fb_families = [&fb_family];
         let mut fb_iter =
-            FontFallbackIter::new(font_system, &fb_fonts, &fb_families, &[], "", attrs.weight);
+            FontFallbackIter::new(font_system, &fb_fonts, &fb_families, &[], "", attrs.weight, attrs.optical);
 
         if let Some(fb_font) = fb_iter.next() {
             let fb_swash = fb_font.as_swash();
@@ -589,6 +618,20 @@ fn shape_skip_glyphs(
     start_run: usize,
     end_run: usize,
 ) {
+    shape_skip_glyphs_as(glyphs, font, line, attrs_list, start_run, end_run, None);
+}
+
+/// zgui: as `shape_skip_glyphs`, every character drawn as `mask` if given.
+#[cfg(feature = "swash")]
+fn shape_skip_glyphs_as(
+    glyphs: &mut Vec<ShapeGlyph>,
+    font: &Font,
+    line: &str,
+    attrs_list: &AttrsList,
+    start_run: usize,
+    end_run: usize,
+    mask: Option<char>,
+) {
     let font_id = font.id();
     let font_monospace_em_width = font.monospace_em_width();
     let swash_font = font.as_swash();
@@ -604,7 +647,13 @@ fn shape_skip_glyphs(
         line[start_run..end_run]
             .char_indices()
             .map(|(chr_idx, codepoint)| {
-                let glyph_id = charmap.map(codepoint);
+                let glyph_id = match mask {
+                    Some(mask) => match charmap.map(mask) {
+                        0 => charmap.map('*'),
+                        id => id,
+                    },
+                    None => charmap.map(codepoint),
+                };
                 let x_advance = glyph_metrics.advance_width(glyph_id)
                     + attrs_list
                         .get_span(start_run + chr_idx)
@@ -624,6 +673,7 @@ fn shape_skip_glyphs(
                     font_monospace_em_width,
                     font_id,
                     font_weight: attrs.weight,
+                    font_optical: if font.has_optical() { attrs.optical } else { 0 },
                     glyph_id,
                     color_opt: attrs.color_opt,
                     metadata: attrs.metadata,
@@ -660,6 +710,8 @@ pub struct ShapeGlyph {
     pub font_monospace_em_width: Option<f32>,
     pub font_id: fontdb::ID,
     pub font_weight: fontdb::Weight,
+    /// zgui: the optical size its font was instanced at (0: the default).
+    pub font_optical: u16,
     pub glyph_id: u16,
     pub color_opt: Option<Color>,
     pub metadata: usize,
@@ -684,6 +736,7 @@ impl ShapeGlyph {
             line_height_opt,
             font_id: self.font_id,
             font_weight: self.font_weight,
+            font_optical: self.font_optical,
             glyph_id: self.glyph_id,
             x,
             y,
@@ -1010,6 +1063,7 @@ impl ShapeSpan {
                             &[],
                             &probe_text,
                             attrs.weight,
+                            attrs.optical,
                         );
 
                         if let Some(font) = font_iter.next() {
@@ -1139,7 +1193,7 @@ impl ShapeSpan {
                 .next()
                 .and_then(|glyph| {
                     font_system
-                        .get_font(glyph.font_id, glyph.font_weight)
+                        .get_font_at(glyph.font_id, glyph.font_weight, glyph.font_optical)
                         .map(|font| decoration_metrics(&font))
                 });
 

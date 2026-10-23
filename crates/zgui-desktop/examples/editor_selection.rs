@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let scene = cx.ui.scene.clone();
             let window = cx.window.clone();
             cx.tasks.spawn(async move {
-                for _ in 0..220 {
+                for _ in 0..400 {
                     {
                         let selection = editor.editor.borrow().selection();
                         let scene = scene.borrow();

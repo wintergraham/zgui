@@ -114,4 +114,9 @@ pub struct Decoration {
     pub border_style: BorderStyle,
     /// Some(empty) explicitly clears all shadows; None inherits the legacy shadow.
     pub shadows: Option<Arc<[BoxShadow]>>,
+    /// Shadows inside the box (CSS's `inset`), over its fill and under its
+    /// border and children: the box less itself moved by the offset and
+    /// shrunk by the spread, cut to its corners (a 1-point top highlight is
+    /// `inset 0 1px`). Drawn sharp: their blur is not applied.
+    pub inset_shadows: Option<Arc<[BoxShadow]>>,
 }

@@ -1,12 +1,18 @@
 [workspace]
 members = ["crates/zgui", "crates/zgui-desktop", "crates/zgui-ghostty-sys", "crates/zgui-gpu", "crates/zgui-script", "comparisons/workload"]
-exclude = ["comparisons/gpui", "comparisons/quickgui", "vendor/cosmic-text"]
+exclude = ["comparisons/gpui", "comparisons/quickgui", "vendor/cosmic-text", "vendor/taffy"]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+
+# Dependencies optimized in dev builds too: the Luau VM, text shaping,
+# rasterizing and the GPU stack run many times slower unoptimized, which
+# made debug apps lag. Workspace crates stay quick to rebuild.
+[profile.dev.package."*"]
+opt-level = 3
 
 [profile.release]
 lto = "thin"
@@ -27,3 +33,6 @@ codegen-units = 1
 [patch.crates-io]
 wgpu-hal = { path = "vendor/wgpu-hal" }
 cosmic-text = { path = "vendor/cosmic-text" }
+# taffy 0.9.0 with auto margins keeping a flex line's gaps (see
+# vendor/taffy/src/compute/flexbox.rs, "zgui:").
+taffy = { path = "vendor/taffy" }

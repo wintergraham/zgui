@@ -39,17 +39,47 @@ pub fn decode_svg(bytes: &[u8], width: u32, height: u32) -> Result<Arc<ImageData
     {
         return Err(GpuError("SVG input or output exceeds bounds".into()));
     }
-    let mut options = resvg::usvg::Options::default();
-    options.image_href_resolver.resolve_string = Box::new(|_, _| None);
-    let tree =
-        resvg::usvg::Tree::from_data(bytes, &options).map_err(|e| GpuError(e.to_string()))?;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)
         .ok_or_else(|| GpuError("SVG image allocation failed".into()))?;
-    let transform = resvg::tiny_skia::Transform::from_scale(
-        width as f32 / tree.size().width(),
-        height as f32 / tree.size().height(),
-    );
-    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    // A raster where an SVG was asked for (a URL that serves either): drawn
+    // as that picture, scaled to fit.
+    if image::guess_format(bytes).is_ok() {
+        let image = decode_image(bytes)?;
+        let mut source = resvg::tiny_skia::Pixmap::new(image.width(), image.height())
+            .ok_or_else(|| GpuError("SVG image allocation failed".into()))?;
+        for (to, from) in source
+            .pixels_mut()
+            .iter_mut()
+            .zip(image.pixels().as_chunks::<4>().0)
+        {
+            *to = resvg::tiny_skia::ColorU8::from_rgba(from[0], from[1], from[2], from[3])
+                .premultiply();
+        }
+        pixmap.draw_pixmap(
+            0,
+            0,
+            source.as_ref(),
+            &resvg::tiny_skia::PixmapPaint {
+                quality: resvg::tiny_skia::FilterQuality::Bicubic,
+                ..Default::default()
+            },
+            resvg::tiny_skia::Transform::from_scale(
+                width as f32 / image.width() as f32,
+                height as f32 / image.height() as f32,
+            ),
+            None,
+        );
+    } else {
+        let mut options = resvg::usvg::Options::default();
+        options.image_href_resolver.resolve_string = Box::new(|_, _| None);
+        let tree =
+            resvg::usvg::Tree::from_data(bytes, &options).map_err(|e| GpuError(e.to_string()))?;
+        let transform = resvg::tiny_skia::Transform::from_scale(
+            width as f32 / tree.size().width(),
+            height as f32 / tree.size().height(),
+        );
+        resvg::render(&tree, transform, &mut pixmap.as_mut());
+    }
     let mut pixels = pixmap.take();
     for p in pixels.as_chunks_mut::<4>().0 {
         let alpha = p[3] as u32;

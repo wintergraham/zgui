@@ -67,11 +67,73 @@ pub struct TerminalState {
     /// A program's progress report (OSC 9;4): 0 to 1, or negative while
     /// indeterminate; `None` without one.
     pub progress: Option<f32>,
+    /// The progress report is in its error state (OSC 9;4;2).
+    pub progress_error: bool,
+    /// What the running program says it is doing (the Program Status
+    /// Protocol, OSC 7501), when it says; see [`ProgramStatus`].
+    pub status: Option<ProgramStatus>,
     /// The process ended, with this exit code.
     pub exited: Option<i32>,
     /// Grid size in cells.
     pub columns: u16,
     pub rows: u16,
+}
+
+/// A program's own report of its state (the Program Status Protocol, OSC
+/// 7501, as Rex defines it): its root record, and whether any record under
+/// it (a worker) is blocked.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct ProgramStatus {
+    pub state: ProgramState,
+    /// With [`ProgramState::Blocked`]: what it waits for (`permission`,
+    /// `question`, `auth`).
+    pub kind: Option<String>,
+    /// 0 to 100, while working or blocked; `None`: indeterminate.
+    pub progress: Option<u8>,
+    /// The program's stable identifier (`claude-code`), not a label.
+    pub app: Option<String>,
+    /// A short label, and one line of detail, as the program wrote them.
+    pub title: Option<String>,
+    pub msg: Option<String>,
+    /// A record under the root is blocked, whatever the root says.
+    pub child_blocked: bool,
+    /// When the root record last changed state (Unix milliseconds).
+    pub since_ms: u64,
+}
+/// A program's state, as the Program Status Protocol names them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ProgramState {
+    /// At rest, waiting for the user's next instruction.
+    #[default]
+    Idle,
+    Working,
+    /// Finished; the result is ready and not yet seen.
+    Done,
+    /// Cannot continue until the user does something (`kind` says what).
+    Blocked,
+    /// Failed and stopped.
+    Error,
+}
+impl ProgramState {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Working => "working",
+            Self::Done => "done",
+            Self::Blocked => "blocked",
+            Self::Error => "error",
+        }
+    }
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "idle" => Self::Idle,
+            "working" => Self::Working,
+            "done" => Self::Done,
+            "blocked" => Self::Blocked,
+            "error" => Self::Error,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -139,7 +201,10 @@ pub trait TerminalBackend {
 type Listener = Rc<RefCell<dyn FnMut(&TerminalEvent)>>;
 struct Inner {
     id: u64,
-    options: TerminalOptions,
+    /// How it starts; settable until a platform terminal starts it.
+    options: RefCell<TerminalOptions>,
+    /// A platform terminal started it (its process runs with `options`).
+    started: Cell<bool>,
     state: Signal<TerminalState>,
     /// The pointer over the terminal, in points from its top left.
     pointer: Signal<Option<(f32, f32)>>,
@@ -201,7 +266,8 @@ impl Terminal {
         });
         Self(Rc::new(Inner {
             id,
-            options,
+            options: RefCell::new(options),
+            started: Cell::new(false),
             state: runtime.signal(TerminalState::default()),
             pointer: runtime.signal(None),
             attached: runtime.signal(false),
@@ -216,8 +282,18 @@ impl Terminal {
     pub fn id(&self) -> u64 {
         self.0.id
     }
-    pub fn options(&self) -> &TerminalOptions {
-        &self.0.options
+    pub fn options(&self) -> TerminalOptions {
+        self.0.options.borrow().clone()
+    }
+    /// Change how it starts, before a platform terminal has started it
+    /// (one made it with defaults, before its owner gave its command).
+    /// Returns whether they apply: a started terminal keeps its own.
+    pub fn set_options(&self, options: TerminalOptions) -> bool {
+        if self.0.started.get() || self.0.closed.get() {
+            return false;
+        }
+        *self.0.options.borrow_mut() = options;
+        true
     }
     pub fn downgrade(&self) -> WeakTerminal {
         WeakTerminal(Rc::downgrade(&self.0))
@@ -321,6 +397,7 @@ impl Terminal {
 
     /// Attach the platform terminal; queued commands run now, in order.
     pub fn attach(&self, backend: Rc<dyn TerminalBackend>) {
+        self.0.started.set(true);
         *self.0.backend.borrow_mut() = Some(backend.clone());
         let queued = std::mem::take(&mut *self.0.queued.borrow_mut());
         for command in queued {

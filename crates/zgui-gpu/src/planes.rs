@@ -8,6 +8,7 @@
 //! window: its items draw relative to that box, as an isolated layer's do.
 //! Both show their frames as plain layer contents, so they change with the
 //! native views' geometry in one Core Animation transaction.
+#[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
 use crate::{GpuError, GpuRenderer};
 use std::{borrow::Cow, rc::Rc};
 use zgui::{
@@ -110,6 +111,18 @@ impl GpuRenderer {
     /// overlay plane hidden while nothing painted on it).
     pub fn repaint_all(&mut self) {
         self.fresh = true;
+    }
+    /// Whether native views share the window. While they do, every frame
+    /// shows on the plain layer, in the caller's Core Animation transaction
+    /// with the views' moves, and never on the video layer: handing frames
+    /// from one to the other left the window empty for a refresh (it
+    /// flashed when a tab switch moved the views). The video layer's
+    /// steadier pacing is for windows of zgui alone.
+    pub fn present_with_native_views(&mut self, #[allow(unused)] natives: bool) {
+        #[cfg(target_os = "macos")]
+        if let Some(present) = &mut self.layer_present {
+            present.with_natives = natives;
+        }
     }
     /// Show frames on the plain layer for `duration` from now: they then
     /// change in the caller's Core Animation transaction, with native views

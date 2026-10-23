@@ -35,6 +35,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
             let window = cx.window.clone();
             host.action("quit", move |_| window.close());
+            // Plugins reach only what the app exposes to them.
+            host.expose_shared("window", None);
+            host.expose_shared("count", None);
+            host.expose_action("quit", None);
 
             // A failed first load shows its error; fixing the file recovers.
             let _ = host.reload();

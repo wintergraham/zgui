@@ -86,9 +86,11 @@ local function go(typed: string)
 	elseif not query:find("%s") and (query:find("%.") or query:find("^localhost")) then
 		web:load("https://" .. query)
 	else
-		local encoded = query:gsub("[^%w%-_.~ ]", function(c)
-			return string.format("%%%02X", string.byte(c))
-		end):gsub(" ", "+")
+		local encoded = query
+			:gsub("[^%w%-_.~ ]", function(c)
+				return string.format("%%%02X", string.byte(c))
+			end)
+			:gsub(" ", "+")
 		web:load("https://duckduckgo.com/?q=" .. encoded)
 	end
 	editing:set(false)
@@ -96,9 +98,8 @@ local function go(typed: string)
 end
 
 -- A square glyph button, clear until hovered; dimmed while it can't act.
-local function tool(label: string, glyph: string | () -> string, on_click: () -> (), enabled: (() -> boolean)?)
+local function tool(glyph: string | () -> string, on_click: Handler | Action, enabled: (() -> boolean)?)
 	return ui.button {
-		label = label,
 		w = 30,
 		h = 28,
 		shrink = 0,
@@ -115,9 +116,11 @@ local function tool(label: string, glyph: string | () -> string, on_click: () ->
 		on_click = on_click,
 		ui.svg {
 			code = if type(glyph) == "string" then glyph else nil,
-			src = if type(glyph) == "function" then function()
-				return "code:" .. glyph()
-			end else nil,
+			src = if type(glyph) == "function"
+				then function()
+					return "code:" .. glyph()
+				end
+				else nil,
 			w = 16,
 			h = 16,
 			tint = function()
@@ -127,12 +130,11 @@ local function tool(label: string, glyph: string | () -> string, on_click: () ->
 	}
 end
 
--- Empty titlebar space moves the window.
-local function drag(props: { [string]: any }?)
-	local spacer = { h_full = true, on_press = ui.action("drag_window") }
-	for k, v in props or {} do
-		spacer[k] = v
-	end
+-- Empty titlebar space moves the window (a double click zooms it).
+local function drag(props: ContainerProps?)
+	local spacer: ContainerProps = if props then table.clone(props) else {}
+	spacer.h_full = true
+	spacer.window_drag = true
 	return ui.div(spacer)
 end
 
@@ -184,10 +186,11 @@ local address_bar = ui.row {
 	bg = function()
 		return if editing:get() then "#00000040" else wash
 	end,
-	-- A 2pt ring while editing.
+	-- A 2pt ring while editing, over the bar (editing moves nothing).
 	border = function()
 		return if editing:get() then 2 else 1
 	end,
+	border_over = true,
 	border_color = function()
 		return if editing:get() then accent .. "b3" else line
 	end,
@@ -204,22 +207,13 @@ local address_bar = ui.row {
 		shrink = 1,
 		min_w = 0,
 		h = 28,
-		-- Under the clear input: a hint while there's no address.
-		ui.show(
-			function()
-				return address:get() == ""
-			end,
-			ui.row {
-				w_full = true,
-				h = 28,
-				items = "center",
-				px = 8,
-				ui.text { "Search or enter address", text_size = 13, color = tertiary },
-			}
-		),
 		ui.input {
 			label = "Address",
 			value = address,
+			placeholder = "Search or enter address",
+			placeholder_color = tertiary,
+			-- The first click selects the address, the next places the caret.
+			select_on_focus = true,
 			w_full = true,
 			h = 28,
 			text_size = 13,
@@ -260,17 +254,17 @@ local titlebar = ui.row {
 	pr = 8,
 	-- Room for the traffic lights.
 	drag { w = 78 },
-	tool("Back", BACK, function()
+	tool(BACK, function()
 		web:back()
 	end, function()
 		return web.can_go_back
 	end),
-	tool("Forward", FORWARD, function()
+	tool(FORWARD, function()
 		web:forward()
 	end, function()
 		return web.can_go_forward
 	end),
-	tool("Reload", function()
+	tool(function()
 		return if web.loading then STOP else RELOAD
 	end, function()
 		if web.loading then
@@ -283,7 +277,7 @@ local titlebar = ui.row {
 	drag { grow = 1, min_w = 12 },
 	ui.popover {
 		open = open,
-		anchor = tool("Menu", MORE, ui.toggle(open) :: any),
+		anchor = tool(MORE, ui.toggle(open)),
 		w = 220,
 		p = 6,
 		gap = 2,

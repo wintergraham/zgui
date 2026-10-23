@@ -30,26 +30,446 @@ use zgui::{
 pub(crate) struct Assets {
     images: std::cell::RefCell<HashMap<String, Arc<ImageData>>>,
     svgs: std::cell::RefCell<HashMap<String, Arc<SvgData>>>,
+    /// Each file's path and modification time when it was read, so a
+    /// watching host sees an edited image (see `changed`).
+    files: std::cell::RefCell<HashMap<String, (std::path::PathBuf, Option<std::time::SystemTime>)>>,
+    /// Where they are read from: the disk, or the app's bundle.
+    source: std::cell::Cell<Option<crate::Files>>,
+    /// Remote sources (`https://…`) by URL: fetched once, whoever shows
+    /// them; what shows one follows its status (`LOADING`, `READY`, `FAILED`).
+    remote: std::cell::RefCell<HashMap<String, zgui::reactive::Signal<u8>>>,
+    /// Failed remote sources: when, and how many times in a row. Asked
+    /// for again after a backoff, they're fetched again (as a browser
+    /// retries a broken image when a new element shows it).
+    failed: std::cell::RefCell<HashMap<String, (std::time::Instant, u32)>>,
+    /// The host's tasks and transport, which remote sources go through.
+    links: std::cell::RefCell<Option<(Rc<crate::timers::Timers>, crate::calls::SharedFetcher)>>,
+    /// Images the host made (`ScriptHost::image`), as `host:<name>`
+    /// sources: what shows one follows its version.
+    hosted: std::cell::RefCell<HashMap<String, zgui::reactive::Signal<u64>>>,
+}
+impl Assets {
+    /// `name`'s version signal, made with `runtime` the first time.
+    fn hosted(&self, src: &str, runtime: &zgui::reactive::Runtime) -> zgui::reactive::Signal<u64> {
+        self.hosted
+            .borrow_mut()
+            .entry(src.to_owned())
+            .or_insert_with(|| runtime.signal(0))
+            .clone()
+    }
+    /// The host sets (or, with None, clears) image `host:<name>`.
+    pub(crate) fn set_hosted(
+        &self,
+        name: &str,
+        image: Option<Arc<ImageData>>,
+        runtime: &zgui::reactive::Runtime,
+    ) {
+        let src = format!("host:{name}");
+        match image {
+            Some(image) => self.images.borrow_mut().insert(src.clone(), image),
+            None => self.images.borrow_mut().remove(&src),
+        };
+        let version = self.hosted(&src, runtime);
+        version.update(|v| *v = v.wrapping_add(1));
+    }
+    pub(crate) fn connect(
+        &self,
+        timers: Rc<crate::timers::Timers>,
+        fetcher: crate::calls::SharedFetcher,
+    ) {
+        *self.links.borrow_mut() = Some((timers, fetcher));
+    }
+    pub(crate) fn set_files(&self, files: crate::Files) {
+        self.source.set(Some(files));
+    }
+    fn read(&self, src: &str, path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+        let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        let bytes = match self.source.get() {
+            Some(files) => files.read(path)?,
+            None => std::fs::read(path)?,
+        };
+        self.files
+            .borrow_mut()
+            .insert(src.to_owned(), (path.to_path_buf(), modified));
+        Ok(bytes)
+    }
+    /// The files read.
+    pub fn files(&self) -> Vec<std::path::PathBuf> {
+        self.files
+            .borrow()
+            .values()
+            .map(|(path, _)| path.clone())
+            .collect()
+    }
+    /// Forgets the files edited since they were read, so the next build
+    /// reads them again; whether there were any. Only stats files.
+    pub fn changed(&self) -> bool {
+        let stale: Vec<String> = self
+            .files
+            .borrow()
+            .iter()
+            .filter(|(_, (path, modified))| {
+                std::fs::metadata(path).and_then(|m| m.modified()).ok() != *modified
+            })
+            .map(|(src, _)| src.clone())
+            .collect();
+        for src in &stale {
+            self.files.borrow_mut().remove(src);
+            self.images.borrow_mut().remove(src);
+            self.svgs.borrow_mut().remove(src);
+        }
+        !stale.is_empty()
+    }
 }
 
 pub(crate) struct Lowering {
-    pub slots: HashMap<String, Vec<Rc<Node>>>,
+    /// What each slot shows: its contributions and who made them.
+    pub slots: crate::node::Slots,
     pub actions: Actions,
     pub elements: Rc<crate::element::Elements>,
     pub runtime: zgui::reactive::Runtime,
     pub assets: Rc<Assets>,
     pub natives: Rc<crate::Natives>,
+    /// The window's layout inspector, once the host view mounted: nodes
+    /// with a recorded source are labelled for it while it records.
+    pub inspector: Rc<std::cell::RefCell<Option<zgui::inspect::Inspector>>>,
 }
 
 pub(crate) fn lower(node: &Rc<Node>, low: &Rc<Lowering>) -> View {
     let Some(vm) = node.owner.upgrade() else {
         return div();
     };
-    if node.needs_context() {
-        let (node, low) = (node.clone(), low.clone());
-        return component(move |cx| build(&node, &vm, &low, Some(cx)));
+    let view = if node.needs_context() {
+        let (node, low, vm) = (node.clone(), low.clone(), vm.clone());
+        component(move |cx| build(&node, &vm, &low, Some(cx)))
+    } else {
+        build(node, &vm, low, None)
+    };
+    // Labelled for the layout inspector while it records.
+    let view = match (&node.source, low.inspector.borrow().as_ref()) {
+        (Some(source), Some(inspector)) if inspector.recording() => {
+            let (inspector, source, name) = (inspector.clone(), source.clone(), node.label());
+            view.on_mount(move |handle| inspector.label(handle.node(), name, Some(source)))
+        }
+        _ => view,
+    };
+    let view = match node.tooltip.as_deref() {
+        Some(
+            tip @ crate::node::Tooltip {
+                content: Some(_), ..
+            },
+        ) => tooltip(view, tip, &vm, low),
+        _ => view,
+    };
+    match &node.theme {
+        None => view,
+        Some(spec) => themed(spec, &vm, view),
     }
-    build(node, &vm, low, None)
+}
+
+/// A tooltip showing: its number, and what closes it.
+type Showing = (u64, Rc<dyn Fn()>);
+thread_local! {
+    /// Tooltips showing, and when the last one closed: within a second of
+    /// one, the next opens at once (as a tooltip provider's `timeout`).
+    static TOOLTIPS: std::cell::Cell<(usize, Option<std::time::Instant>)> =
+        const { std::cell::Cell::new((0, None)) };
+    /// The tooltip showing (one at most): its number, and what closes it.
+    static SHOWING: std::cell::RefCell<Option<Showing>> =
+        const { std::cell::RefCell::new(None) };
+    static NEXT_TOOLTIP: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+/// Tooltip `open`'s showing ends (`shown` says whether it was showing).
+fn hide_tooltip(open: &Signal<bool>, shown: &std::cell::Cell<bool>) {
+    if !shown.replace(false) {
+        return;
+    }
+    TOOLTIPS.with(|t| {
+        let (count, _) = t.get();
+        t.set((count.saturating_sub(1), Some(std::time::Instant::now())));
+    });
+    open.set(false);
+}
+/// `anchor` with its tooltip: shown above it (unless placed otherwise)
+/// 300 ms after the pointer comes to rest on it, at once while another
+/// tooltip shows or just did, gone as the pointer leaves or presses. It
+/// takes no focus and lets the pointer through.
+fn tooltip(anchor: View, tip: &crate::node::Tooltip, vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
+    use crate::node::TooltipContent;
+    use std::time::Duration;
+    use zgui::theme::tok;
+    let content = match tip.content.as_ref().expect("a tooltip's content") {
+        TooltipContent::Node(node) => lower(node, low),
+        // The theme's look: an overlay card, small text.
+        TooltipContent::Text(text) => column()
+            .px(8.)
+            .py(4.)
+            .max_w(320.)
+            .bg(tok::SURFACE_OVERLAY)
+            .border(0.5)
+            .border_color(tok::BORDER)
+            .rounded(tok::RADIUS_SM)
+            .text_size(tok::FONT_SIZE_XS)
+            .text_wrap(true)
+            .child(zgui::compose::text(text.clone())),
+    };
+    let open = low.runtime.signal(false);
+    let shown = std::rc::Rc::new(std::cell::Cell::new(false));
+    let timers = crate::node::env(&vm.lua).ok().map(|env| env.timers.clone());
+    // Its fade (in over 140 ms, out over 100, both easing out; none
+    // when it takes over from another at once).
+    let fade = low.runtime.signal(0_f32);
+    let fading: Rc<std::cell::RefCell<Option<crate::timers::Stop>>> = Rc::default();
+    let animate = {
+        let (fade, fading, timers) = (fade.clone(), fading.clone(), timers.clone());
+        move |to: f32, ms: f32, done: Option<Rc<dyn Fn()>>| {
+            fading.borrow_mut().take();
+            let from = fade.with_untracked(|v| *v);
+            let Some(timers) = timers.as_ref().filter(|_| ms > 0. && from != to) else {
+                fade.set(to);
+                if let Some(done) = done {
+                    done();
+                }
+                return;
+            };
+            let start = std::time::Instant::now();
+            let fade = fade.clone();
+            *fading.borrow_mut() = Some(timers.start(Duration::from_millis(8), true, move || {
+                let t = (start.elapsed().as_secs_f32() * 1000. / ms).min(1.);
+                fade.set(from + (to - from) * (1. - (1. - t).powi(3)));
+                if t < 1. {
+                    return true;
+                }
+                if let Some(done) = &done {
+                    done();
+                }
+                false
+            }));
+        }
+    };
+    // One tooltip shows at a time: showing this one closes the last, at once.
+    let number = NEXT_TOOLTIP.with(|n| {
+        n.set(n.get() + 1);
+        n.get()
+    });
+    let set = {
+        let (open, shown, fade, fading) =
+            (open.clone(), shown.clone(), fade.clone(), fading.clone());
+        move |on: bool, instant: bool| {
+            if !on {
+                SHOWING.with(|s| {
+                    let mut s = s.borrow_mut();
+                    if s.as_ref().is_some_and(|(n, _)| *n == number) {
+                        *s = None;
+                    }
+                });
+                if !shown.get() {
+                    return;
+                }
+                let (open, shown) = (open.clone(), shown.clone());
+                let hide: Rc<dyn Fn()> = Rc::new(move || hide_tooltip(&open, &shown));
+                animate(0., if instant { 0. } else { 100. }, Some(hide));
+                return;
+            }
+            let close: Rc<dyn Fn()> = {
+                let (open, shown, fade, fading) =
+                    (open.clone(), shown.clone(), fade.clone(), fading.clone());
+                Rc::new(move || {
+                    fading.borrow_mut().take();
+                    fade.set(0.);
+                    hide_tooltip(&open, &shown);
+                })
+            };
+            let last = SHOWING.with(|s| s.borrow_mut().replace((number, close)));
+            if let Some((n, close_last)) = last
+                && n != number
+            {
+                close_last();
+            }
+            if !shown.replace(true) {
+                TOOLTIPS.with(|t| {
+                    let (count, last) = t.get();
+                    t.set((count + 1, last));
+                });
+                open.set(true);
+            }
+            animate(1., if instant { 0. } else { 140. }, None);
+        }
+    };
+    let waiting: Rc<std::cell::RefCell<Option<crate::timers::Stop>>> = Rc::default();
+    // An interactive card: the pointer may cross from the node to the card
+    // (a moment's grace) and stay on either.
+    let interactive = tip.interactive;
+    let (over_anchor, over_card) = (
+        Rc::new(std::cell::Cell::new(false)),
+        Rc::new(std::cell::Cell::new(false)),
+    );
+    let leave = {
+        let (set, timers, waiting) = (set.clone(), timers.clone(), waiting.clone());
+        let (over_anchor, over_card) = (over_anchor.clone(), over_card.clone());
+        move || {
+            if !interactive {
+                waiting.borrow_mut().take();
+                set(false, false);
+                return;
+            }
+            let Some(timers) = &timers else {
+                return set(false, false);
+            };
+            let (set, over_anchor, over_card) =
+                (set.clone(), over_anchor.clone(), over_card.clone());
+            *waiting.borrow_mut() =
+                Some(timers.start(Duration::from_millis(120), false, move || {
+                    if !over_anchor.get() && !over_card.get() {
+                        set(false, false);
+                    }
+                    false
+                }));
+        }
+    };
+    let anchor = {
+        let (leave, over_anchor) = (leave.clone(), over_anchor.clone());
+        anchor.on_event(move |cx| {
+            if cx.phase == EventPhase::Capture {
+                return;
+            }
+            match cx.event {
+                InputEvent::PointerEnter if cx.target == cx.current_target => {
+                    over_anchor.set(true);
+                    let now = shown.get()
+                        || TOOLTIPS.with(|t| {
+                            let (count, last) = t.get();
+                            count > 0
+                                || last.is_some_and(|at| at.elapsed() < Duration::from_secs(1))
+                        });
+                    if now {
+                        // Taking over from another (or back while it fades):
+                        // no fade in from nothing.
+                        waiting.borrow_mut().take();
+                        set(true, !shown.get());
+                    } else if let Some(timers) = &timers {
+                        let set = set.clone();
+                        *waiting.borrow_mut() =
+                            Some(timers.start(Duration::from_millis(300), false, move || {
+                                set(true, false);
+                                false
+                            }));
+                    }
+                }
+                InputEvent::PointerLeave if cx.target == cx.current_target => {
+                    over_anchor.set(false);
+                    leave();
+                }
+                InputEvent::PointerDown { .. } | InputEvent::Scroll { .. } if !interactive => {
+                    waiting.borrow_mut().take();
+                    set(false, true);
+                }
+                _ => {}
+            }
+        })
+    };
+    let content = if interactive {
+        content.on_event(move |cx| {
+            if cx.phase == EventPhase::Capture || cx.target != cx.current_target {
+                return;
+            }
+            match cx.event {
+                InputEvent::PointerEnter => over_card.set(true),
+                InputEvent::PointerLeave => {
+                    over_card.set(false);
+                    leave();
+                }
+                _ => {}
+            }
+        })
+    } else {
+        content
+    };
+    let placement = tip.placement.unwrap_or(zgui::compose::Placement {
+        side: zgui::compose::PlacementSide::Top,
+        align: zgui::compose::PlacementEdge::Center,
+        offset: 6.,
+    });
+    let content = column()
+        .child(content)
+        .reactive_style(move || zgui::style::Styles::new().opacity(fade.get()));
+    zgui::compose::popover("Tooltip", open, anchor)
+        .layer()
+        .autofocus(false)
+        .placement(placement)
+        .pointer_events(interactive)
+        .child(content)
+}
+
+/// `view` under the theme scope `theme = …` asks for.
+fn themed(spec: &crate::node::ThemeSpec, vm: &Rc<Vm>, view: View) -> View {
+    use crate::node::ThemeSpec;
+    let compute = |value: Value, vm: &Vm| {
+        crate::theme::override_of(&value).unwrap_or_else(|e| {
+            vm.report(mlua::Error::runtime(format!("theme: {e}")));
+            zgui::theme::ThemeOverride::new()
+        })
+    };
+    match spec {
+        ThemeSpec::Fixed(over) => zgui::compose::theme_scope(over.clone(), view),
+        ThemeSpec::State(state) => {
+            let (state, vm) = (state.clone(), vm.clone());
+            zgui::compose::theme_scope_with(move || compute(state.get(), &vm), view)
+        }
+        ThemeSpec::Computed(f) => {
+            let (f, vm) = (f.clone(), vm.clone());
+            zgui::compose::theme_scope_with(
+                move || {
+                    let value = vm.call::<Value>(&f, ()).unwrap_or_else(|e| {
+                        vm.report(e);
+                        Value::Nil
+                    });
+                    compute(value, &vm)
+                },
+                view,
+            )
+        }
+    }
+}
+/// The style property a theme token in `prop` sets.
+fn token_field(prop: Prop) -> Option<zgui::theme::Field> {
+    use Prop::*;
+    use zgui::theme::Field;
+    Some(match prop {
+        Bg => Field::Background,
+        TextColor => Field::TextColor,
+        BorderColor => Field::BorderColor,
+        OutlineColor => Field::OutlineColor,
+        Rounded => Field::Radius,
+        Border => Field::BorderWidth,
+        P => Field::Padding(15),
+        Px => Field::Padding(10),
+        Py => Field::Padding(5),
+        Pt => Field::Padding(1),
+        Pr => Field::Padding(2),
+        Pb => Field::Padding(4),
+        Pl => Field::Padding(8),
+        M => Field::Margin(15),
+        Mx => Field::Margin(10),
+        My => Field::Margin(5),
+        Mt => Field::Margin(1),
+        Mr => Field::Margin(2),
+        Mb => Field::Margin(4),
+        Ml => Field::Margin(8),
+        Gap => Field::Gap,
+        TextSize => Field::TextSize,
+        LineHeight => Field::LineHeight,
+        LetterSpacing => Field::LetterSpacing,
+        Weight => Field::FontWeight,
+        Font => Field::FontFamily,
+        Shadow => Field::Shadow,
+        InsetShadow => Field::InsetShadow,
+        Opacity => Field::Opacity,
+        BackdropBlur => Field::Blur,
+        W => Field::Width,
+        H => Field::Height,
+        _ => return None,
+    })
 }
 
 fn bridge<T: PartialEq + Clone + 'static>(
@@ -90,7 +510,31 @@ fn number(value: &Value) -> f32 {
 /// component's body: the effects and computed values it creates live as long
 /// as what it built (not as long as the script), and its `ui.on_mount`
 /// hooks run once that is mounted.
-fn build_scoped(
+/// A slot's context, for what is contributed to it.
+pub(crate) struct SlotContext(pub Value);
+/// A copy of `props` with `slot = context`.
+fn with_slot(lua: &mlua::Lua, props: &mlua::Table, context: &Value) -> mlua::Result<mlua::Table> {
+    let copy = lua.create_table()?;
+    for pair in props.pairs::<mlua::Value, mlua::Value>() {
+        let (key, value) = pair?;
+        copy.raw_set(key, value)?;
+    }
+    copy.raw_set("slot", context.clone())?;
+    Ok(copy)
+}
+
+/// A row of a `ui.each` as the key pass last saw it.
+struct EachRow {
+    /// Its item, to tell when it changed (rows built again then).
+    last: Value,
+    /// Bumped when the item changes: a new identity, so a new row.
+    generation: u64,
+    /// A live row's item, as the state its builder was given.
+    item: Option<Signal<Value>>,
+    /// Seen in this pass.
+    seen: bool,
+}
+pub(crate) fn build_scoped(
     vm: &Rc<Vm>,
     cx: &mut Context,
     low: &Rc<Lowering>,
@@ -201,10 +645,15 @@ fn web_view_of(spec: &crate::node::WebSpec, vm: &Rc<Vm>, low: &Rc<Lowering>) -> 
                 WebViewEvent::ProcessTerminated => {
                     call(&error, pack(&["", "the page's process ended"]))
                 }
-                WebViewEvent::Message { body } => {
+                WebViewEvent::Message {
+                    body,
+                    origin,
+                    main_frame,
+                } => {
                     if let Some(f) = &message {
                         let value = crate::node::json_value(body);
-                        if let Err(e) = vm.call::<()>(f, value) {
+                        // Who sent it: check before acting on it.
+                        if let Err(e) = vm.call::<()>(f, (value, origin.as_str(), *main_frame)) {
                             vm.report(e);
                         }
                     }
@@ -237,7 +686,8 @@ fn built(vm: &Rc<Vm>, result: mlua::Result<mlua::Value>, low: &Rc<Lowering>) -> 
 }
 
 fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut Context>) -> View {
-    let element = node.targetable().then(|| {
+    // Layout moves animate through an element too, one selectors do not find.
+    let element = (node.targetable() || node.tracks_layout()).then(|| {
         Element::new(
             &low.runtime,
             node.id.clone(),
@@ -272,19 +722,10 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
         }
         Kind::Text(text) => lower_text(text, vm),
         Kind::Rich(spans) => lower_rich(spans, vm, low),
-        Kind::Image { label, src } => {
-            let (src, vm2, low2) = (resolve_owned(src), vm.clone(), low.clone());
-            let label = label.clone();
-            image_signal(label, move || {
-                let path = match resolve(&src, Ty::Str, None, &vm2) {
-                    Some(Lit::Str(path)) => path,
-                    _ => return placeholder(),
-                };
-                load_image(&vm2, &low2, &path).unwrap_or_else(placeholder)
-            })
-        }
+        Kind::Image { .. } => lower_image(&node.kind, vm, low),
         Kind::Svg { label, src } => {
             let (src, vm2, low2) = (resolve_owned(src), vm.clone(), low.clone());
+            let theme = cx.as_deref().map(Context::theme);
             // The tint may be state or computed: the icon re-tints when it changes.
             let tint = node
                 .props
@@ -302,6 +743,12 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
                     .and_then(|t| resolve(t, Ty::Color, None, &vm2))
                 {
                     Some(Lit::Color(c)) => Arc::new(data.tinted(c)),
+                    // `"currentColor"`: the inherited text colour, as CSS's.
+                    Some(Lit::Str(_)) => Arc::new(data.current_color()),
+                    Some(Lit::Token(t)) => match theme.as_ref().map(|theme| theme.get(t).color()) {
+                        Some(Some(c)) => Arc::new(data.tinted(c)),
+                        _ => data,
+                    },
                     _ => data,
                 }
             })
@@ -345,6 +792,11 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
             label,
             value,
             multiline,
+            placeholder,
+            placeholder_color,
+            select_on_focus,
+            line_numbers,
+            secure,
         } => {
             let value = bridge(
                 need(&mut cx),
@@ -352,11 +804,49 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
                 |v| v.to_string(),
                 |s| Value::Str(s.into()),
             );
-            if *multiline {
+            let mut view = if *multiline {
                 text_area(label.clone(), value)
             } else {
                 text_input(label.clone(), value)
+            };
+            if let Some(text) = placeholder {
+                let (text, vm) = (resolve_owned(text), vm.clone());
+                view = view.placeholder_when(move || match resolve(&text, Ty::Str, None, &vm) {
+                    Some(Lit::Str(text)) => text.to_string(),
+                    _ => String::new(),
+                });
             }
+            match placeholder_color {
+                Some(Source::Lit(Lit::Color(color))) => view = view.placeholder_color(*color),
+                Some(color) => {
+                    // A token (`"$text.tertiary"`) follows the element's theme;
+                    // anything unresolved shows the default placeholder colour.
+                    let (color, vm) = (resolve_owned(color), vm.clone());
+                    let theme = match cx.as_deref().map(Context::theme) {
+                        Some(theme) => theme,
+                        None => zgui::theme::Themes::of(&low.runtime).root().clone(),
+                    };
+                    view = view.placeholder_color_when(move || {
+                        let muted = || theme.color(zgui::theme::tok::TEXT_TERTIARY);
+                        match resolve(&color, Ty::Color, None, &vm) {
+                            Some(Lit::Color(color)) => color,
+                            Some(Lit::Token(t)) => theme.get(t).color().unwrap_or_else(muted),
+                            _ => muted(),
+                        }
+                    });
+                }
+                None => {}
+            }
+            if *secure {
+                view = view.secure(true);
+            }
+            if *select_on_focus {
+                view = view.select_on_focus(true);
+            }
+            if *line_numbers {
+                view = view.line_numbers(true);
+            }
+            view
         }
         Kind::Progress { label, value } => progress(
             label.clone(),
@@ -389,10 +879,13 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
                     match (on, &otherwise) {
                         (true, _) => lower(&then, &low),
                         (false, Some(otherwise)) => lower(otherwise, &low),
-                        (false, None) => div(),
+                        // Nothing: not a flex item either (no gap for it).
+                        (false, None) => div().hidden(),
                     }
                 },
             )
+            // Lays out as what it shows, as if in its place.
+            .contents()
         }
         Kind::Switch {
             value,
@@ -413,30 +906,55 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
                     match (found, &default) {
                         (Some((_, node)), _) => lower(node, &low),
                         (None, Some(node)) => lower(node, &low),
-                        (None, None) => div(),
+                        (None, None) => div().hidden(),
                     }
                 },
             )
+            .contents()
         }
         Kind::Each {
             items,
             build: builder,
             key,
+            motion: Some(motion),
+        } => crate::motion::each(
+            need(&mut cx),
+            items.clone(),
+            builder.clone(),
+            key.clone(),
+            motion.clone(),
+            vm,
+            low,
+        ),
+        Kind::Each {
+            items,
+            build: builder,
+            key,
+            motion: None,
         } => {
             // Rows are keyed by the script's `key` (they keep their state as
-            // the list reorders), else by position and value. The key pass
-            // notes each row's index for the build that follows it.
-            let indices: Rc<std::cell::RefCell<HashMap<String, usize>>> = Rc::default();
+            // the list reorders), else by position. A row whose item changes
+            // under its key is built again, unless its builder takes a third
+            // parameter: then it gets its item as state, kept current, and
+            // updates in place (a streaming message's row, its text growing).
+            // The key pass notes each row's index for the build that follows.
+            let live = builder.info().num_params >= 3;
+            let rows: Rc<std::cell::RefCell<HashMap<String, EachRow>>> = Rc::default();
+            let noted: Rc<std::cell::RefCell<HashMap<String, (usize, String)>>> = Rc::default();
             let (keys_from, items) = (items.clone(), items.clone());
-            let (key_fn, key_vm, noted) = (key.clone(), vm.clone(), indices.clone());
+            let (key_fn, key_vm) = (key.clone(), vm.clone());
+            let (rows_in_keys, noted_in_keys) = (rows.clone(), noted.clone());
+            let runtime = vm.runtime.clone();
             let (builder, vm, low) = (builder.clone(), vm.clone(), low.clone());
             keyed(
                 move || {
                     keys_from.with(|list| {
-                        let mut noted = noted.borrow_mut();
+                        let mut noted = noted_in_keys.borrow_mut();
                         noted.clear();
+                        let mut rows = rows_in_keys.borrow_mut();
                         let mut seen: HashMap<String, usize> = HashMap::new();
-                        list.list()
+                        let identities = list
+                            .list()
                             .iter()
                             .enumerate()
                             .map(|(i, item)| {
@@ -448,84 +966,186 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
                                         },
                                         |k| k.to_string(),
                                     ),
-                                    None => format!("{i}:{item:?}"),
+                                    None => i.to_string(),
                                 };
                                 let n = seen.entry(base.clone()).or_default();
                                 *n += 1;
-                                let identity = format!("{base}#{n}");
-                                noted.insert(identity.clone(), i);
+                                let row = format!("{base}#{n}");
+                                let identity = match rows.get_mut(&row) {
+                                    Some(state) if live => {
+                                        state.seen = true;
+                                        if let Some(signal) = &state.item {
+                                            let item = item.clone();
+                                            let signal = signal.clone();
+                                            runtime.untracked(|| signal.set(item));
+                                        }
+                                        row.clone()
+                                    }
+                                    Some(state) => {
+                                        state.seen = true;
+                                        if state.last != *item {
+                                            state.last = item.clone();
+                                            state.generation += 1;
+                                        }
+                                        format!("{row}@{}", state.generation)
+                                    }
+                                    None => {
+                                        rows.insert(
+                                            row.clone(),
+                                            EachRow {
+                                                last: item.clone(),
+                                                generation: 0,
+                                                item: None,
+                                                seen: true,
+                                            },
+                                        );
+                                        if live {
+                                            row.clone()
+                                        } else {
+                                            format!("{row}@0")
+                                        }
+                                    }
+                                };
+                                noted.insert(identity.clone(), (i, row));
                                 identity
                             })
-                            .collect::<Vec<_>>()
+                            .collect::<Vec<_>>();
+                        // Rows gone from the list go from here too.
+                        rows.retain(|_, state| std::mem::take(&mut state.seen));
+                        identities
                     })
                 },
                 move |identity, cx| {
-                    let index = indices.borrow().get(&identity).copied().unwrap_or(0);
+                    let (index, row) = noted.borrow().get(&identity).cloned().unwrap_or_default();
                     let item = items
                         .with_untracked(|list| list.list().get(index).cloned().unwrap_or_default());
-                    build_scoped(&vm, cx, &low, &builder, (item, index + 1))
+                    if !live {
+                        return build_scoped(&vm, cx, &low, &builder, (item, index + 1));
+                    }
+                    let signal = vm.runtime.signal(item.clone());
+                    if let Some(state) = rows.borrow_mut().get_mut(&row) {
+                        state.item = Some(signal.clone());
+                    }
+                    build_scoped(
+                        &vm,
+                        cx,
+                        &low,
+                        &builder,
+                        (item, index + 1, crate::value::State(signal)),
+                    )
                 },
             )
         }
-        Kind::List {
-            count,
-            height,
-            overscan,
-            build: builder,
-            offset,
+        Kind::List { .. } => lower_list(&node.kind, vm, low, &mut cx),
+        Kind::Modal {
+            label,
+            open,
+            placement,
+            autofocus,
+            layer,
         } => {
-            let offset = match offset {
-                Some(offset) => bridge(need(&mut cx), offset, number, |x| Value::Num(x as f64)),
-                None => need(&mut cx).state(0_f32),
+            let view = modal(
+                label.clone(),
+                bridge(need(&mut cx), open, Value::truthy, Value::Bool),
+            );
+            let view = if *autofocus {
+                view
+            } else {
+                view.autofocus(false)
             };
-            let (count, count_vm) = (Rc::new(resolve_owned(count)), vm.clone());
-            let (builder, vm, low) = (builder.clone(), vm.clone(), low.clone());
-            virtual_list(
-                offset,
-                *height,
-                *overscan,
-                move || match resolve(&count, Ty::Num, None, &count_vm) {
-                    Some(Lit::Num(n)) => n.max(0.) as usize,
-                    _ => 0,
-                },
-                |index| index,
-                move |_, index, _| built(&vm, vm.call::<mlua::Value>(&builder, index + 1), &low),
-            )
+            let view = if *layer { view.layer() } else { view };
+            match placement {
+                Some(at) => view.modal_placement(*at),
+                None => view,
+            }
         }
-        Kind::Modal { label, open } => modal(
-            label.clone(),
-            bridge(need(&mut cx), open, Value::truthy, Value::Bool),
-        ),
         Kind::Popover {
             label,
             open,
             anchor,
-        } => popover(
-            label.clone(),
-            bridge(need(&mut cx), open, Value::truthy, Value::Bool),
-            lower(anchor, low),
-        ),
+            placement,
+            autofocus,
+        } => {
+            let view = popover(
+                label.clone(),
+                bridge(need(&mut cx), open, Value::truthy, Value::Bool),
+                lower(anchor, low),
+            );
+            let view = if *autofocus {
+                view
+            } else {
+                view.autofocus(false)
+            };
+            match placement {
+                Some(at) => view.placement(*at),
+                None => view,
+            }
+        }
         Kind::Menu {
             label,
             open,
             anchor,
-        } => menu(
-            label.clone(),
-            bridge(need(&mut cx), open, Value::truthy, Value::Bool),
-            lower(anchor, low),
-        ),
-        Kind::MenuItem(label) => menu_item(label.clone()),
-        Kind::Submenu { label, open } => submenu(
-            label.clone(),
-            bridge(need(&mut cx), open, Value::truthy, Value::Bool),
-        ),
+            placement,
+            autofocus,
+        } => {
+            let view = menu(
+                label.clone(),
+                bridge(need(&mut cx), open, Value::truthy, Value::Bool),
+                lower(anchor, low),
+            );
+            let view = if *autofocus {
+                view
+            } else {
+                view.autofocus(false)
+            };
+            match placement {
+                Some(at) => view.placement(*at),
+                None => view,
+            }
+        }
+        Kind::MenuItem(label, keep_open) => {
+            let item = menu_item(label.clone());
+            if *keep_open { item.keep_open() } else { item }
+        }
+        Kind::Submenu {
+            label,
+            open,
+            trigger,
+        } => {
+            let view = submenu(
+                label.clone(),
+                bridge(need(&mut cx), open, Value::truthy, Value::Bool),
+            );
+            match trigger {
+                // A menu item is the row; anything else goes in one.
+                Some(node) if matches!(node.kind, Kind::MenuItem(..)) => {
+                    view.trigger(lower(node, low))
+                }
+                Some(node) => view.trigger(menu_item(label.clone()).child(lower(node, low))),
+                None => view,
+            }
+        }
         Kind::Component {
             build: builder,
             props,
         } => {
             let (builder, props, vm, low) =
                 (builder.clone(), props.clone(), vm.clone(), low.clone());
-            component(move |cx| build_scoped(&vm, cx, &low, &builder, props.clone()))
+            component(move |cx| {
+                // Contributed to a slot with a context: its own props, with
+                // the context as `slot`.
+                let props = match cx.try_service::<SlotContext>() {
+                    Some(context) => match with_slot(&vm.lua, &props, &context.0) {
+                        Ok(props) => props,
+                        Err(error) => {
+                            vm.report(error);
+                            props.clone()
+                        }
+                    },
+                    None => props.clone(),
+                };
+                build_scoped(&vm, cx, &low, &builder, props)
+            })
         }
         Kind::Presence {
             value,
@@ -542,27 +1162,47 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
             exit.clone(),
             *wait,
             *initial,
+            node.props.iter().any(|(p, _)| BOX.contains(p)),
             vm,
             low,
         ),
-        Kind::Slot(name) => column().children(
+        Kind::Slot {
+            name,
+            context,
+            from,
+        } => column().children(
             low.slots
                 .get(name)
                 .into_iter()
                 .flatten()
-                .map(|n| lower(n, low)),
+                .filter(|(owner, _)| from.as_deref().is_none_or(|from| **owner == *from))
+                .map(|(_, n)| match context {
+                    // What is contributed here hears it (`props.slot`).
+                    Some(context) => {
+                        zgui::compose::provide(SlotContext(context.clone()), lower(n, low))
+                    }
+                    None => lower(n, low),
+                }),
         ),
     };
     if let Some(mask) = &node.mask {
         view = view
             .mask(mask.image.clone(), mask.size)
             .mask_offset(mask.offset.0, mask.offset.1);
+        // The engine moves a sweeping mask itself, frame by frame.
+        if let Some(sweep) = mask.sweep.clone() {
+            let cx = need(&mut cx);
+            let (tasks, frames) = (cx.tasks(), cx.frames());
+            view = view.on_mount(move |mounted| {
+                tasks.spawn(mounted.sweep_mask(frames.clone(), sweep.by, sweep.period, sweep.rate));
+            });
+        }
     }
     if !node.children.is_empty() {
         let flow = flow(node);
         view = view.children(node.children.iter().map(|child| {
             let view = lower(child, low);
-            if child.kind.is_region() {
+            if child.kind.flows() {
                 apply_all(view, &flow)
             } else {
                 view
@@ -574,8 +1214,6 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
     // animated values, share one reactive style.
     let mut statics = Vec::new();
     let mut dynamic = Vec::new();
-    // With `layout`, where the node sits belongs to the box that animates.
-    let mut placement = Vec::new();
     for (prop, source) in &node.props {
         match source {
             Source::Lit(lit) => statics.push((*prop, lit.clone())),
@@ -602,37 +1240,6 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
                 .collect();
             statics.retain(|(p, _)| !group.contains(p));
             dynamic.extend(moved.into_iter().map(|(p, l)| (p, Owned::Lit(l), None)));
-        }
-    }
-    if let Some(layout) = &node.layout {
-        let (moved, kept): (Vec<_>, Vec<_>) = statics
-            .into_iter()
-            .partition(|(p, _)| PLACEMENT.contains(p));
-        statics = kept;
-        placement = moved;
-        // The animated axis's size is set on the outer box; the content
-        // fills its other axis.
-        let sizing: &[Prop] = if layout.height {
-            &[Prop::W, Prop::MinW, Prop::MaxW, Prop::WFull]
-        } else {
-            &[Prop::H, Prop::MinH, Prop::MaxH, Prop::HFull]
-        };
-        let sized: Vec<_> = statics
-            .iter()
-            .filter(|(p, _)| sizing.contains(p))
-            .cloned()
-            .collect();
-        if !sized.is_empty() {
-            statics.retain(|(p, _)| !sizing.contains(p));
-            placement.extend(sized);
-            statics.push((
-                if layout.height {
-                    Prop::WFull
-                } else {
-                    Prop::HFull
-                },
-                Lit::Bool(true),
-            ));
         }
     }
     if let Some(element) = &element {
@@ -701,10 +1308,13 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
                 low.clone(),
             )
         });
-    let shader = node
-        .shader
-        .clone()
-        .map(|shader| (shader, node.shader_params.unwrap_or_default()));
+    let shader = node.shader.clone().map(|shader| {
+        (
+            shader,
+            node.shader_params.unwrap_or_default(),
+            node.shader_tokens,
+        )
+    });
     if !dynamic.is_empty() || element.is_some() || bg_image.is_some() || shader.is_some() {
         let vm = vm.clone();
         let element = element.clone();
@@ -712,7 +1322,7 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
             let lits: Vec<(Prop, Lit)> = dynamic
                 .iter()
                 .filter_map(|(prop, source, scalar)| {
-                    Some((*prop, resolve(source, prop.ty(), scalar.as_ref(), &vm)?))
+                    Some((*prop, resolve_style(source, *prop, scalar.as_ref(), &vm)?))
                 })
                 .collect();
             let styles = match &element {
@@ -731,27 +1341,56 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
             };
             // A shader fill, with its literal parameters unless animated.
             match &shader {
-                Some((fill, params)) => {
+                Some((fill, params, tokens)) => {
                     let animated = element.as_ref().and_then(|e| e.animated.borrow().shader);
                     let uniforms = animated.unwrap_or(zgui::decoration::ShaderUniforms {
                         time: 0.,
                         params: *params,
                     });
+                    // Theme colours bind to their slots: resolved where the
+                    // node is styled, and again when the theme changes.
+                    let mut styles = styles;
+                    for (slot, token) in tokens.iter().enumerate() {
+                        if let Some(token) = token {
+                            styles =
+                                styles.token(zgui::theme::Field::ShaderParam(slot as u8), *token);
+                        }
+                    }
                     styles.bg_shader(fill.clone()).shader_uniforms(uniforms)
                 }
                 None => styles,
             }
         });
     }
-    for (pseudo, lits) in &node.pseudo {
-        let lits = lits.clone();
-        let style = move |s: Styles| apply_all(s, &lits);
-        view = match pseudo {
-            Pseudo::Hover => view.hover(style),
-            Pseudo::Active => view.active(style),
-            Pseudo::Focus => view.focus(style),
-            Pseudo::Disabled => view.disabled_style(style),
-        };
+    if let Some(selection) = &node.variant_interaction {
+        // Variants chosen by state set interaction styles: the choice's,
+        // the element's own over them, swapped when the choice changes.
+        let (selection, own) = (selection.clone(), crate::node::interaction_of(&node.pseudo));
+        let mut last: Option<Box<[u16]>> = None;
+        view = view.reactive_interaction(move || {
+            let key = selection.key();
+            if last.as_ref() == Some(&key) {
+                return None;
+            }
+            let layer = selection.layer(&key);
+            last = Some(key);
+            Some(std::array::from_fn(|slot| {
+                let mut lits = layer.interaction[slot].clone();
+                crate::variants::over(&mut lits, &own[slot]);
+                (!lits.is_empty()).then(|| apply_all(Styles::new(), &lits))
+            }))
+        });
+    } else {
+        for (pseudo, lits) in &node.pseudo {
+            let lits = lits.clone();
+            let style = move |s: Styles| apply_all(s, &lits);
+            view = match pseudo {
+                Pseudo::Hover => view.hover(style),
+                Pseudo::Active => view.active(style),
+                Pseudo::Focus => view.focus(style),
+                Pseudo::Disabled => view.disabled_style(style),
+            };
+        }
     }
     if let Some(disabled) = &node.disabled {
         let (disabled, vm) = (resolve_owned(disabled), vm.clone());
@@ -762,23 +1401,45 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
     if node.keep_focus {
         view = view.keeps_focus(true);
     }
-    if let Some(on) = &node.pointer_events {
-        let (on, vm) = (resolve_owned(on), vm.clone());
-        view = view.pointer_events_when(move || match resolve(&on, Ty::Bool, None, &vm) {
-            Some(Lit::Bool(on)) => Some(on),
-            _ => None,
-        });
-    }
     if let Some(color) = node.selection_color {
         view = view.selection_color(color);
     }
     if let Some(focusable) = node.focusable {
         view = view.focusable(focusable);
     }
+    if node.window_drag {
+        view = view.window_drag();
+    }
+    match &node.pointer_events {
+        Some(Source::Lit(Lit::Bool(enabled))) => view = view.pointer_events(*enabled),
+        Some(source) => {
+            // Followed: a state or a function (`"none"`, `"auto"` or a
+            // boolean); nil inherits the ancestors' value.
+            let (source, vm) = (resolve_owned(source), vm.clone());
+            view = view.pointer_events_inherit_when(move || {
+                let value = match &source {
+                    Owned::State(s) => s.with(|v| v.clone()),
+                    Owned::Computed(f) => match vm.call::<Value>(f, ()) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            vm.report(error);
+                            return None;
+                        }
+                    },
+                    Owned::Lit(Lit::Bool(enabled)) => return Some(*enabled),
+                    _ => return None,
+                };
+                crate::node::pointer_events(&value)
+            });
+        }
+        None => {}
+    }
     if let Some(handler) = &node.events.click {
         let (handler, vm, actions) = (handler.clone(), vm.clone(), low.actions.clone());
-        view = view.on_click(move || {
-            run(&handler, &vm, &actions, ());
+        // Told the keys held: `{ shift, ctrl, alt, meta }` (a ⌘-click).
+        view = view.on_click_with(move |held| {
+            let keys = modifiers_table(&vm.lua, held).ok();
+            run(&handler, &vm, &actions, keys);
         });
     }
     // The node's handle, for local pointer coordinates and elements.
@@ -847,17 +1508,36 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
     // Input and drag handlers read the node's handle (local coordinates).
     if element.is_some() || node.events.any_input() || node.events.any_drag() {
         let (element, elements, refs) = (element.clone(), low.elements.clone(), node.refs.clone());
-        let (mount, resize, vm) = (
+        let targetable = node.targetable();
+        // Moves are measured against the parent; with a size box, against
+        // the box's parent.
+        let track = node.tracks_layout().then(|| {
+            let timing = crate::motion::Timing {
+                ease: node.layout.as_ref().and_then(|l| l.ease.clone()),
+                duration: node.layout.as_ref().and_then(|l| l.duration),
+            };
+            let depth = if node.sizes_layout() { 2 } else { 0 };
+            (node.layout_id.clone(), timing, depth)
+        });
+        let (mount, resize, visible, vm) = (
             node.events.mount.clone(),
             node.events.resize.clone(),
+            node.events.visible.clone(),
             vm.clone(),
         );
         view = view.on_mount(move |mounted| {
             let _ = handle.set(mounted.clone());
             let Some(element) = element else { return };
-            elements.register(&element, mounted.clone());
+            if targetable {
+                elements.register(&element, mounted.clone());
+            } else {
+                element.attach(mounted.clone());
+            }
+            if let Some((layout_id, timing, depth)) = track {
+                crate::motion::track(&element, &mounted, layout_id, timing, depth, &vm);
+            }
             for r in &refs {
-                r.attach(&element);
+                r.attach(&element, &mounted);
             }
             if let Some(f) = mount {
                 let arg = vm.lua.create_userdata(ElementUd(element.clone()));
@@ -865,13 +1545,12 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
                     vm.report(e);
                 }
             }
-            if let (Some(f), Some(bounds)) = (resize.clone(), mounted.observe_bounds()) {
+            if let (Some(f), Some(sizes)) = (resize.clone(), mounted.observe_size()) {
                 // Size changes only: moving does not report.
                 let (vm, element, runtime) = (vm.clone(), element.clone(), vm.runtime.clone());
                 let last = std::cell::Cell::new(None::<(f32, f32)>);
                 let effect = runtime.effect(move || {
-                    let b = bounds.get();
-                    let size = (b.width, b.height);
+                    let size = sizes.get();
                     // Nothing to report before the first layout.
                     if last.get().is_none() && size == (0., 0.) {
                         return;
@@ -879,10 +1558,11 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
                     if last.replace(Some(size)) == Some(size) {
                         return;
                     }
+                    let (w, h) = size;
                     let call = || -> mlua::Result<()> {
                         let size = vm.lua.create_table()?;
-                        size.set("w", b.width)?;
-                        size.set("h", b.height)?;
+                        size.set("w", w)?;
+                        size.set("h", h)?;
                         let el = vm.lua.create_userdata(ElementUd(element.clone()))?;
                         vm.call::<()>(&f, (size, el))
                     };
@@ -892,21 +1572,80 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
                 });
                 mounted.retain(effect);
             }
+            if let (Some(f), Some(shown)) = (visible.clone(), mounted.observe_visibility()) {
+                // Changes only, and the first layout's answer, delivered
+                // after the frame as an IntersectionObserver does: what the
+                // handler builds or drops lays out next frame, never feeding
+                // back into the layout that reported it.
+                let timers = crate::node::env(&vm.lua).ok().map(|env| env.timers.clone());
+                let (vm, element, runtime) = (vm.clone(), element.clone(), vm.runtime.clone());
+                let sizes = mounted.observe_size();
+                let latest = Rc::new(std::cell::Cell::new(None::<bool>));
+                let told = Rc::new(std::cell::Cell::new(None::<bool>));
+                let pending: Rc<std::cell::RefCell<Option<crate::timers::Stop>>> = Rc::default();
+                let deliver = {
+                    let (latest, told, pending) = (latest.clone(), told.clone(), pending.clone());
+                    move || {
+                        pending.borrow_mut().take();
+                        let Some(on) = latest.get() else { return };
+                        if told.replace(Some(on)) == Some(on) {
+                            return;
+                        }
+                        let call = || -> mlua::Result<()> {
+                            let el = vm.lua.create_userdata(ElementUd(element.clone()))?;
+                            vm.call::<()>(&f, (on, el))
+                        };
+                        if let Err(e) = vm.runtime.untracked(call) {
+                            vm.report(e);
+                        }
+                    }
+                };
+                let deliver = Rc::new(deliver);
+                let effect = runtime.effect(move || {
+                    let on = shown.get();
+                    // Nothing to report before the first layout.
+                    if latest.get().is_none() && sizes.as_ref().is_some_and(|s| s.get() == (0., 0.))
+                    {
+                        return;
+                    }
+                    latest.set(Some(on));
+                    if pending.borrow().is_some() {
+                        return;
+                    }
+                    match timers.as_ref() {
+                        Some(timers) => {
+                            let deliver = deliver.clone();
+                            let stop = timers.start(
+                                std::time::Duration::from_millis(1),
+                                false,
+                                move || {
+                                    deliver();
+                                    false
+                                },
+                            );
+                            *pending.borrow_mut() = Some(stop);
+                        }
+                        None => deliver(),
+                    }
+                });
+                mounted.retain(effect);
+            }
         });
     }
     if let Some(id) = &node.id {
         view = view.id(id.to_string());
     }
-    if let Some(layout) = &node.layout {
-        view = layout_box(view, placement, layout, vm, low);
+    if let Some(layout) = node.layout.as_ref().filter(|_| node.sizes_layout()) {
+        view = layout_box(view, layout, vm, low);
     }
     view
 }
 
-/// How a container lays out its children, for the regions among them
-/// (`each`, `show`, `switch`, `presence`, `slot`): a region is a box of its
-/// own, and lays its children out as its parent would, stretched across the
-/// parent's cross axis in a column. CSS would say `display: contents`.
+/// How a container lays out its children, for the regions among them that
+/// hold any number (`each`, `slot`): a region is a box of its own, and lays
+/// its children out as its parent would, stretched across the parent's
+/// cross axis in a column. (`show`, `switch` and `presence` hold one view
+/// at a time and are contents nodes: CSS `display: contents`, exactly.)
 fn flow(node: &Node) -> Vec<(Prop, Lit)> {
     let mut row = matches!(node.kind, Kind::Row);
     let mut out = Vec::new();
@@ -936,39 +1675,9 @@ fn flow(node: &Node) -> Vec<(Prop, Lit)> {
     out
 }
 
-/// Where a node sits in its parent: with `layout`, these move to the box
-/// whose size animates.
-const PLACEMENT: &[Prop] = &[
-    Prop::M,
-    Prop::Mx,
-    Prop::My,
-    Prop::Mt,
-    Prop::Mr,
-    Prop::Mb,
-    Prop::Ml,
-    Prop::Absolute,
-    Prop::Relative,
-    Prop::Top,
-    Prop::Left,
-    Prop::Right,
-    Prop::Bottom,
-    Prop::Grow,
-    Prop::Shrink,
-    Prop::Basis,
-    Prop::AlignSelf,
-    Prop::ColStart,
-    Prop::RowStart,
-    Prop::ColSpan,
-    Prop::RowSpan,
-    Prop::ColSpanFull,
-    Prop::RowSpanFull,
-    Prop::X,
-    Prop::Y,
-];
-
 /// Resolves an element's animated values over `lits`: what an animation
 /// writes wins, as the inline styles anime.js writes do.
-fn with_animated(element: &Element, mut lits: Vec<(Prop, Lit)>) -> Styles {
+pub(crate) fn with_animated(element: &Element, mut lits: Vec<(Prop, Lit)>) -> Styles {
     element.revision.get();
     let animated = element.animated.borrow();
     if animated.styles.iter().any(|(p, _)| is_corner(*p)) {
@@ -984,7 +1693,7 @@ fn with_animated(element: &Element, mut lits: Vec<(Prop, Lit)>) -> Styles {
         lits.push((*prop, lit.clone()));
     }
     let mut styles = apply_all(Styles::new(), &lits);
-    if let Some((x, y)) = animated.translate {
+    if let Some((x, y)) = element.shown_translate(literal_transform(&lits).0) {
         styles = styles.translate(x, y);
     }
     if let Some(opacity) = animated.opacity {
@@ -1029,35 +1738,25 @@ fn element_view(
         })
 }
 
-/// The springy default for size changes: anime.js `spring({ bounce = .1,
-/// duration = 400 })`, as the motion lab tunes it.
+/// The springy default for size changes, as for moves.
 fn layout_ease(layout: &LayoutAnim) -> (crate::anime::ease::Ease, f64) {
-    use crate::anime::ease::{Ease, Spring};
-    let ease = layout
-        .ease
-        .clone()
-        .unwrap_or_else(|| Ease::Spring(Rc::new(Spring::perceptual(0.1, 0.4))));
-    let duration = layout
-        .duration
-        .or_else(|| ease.spring_duration_ms())
-        .unwrap_or(350.);
-    (ease, duration)
+    crate::motion::Timing {
+        ease: layout.ease.clone(),
+        duration: layout.duration,
+    }
+    .resolve()
 }
 
 /// Wraps `inner` in a box whose size follows the inner content's, animated.
-/// The content keeps its own size; what animates is the space it takes, as
-/// a margin (the lab's technique): a negative bottom (or right) margin holds
-/// the box at its last size and eases to zero. The content's constraints
-/// never change, so a frame of the animation lays out only the box and its
-/// ancestors, and nothing is clipped unless `layout_clip` asks for it.
-fn layout_box(
-    inner: View,
-    placement: Vec<(Prop, Lit)>,
-    layout: &LayoutAnim,
-    vm: &Rc<Vm>,
-    low: &Rc<Lowering>,
-) -> View {
-    let outer = Element::new(&low.runtime, None, Rc::new([]), "layout");
+/// The box is a contents node: `inner` lays out exactly as it would without
+/// it, at its new size at once (its percentages, `grow` and the scroll views
+/// inside it included), and what animates is the space it takes, as a margin
+/// of the box's own (the lab's technique): a negative bottom (or right)
+/// margin holds the space at its last size and eases to zero. The content's
+/// constraints never change, so a frame of the animation lays out only the
+/// box and its ancestors. Nothing is clipped unless `layout_clip` asks: then
+/// a clip inset follows the margin, cutting the content to the space.
+fn layout_box(inner: View, layout: &LayoutAnim, vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
     let slack = Element::new(&low.runtime, None, Rc::new([]), "layout");
     let (enter, grow_h, grow_w, clip) = (layout.enter, layout.height, layout.width, layout.clip);
     let (layout, target, vm2) = (layout.clone(), slack.clone(), Rc::downgrade(vm));
@@ -1066,14 +1765,13 @@ fn layout_box(
         .app_data_ref::<crate::node::Env>()
         .map(|env| env.engine.clone());
     let inner = inner.on_mount(move |handle| {
-        let (Some(bounds), Some(engine)) = (handle.observe_bounds(), engine) else {
+        let (Some(sizes), Some(engine)) = (handle.observe_size(), engine) else {
             return;
         };
         let last: std::cell::Cell<Option<(f32, f32)>> = Default::default();
         let runtime = engine.runtime.clone();
         let effect = runtime.effect(move || {
-            let b = bounds.get();
-            let size = (b.width, b.height);
+            let size = sizes.get();
             if size.0 <= 0. && size.1 <= 0. && last.get().is_none() {
                 return;
             }
@@ -1103,15 +1801,30 @@ fn layout_box(
             let reflowed = grow_h
                 && !grow_w
                 && previous.is_some_and(|(width, _)| (width - size.0).abs() > 0.5);
-            for (on, prop, now, before) in [
-                (grow_h, Prop::Mb, size.1, previous.map(|p| p.1)),
-                (grow_w, Prop::Mr, size.0, previous.map(|p| p.0)),
+            for (on, prop, side, now, before) in [
+                (
+                    grow_h,
+                    Prop::Mb,
+                    Property::ClipBottom,
+                    size.1,
+                    previous.map(|p| p.1),
+                ),
+                (
+                    grow_w,
+                    Prop::Mr,
+                    Property::ClipRight,
+                    size.0,
+                    previous.map(|p| p.0),
+                ),
             ] {
                 if !on {
                     continue;
                 }
                 if reflowed && prop == Prop::Mb {
                     snap.push((element.clone(), Property::Style(prop), V::Num(0.), None));
+                    if clip {
+                        snap.push((element.clone(), side, V::Num(0.), None));
+                    }
                     continue;
                 }
                 let shown = match before {
@@ -1121,13 +1834,13 @@ fn layout_box(
                     Some(before) if before == now => continue,
                     Some(before) => before + current(prop).unwrap_or(0.),
                 };
-                from.push((
-                    element.clone(),
-                    Property::Style(prop),
-                    V::Num((shown - now) as f64),
-                    None,
-                ));
+                let margin = (shown - now) as f64;
+                from.push((element.clone(), Property::Style(prop), V::Num(margin), None));
                 to.push((element.clone(), Property::Style(prop), V::Num(0.)));
+                if clip {
+                    from.push((element.clone(), side.clone(), V::Num(-margin), None));
+                    to.push((element.clone(), side, V::Num(0.)));
+                }
             }
             if !snap.is_empty() {
                 engine.remove_targets(std::slice::from_ref(&element));
@@ -1142,23 +1855,19 @@ fn layout_box(
         });
         handle.retain(effect);
     });
-    let mut middle = column().items_stretch().child(inner);
-    if enter {
-        // Closed until the content's first size arrives: no frame at full size.
-        if grow_h {
-            middle = middle.mb(-100_000.);
-        }
-        if grow_w {
-            middle = middle.mr(-100_000.);
-        }
+    let mut space = column().contents().child(inner);
+    // Closed until the content's first size arrives: no frame at full size.
+    let closed = |on: bool| if enter && on { 100_000. } else { 0. };
+    if enter && grow_h {
+        space = space.mb(-100_000.);
     }
-    let middle = element_view(middle, slack, low, |_| {});
-    let mut outer_view = column().items_stretch().child(middle);
+    if enter && grow_w {
+        space = space.mr(-100_000.);
+    }
     if clip {
-        outer_view = outer_view.overflow_hidden();
+        space = space.clip_inset(0., closed(grow_w), closed(grow_h), 0.);
     }
-    outer_view = apply_all(outer_view, &placement);
-    element_view(outer_view, outer, low, |_| {})
+    element_view(space, slack, low, |_| {})
 }
 
 /// Properties set together: a dynamic one carries the literal rest along.
@@ -1189,12 +1898,147 @@ fn resolve_path(vm: &Vm, path: &str) -> std::path::PathBuf {
         _ => path.to_path_buf(),
     }
 }
-fn load_image(vm: &Vm, low: &Lowering, src: &str) -> Option<Arc<ImageData>> {
+fn is_remote(src: &str) -> bool {
+    src.starts_with("https://") || src.starts_with("http://")
+}
+/// What a remote source decodes to, on a worker thread.
+enum Decoded {
+    Image(Arc<ImageData>),
+    Svg(Arc<SvgData>),
+}
+const LOADING: u8 = 0;
+const READY: u8 = 1;
+const FAILED: u8 = 2;
+/// Whether remote `src` is in the caches: the first ask fetches it (once,
+/// through the host's fetcher), decodes it off the main thread and caches
+/// it. Tracked: what asked shows it once it arrives.
+fn remote_ready(vm: &Rc<Vm>, low: &Lowering, src: &str, svg: bool) -> bool {
+    remote_status(vm, low, src, svg) == READY
+}
+/// Remote `src`'s status (`LOADING`, `READY`, `FAILED`), fetching it the
+/// first time. Tracked.
+fn remote_status(vm: &Rc<Vm>, low: &Lowering, src: &str, svg: bool) -> u8 {
+    let existing = low.assets.remote.borrow().get(src).cloned();
+    let ready = match existing {
+        Some(status) if status.get() != FAILED => return status.get(),
+        Some(status) => {
+            // 5 s, doubling each time in a row it fails, up to 5 minutes.
+            let failed = low.assets.failed.borrow().get(src).copied();
+            let wait = |times: u32| {
+                std::time::Duration::from_secs((5u64 << times.saturating_sub(1).min(6)).min(300))
+            };
+            if failed.is_some_and(|(at, times)| at.elapsed() < wait(times)) {
+                return FAILED;
+            }
+            status.set(LOADING);
+            status
+        }
+        None => {
+            let ready = low.runtime.signal(LOADING);
+            low.assets
+                .remote
+                .borrow_mut()
+                .insert(src.to_owned(), ready.clone());
+            ready
+        }
+    };
+    let links = low.assets.links.borrow().clone();
+    let fetch = links
+        .as_ref()
+        .and_then(|(_, fetcher)| fetcher.borrow().clone());
+    let (Some((timers, _)), Some(fetch)) = (links, fetch) else {
+        vm.report(mlua::Error::runtime(format!(
+            "{src}: remote sources need the host's fetcher (`ScriptHost::fetcher`)"
+        )));
+        return ready.get();
+    };
+    let future = fetch(crate::calls::Request {
+        url: src.to_owned(),
+        method: "GET".into(),
+        headers: Vec::new(),
+        body: None,
+    });
+    let (assets, vm, src, runtime) = (
+        low.assets.clone(),
+        Rc::downgrade(vm),
+        src.to_owned(),
+        low.runtime.clone(),
+    );
+    let arriving = ready.clone();
+    timers.spawn(async move {
+        let bytes = match future.await {
+            Ok(response) if (200..300).contains(&response.status) => Ok(response.body),
+            Ok(response) => Err(format!("HTTP {}", response.status)),
+            Err(error) => Err(error),
+        };
+        let decoded = match bytes {
+            Ok(bytes) => {
+                // Decoding a large image takes long enough to drop frames.
+                let (tell, mut heard) = zgui::task::latest::<Result<Decoded, String>>();
+                std::thread::spawn(move || {
+                    tell.send(if svg {
+                        SvgData::new(bytes)
+                            .map(|svg| Decoded::Svg(Arc::new(svg)))
+                            .map_err(|e| e.to_string())
+                    } else {
+                        zgui_gpu::assets::decode_image(&bytes)
+                            .map(Decoded::Image)
+                            .map_err(|e| e.to_string())
+                    });
+                });
+                heard
+                    .recv()
+                    .await
+                    .unwrap_or_else(|| Err("the decoder stopped".into()))
+            }
+            Err(error) => Err(error),
+        };
+        match decoded {
+            Ok(Decoded::Image(image)) => {
+                assets.failed.borrow_mut().remove(&src);
+                assets.images.borrow_mut().insert(src, image);
+            }
+            Ok(Decoded::Svg(svg)) => {
+                assets.failed.borrow_mut().remove(&src);
+                assets.svgs.borrow_mut().insert(src, svg);
+            }
+            Err(error) => {
+                // A picture that doesn't come is the network's doing, not
+                // the script's: logged, and `fallback` shows in its place.
+                let _ = vm;
+                eprintln!("zgui: {src} didn't load: {error}");
+                let now = std::time::Instant::now();
+                assets
+                    .failed
+                    .borrow_mut()
+                    .entry(src)
+                    .and_modify(|(at, times)| (*at, *times) = (now, *times + 1))
+                    .or_insert((now, 1));
+                runtime.batch(|| arriving.set(FAILED));
+                return;
+            }
+        }
+        runtime.batch(|| arriving.set(READY));
+    });
+    ready.get()
+}
+fn load_image(vm: &Rc<Vm>, low: &Lowering, src: &str) -> Option<Arc<ImageData>> {
+    // The host's own images, followed as it replaces them.
+    if src.starts_with("host:") {
+        low.assets.hosted(src, &low.runtime).get();
+        return low.assets.images.borrow().get(src).cloned();
+    }
     if let Some(image) = low.assets.images.borrow().get(src) {
         return Some(image.clone());
     }
+    if is_remote(src) {
+        remote_ready(vm, low, src, false);
+        return None;
+    }
     let path = resolve_path(vm, src);
-    let decoded = std::fs::read(&path)
+    let decoded = low
+        .assets
+        .read(src, &path)
         .map_err(|e| format!("{}: {e}", path.display()))
         .and_then(|bytes| {
             zgui_gpu::assets::decode_image(&bytes).map_err(|e| format!("{}: {e}", path.display()))
@@ -1213,15 +2057,26 @@ fn load_image(vm: &Vm, low: &Lowering, src: &str) -> Option<Arc<ImageData>> {
         }
     }
 }
-fn load_svg(vm: &Vm, low: &Lowering, src: &str) -> Arc<SvgData> {
+fn load_svg(vm: &Rc<Vm>, low: &Lowering, src: &str) -> Arc<SvgData> {
     if let Some(svg) = low.assets.svgs.borrow().get(src) {
         return svg.clone();
+    }
+    if is_remote(src) {
+        remote_ready(vm, low, src, true);
+        thread_local! {
+            static NOTHING: Arc<SvgData> = Arc::new(
+                SvgData::new(&b"<svg xmlns='http://www.w3.org/2000/svg'/>"[..]).expect("empty svg"),
+            );
+        }
+        return NOTHING.with(Clone::clone);
     }
     let bytes = match src.strip_prefix("code:") {
         Some(code) => Ok(code.as_bytes().to_vec()),
         None => {
             let path = resolve_path(vm, src);
-            std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))
+            low.assets
+                .read(src, &path)
+                .map_err(|e| format!("{}: {e}", path.display()))
         }
     };
     let parsed = bytes.and_then(|b| SvgData::new(b).map_err(|e| format!("{src}: {e}")));
@@ -1241,6 +2096,16 @@ fn load_svg(vm: &Vm, low: &Lowering, src: &str) -> Arc<SvgData> {
             )
         }
     }
+}
+
+/// The modifier keys held, as a script sees them.
+fn modifiers_table(lua: &mlua::Lua, held: zgui::input::Modifiers) -> mlua::Result<mlua::Table> {
+    let t = lua.create_table()?;
+    t.set("shift", held.shift)?;
+    t.set("ctrl", held.control)?;
+    t.set("alt", held.alt)?;
+    t.set("meta", held.meta)?;
+    Ok(t)
 }
 
 fn key_name(key: &Key) -> String {
@@ -1294,6 +2159,7 @@ fn with_events(
                 .map_or((0., 0.), |b| (b.x, b.y));
             (x - origin.0, y - origin.1)
         };
+        let held = event.pointer_modifiers();
         let point = |x: f32, y: f32| -> mlua::Result<mlua::Table> {
             let (lx, ly) = local(x, y);
             let t = lua.create_table()?;
@@ -1301,6 +2167,10 @@ fn with_events(
             t.set("y", y)?;
             t.set("local_x", lx)?;
             t.set("local_y", ly)?;
+            t.set("shift", held.shift)?;
+            t.set("ctrl", held.control)?;
+            t.set("alt", held.alt)?;
+            t.set("meta", held.meta)?;
             Ok(t)
         };
         if captures
@@ -1314,6 +2184,11 @@ fn with_events(
         {
             event.capture_pointer_unless_taken();
         }
+        // A child's events reach this node going down and coming back up:
+        // the handlers hear them once, as they bubble.
+        if event.phase == EventPhase::Capture {
+            return;
+        }
         match &event.event {
             InputEvent::PointerDown {
                 x,
@@ -1321,6 +2196,8 @@ fn with_events(
                 button: PointerButton::Primary,
             } => {
                 if let (Some(h), Ok(p)) = (&press, point(*x, *y)) {
+                    // The press's count: 2 for a double click's second.
+                    let _ = p.set("clicks", event.click_count());
                     run(h, &vm, &actions, p);
                 }
             }
@@ -1361,6 +2238,8 @@ fn with_events(
                         t.set("alt", modifiers.alt)?;
                         t.set("meta", modifiers.meta)?;
                         t.set("repeat", *repeat)?;
+                        t.set("code", event.key_code())?;
+                        t.set("editing", handle.get().is_some_and(|h| h.editing()))?;
                         Ok(t)
                     });
                     if let Ok(t) = table
@@ -1555,11 +2434,13 @@ fn run(
 
 /// A source with its Lua function or animation detached from the node, so a
 /// reactive closure can own it.
+#[derive(Clone)]
 enum Owned {
     Lit(Lit),
     State(Signal<Value>),
     Computed(mlua::Function),
     Anim(Option<Value>, Option<Value>),
+    Variant(Rc<crate::variants::Selection>, Prop),
 }
 fn resolve_owned(source: &Source) -> Owned {
     match source {
@@ -1567,11 +2448,41 @@ fn resolve_owned(source: &Source) -> Owned {
         Source::State(s) => Owned::State(s.clone()),
         Source::Computed(f) => Owned::Computed(f.clone()),
         Source::Anim(a) => Owned::Anim(a.from.clone(), a.to.clone()),
+        Source::Variant(selection, prop) => Owned::Variant(selection.clone(), *prop),
     }
+}
+/// A style's value now. What a function returns is checked by the design
+/// lint, unless it is `ui.raw`.
+fn resolve_style(source: &Owned, prop: Prop, scalar: Option<&Signal<f32>>, vm: &Vm) -> Option<Lit> {
+    if let Owned::Computed(f) = source
+        && crate::design::mode(&vm.lua) != crate::DesignLint::Off
+    {
+        let value = vm
+            .call::<mlua::Value>(f, ())
+            .map_err(|e| vm.report(e))
+            .ok()?;
+        let raw = crate::design::is_raw(&value);
+        let value = vm.lua.unpack::<Value>(value).ok()?;
+        let lit = lit(&value, prop.ty())?;
+        if !raw {
+            let name = prop.name();
+            if let Err(message) = crate::design::check_returned(&vm.lua, f, prop, name, &lit) {
+                vm.report(mlua::Error::runtime(message));
+                return None;
+            }
+        }
+        return Some(lit);
+    }
+    resolve(source, prop.ty(), scalar, vm)
 }
 fn resolve(source: &Owned, ty: Ty, scalar: Option<&Signal<f32>>, vm: &Vm) -> Option<Lit> {
     match source {
         Owned::Lit(l) => Some(l.clone()),
+        Owned::Variant(selection, prop) => selection
+            .current()
+            .props
+            .iter()
+            .find_map(|(p, l)| (p == prop).then(|| l.clone())),
         Owned::State(s) => s.with(|v| lit(v, ty)),
         Owned::Computed(f) => vm
             .call::<Value>(f, ())
@@ -1581,7 +2492,13 @@ fn resolve(source: &Owned, ty: Ty, scalar: Option<&Signal<f32>>, vm: &Vm) -> Opt
         Owned::Anim(from, to) => {
             let t = scalar?.get();
             match (from, to) {
-                (Some(a), Some(b)) => lerp(&lit(a, ty)?, &lit(b, ty)?, t),
+                (Some(a), Some(b)) => {
+                    let (a, b) = (lit(a, ty)?, lit(b, ty)?);
+                    match ty {
+                        Ty::Color => mix_theme(&a, &b, t).or_else(|| lerp(&a, &b, t)),
+                        _ => lerp(&a, &b, t),
+                    }
+                }
                 _ => Some(Lit::Num(t)),
             }
         }
@@ -1599,6 +2516,18 @@ fn resolve_value(source: &Owned, vm: &Vm) -> Value {
         }),
         _ => Value::Nil,
     }
+}
+/// `t` of the way between two colours, one or both theme tokens: a blend
+/// the node resolves from its theme, so it eases between theme colours and
+/// follows theme changes.
+fn mix_theme(a: &Lit, b: &Lit, t: f32) -> Option<Lit> {
+    use zgui::theme::Themed;
+    Some(match (a, b) {
+        (Lit::Token(a), Lit::Token(b)) => Lit::Mix(*a, Themed::Token(*b), t),
+        (Lit::Token(a), Lit::Color(b)) => Lit::Mix(*a, Themed::Value(*b), t),
+        (Lit::Color(a), Lit::Token(b)) => Lit::Mix(*b, Themed::Value(*a), 1. - t),
+        _ => return None,
+    })
 }
 fn lerp(a: &Lit, b: &Lit, t: f32) -> Option<Lit> {
     let mix = |x: f32, y: f32| x + (y - x) * t;
@@ -1666,23 +2595,240 @@ fn lower_text(text: &Text, vm: &Rc<Vm>) -> View {
         }
     }
 }
+/// A `ui.image` (out of `build`, as `lower_list` is).
+#[inline(never)]
+fn lower_image(kind: &Kind, vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
+    let Kind::Image {
+        label,
+        src,
+        fallback,
+    } = kind
+    else {
+        unreachable!("lower_image takes images")
+    };
+    // The picture, as a view (made again each time it shows).
+    let picture = {
+        let (src, vm2, low2, label) = (resolve_owned(src), vm.clone(), low.clone(), label.clone());
+        move || {
+            let (src, vm2, low2) = (src.clone(), vm2.clone(), low2.clone());
+            image_signal(label.clone(), move || {
+                let path = match resolve(&src, Ty::Str, None, &vm2) {
+                    Some(Lit::Str(path)) => path,
+                    _ => return placeholder(),
+                };
+                load_image(&vm2, &low2, &path).unwrap_or_else(placeholder)
+            })
+        }
+    };
+    match fallback {
+        None => picture(),
+        Some(fallback) => {
+            // The picture once a remote one has arrived (a local one
+            // at once), else the fallback.
+            let (src, vm2, low2) = (resolve_owned(src), vm.clone(), low.clone());
+            let shown = move || match resolve(&src, Ty::Str, None, &vm2) {
+                Some(Lit::Str(path)) if is_remote(&path) => {
+                    remote_status(&vm2, &low2, &path, false) == READY
+                }
+                Some(Lit::Str(_)) => true,
+                _ => false,
+            };
+            let (fallback, low3) = (fallback.clone(), low.clone());
+            zgui::compose::switch(shown, move |ready, _| {
+                if ready {
+                    picture().w_full().h_full()
+                } else {
+                    lower(&fallback, &low3).w_full().h_full()
+                }
+            })
+        }
+    }
+}
+
+/// A `ui.list` (kept out of `build`, which recurses: its locals would
+/// weigh on every level of a deep interface's stack).
+#[inline(never)]
+fn lower_list(kind: &Kind, vm: &Rc<Vm>, low: &Rc<Lowering>, cx: &mut Option<&mut Context>) -> View {
+    let Kind::List {
+        count,
+        height,
+        heights,
+        sticky,
+        sticky_top,
+        overscan,
+        build: builder,
+        offset,
+    } = kind
+    else {
+        unreachable!("lower_list takes lists")
+    };
+    let mut cx = cx.as_deref_mut();
+    let offset = match offset {
+        Some(offset) => bridge(need(&mut cx), offset, number, |x| Value::Num(x as f64)),
+        None => need(&mut cx).state(0_f32),
+    };
+    if let Some(heights) = heights {
+        let cx = need(&mut cx);
+        let rows = zgui::compose::VariableHeights::new(&cx.runtime(), 0, *height);
+        // Every height replaced when the list changes: linear, in Rust.
+        let (list, heights_vm, r) = (heights.clone(), vm.clone(), rows.clone());
+        cx.retain(cx.runtime().effect(move || {
+            let value = match &list {
+                crate::node::Heights::Lit(v) => v.clone(),
+                crate::node::Heights::State(s) => s.get(),
+                crate::node::Heights::Computed(f) => heights_vm
+                    .call::<Value>(f, ())
+                    .map_err(|e| heights_vm.report(e))
+                    .unwrap_or_default(),
+            };
+            let values = value.list().iter().map(|v| match v {
+                Value::Num(n) if n.is_finite() && *n > 0. => *n as f32,
+                _ => 1.,
+            });
+            let _ = r.replace(values);
+        }));
+        let list = {
+            let (builder, vm, low) = (builder.clone(), vm.clone(), low.clone());
+            variable_virtual_list(
+                offset.clone(),
+                rows.clone(),
+                *overscan,
+                |index| index,
+                move |_, index, cx| build_scoped(&vm, cx, &low, &builder, index + 1),
+            )
+        };
+        match sticky {
+            None => list,
+            Some(sticky) => sticky_list(
+                list,
+                sticky,
+                *sticky_top,
+                offset,
+                rows,
+                builder,
+                vm,
+                low,
+                cx,
+            ),
+        }
+    } else {
+        let (count, count_vm) = (Rc::new(resolve_owned(count)), vm.clone());
+        let (builder, vm, low) = (builder.clone(), vm.clone(), low.clone());
+        virtual_list(
+            offset,
+            *height,
+            *overscan,
+            move || match resolve(&count, Ty::Num, None, &count_vm) {
+                Some(Lit::Num(n)) => n.max(0.) as usize,
+                _ => 0,
+            },
+            |index| index,
+            // Each row owns what it makes, as `each` rows do.
+            move |_, index, cx| build_scoped(&vm, cx, &low, &builder, index + 1),
+        )
+    }
+}
+
+/// A variable list with sticky rows: the list, and over it the sticky row
+/// whose section covers the top of the view (the last one at or above it),
+/// built as any row is and pushed up as the next sticky row arrives: CSS's
+/// `position: sticky` for section headers, with the rows virtualized.
+#[allow(clippy::too_many_arguments)]
+fn sticky_list(
+    list: View,
+    sticky: &crate::node::Heights,
+    // How far below the top they stick (CSS's sticky `top`).
+    inset: f32,
+    offset: Signal<f32>,
+    rows: zgui::compose::VariableHeights,
+    builder: &mlua::Function,
+    vm: &Rc<Vm>,
+    low: &Rc<Lowering>,
+    cx: &mut Context,
+) -> View {
+    // The sticky rows, from 0, kept sorted.
+    let indices = cx.state(Rc::<[usize]>::from([]));
+    {
+        let (sticky, vm, indices) = (sticky.clone(), vm.clone(), indices.clone());
+        cx.retain(cx.runtime().effect(move || {
+            let value = match &sticky {
+                crate::node::Heights::Lit(v) => v.clone(),
+                crate::node::Heights::State(s) => s.get(),
+                crate::node::Heights::Computed(f) => vm
+                    .call::<Value>(f, ())
+                    .map_err(|e| vm.report(e))
+                    .unwrap_or_default(),
+            };
+            let mut list: Vec<usize> = value
+                .list()
+                .iter()
+                .filter_map(|v| v.as_f64().filter(|n| *n >= 1.).map(|n| n as usize - 1))
+                .collect();
+            list.sort_unstable();
+            list.dedup();
+            indices.set(list.into());
+        }));
+    }
+    // The sticky row in charge at the top, if any.
+    let current = {
+        let (offset, rows, indices) = (offset.clone(), rows.clone(), indices.clone());
+        move || -> Option<usize> {
+            let top = rows.row_at((offset.get() + inset).max(0.))?;
+            indices.with(|list| list.iter().rev().find(|&&i| i <= top).copied())
+        }
+    };
+    // How far the next sticky row pushes it up.
+    let shift = {
+        let (offset, rows, indices) = (offset.clone(), rows.clone(), indices.clone());
+        let current = current.clone();
+        move || -> f32 {
+            let Some(at) = current() else { return 0. };
+            let height = rows.row_height(at).unwrap_or(0.);
+            let next = indices.with(|list| list.iter().find(|&&i| i > at).copied());
+            match next {
+                Some(next) => (rows.row_offset(next) - offset.get() - inset - height).min(0.),
+                None => 0.,
+            }
+        }
+    };
+    let (builder, vm, low) = (builder.clone(), vm.clone(), low.clone());
+    let header = zgui::compose::switch(current, move |at, cx| match at {
+        Some(at) => build_scoped(&vm, cx, &low, &builder, at + 1),
+        None => div(),
+    });
+    overlay().child(list.w_full().h_full()).child(
+        column()
+            .absolute()
+            .top(inset)
+            .left(0.)
+            .right(0.)
+            .child(header)
+            .reactive_style(move || zgui::style::Styles::new().translate(0., shift())),
+    )
+}
+
 fn lower_rich(spans: &[Span], vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
     /// A span with its text and handler owned by the closure.
     struct Owned {
         text: Text,
         style: SpanStyle,
         click: Option<Handler>,
+        icon: Option<crate::node::SpanIcon>,
     }
     #[derive(Clone, Copy)]
     struct SpanStyle {
-        color: Option<Color>,
-        background: Option<Color>,
+        color: Option<zgui::theme::Themed<Color>>,
+        background: Option<zgui::theme::Themed<Color>>,
         size: Option<f32>,
         weight: Option<u16>,
         italic: bool,
         underline: bool,
         strike: bool,
         mono: bool,
+        padding: [f32; 2],
+        radius: f32,
+        underline_offset: Option<f32>,
+        hover: Option<(bool, Option<zgui::theme::Themed<Color>>)>,
     }
     let owned: Vec<Owned> = spans
         .iter()
@@ -1709,11 +2855,16 @@ fn lower_rich(spans: &[Span], vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
                 underline: s.underline,
                 strike: s.strike,
                 mono: s.mono,
+                padding: s.padding,
+                radius: s.radius,
+                underline_offset: s.underline_offset,
+                hover: s.hover,
             },
             click: s.click.clone(),
+            icon: s.icon.clone(),
         })
         .collect();
-    let (vm, actions) = (vm.clone(), low.actions.clone());
+    let (vm, actions, low) = (vm.clone(), low.actions.clone(), low.clone());
     rich_text_signal(move || {
         owned
             .iter()
@@ -1727,7 +2878,18 @@ fn lower_rich(spans: &[Span], vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
                     underline,
                     strike,
                     mono,
+                    padding,
+                    radius,
+                    underline_offset,
+                    hover,
                 } = span.style;
+                let decoration = || {
+                    let d = zgui::rich_text::Decoration::default();
+                    match underline_offset {
+                        Some(offset) => d.offset(offset),
+                        None => d,
+                    }
+                };
                 let mut out: TextSpan = text_span(render_text(&span.text, &vm));
                 if let Some(c) = color {
                     out = out.text_color(c);
@@ -1745,7 +2907,13 @@ fn lower_rich(spans: &[Span], vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
                     out = out.italic(true);
                 }
                 if underline {
-                    out = out.underline(Default::default());
+                    out = out.underline(decoration());
+                }
+                if let Some((underlined, color)) = hover {
+                    out = out.hover(zgui::compose::SpanHover {
+                        underline: underlined.then(decoration),
+                        text_color: color,
+                    });
                 }
                 if strike {
                     out = out.strikethrough(Default::default());
@@ -1753,10 +2921,34 @@ fn lower_rich(spans: &[Span], vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
                 if mono {
                     out = out.font_family(FontFamily::Monospace);
                 }
+                if padding != [0.; 2] {
+                    out = out.padding(padding[0], padding[1]);
+                }
+                if radius > 0. {
+                    out = out.radius(radius);
+                }
                 if let Some(handler) = &span.click {
                     let (handler, vm, actions) = (handler.clone(), vm.clone(), actions.clone());
                     out = out.on_click(move || {
                         run(&handler, &vm, &actions, ());
+                    });
+                }
+                if let Some(icon) = &span.icon {
+                    // Tracked: a remote icon shows once it comes.
+                    let data = load_svg(&vm, &low, &icon.src);
+                    // `"currentColor"`: the span's text colour.
+                    let (svg, tint) = match &icon.tint {
+                        Some(crate::value::Value::Str(s)) if &**s == "currentColor" => {
+                            (Arc::new(data.current_color()), None)
+                        }
+                        Some(tint) => (data, crate::node::themed_color(tint)),
+                        None => (data, None),
+                    };
+                    out = out.icon(zgui::compose::SpanIcon {
+                        svg,
+                        size: icon.size,
+                        gap: icon.gap,
+                        tint,
                     });
                 }
                 out
@@ -1881,6 +3073,18 @@ fn align(v: &str) -> Align {
 
 fn apply<S: Styled>(s: S, prop: Prop, lit: &Lit) -> S {
     use Prop::*;
+    if let Lit::Token(token) = lit {
+        return match token_field(prop) {
+            Some(field) => s.token(field, *token),
+            None => s,
+        };
+    }
+    if let Lit::Mix(from, to, t) = lit {
+        return match token_field(prop) {
+            Some(field) => s.token_mix(field, *from, *to, *t),
+            None => s,
+        };
+    }
     // Lengths: points, percentages (of the containing block) or auto.
     let len = |l: &Lit| match l {
         Lit::Len(l) => Some(*l),
@@ -1979,6 +3183,7 @@ fn apply<S: Styled>(s: S, prop: Prop, lit: &Lit) -> S {
             "between" | "space-between" => s.justify_between(),
             "around" | "space-around" => s.justify_around(),
             "evenly" | "space-evenly" => s.justify_evenly(),
+            "stretch" => s.justify_stretch(),
             _ => s.justify_start(),
         },
         (AlignSelf, Lit::Str(v)) => s.align_self(align(v)),
@@ -2032,6 +3237,9 @@ fn apply<S: Styled>(s: S, prop: Prop, lit: &Lit) -> S {
         (RoundedTl | RoundedTr | RoundedBr | RoundedBl, _) => s,
         (Border, Lit::Num(v)) => s.border(*v),
         (BorderColor, Lit::Color(c)) => s.border_color(*c),
+        (Outline, Lit::Num(v)) => s.outline_width(*v),
+        (OutlineColor, Lit::Color(c)) => s.outline_color(*c),
+        (OutlineOffset, Lit::Num(v)) => s.outline_offset(*v),
         (BorderDash, Lit::Pair(length, gap)) => {
             s.border_style(zgui::decoration::BorderStyle::Dashed {
                 length: *length,
@@ -2039,6 +3247,7 @@ fn apply<S: Styled>(s: S, prop: Prop, lit: &Lit) -> S {
             })
         }
         (Shadow, Lit::Shadows(shadows)) => s.shadows(shadows.clone()),
+        (InsetShadow, Lit::Shadows(shadows)) => s.inset_shadows(shadows.clone()),
         (Opacity, Lit::Num(v)) => s.opacity(v.clamp(0., 1.)),
         (Blur, Lit::Num(v)) => s.filter_blur(v.max(0.)),
         (BackdropBlur, Lit::Num(v)) => s.blur(v.max(0.)),
@@ -2047,6 +3256,8 @@ fn apply<S: Styled>(s: S, prop: Prop, lit: &Lit) -> S {
         (Saturate, Lit::Num(v)) => s.saturate(*v),
         (Fade, Lit::Pair(top, bottom)) => s.fade_edges(*top, *bottom),
         (FadeX, Lit::Pair(left, right)) => s.fade_edges_x(*left, *right),
+        (FadeOverflow, Lit::Bool(v)) => s.fade_overflow(*v),
+        (Snap, Lit::Bool(v)) => s.snap(*v),
         // `{ top, right, bottom, left }` in points; negative reaches past the box.
         (ClipInset, Lit::Corners(c)) => {
             s.clip_inset(c.top_left, c.top_right, c.bottom_right, c.bottom_left)
@@ -2086,6 +3297,12 @@ fn apply<S: Styled>(s: S, prop: Prop, lit: &Lit) -> S {
         (Lines, Lit::Num(v)) => s.line_clamp(*v as u32),
         (LineHeight, Lit::Num(v)) => s.line_height(*v),
         (LetterSpacing, Lit::Num(v)) => s.letter_spacing(*v),
+        (Underline, Lit::Bool(v)) => s.text_underline(*v),
+        (UnderlineOffset, Lit::Num(v)) => s.underline_offset(*v),
+        // Every digit one width, so changing numbers hold still.
+        (Tabular, Lit::Bool(true)) => {
+            s.font_features(zgui::text_layout::FontFeatures::new([(*b"tnum", 1)]))
+        }
         _ => s,
     }
 }
@@ -2128,19 +3345,74 @@ struct Entry {
     value: Value,
     exiting: bool,
     animate_in: bool,
+    /// Holds the presence's place while `mode = "wait"` waits for what
+    /// leaves (an empty box: what leaves lies over it).
+    placeholder: bool,
 }
 #[derive(Default)]
 struct Present {
     entries: Vec<Entry>,
     next: u64,
-    elements: HashMap<u64, Rc<Element>>,
+    elements: HashMap<u64, (Rc<Element>, NodeHandle)>,
     /// `mode = "wait"`: the value to show once the leaving content is gone.
     waiting: Option<Value>,
 }
+impl Present {
+    fn push(&mut self, value: Value, animate_in: bool, placeholder: bool) {
+        let id = self.next;
+        self.next += 1;
+        self.entries.push(Entry {
+            id,
+            value,
+            exiting: false,
+            animate_in,
+            placeholder,
+        });
+    }
+}
+
+/// Properties that make a presence a box of its own, which its content
+/// fills: without them it lays out as its content, as if in its place.
+const BOX: &[Prop] = &[
+    Prop::W,
+    Prop::H,
+    Prop::Size,
+    Prop::MinW,
+    Prop::MaxW,
+    Prop::MinH,
+    Prop::MaxH,
+    Prop::WFull,
+    Prop::HFull,
+    Prop::Aspect,
+    Prop::Absolute,
+    Prop::Top,
+    Prop::Left,
+    Prop::Right,
+    Prop::Bottom,
+    Prop::P,
+    Prop::Px,
+    Prop::Py,
+    Prop::Pt,
+    Prop::Pr,
+    Prop::Pb,
+    Prop::Pl,
+    Prop::Grow,
+    Prop::Shrink,
+    Prop::Basis,
+    Prop::AlignSelf,
+    Prop::ColStart,
+    Prop::RowStart,
+    Prop::ColSpan,
+    Prop::RowSpan,
+    Prop::ColSpanFull,
+    Prop::RowSpanFull,
+];
 
 /// `ui.presence`: content for the current value. When the value changes
 /// the new content mounts and plays `enter`; the old leaves the flow
-/// (positioned where it was) and plays `exit`, then unmounts.
+/// (positioned where it was, at the size it had) and plays `exit`, then
+/// unmounts. With sizing of its own (`boxed`) it is a box the content
+/// fills; otherwise the content lays out as if it stood in its place.
 #[allow(clippy::too_many_arguments)]
 fn presence(
     cx: &mut Context,
@@ -2150,6 +3422,7 @@ fn presence(
     exit: Option<mlua::Table>,
     wait: bool,
     initial: bool,
+    boxed: bool,
     vm: &Rc<Vm>,
     low: &Rc<Lowering>,
 ) -> View {
@@ -2202,14 +3475,8 @@ fn presence(
                     .take()
                     .filter(|_| st.entries.iter().all(|e| !e.exiting))
                 {
-                    let id = st.next;
-                    st.next += 1;
-                    st.entries.push(Entry {
-                        id,
-                        value,
-                        exiting: false,
-                        animate_in: true,
-                    });
+                    st.entries.retain(|e| !e.placeholder);
+                    st.push(value, true, false);
                 }
             }
             publish();
@@ -2230,39 +3497,60 @@ fn presence(
             let leaving = {
                 let mut st = state.borrow_mut();
                 let first = st.entries.is_empty() && st.waiting.is_none();
-                if st.entries.iter().any(|e| !e.exiting && e.value == value) {
+                if st
+                    .entries
+                    .iter()
+                    .any(|e| !e.exiting && !e.placeholder && e.value == value)
+                {
                     return;
                 }
                 let mut leaving = Vec::new();
-                for e in st.entries.iter_mut().filter(|e| !e.exiting) {
+                for e in st
+                    .entries
+                    .iter_mut()
+                    .filter(|e| !e.exiting && !e.placeholder)
+                {
                     e.exiting = true;
                     leaving.push(e.id);
                 }
                 if wait && st.entries.iter().any(|e| e.exiting) {
                     st.waiting = Some(value);
+                    if !st.entries.iter().any(|e| e.placeholder) {
+                        st.push(Value::Nil, false, true);
+                    }
                 } else {
-                    let id = st.next;
-                    st.next += 1;
-                    st.entries.push(Entry {
-                        id,
-                        value,
-                        exiting: false,
-                        animate_in: !first || initial,
-                    });
+                    st.entries.retain(|e| !e.placeholder);
+                    st.push(value, !first || initial, false);
                 }
                 leaving
             };
             for id in leaving {
-                let element = state.borrow().elements.get(&id).cloned();
-                match (element, &exit) {
-                    (Some(element), Some(exit)) => {
-                        // Out of the flow, where it was: what replaces it
-                        // decides the size from now on.
+                let mounted = state.borrow().elements.get(&id).cloned();
+                match (mounted, &exit) {
+                    (Some((element, handle)), Some(exit)) => {
+                        // Out of the flow, where it was and as large: what
+                        // replaces it decides the size from now on.
+                        let scene = handle.scene().filter(|_| handle.is_mounted());
+                        let size = scene.as_ref().map_or((0., 0.), |scene| {
+                            let b = scene.borrow().bounds(handle.node());
+                            (b.width, b.height)
+                        });
+                        if let Some(scene) = &scene {
+                            scene.borrow_mut().set_contents(handle.node(), false);
+                        }
+                        // A one-cell grid holds the content at that size,
+                        // flex-sized content included.
+                        let px = |v: f32| Lit::Len(zgui::layout::Length::Px(v));
                         for (prop, lit) in [
                             (Prop::Absolute, Lit::Bool(true)),
-                            (Prop::Top, Lit::Len(zgui::layout::Length::Px(0.))),
-                            (Prop::Left, Lit::Len(zgui::layout::Length::Px(0.))),
-                            (Prop::Right, Lit::Len(zgui::layout::Length::Px(0.))),
+                            (Prop::Top, px(0.)),
+                            (Prop::Left, px(0.)),
+                            (Prop::W, px(size.0)),
+                            (Prop::H, px(size.1)),
+                            (Prop::Grid, Lit::Bool(true)),
+                            (Prop::Cols, Lit::Num(1.)),
+                            (Prop::Rows, Lit::Num(1.)),
+                            (Prop::Items, Lit::Str("stretch".into())),
                         ] {
                             element.set_style(prop, lit);
                         }
@@ -2288,45 +3576,71 @@ fn presence(
         change_runtime.untracked(|| change(current));
     }));
     let (vm, low) = (vm.clone(), low.clone());
-    overlay().w_full().child(
-        keyed(
-            move || shown.get(),
-            move |id, cx| {
-                let (value, animate_in) = state
-                    .borrow()
-                    .entries
-                    .iter()
-                    .find(|e| e.id == id)
-                    .map_or((Value::Nil, false), |e| (e.value.clone(), e.animate_in));
-                // Nothing shows for nil: `presence(cond and "x" or nil, …)`
-                // enters and exits one piece of content.
-                let content = if value == Value::Nil {
-                    div()
-                } else {
-                    build_scoped(&vm, cx, &low, &builder, value)
-                };
-                let element = Element::new(&low.runtime, None, Rc::new([]), "presence");
-                let (state, enter, play, vm) =
-                    (state.clone(), enter.clone(), play.clone(), vm.clone());
-                let mounted = element.clone();
-                // Content fills the presence's box: what sizes the presence
-                // (its own props) sizes it.
-                element_view(
-                    column().items_stretch().w_full().h_full().child(content),
-                    element,
-                    &low,
-                    move |_| {
-                        state.borrow_mut().elements.insert(id, mounted.clone());
-                        if let (true, Some(enter)) = (animate_in, &enter)
-                            && let Err(e) = play(&mounted, enter, None)
-                        {
-                            vm.report(e);
-                        }
-                    },
-                )
-            },
-        )
-        .w_full()
-        .h_full(),
+    // The content lays out as if it stood where the presence does (or in
+    // the presence's box): the region and each entry's wrapper are contents
+    // nodes, and what leaves lies over the current content.
+    let showing = {
+        let (state, shown) = (state.clone(), shown.clone());
+        move || {
+            shown.with(|_| ());
+            state.borrow().entries.iter().any(|e| e.value != Value::Nil)
+        }
+    };
+    let region = keyed(
+        move || shown.get(),
+        move |id, cx| {
+            let (value, animate_in) = state
+                .borrow()
+                .entries
+                .iter()
+                .find(|e| e.id == id)
+                .map_or((Value::Nil, false), |e| (e.value.clone(), e.animate_in));
+            // Nothing shows for nil: `presence(cond and "x" or nil, …)`
+            // enters and exits one piece of content.
+            let content = if value == Value::Nil {
+                div()
+            } else {
+                build_scoped(&vm, cx, &low, &builder, value)
+            };
+            let element = Element::new(&low.runtime, None, Rc::new([]), "presence");
+            let (state, enter, play, vm) = (state.clone(), enter.clone(), play.clone(), vm.clone());
+            let mounted = element.clone();
+            element_view(
+                // Until it leaves (see `change`).
+                column().contents().child(content),
+                element,
+                &low,
+                move |handle| {
+                    state
+                        .borrow_mut()
+                        .elements
+                        .insert(id, (mounted.clone(), handle));
+                    if let (true, Some(enter)) = (animate_in, &enter)
+                        && let Err(e) = play(&mounted, enter, None)
+                    {
+                        vm.report(e);
+                    }
+                },
+            )
+        },
     )
+    .contents();
+    if boxed {
+        // Its content fills it, in both directions, unless it sizes itself.
+        // Showing nothing, the box is not there for the pointer (a sheet's
+        // full-window box over the panes while it is put away).
+        // Showing, it inherits (a presence in a pass-through layer stays
+        // pass-through).
+        cell()
+            .pointer_events_inherit_when(move || (!showing()).then_some(false))
+            .child(region)
+    } else {
+        region
+    }
+}
+
+/// A box whose one in-flow child fills it in both directions unless it
+/// sizes itself: a one-cell grid, whose items stretch.
+fn cell() -> View {
+    column().grid().grid_cols(1).grid_rows(1).items_stretch()
 }

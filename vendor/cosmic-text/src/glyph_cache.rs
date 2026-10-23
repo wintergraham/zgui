@@ -29,6 +29,8 @@ pub struct CacheKey {
     pub y_bin: SubpixelBin,
     /// Font weight
     pub font_weight: fontdb::Weight,
+    /// zgui: optical size (pixels; 0 for the font's default)
+    pub font_optical: u16,
     /// [`CacheKeyFlags`]
     pub flags: CacheKeyFlags,
 }
@@ -40,6 +42,7 @@ impl CacheKey {
         font_size: f32,
         pos: (f32, f32),
         weight: fontdb::Weight,
+        optical: u16,
         flags: CacheKeyFlags,
     ) -> (Self, i32, i32) {
         let (x, x_bin) = SubpixelBin::new(pos.0);
@@ -53,6 +56,7 @@ impl CacheKey {
                 y_bin,
                 flags,
                 font_weight: weight,
+                font_optical: optical,
             },
             x,
             y,

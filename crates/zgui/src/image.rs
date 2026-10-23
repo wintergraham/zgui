@@ -6,7 +6,7 @@ use std::sync::{
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 pub(crate) fn next_identity() -> Result<u64, &'static str> {
     NEXT_ID
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
         .map_err(|_| "image identity exhausted")
 }
 #[derive(Debug)]

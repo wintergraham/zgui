@@ -1,5 +1,6 @@
 use zgui::scene::{
-    Align, BoxShadow, Color, Insets, Layout, NodeKind, QuadStyle, Rect, Scene, Style, Transform,
+    Align, BoxShadow, Color, Insets, Justify, Layout, NodeKind, QuadStyle, Rect, Scene, Style,
+    Transform,
 };
 
 fn edges() -> Insets {
@@ -72,6 +73,8 @@ fn asymmetric_padding_constrains_flex_and_reflows_on_resize() {
         let mut style = scene.style(scene.root());
         style.padding_edges = Some(edges());
         style.align = Align::Stretch;
+        // An overlay fills down by `justify` (rows and columns ignore it).
+        style.justify = Justify::Stretch;
         scene.set_style(scene.root(), style);
         let child = scene.append(
             scene.root(),

@@ -17,13 +17,14 @@ use winit::{
     dpi::{LogicalPosition, LogicalSize, PhysicalSize},
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
-    keyboard::{Key as WKey, NamedKey},
+    keyboard::{Key as WKey, KeyCode, NamedKey, PhysicalKey},
     raw_window_handle::{HasDisplayHandle, RawDisplayHandle},
     window::{CursorIcon, Window, WindowId},
 };
 use zgui::{
     frame::{Frame, FrameClock},
     input::{InputEvent, Key, Modifiers, PointerButton},
+    native_view::PointerStep,
     reactive::Signal,
     scene::{NodeId, Rect},
     semantics::Role,
@@ -50,6 +51,17 @@ pub struct WindowOptions {
     /// example to save power. Input-driven redraws are not limited. `None`
     /// follows the display.
     pub max_frame_rate: Option<f64>,
+    /// The title bar's style (macOS; other platforms keep theirs).
+    pub titlebar: crate::Titlebar,
+    /// A frosted desktop behind the window (macOS): the window is then
+    /// transparent, whatever `transparent` says.
+    pub glass: Option<crate::Glass>,
+}
+impl WindowOptions {
+    /// Whether the window is transparent where zgui paints nothing.
+    pub fn is_transparent(&self) -> bool {
+        self.transparent || self.glass.is_some()
+    }
 }
 impl Default for WindowOptions {
     fn default() -> Self {
@@ -65,6 +77,8 @@ impl Default for WindowOptions {
             bounds: None,
             display: None,
             max_frame_rate: None,
+            titlebar: crate::Titlebar::Standard,
+            glass: None,
         }
     }
 }
@@ -96,6 +110,7 @@ enum Event {
 #[derive(Debug)]
 enum WindowCommand {
     Bounds(crate::WindowBounds),
+    PointerPassthrough(bool),
     Fullscreen(bool),
     Decorations(bool),
     MinSize(Option<(f64, f64)>),
@@ -108,6 +123,11 @@ enum WindowCommand {
     Visible(bool),
     Focus,
     MaxFrameRate(Option<f64>),
+    ContextMenu {
+        entries: Vec<crate::AppMenuEntry>,
+        x: f64,
+        y: f64,
+    },
 }
 #[derive(Debug)]
 struct WindowState {
@@ -132,8 +152,11 @@ impl WindowState {
             WindowCommand::Bounds(bounds) => options.bounds = Some(*bounds),
             WindowCommand::Fullscreen(value) => options.fullscreen = *value,
             WindowCommand::Decorations(value) => options.decorations = *value,
+            WindowCommand::PointerPassthrough(_) => {}
             WindowCommand::MinSize(value) => options.min_size = *value,
-            WindowCommand::Drag | WindowCommand::RefreshInfo => {}
+            WindowCommand::Drag
+            | WindowCommand::RefreshInfo
+            | WindowCommand::ContextMenu { .. } => {}
             WindowCommand::Title(title) => options.title.clone_from(title),
             WindowCommand::Size(width, height) => {
                 options.width = *width;
@@ -210,6 +233,12 @@ impl WindowHandle {
     pub fn set_decorations(&self, decorations: bool) {
         self.command(WindowCommand::Decorations(decorations));
     }
+    /// Let the real pointer pass through to whatever lies behind the window
+    /// (a tool's window that must not hear the person's mouse); input
+    /// dispatched to it in code still arrives.
+    pub fn set_pointer_passthrough(&self, passthrough: bool) {
+        self.command(WindowCommand::PointerPassthrough(passthrough));
+    }
     pub fn set_min_inner_size(&self, size: Option<(f64, f64)>) {
         if size.is_none_or(|(w, h)| valid_window_size(w, h)) {
             self.command(WindowCommand::MinSize(size));
@@ -237,6 +266,13 @@ impl WindowHandle {
                 .proxy
                 .send_event(Event::WindowCommand(self.token, command));
         }
+    }
+    /// Show `entries` as a native pop-up menu at `(x, y)`, in points from the
+    /// top left of the window's content (macOS; elsewhere it does nothing).
+    /// A chosen item arrives through the window's menu action handler, and
+    /// the press that opened the menu ends when it closes.
+    pub fn show_context_menu(&self, entries: Vec<crate::AppMenuEntry>, x: f64, y: f64) {
+        self.command(WindowCommand::ContextMenu { entries, x, y });
     }
     /// Change the native and accessible window title, including while suspended.
     pub fn set_title(&self, title: impl Into<String>) {
@@ -288,9 +324,18 @@ impl WindowHandle {
     pub fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
     }
+    /// Repaint the whole window on its next frame.
     pub fn request_redraw(&self) {
         if !self.closed.load(Ordering::Acquire) {
             let _ = self.proxy.send_event(Event::Redraw(self.token));
+        }
+    }
+    /// Run the window's loop once: what changed since (input dispatched
+    /// from elsewhere, state set off the loop) is laid out and painted as
+    /// a frame of its own would be, its damage alone.
+    pub fn wake(&self) {
+        if !self.closed.load(Ordering::Acquire) {
+            let _ = self.proxy.send_event(Event::Wake(self.token));
         }
     }
 }
@@ -394,6 +439,12 @@ pub struct WindowContext {
     /// Display-paced animation frames for this window. Components reach it
     /// through `Context::frames`.
     pub frames: FrameClock,
+    /// The layout inspector (`zgui::inspect`): Ctrl+Option+Cmd+I on macOS,
+    /// Ctrl+Alt+Shift+I elsewhere, or `ZGUI_INSPECT=1`, toggles it; call
+    /// `set_enabled` to turn it on from code. Components reach it as a
+    /// service (`Context::try_service`), as `zgui-script` does to label
+    /// what it creates. Off, it costs nothing.
+    pub inspector: zgui::inspect::Inspector,
     natives: zgui::native_view::NativeViews,
     #[allow(dead_code)]
     native_diagnostics: crate::native_host::NativeDiagnosticsHandle,
@@ -455,9 +506,24 @@ impl WindowContext {
         let runner = zgui::compose::TaskRunner::new(move |future| {
             zgui::compose::TaskToken::new(tasks.spawn_scoped(future), |task| task.is_finished())
         });
+        // The clipboard and file dialogs, for what asks (zgui-script's
+        // `ui.clipboard`, `ui.open_files`).
+        let platform = zgui::platform::PlatformService(Rc::new(crate::platform::Desktop {
+            clipboard: self.windows.clipboard.clone(),
+            dialogs: self.dialogs.clone(),
+        }));
         self.ui.render(zgui::compose::provide(
             self.frames.clone(),
-            zgui::compose::provide(runner, zgui::compose::provide(self.natives.clone(), view)),
+            zgui::compose::provide(
+                runner,
+                zgui::compose::provide(
+                    self.natives.clone(),
+                    zgui::compose::provide(
+                        self.inspector.clone(),
+                        zgui::compose::provide(platform, view),
+                    ),
+                ),
+            ),
         ))
     }
     /// This window's mounted native views (web pages): provided to the
@@ -641,6 +707,10 @@ fn sleep_until(at: std::time::Instant) {
         std::thread::sleep(at - now);
     }
 }
+/// How long after a resize frames skip the refresh-point wait (the renderer
+/// presents on the plain layer for as long: `zgui_gpu`'s `RESIZE_SETTLE`).
+#[cfg(target_os = "macos")]
+const RESIZE_SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
 /// The refresh point steady frames present at (see `Host::refresh_grid`),
 /// and when they render before it.
 #[cfg(target_os = "macos")]
@@ -829,6 +899,13 @@ enum StartupTrim {
     At(std::time::Instant),
     Done,
 }
+/// The system's light or dark appearance, as zgui's themes take it.
+fn appearance_of(theme: winit::window::Theme) -> zgui::theme::Appearance {
+    match theme {
+        winit::window::Theme::Light => zgui::theme::Appearance::Light,
+        winit::window::Theme::Dark => zgui::theme::Appearance::Dark,
+    }
+}
 struct Host {
     #[cfg(target_os = "linux")]
     file_surface: Option<u32>,
@@ -877,6 +954,12 @@ struct Host {
     /// (see `Host::refresh_grid`).
     #[cfg(target_os = "macos")]
     presented_at: Option<std::time::Instant>,
+    /// When the window last changed size: live-resize frames are drawn
+    /// inside AppKit's resize transaction, which shows them with the new
+    /// frame, so they skip the refresh-point wait (`refresh_grid`) that
+    /// would hold the next resize step back.
+    #[cfg(target_os = "macos")]
+    resized_at: Option<std::time::Instant>,
     #[cfg(target_os = "macos")]
     latch: Latch,
     frame_timer: crate::frame_source::FrameTimer,
@@ -899,6 +982,9 @@ struct Host {
     last_accessibility: Option<(u64, Option<NodeId>)>,
     accessibility_geometry_dirty: bool,
     native_cursor: Option<CursorIcon>,
+    /// The window's cursor rects are off (see `disable_cursor_rects`).
+    #[cfg(target_os = "macos")]
+    cursor_rects_off: bool,
     cursor_query: Option<((f32, f32), u64, Option<zgui::cursor::Cursor>)>,
     /// The pointer is over this window. Outside it, the cursor shape does not
     /// matter, so animating geometry need not be hit-tested every frame.
@@ -913,6 +999,11 @@ struct Host {
     scroll: crate::scroll_resample::ScrollResampler,
     /// Native views (web pages) over and under this window's zgui content.
     native: crate::native_host::NativeHost,
+    /// The theme's `background` when it changes, for the renderer's clear
+    /// colour, and the effect that watches it.
+    theme_background: Rc<std::cell::Cell<Option<zgui::scene::Color>>>,
+    applied_background: Option<zgui::scene::Color>,
+    _background_effect: Option<zgui::reactive::Effect>,
 }
 impl Host {
     fn new(options: WindowOptions, handle: WindowHandle, windows: WindowFactory) -> Self {
@@ -955,7 +1046,13 @@ impl Host {
                 let _ = wake.send_event(Event::Wake(token));
             }
         });
+        let inspector = zgui::inspect::Inspector::new();
+        {
+            let handle = handle.clone();
+            inspector.set_wake(move || handle.request_redraw());
+        }
         let context = WindowContext {
+            inspector,
             natives: native.natives.clone(),
             native_diagnostics: native.diagnostics.clone(),
             window_info,
@@ -1031,6 +1128,8 @@ impl Host {
             #[cfg(target_os = "macos")]
             presented_at: None,
             #[cfg(target_os = "macos")]
+            resized_at: None,
+            #[cfg(target_os = "macos")]
             latch: Latch::default(),
             frame_arrived: false,
             trim_at: None,
@@ -1044,11 +1143,16 @@ impl Host {
             last_accessibility: None,
             accessibility_geometry_dirty: true,
             native_cursor: None,
+            #[cfg(target_os = "macos")]
+            cursor_rects_off: false,
             cursor_query: None,
             pointer_inside: false,
             ime_geometry: None,
             ime_target: None,
             native,
+            theme_background: Rc::default(),
+            applied_background: None,
+            _background_effect: None,
         }
     }
     fn dispatch(&mut self, event: InputEvent) -> Result<(), zgui::widgets::LayoutFeedbackError> {
@@ -1159,7 +1263,21 @@ impl Host {
             .ui
             .advance_interactions(std::time::Instant::now())?;
         self.context.ui.try_prepare_frame()?;
+        // The layout inspector's overlay and warnings follow layout (and
+        // the pointer); off, this is one flag.
+        if self.context.inspector.active() {
+            let pointer = self.pointer_inside.then_some(self.cursor);
+            self.context.inspector.update(&self.context.ui, pointer);
+        }
         self.sync_ime_cancellation();
+        if let Some(color) = self.theme_background.take()
+            && self.applied_background != Some(color)
+            && let Some(renderer) = &mut self.renderer
+        {
+            self.applied_background = Some(color);
+            renderer.set_background(color);
+            self.force = true;
+        }
         let scene = self.context.ui.scene.clone();
         let mut scene = scene.borrow_mut();
         let report = scene.flush();
@@ -1234,6 +1352,8 @@ impl Host {
                 // change in one transaction (committed when it drops).
                 let transaction = self.native.begin();
                 self.native.present_overlay()?;
+                // Checked above; `self` is borrowed in between, so no `if let`.
+                #[allow(clippy::unnecessary_unwrap)]
                 let renderer = self.renderer.as_mut().expect("checked above");
                 let status = renderer.present_with_notify(|| {
                     window.pre_present_notify();
@@ -1243,6 +1363,8 @@ impl Host {
                     }
                 })?;
                 self.native.apply();
+                // Commits the transaction (macOS; elsewhere there is none).
+                #[allow(dropping_copy_types)]
                 drop(transaction);
                 #[cfg(target_os = "macos")]
                 {
@@ -1301,13 +1423,23 @@ impl Host {
             .map(native_cursor)
             .unwrap_or_else(|| cursor_for_role(role));
         // Over a native view, the view sets the cursor.
-        let over_native = ui
-            .input
-            .hovered()
-            .is_some_and(|node| self.native.is_native(node));
+        let over_native = self.native.pointer_over_native()
+            || ui
+                .input
+                .hovered()
+                .is_some_and(|node| self.native.is_native(node));
+        #[cfg(target_os = "macos")]
+        if !std::mem::replace(&mut self.cursor_rects_off, true) {
+            crate::native_host::disable_cursor_rects(&window);
+        }
         if over_native {
             self.native_cursor = None;
         } else if Some(cursor) != self.native_cursor {
+            // Only when zgui's own choice changes, so at a page's edge it never
+            // takes back a cursor the page has just set.
+            #[cfg(target_os = "macos")]
+            crate::native_host::set_cursor(&window, cursor);
+            #[cfg(not(target_os = "macos"))]
             window.set_cursor(cursor);
             self.native_cursor = Some(cursor);
         }
@@ -1435,6 +1567,21 @@ impl Host {
             content_never_moves_window();
             mouse_down::watch();
         }
+        let sized = self.options.bounds;
+        let radius =
+            crate::window_chrome::apply(&window, self.options.titlebar, self.options.glass);
+        if self.options.titlebar != crate::Titlebar::Standard {
+            // Content now spans the title bar: the window shrinks to give
+            // it the size asked for.
+            let _ = match sized {
+                Some(bounds) => {
+                    window.request_inner_size(PhysicalSize::new(bounds.size.0, bounds.size.1))
+                }
+                None => window
+                    .request_inner_size(LogicalSize::new(self.options.width, self.options.height)),
+            };
+        }
+        self.context.window_info.corner_radius.set(radius);
         self.x11 = window.display_handle().is_ok_and(|handle| {
             matches!(
                 handle.as_raw(),
@@ -1475,11 +1622,33 @@ impl Host {
         };
         self.scale_factor = window.scale_factor();
         renderer.set_scale_factor(self.scale_factor as f32);
-        renderer.set_background(if self.options.transparent {
-            zgui::scene::Color(0, 0, 0, 0)
+        let themes = self.context.ui.theme().clone();
+        // Glass windows are transparent too (`WindowOptions::is_transparent`).
+        if self.options.is_transparent() {
+            renderer.set_background(zgui::scene::Color(0, 0, 0, 0));
         } else {
-            self.context.ui.theme.background
-        });
+            let background = themes.root().color_untracked(zgui::theme::tok::BACKGROUND);
+            renderer.set_background(background);
+            self.applied_background = Some(background);
+            if self._background_effect.is_none() {
+                // The clear colour follows the theme: the effect hands a new
+                // background to the next frame and asks for that frame.
+                let theme = themes.root().clone();
+                let pending = self.theme_background.clone();
+                let redraw = window.clone();
+                let mut first = true;
+                self._background_effect = Some(self.context.ui.runtime.effect(move || {
+                    let color = theme.color(zgui::theme::tok::BACKGROUND);
+                    if !std::mem::take(&mut first) {
+                        pending.set(Some(color));
+                        redraw.request_redraw();
+                    }
+                }));
+            }
+        }
+        if let Some(appearance) = window.theme() {
+            themes.set_system_appearance(appearance_of(appearance));
+        }
         renderer.install_text(&mut self.context.ui.scene.borrow_mut());
         self.context.ui.refresh_text_geometry();
         self.renderer = Some(renderer);
@@ -1578,7 +1747,28 @@ impl Host {
             WindowCommand::Fullscreen(value) => {
                 window.set_fullscreen(value.then_some(winit::window::Fullscreen::Borderless(None)))
             }
+            WindowCommand::ContextMenu { entries, x, y } => {
+                #[cfg(target_os = "macos")]
+                {
+                    let shown = crate::app_menu::show_context_menu(window, &entries, x, y);
+                    self.context
+                        .window_info
+                        .last_request_error
+                        .set(shown.err().map(|e| e.0));
+                    // The menu's own tracking took the mouse-up: end the press that opened it.
+                    self.context
+                        .ui
+                        .dispatch(zgui::input::InputEvent::PointerCancel);
+                    // And it showed its own cursor: set zgui's again.
+                    self.native_cursor = None;
+                }
+                #[cfg(not(target_os = "macos"))]
+                let _ = (entries, x, y);
+            }
             WindowCommand::Decorations(value) => window.set_decorations(value),
+            WindowCommand::PointerPassthrough(value) => {
+                let _ = window.set_cursor_hittest(!value);
+            }
             WindowCommand::MinSize(value) => {
                 window.set_min_inner_size(value.map(|(w, h)| LogicalSize::new(w, h)))
             }
@@ -1649,8 +1839,48 @@ impl Host {
             WindowCommand::MaxFrameRate(_) => {}
         }
     }
+    /// A press in a `window_drag` region: move the window, or what a double
+    /// click on its title bar does.
+    fn window_gesture(
+        &mut self,
+        gesture: zgui::widgets::WindowGesture,
+    ) -> Result<(), zgui::widgets::LayoutFeedbackError> {
+        use zgui::widgets::WindowGesture;
+        let Some(window) = self.window.clone() else {
+            return Ok(());
+        };
+        #[cfg(target_os = "macos")]
+        {
+            // AppKit's own count: zgui's press tracking ends with a drag.
+            if gesture == WindowGesture::DoubleClick || mouse_down::click_count() == 2 {
+                crate::window_chrome::double_click(&window);
+            } else if mouse_down::drag(&window) {
+                // The window server has the press now: AppKit sends no
+                // release for it.
+                self.dispatch(InputEvent::PointerCancel)?;
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        match gesture {
+            WindowGesture::Drag => {
+                self.context
+                    .window_info
+                    .last_request_error
+                    .set(window.drag_window().err().map(|e| e.to_string()));
+            }
+            WindowGesture::DoubleClick => crate::window_chrome::double_click(&window),
+        }
+        Ok(())
+    }
     fn deactivate(&mut self) {
         self.context.ui.cancel_interactions();
+        // A window at the back hears no pointer moves: what it hovered
+        // has its leave now, not when the pointer next moves over it.
+        self.native.pointer_left();
+        self.context
+            .ui
+            .input
+            .dispatch(&self.context.ui.scene, InputEvent::PointerLeave);
         self.native_focused = false;
         self.ime_active = false;
         self.ime_restart = Default::default();
@@ -1698,6 +1928,8 @@ impl Host {
         self.frame_heartbeat = None;
         self.frame_redraw_requested = false;
         self.native.suspend();
+        // It redraws the window it was made with: the next one makes its own.
+        self._background_effect = None;
         self.window = None;
         self.force = true;
     }
@@ -1782,6 +2014,10 @@ impl Host {
                     if let Some(renderer) = &mut self.renderer {
                         renderer.resize(size.width, size.height);
                     }
+                    #[cfg(target_os = "macos")]
+                    {
+                        self.resized_at = Some(std::time::Instant::now());
+                    }
                     self.force = true;
                     // AppKit delivers live resizes synchronously and commits the
                     // new window frame when this callback returns. Paint now so
@@ -1822,10 +2058,25 @@ impl Host {
                 let p = position.to_logical::<f32>(self.scale_factor);
                 self.cursor = (p.x, p.y);
                 self.pointer_inside = true;
-                self.dispatch(InputEvent::PointerMove { x: p.x, y: p.y })?;
+                // Over a native view taking input zgui hears one leave, then
+                // nothing until the pointer is back (unless a press of
+                // zgui's follows it there).
+                let input = &self.context.ui.input;
+                let held = input.captured().is_some() || input.is_dragging();
+                match self.native.pointer_moved(p.x, p.y, held) {
+                    PointerStep::Move => {
+                        self.dispatch(InputEvent::PointerMove { x: p.x, y: p.y })?
+                    }
+                    PointerStep::Leave(_) => self.dispatch(InputEvent::PointerLeave)?,
+                    PointerStep::Over(_) => {}
+                }
             }
             WindowEvent::CursorLeft { .. } => {
                 self.pointer_inside = false;
+                // Outside, others set the cursor: back in, zgui sets its own
+                // again rather than trust what it last set.
+                self.native_cursor = None;
+                self.native.pointer_left();
                 self.dispatch(InputEvent::PointerLeave)?
             }
             WindowEvent::HoveredFile(path) => self.dispatch(InputEvent::FileHover {
@@ -1857,6 +2108,10 @@ impl Host {
                 } else {
                     InputEvent::PointerUp { x, y, button }
                 })?;
+                // A press in a `window_drag` region.
+                if let Some(gesture) = self.context.ui.take_window_gesture() {
+                    self.window_gesture(gesture)?;
+                }
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let (dx, dy) = wheel_delta(delta, self.scale_factor);
@@ -1877,8 +2132,20 @@ impl Host {
                     })?;
                 }
             }
-            WindowEvent::Focused(false) => self.deactivate(),
+            WindowEvent::Focused(false) => {
+                zgui_gpu::present_log::log(|| "window-focus false".into());
+                self.deactivate()
+            }
+            WindowEvent::ThemeChanged(appearance) => {
+                self.context
+                    .ui
+                    .theme()
+                    .set_system_appearance(appearance_of(appearance));
+            }
             WindowEvent::Focused(true) => {
+                zgui_gpu::present_log::log(|| "window-focus true".into());
+                // AppKit may have reset the cursor while another app had it.
+                self.native_cursor = None;
                 self.native_focused = true;
                 self.focus_memory.activate(&self.context.ui);
             }
@@ -1899,12 +2166,35 @@ impl Host {
             WindowEvent::KeyboardInput {
                 is_synthetic: true, ..
             } => {}
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state == ElementState::Pressed
+                    && event.physical_key == PhysicalKey::Code(KeyCode::KeyI)
+                    && inspector_shortcut(self.modifiers) =>
+            {
+                if !event.repeat {
+                    self.context.inspector.toggle();
+                    self.force = true;
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 let key = map_key(&event.logical_key);
                 let mut prevented = false;
                 if let Some(key) = key
                     && !self.ime_active
                 {
+                    // The physical key, as the DOM's `KeyboardEvent.code`.
+                    self.context
+                        .ui
+                        .input
+                        .set_key_code(match event.physical_key {
+                            PhysicalKey::Code(KeyCode::SuperLeft) => Some("MetaLeft".into()),
+                            PhysicalKey::Code(KeyCode::SuperRight) => Some("MetaRight".into()),
+                            PhysicalKey::Code(code) => Some(format!("{code:?}").into()),
+                            PhysicalKey::Unidentified(_) => None,
+                        });
                     if event.state == ElementState::Pressed {
                         prevented = self.dispatch_prevented(InputEvent::KeyDown {
                             key: key.clone(),
@@ -1920,6 +2210,7 @@ impl Host {
                             modifiers: self.modifiers,
                         })?;
                     }
+                    self.context.ui.input.set_key_code(None);
                 }
                 if event.state == ElementState::Pressed
                     && (!prevented || self.context.ui.input.has_pending_keys())
@@ -1954,6 +2245,11 @@ impl Host {
         // Native views' reports (navigation, script replies), and keyboard
         // focus they took or gave back, at this safe point.
         zgui::native_view::deliver_posted();
+        // Moves zgui heard through the native views' pointer monitor.
+        if let Some(pointer) = self.native.take_unheard_pointer() {
+            self.cursor = pointer;
+            self.pointer_inside = true;
+        }
         self.native.sync_focus(&self.context.ui);
         self.poll_frame_deadline(std::time::Instant::now());
         if self.scroll.pending() {
@@ -2071,6 +2367,13 @@ impl Host {
     #[cfg(target_os = "macos")]
     fn refresh_grid(&mut self) -> Option<(std::time::Instant, std::time::Duration)> {
         let now = std::time::Instant::now();
+        if self
+            .resized_at
+            .is_some_and(|at| now.duration_since(at) < RESIZE_SETTLE)
+        {
+            self.latch = Latch::default();
+            return None;
+        }
         let steady = self
             .presented_at
             .is_some_and(|at| now.duration_since(at) < STEADY_GAP);
@@ -2705,6 +3008,16 @@ impl ApplicationHandler<Event> for WindowManager {
         });
     }
 }
+/// The layout inspector's toggle, with I: Ctrl+Option+Cmd on macOS (no
+/// system or AppKit shortcut uses it), Ctrl+Alt+Shift elsewhere (where the
+/// Super key belongs to the desktop).
+fn inspector_shortcut(m: Modifiers) -> bool {
+    if cfg!(target_os = "macos") {
+        m.control && m.alt && m.meta && !m.shift
+    } else {
+        m.control && m.alt && m.shift && !m.meta
+    }
+}
 fn map_key(key: &WKey) -> Option<Key> {
     Some(match key {
         WKey::Character(k) if k.as_str() == " " => Key::Space,
@@ -2947,6 +3260,10 @@ mod mouse_down {
             )
         };
         std::mem::forget(monitor);
+    }
+    /// The last mouse-down's click count (2: a double click's second).
+    pub fn click_count() -> isize {
+        LAST.with(|last| last.borrow().as_ref().map_or(0, |event| event.clickCount()))
     }
     /// Start a window drag from the last mouse-down, if the button is still
     /// down; whether one started.

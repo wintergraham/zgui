@@ -345,6 +345,10 @@ pub(crate) struct Layer {
 /// each refresh or so, as no further frame may come to check it.
 struct Uncover {
     plain: Retained<CALayer>,
+    /// The video layer, kept all but transparent over a translucent window
+    /// until now (see `Layer::show`): shown in the transaction that clears
+    /// `plain`, so the two never show one frame twice.
+    video: Retained<CALayer>,
     queue: Retained<AnyObject>,
     reports_displayed: bool,
     shows: Rc<Cell<bool>>,
@@ -369,7 +373,12 @@ impl Uncover {
     extern "C" fn run(context: *mut c_void) {
         // SAFETY: `schedule` passed a boxed `Uncover`, for this call alone.
         let mut this = unsafe { Box::from_raw(context.cast::<Uncover>()) };
-        if this.generation.get() != this.expected || !this.shows.get() {
+        if this.generation.get() != this.expected {
+            this.pending.set(false);
+            return;
+        }
+        if !this.shows.get() {
+            transaction(|| this.video.setOpacity(1.));
             this.pending.set(false);
             return;
         }
@@ -381,14 +390,77 @@ impl Uncover {
             this.tries > 6
         };
         if shown || this.tries > 60 {
+            crate::present_log::log(|| format!("uncover tries={} confirmed={shown}", this.tries));
             // SAFETY: No contents is valid.
-            transaction(|| unsafe { this.plain.setContents(None) });
+            transaction(|| {
+                unsafe { this.plain.setContents(None) };
+                this.video.setOpacity(1.);
+            });
             this.shows.set(false);
             this.pending.set(false);
             return;
         }
         this.schedule();
     }
+}
+/// `ZGUI_PRESENT_LOG`: every 4 ms on the main queue, the presented state of
+/// `host` and its layers as Core Animation holds it (not as zgui believes
+/// it set it), logged when it changes.
+struct Sampler {
+    host: Retained<CALayer>,
+    last: String,
+}
+impl Sampler {
+    fn schedule(self: Box<Self>) {
+        // SAFETY: The main queue runs `run` once with the box, which it takes back.
+        unsafe {
+            dispatch_after_f(
+                dispatch_time(0, 4_000_000),
+                &raw const _dispatch_main_q,
+                Box::into_raw(self).cast(),
+                Self::run,
+            )
+        };
+    }
+    extern "C" fn run(context: *mut c_void) {
+        // SAFETY: `schedule` passed a boxed `Sampler`, for this call alone.
+        let mut this = unsafe { Box::from_raw(context.cast::<Sampler>()) };
+        let state = describe(&this.host);
+        if state != this.last {
+            crate::present_log::log(|| format!("layers {state}"));
+            this.last = state;
+        }
+        this.schedule();
+    }
+}
+fn describe(host: &CALayer) -> String {
+    let one = |layer: &CALayer| {
+        let contents: Option<Retained<AnyObject>> = unsafe { msg_send![layer, contents] };
+        format!(
+            "{}(op={:.3} hidden={} contents={})",
+            layer.class().name().to_str().unwrap_or("?"),
+            layer.opacity(),
+            layer.isHidden(),
+            contents.map_or("none".into(), |c| format!("{:p}", &*c)),
+        )
+    };
+    let mut out = format!("host[{}]", one(host));
+    let mut ancestor = host.superlayer();
+    let mut depth = 0;
+    while let Some(layer) = ancestor {
+        if layer.isHidden() || layer.opacity() < 1. {
+            out += &format!(" ancestor{depth}[{}]", one(&layer));
+        }
+        ancestor = layer.superlayer();
+        depth += 1;
+    }
+    if let Some(subs) = unsafe { host.sublayers() } {
+        for sub in subs.iter() {
+            out += " ";
+            out += &one(&sub);
+        }
+    }
+    out
 }
 #[link(name = "System", kind = "dylib")]
 unsafe extern "C" {
@@ -478,7 +550,7 @@ fn transaction(change: impl FnOnce()) {
     CATransaction::commit();
 }
 impl Video {
-    fn new(host: &CALayer, opaque: bool) -> Self {
+    fn new(host: &CALayer, opaque: bool, hidden: bool) -> Self {
         // SAFETY: AVFoundation (linked above) defines the class; `new` makes
         // a layer, a CALayer subclass.
         let layer: Retained<CALayer> = unsafe {
@@ -497,6 +569,8 @@ impl Video {
             let _: () = msg_send![&*layer, setPreventsDisplaySleepDuringVideoPlayback: false];
         }
         fill(&layer, host, opaque);
+        // Not 0: a layer the window server skips shows no frame.
+        layer.setOpacity(if hidden { 0.001 } else { 1. });
         // SAFETY: `sampleBufferRenderer` (macOS 14) returns the layer's
         // renderer; earlier systems enqueue to the layer itself.
         let queue = unsafe {
@@ -548,6 +622,13 @@ impl Layer {
         let plain = CALayer::new();
         fill(&plain, host, false);
         transaction(|| host.addSublayer(&plain));
+        if crate::present_log::enabled() {
+            Box::new(Sampler {
+                host: host.retain(),
+                last: String::new(),
+            })
+            .schedule();
+        }
         Self {
             host: host.retain(),
             plain,
@@ -573,11 +654,25 @@ impl Layer {
     pub fn show(&mut self, buffer: &Buffer, opaque: bool, steady: bool) {
         self.set_opaque(opaque);
         if steady && self.video.is_none() {
-            self.video = Some(Video::new(&self.host, opaque));
+            crate::present_log::log(|| {
+                format!(
+                    "video-start opaque={opaque} plain_shows={}",
+                    self.plain_shows.get()
+                )
+            });
+            // Over a translucent window, the plain layer's frame and the
+            // video layer's would blend twice (the window darkens for a
+            // refresh) between the video layer's first frame and clearing
+            // the plain one: it starts all but transparent (still drawn, so
+            // it says what it shows) and `Uncover` shows it as the plain
+            // layer clears. An opaque frame covers the one under it.
+            let hidden = !opaque && self.plain_shows.get();
+            self.video = Some(Video::new(&self.host, opaque, hidden));
         }
         let Some(video) = &self.video else {
             // SAFETY: An IOSurface is a layer's valid contents.
             let surface = &*buffer.surface as *const IOSurfaceRef as *const AnyObject;
+            crate::present_log::log(|| format!("plain-set surface={}", buffer.surface.id()));
             transaction(|| unsafe { self.plain.setContents(Some(&*surface)) });
             self.plain_shows.set(true);
             return;
@@ -588,6 +683,7 @@ impl Layer {
         }
         Box::new(Uncover {
             plain: self.plain.clone(),
+            video: video.layer.clone(),
             queue: video.queue.clone(),
             reports_displayed: video.reports_displayed,
             shows: self.plain_shows.clone(),
@@ -608,10 +704,14 @@ impl Layer {
         self.set_opaque(opaque);
         let video = self.video.take();
         if video.is_some() {
+            crate::present_log::log(|| "video-drop (plain takes over)".into());
             self.generation.set(self.generation.get() + 1);
         }
         // SAFETY: An IOSurface is a layer's valid contents.
         let surface = &*buffer.surface as *const IOSurfaceRef as *const AnyObject;
+        crate::present_log::log(|| {
+            format!("plain-set surface={} (show_plain)", buffer.surface.id())
+        });
         transaction(|| {
             unsafe { self.plain.setContents(Some(&*surface)) };
             if let Some(video) = &video {

@@ -167,6 +167,50 @@ impl CanvasCache {
 fn color(color: zgui::scene::Color) -> sk::Color {
     sk::Color::from_rgba8(color.0, color.1, color.2, color.3)
 }
+/// Stops that make tiny-skia, which interpolates straight colours, draw
+/// what interpolating premultiplied ones gives (as CSS and the GPU ramps
+/// do): a span between stops of differing alpha is cut into steps whose
+/// colours are the premultiplied mix, so a fade to transparent stays its
+/// colour instead of greying.
+fn premultiplied_stops(stops: &[zgui::canvas::GradientStop]) -> Vec<sk::GradientStop> {
+    const STEPS: usize = 16;
+    let mut out = Vec::with_capacity(stops.len());
+    for (i, stop) in stops.iter().enumerate() {
+        out.push(sk::GradientStop::new(stop.offset, color(stop.color)));
+        let Some(next) = stops.get(i + 1) else { break };
+        let (a, b) = (stop.color, next.color);
+        if a.3 == b.3 || next.offset <= stop.offset {
+            continue;
+        }
+        let premultiplied = |c: zgui::scene::Color| {
+            let alpha = c.3 as f32 / 255.;
+            [
+                c.0 as f32 * alpha,
+                c.1 as f32 * alpha,
+                c.2 as f32 * alpha,
+                alpha,
+            ]
+        };
+        let (pa, pb) = (premultiplied(a), premultiplied(b));
+        for step in 1..STEPS {
+            let f = step as f32 / STEPS as f32;
+            let mix: [f32; 4] = std::array::from_fn(|k| pa[k] + (pb[k] - pa[k]) * f);
+            let straight = |v: f32| {
+                if mix[3] > 0. {
+                    (v / mix[3] / 255.).clamp(0., 1.)
+                } else {
+                    0.
+                }
+            };
+            out.push(sk::GradientStop::new(
+                stop.offset + (next.offset - stop.offset) * f,
+                sk::Color::from_rgba(straight(mix[0]), straight(mix[1]), straight(mix[2]), mix[3])
+                    .unwrap_or(sk::Color::TRANSPARENT),
+            ));
+        }
+    }
+    out
+}
 fn point(point: Point) -> sk::Point {
     sk::Point::from_xy(point.x, point.y)
 }
@@ -275,10 +319,7 @@ pub fn rasterize(
                 sk::LinearGradient::new(
                     point(*start),
                     point(*end),
-                    stops
-                        .iter()
-                        .map(|s| sk::GradientStop::new(s.offset, color(s.color)))
-                        .collect(),
+                    premultiplied_stops(stops),
                     sk::SpreadMode::Pad,
                     sk::Transform::identity(),
                 )

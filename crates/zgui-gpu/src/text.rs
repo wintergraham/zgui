@@ -4,6 +4,15 @@ use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping};
 use std::{ops::Range, sync::Arc};
 use unicode_segmentation::UnicodeSegmentation;
 use zgui::scene::Rect;
+/// The width text wraps at: the box's, and a thousandth of a point more.
+/// A box sized to its text gets that width back through layout arithmetic
+/// (a bubble's padding added, then taken off), where a float's last bit
+/// can come out short and break a line that fits: "hi" in two lines. The
+/// measuring and drawing paths both wrap here, so they agree.
+pub fn wrap_width(width: Option<f32>) -> Option<f32> {
+    width.map(|w| if w.is_finite() { w + 1e-3 } else { w })
+}
+
 /// Validated TrueType/OpenType font or font collection, shared without copying
 /// its bytes between windows. Registration is additive; choose its family by name.
 #[derive(Clone, Debug)]
@@ -64,6 +73,11 @@ pub(crate) fn attrs(font: &zgui::text_layout::FontStyle, size: f32) -> Attrs<'_>
     let attrs = Attrs::new()
         .font_features(features)
         .family(family)
+        // Variable fonts with an optical size axis (Inter's `opsz`) take the
+        // font size, as browsers do (`font-optical-sizing: auto`): large
+        // titles get their display cut, tighter and narrower.
+        .optical(size.round().clamp(1., 1000.) as u16)
+        .masked(font.masked)
         .weight(cosmic_text::Weight(font.weight.clamp(1, 1000)))
         .style(if font.italic {
             cosmic_text::Style::Italic
@@ -215,7 +229,7 @@ impl ShapedText {
         let size = font_size.max(1.);
         let line_height = font.line_height.resolve(size);
         let mut buffer = Buffer::new_empty(Metrics::new(size, line_height));
-        buffer.set_size(width, None);
+        buffer.set_size(wrap_width(width), None);
         set_buffer_text(fonts, &mut buffer, &text, font, size);
         // Editors need a visual row for the caret after a final line ending;
         // add it unless cosmic-text already ended with that empty line.
@@ -621,7 +635,7 @@ impl CpuTextRaster {
     ) -> Vec<(i32, i32, cosmic_text::SwashImage)> {
         let size = size.max(1.);
         let mut buffer = Buffer::new_empty(Metrics::new(size, font.line_height.resolve(size)));
-        buffer.set_size(Some(width), Some(height));
+        buffer.set_size(wrap_width(Some(width)), Some(height));
         set_buffer_text(&mut self.fonts, &mut buffer, text, font, size);
         buffer.shape_until_scroll(&mut self.fonts, false);
         let mut images = Vec::new();
@@ -1091,7 +1105,7 @@ pub fn rich_buffer(
                 run.font_size,
                 run.font.line_height.resolve(run.font_size),
             ));
-            buffer.set_size(width, None);
+            buffer.set_size(wrap_width(width), None);
             set_buffer_text(fonts, &mut buffer, "", &run.font, run.font_size);
             buffer.shape_until_scroll(fonts, false);
             return buffer;
@@ -1159,7 +1173,7 @@ fn rich_buffer_raw(
     ellipsis: bool,
 ) -> Buffer {
     let mut buffer = rich_buffer_unshaped(fonts, rich, ellipsis, Vec::new());
-    buffer.set_size(width, height);
+    buffer.set_size(wrap_width(width), height);
     buffer.shape_until_scroll(fonts, false);
     buffer
 }
@@ -1213,10 +1227,17 @@ pub(crate) fn rich_buffer_unshaped(
             && runs[end].font == run.font
             && runs[end].font_size == run.font_size
             && runs[end].range.start == runs[end - 1].range.end
+            // A padded run's room goes around it alone.
+            && run.padding[0] == 0.
+            && runs[end].padding[0] == 0.
         {
             end += 1;
         }
-        let attributes = attrs(&run.font, run.font_size.max(1.))
+        let mut attributes = attrs(&run.font, run.font_size.max(1.));
+        if run.padding[0] > 0. {
+            attributes = attributes.padding(run.padding[0] / run.font_size.max(1.));
+        }
+        let attributes = attributes
             .metrics(Metrics::new(
                 run.font_size.max(1.),
                 run.font.line_height.resolve(run.font_size.max(1.)),
@@ -1513,6 +1534,8 @@ pub struct RichDecoration {
     pub bounds: Rect,
     pub color: zgui::scene::Color,
     pub background: bool,
+    /// A background's corner radius.
+    pub radius: f32,
     /// The styled run it decorates, to recolour it without re-shaping.
     pub run: usize,
     /// A line decoration: strikethrough rather than underline.
@@ -1553,6 +1576,32 @@ pub fn run_at(rich: &zgui::rich_text::RichText, index: usize) -> usize {
     runs.partition_point(|run| run.range.end <= index)
         .min(runs.len().saturating_sub(1))
 }
+/// A plain text node's underline (`FontStyle::underline`): a line under
+/// each laid-out line's glyphs, drawn in the text's colour.
+pub fn plain_underlines<'a>(
+    runs: impl Iterator<Item = cosmic_text::LayoutRun<'a>>,
+    font_size: f32,
+    underline: zgui::text_layout::TextUnderline,
+) -> Vec<RichDecoration> {
+    let below = underline.offset().unwrap_or(font_size * 0.1);
+    runs.filter_map(|line| {
+        let (left, right) = line
+            .glyphs
+            .iter()
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(l, r), g| {
+                (l.min(g.x), r.max(g.x + g.w))
+            });
+        (right > left).then(|| RichDecoration {
+            bounds: Rect::new(left, line.line_y + below, right - left, 1.),
+            color: zgui::scene::Color(255, 255, 255, 255),
+            background: false,
+            radius: 0.,
+            run: 0,
+            strike: false,
+        })
+    })
+    .collect()
+}
 /// Derive decoration geometry from shaped visual fragments, including bidi and wrapping.
 pub fn rich_decorations(buffer: &Buffer, rich: &zgui::rich_text::RichText) -> Vec<RichDecoration> {
     rich_decorations_in(buffer.layout_runs(), &line_starts(buffer), rich)
@@ -1589,16 +1638,35 @@ pub fn rich_decorations_in<'a>(
             }
             for (left, right) in merged {
                 if let Some(color) = run.background {
+                    // A padded or rounded background hugs the text (CSS's
+                    // content area, about 0.92 em above the baseline and
+                    // 0.24 below) plus its padding; a plain one fills the line.
+                    let bounds = if run.padding != [0.; 2] || run.radius > 0. {
+                        let (above, below) = (run.font_size * 0.92, run.font_size * 0.24);
+                        let top = line.line_y - above - run.padding[1];
+                        Rect::new(left, top, right - left, above + below + 2. * run.padding[1])
+                    } else {
+                        Rect::new(left, line.line_top, right - left, line.line_height)
+                    };
                     output.push(RichDecoration {
-                        bounds: Rect::new(left, line.line_top, right - left, line.line_height),
+                        bounds,
                         color,
                         background: true,
+                        radius: run.radius,
                         run: index,
                         strike: false,
                     });
                 }
                 for (decoration, y, strike) in [
-                    (run.underline, line.line_y + run.font_size * 0.1, false),
+                    (
+                        run.underline,
+                        line.line_y
+                            + run
+                                .underline
+                                .and_then(|d| d.offset_px())
+                                .unwrap_or(run.font_size * 0.1),
+                        false,
+                    ),
                     (run.strikethrough, line.line_y - run.font_size * 0.3, true),
                 ] {
                     if let Some(style) = decoration {
@@ -1606,6 +1674,7 @@ pub fn rich_decorations_in<'a>(
                             bounds: Rect::new(left, y, right - left, style.thickness()),
                             color: style.color.unwrap_or(run.color),
                             background: false,
+                            radius: 0.,
                             run: index,
                             strike,
                         });

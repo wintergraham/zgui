@@ -67,24 +67,32 @@ const SPARE_LONG_TEXT: usize = 256;
 #[derive(Clone, PartialEq)]
 struct Key {
     text: Arc<str>,
-    spans: Vec<(Range<usize>, FontStyle, f32)>,
+    /// Runs as shaped: range, font, size and padding across.
+    spans: Vec<(Range<usize>, FontStyle, f32, f32)>,
     /// Plain text keeps a row after a final line break, for an editor's
     /// caret (as `ShapedText::with_font` lays it out); rich text does not.
     caret_row: bool,
 }
 impl Key {
     fn of(rich: &RichText, caret_row: bool) -> Self {
-        let mut spans: Vec<(Range<usize>, FontStyle, f32)> = Vec::new();
+        let mut spans: Vec<(Range<usize>, FontStyle, f32, f32)> = Vec::new();
         for run in rich.runs() {
             match spans.last_mut() {
-                Some((range, font, size))
+                Some((range, font, size, padding))
                     if *font == run.font
                         && *size == run.font_size
+                        && *padding == 0.
+                        && run.padding[0] == 0.
                         && range.end == run.range.start =>
                 {
                     range.end = run.range.end;
                 }
-                _ => spans.push((run.range.clone(), run.font.clone(), run.font_size)),
+                _ => spans.push((
+                    run.range.clone(),
+                    run.font.clone(),
+                    run.font_size,
+                    run.padding[0],
+                )),
             }
         }
         Self {
@@ -97,9 +105,10 @@ impl Key {
         let mut hasher = FxHasher::default();
         self.text.hash(&mut hasher);
         self.caret_row.hash(&mut hasher);
-        for (range, font, size) in &self.spans {
+        for (range, font, size, padding) in &self.spans {
             range.hash(&mut hasher);
             size.to_bits().hash(&mut hasher);
+            padding.to_bits().hash(&mut hasher);
             font.weight.hash(&mut hasher);
             font.italic.hash(&mut hasher);
         }
@@ -198,7 +207,7 @@ impl Compact {
     /// `width`: the widest line, and the sum of line heights. This follows
     /// its congruent-direction branch step by step.
     fn size(&self, width: Option<f32>, line_height: f32) -> (f32, f32) {
-        let limit = width.unwrap_or(f32::INFINITY);
+        let limit = crate::text::wrap_width(width).unwrap_or(f32::INFINITY);
         let (mut widest, mut height) = (0_f32, 0_f32);
         for (spans, empty) in &self.lines {
             let mut line = Visual::default();
@@ -330,7 +339,7 @@ impl Entry {
             line.layout(
                 fonts,
                 self.metrics.font_size,
-                width,
+                crate::text::wrap_width(width),
                 Wrap::WordOrGlyph,
                 Ellipsize::None,
                 None,

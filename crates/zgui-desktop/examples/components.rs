@@ -44,7 +44,11 @@ fn control(label: View) -> View {
         .text_color(Color(235, 241, 255, 255))
         .hover(|s| s.bg(Color(58, 76, 108, 255)))
         .active(|s| s.bg(Color(33, 45, 66, 255)))
-        .focus(|s| s.border(2.0).border_color(Color(112, 174, 255, 255)))
+        .focus(|s| {
+            s.border(2.0)
+                .border_over(true)
+                .border_color(Color(112, 174, 255, 255))
+        })
         .child(label)
 }
 fn app() -> View {

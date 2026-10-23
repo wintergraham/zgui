@@ -39,6 +39,7 @@ mod compose_scrollbar;
 mod compose_style;
 mod compose_virtual_keyboard;
 pub mod style;
+pub mod theme;
 
 #[cfg(doctest)]
 #[doc = include_str!("../../../docs/composition.md")]
@@ -65,6 +66,8 @@ pub mod svg;
 
 pub mod cursor;
 
+pub mod inspect;
+
 mod compose_context_menu;
 mod compose_drag;
 
@@ -72,5 +75,18 @@ mod compose_drag;
 pub mod native_surface;
 
 pub mod native_view;
+/// The clipboard and file dialogs, as a service a host provides.
+pub mod platform;
 pub mod terminal;
 pub mod web_view;
+
+/// Gives a map's room back once it is mostly empty (a page of thousands of
+/// nodes gone): maps keep their peak capacity otherwise. Only past 1024
+/// slots and under a quarter used, so rehashing is rare.
+pub(crate) fn shrink_sparse<K: std::hash::Hash + Eq, V, S: std::hash::BuildHasher>(
+    map: &mut std::collections::HashMap<K, V, S>,
+) {
+    if map.capacity() > 1024 && map.len() * 4 < map.capacity() {
+        map.shrink_to(map.len() * 2);
+    }
+}

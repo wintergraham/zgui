@@ -19,12 +19,12 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSCursor, NSEvent, NSEventModifierFlags, NSEventPhase, NSEventType, NSPasteboard,
-    NSPasteboardTypeString, NSResponder, NSTextInputClient, NSTrackingArea, NSTrackingAreaOptions,
-    NSView,
+    NSPasteboardTypeFileURL, NSPasteboardTypeString, NSResponder, NSTextInputClient,
+    NSTrackingArea, NSTrackingAreaOptions, NSView,
 };
 use objc2_foundation::{
     NSArray, NSAttributedString, NSAttributedStringKey, NSNotFound, NSPoint, NSRange,
-    NSRangePointer, NSRect, NSSize, NSString, NSUInteger,
+    NSRangePointer, NSRect, NSSize, NSString, NSUInteger, NSURL,
 };
 use std::{
     any::Any,
@@ -80,7 +80,9 @@ keybind = super+nine=unbind
 background-opacity = 0
 window-padding-x = 10
 window-padding-y = 6
-window-padding-balance = true
+# Unbalanced: the grid stays put at the padding while a pane resizes (a
+# balanced one re-centres on every point of width, sliding the text).
+window-padding-balance = false
 window-padding-color = background
 confirm-close-surface = false
 ";
@@ -198,7 +200,6 @@ impl App {
             }
             g::ghostty_app_set_focus(app, true);
             // The config is the app's now (Ghostty keeps it until the app goes).
-            poll_processes();
             Some(Self { app })
         }
     }
@@ -302,8 +303,12 @@ extern "C" fn action(
                 _ if report.progress < 0 => Some(-1.),
                 _ => Some(report.progress as f32 / 100.),
             };
+            let failed = report.state == g::GHOSTTY_PROGRESS_STATE_ERROR;
             deliver(surface, move |term| {
-                term.update_state(|state| state.progress = progress);
+                term.update_state(|state| {
+                    state.progress = progress;
+                    state.progress_error = failed;
+                });
             });
             true
         }
@@ -510,39 +515,100 @@ extern "C" fn write_clipboard(
 // ---------------------------------------------------------------------------
 // Foreground processes (what tab titles and icons name).
 
-/// Recheck every live surface's foreground process twice a second.
+thread_local! {
+    static POLLING: Cell<bool> = const { Cell::new(false) };
+}
+/// Whether a surface's foreground process must be polled: unless the app
+/// resolves it and says when it changes (`terminal_processes_pushed`).
+fn polled(view: &TerminalView) -> bool {
+    !(crate::terminal_process::pushed() && view.ivars().resolved.get())
+}
+/// Recheck the polled surfaces' foreground processes twice a second, while
+/// there are any.
 fn poll_processes() {
-    after(0.5, || {
+    if POLLING.replace(true) {
+        return;
+    }
+    fn tick() {
+        after(0.5, || {
+            let surfaces: Vec<Retained<TerminalView>> =
+                SURFACES.with(|surfaces| surfaces.borrow().values().cloned().collect());
+            let mut any = false;
+            for view in surfaces.iter().filter(|view| polled(view)) {
+                any = true;
+                refresh_process(view.ivars().surface.get() as usize);
+            }
+            if any {
+                tick();
+            } else {
+                POLLING.set(false);
+            }
+        });
+    }
+    tick();
+}
+/// Every surface asks again what is in front of it (the app's word that it
+/// may have changed). From any thread.
+pub(crate) fn processes_changed() {
+    on_main(|| {
         let surfaces: Vec<usize> =
             SURFACES.with(|surfaces| surfaces.borrow().keys().copied().collect());
         for surface in surfaces {
             refresh_process(surface);
         }
-        poll_processes();
     });
 }
 fn refresh_process(surface: usize) {
     let Some(view) = view_of(surface) else { return };
     let pid = unsafe { g::ghostty_surface_foreground_pid(surface as g::ghostty_surface_t) };
-    if pid == view.ivars().pid.replace(pid) {
-        return;
-    }
-    let process = if pid == 0 {
-        String::new()
+    // Seen through (an attach client to a session server): what is behind
+    // it changes while the client stays in front, so ask every time.
+    let resolved = if pid == 0 {
+        None
     } else {
-        process_name(pid as i32)
+        crate::terminal_process::resolve(pid as u32)
+    };
+    view.ivars().resolved.set(resolved.is_some());
+    if polled(&view) {
+        poll_processes();
+    }
+    let (process, pid, status) = match resolved {
+        Some(front) => {
+            if view.ivars().front.borrow().as_ref() == Some(&front) {
+                return;
+            }
+            *view.ivars().front.borrow_mut() = Some(front.clone());
+            (front.name, u64::from(front.pid), front.status)
+        }
+        None => {
+            if pid == view.ivars().pid.replace(pid) {
+                return;
+            }
+            let process = if pid == 0 {
+                String::new()
+            } else {
+                process_name(pid as i32)
+            };
+            (process, pid, None)
+        }
     };
     let term = view.ivars().term.clone();
     zgui::native_view::post(move || {
         if let Some(term) = term.upgrade() {
+            let changed = term
+                .state()
+                .with_untracked(|state| state.process != process || state.pid != pid as u32);
             term.update_state(|state| {
                 state.process = process.clone();
                 state.pid = pid as u32;
+                state.status = status;
             });
-            term.emit(TerminalEvent::ProcessChanged {
-                process,
-                pid: pid as u32,
-            });
+            if changed {
+                term.emit(TerminalEvent::ProcessChanged {
+                    process,
+                    pid: pid as u32,
+                });
+            }
         }
     });
 }
@@ -735,11 +801,27 @@ pub(crate) struct ViewState {
     pointer_here: Cell<bool>,
     tracking: RefCell<Option<Retained<NSTrackingArea>>>,
     pid: Cell<u64>,
+    /// The app's resolver named what is in front of it last time (and, when
+    /// the app pushes changes, nothing need poll it).
+    resolved: Cell<bool>,
+    /// What a process resolver last saw in front (name, pid).
+    front: RefCell<Option<crate::terminal_process::ForegroundProcess>>,
     /// Focus asked for before the view was in a window (a tab switching in).
     pending_focus: Cell<bool>,
     /// The size Ghostty was last given, in points.
     size: Cell<(f64, f64)>,
+    /// When the view last took a new size, and the size it was asked for
+    /// since, waiting (`set_frame_size`).
+    resized_at: Cell<Option<std::time::Instant>>,
+    wanted: Cell<Option<(f64, f64)>>,
 }
+/// How often a size an animation changes every frame (the sidebar easing,
+/// panes easing to a new split) reaches the view: each one makes Ghostty
+/// draw into new surfaces, about 1.6 ms of CPU. In between, the view keeps
+/// its size where its pane placed it (the cut views clip it to the pane);
+/// the last size always arrives. A size the user drags is not held back
+/// (`dragged_size`).
+const RESIZE_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
 
 define_class!(
     #[unsafe(super(NSView, NSResponder, NSObject))]
@@ -771,8 +853,10 @@ define_class!(
         }
         #[unsafe(method(setFrameSize:))]
         fn set_frame_size(&self, size: NSSize) {
-            let _: () = unsafe { msg_send![super(self), setFrameSize: size] };
-            self.size_changed();
+            let queued = self.ivars().wanted.replace(Some((size.width, size.height))).is_some();
+            if !queued {
+                self.take_size();
+            }
         }
         #[unsafe(method(viewDidChangeBackingProperties))]
         fn did_change_backing(&self) {
@@ -945,6 +1029,24 @@ define_class!(
         fn perform_key_equivalent(&self, event: &NSEvent) -> bool {
             self.handle_key_equivalent(event)
         }
+        // NSDraggingDestination's, which NSView declares informally: the
+        // view's own methods, not NSTextInputClient's (a debug build checks
+        // a protocol block's methods are the protocol's, and would panic).
+        // Dropped files and text (as Ghostty's own terminal takes them):
+        // pasted, files as their shell-escaped paths, so a program reading
+        // a path (an agent taking an image) gets it whole.
+        #[unsafe(method(draggingEntered:))]
+        fn dragging_entered(&self, sender: &AnyObject) -> NSUInteger {
+            if dropped_text(sender).is_some() { DRAG_COPY } else { 0 }
+        }
+        #[unsafe(method(draggingUpdated:))]
+        fn dragging_updated(&self, sender: &AnyObject) -> NSUInteger {
+            if dropped_text(sender).is_some() { DRAG_COPY } else { 0 }
+        }
+        #[unsafe(method(performDragOperation:))]
+        fn perform_drag_operation(&self, sender: &AnyObject) -> bool {
+            self.drop_text(sender)
+        }
     }
 
     unsafe impl NSObjectProtocol for TerminalView {}
@@ -1038,6 +1140,43 @@ define_class!(
     }
 );
 
+/// `NSDragOperationCopy`: the cursor shows a plus.
+const DRAG_COPY: NSUInteger = 1;
+/// A drop's contents as a terminal takes them: each file's path, escaped for
+/// the shell, or the text; several joined by spaces. `None` for anything
+/// else.
+fn dropped_text(sender: &AnyObject) -> Option<String> {
+    let pasteboard: Retained<NSPasteboard> = unsafe { msg_send![sender, draggingPasteboard] };
+    let items = pasteboard.pasteboardItems()?;
+    let texts: Vec<String> = items
+        .iter()
+        .filter_map(|item| {
+            if let Some(url) = item.stringForType(unsafe { NSPasteboardTypeFileURL }) {
+                // The Finder's are file references (`file:///.file/id=…`).
+                let url: Option<Retained<NSURL>> = NSURL::URLWithString(&url);
+                let path = url?.filePathURL()?.path()?;
+                Some(shell_escape(&path.to_string()))
+            } else {
+                item.stringForType(unsafe { NSPasteboardTypeString })
+                    .map(|text| text.to_string())
+            }
+        })
+        .collect();
+    (!texts.is_empty()).then(|| texts.join(" "))
+}
+/// `path` with the characters a shell reads specially escaped by a
+/// backslash (Ghostty's set).
+fn shell_escape(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for c in path.chars() {
+        if "\\ ()[]{}<>\"'`!#$&;|*?\t".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 fn other_button(number: isize) -> g::ghostty_input_mouse_button_e {
     match number {
         0 => g::GHOSTTY_MOUSE_LEFT,
@@ -1078,12 +1217,36 @@ impl TerminalView {
             pointer_here: Cell::new(false),
             tracking: RefCell::new(None),
             pid: Cell::new(0),
+            resolved: Cell::new(false),
+            front: RefCell::new(None),
             pending_focus: Cell::new(false),
             size: Cell::new((0., 0.)),
+            resized_at: Cell::new(None),
+            wanted: Cell::new(None),
         });
         // A non-zero first size: Ghostty sizes its first frame from it.
         let frame = NSRect::new(NSPoint::new(0., 0.), NSSize::new(800., 600.));
-        unsafe { msg_send![super(this), initWithFrame: frame] }
+        let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
+        // It takes dropped files and text (`performDragOperation:`).
+        let types = unsafe { [NSPasteboardTypeFileURL, NSPasteboardTypeString] };
+        view.registerForDraggedTypes(&NSArray::from_slice(&types));
+        view
+    }
+    /// Paste what is dropped on it; whether it took it.
+    fn drop_text(&self, sender: &AnyObject) -> bool {
+        let (Some(text), Some(surface)) =
+            (dropped_text(sender), self.with_surface(|surface| surface))
+        else {
+            return false;
+        };
+        // What is dropped on a pane is for it: it takes the keyboard.
+        if let Some(window) = self.window() {
+            window.makeFirstResponder(Some(self));
+        }
+        let len = text.len();
+        let text = CString::new(text).unwrap_or_default();
+        unsafe { g::ghostty_surface_text(surface, text.as_ptr(), len) };
+        true
     }
     /// Re-dispatch a command key equivalent passed on once (see
     /// `handle_key_equivalent`) so it encodes; anything else: no beep.
@@ -1150,6 +1313,39 @@ impl TerminalView {
     fn backing_scale(&self) -> f64 {
         self.window()
             .map_or(2., |window| window.backingScaleFactor())
+    }
+    /// Take the size asked for (`set_frame_size`), or wait out the rest of
+    /// `RESIZE_EVERY` since the last and take the latest then.
+    fn take_size(&self) {
+        let Some((width, height)) = self.ivars().wanted.get() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        if let Some(at) = self.ivars().resized_at.get()
+            && now - at < RESIZE_EVERY
+            && !self.dragged_size()
+        {
+            let view = self.retain();
+            after((RESIZE_EVERY - (now - at)).as_secs_f64(), move || {
+                view.take_size()
+            });
+            return;
+        }
+        self.ivars().wanted.set(None);
+        if self.frame().size == NSSize::new(width, height) {
+            return;
+        }
+        self.ivars().resized_at.set(Some(now));
+        let size = NSSize::new(width, height);
+        let _: () = unsafe { msg_send![super(self), setFrameSize: size] };
+        self.size_changed();
+    }
+    /// Whether the user is dragging the size (the window's edge, a divider):
+    /// it follows every frame then, as in Ghostty's own window. Ghostty
+    /// draws the new size in the same transaction and batches the reflow
+    /// (and the program's SIGWINCH) itself.
+    fn dragged_size(&self) -> bool {
+        self.inLiveResize() || NSEvent::pressedMouseButtons() & 1 != 0
     }
     fn size_changed(&self) {
         let size = self.frame().size;
@@ -1697,6 +1893,7 @@ impl MacTerminal {
         view.ivars().surface.set(surface);
         SURFACES.with(|surfaces| surfaces.borrow_mut().insert(surface as usize, view.clone()));
         unsafe { g::ghostty_surface_set_focus(surface, false) };
+        refresh_process(surface as usize);
         view.scale_changed();
         Some(Self { view })
     }
@@ -1763,7 +1960,16 @@ impl TerminalBackend for MacTerminal {
     }
     fn needs_confirm_close(&self) -> bool {
         let surface = self.view.ivars().surface.get();
-        !surface.is_null() && unsafe { g::ghostty_surface_needs_confirm_quit(surface) }
+        if surface.is_null() {
+            return false;
+        }
+        let pid = unsafe { g::ghostty_surface_foreground_pid(surface) };
+        if pid != 0
+            && let Some(front) = crate::terminal_process::resolve(pid as u32)
+        {
+            return !front.idle;
+        }
+        unsafe { g::ghostty_surface_needs_confirm_quit(surface) }
     }
     fn as_any(&self) -> &dyn Any {
         self
@@ -1789,4 +1995,19 @@ pub(crate) fn backend(term: &Terminal, mtm: MainThreadMarker) -> Option<Rc<dyn T
     let backend: Rc<dyn TerminalBackend> = Rc::new(MacTerminal::new(term, mtm)?);
     term.attach(backend.clone());
     Some(backend)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shell_escape;
+
+    #[test]
+    fn dropped_paths_are_escaped_for_the_shell() {
+        assert_eq!(
+            shell_escape("/Users/me/Screen Shot (2).png"),
+            r"/Users/me/Screen\ Shot\ \(2\).png"
+        );
+        assert_eq!(shell_escape("/tmp/a'b&c$d"), r"/tmp/a\'b\&c\$d");
+        assert_eq!(shell_escape("/plain/path.jpg"), "/plain/path.jpg");
+    }
 }

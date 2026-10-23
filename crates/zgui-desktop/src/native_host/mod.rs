@@ -9,6 +9,8 @@
 //! never drift a frame apart. A window without native views does none of it.
 #[cfg(all(target_os = "macos", feature = "ghostty"))]
 mod ghostty;
+#[cfg(all(target_os = "macos", feature = "ghostty"))]
+pub(crate) use ghostty::processes_changed;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
@@ -16,13 +18,15 @@ mod webkit;
 
 use std::rc::Rc;
 use zgui::{
-    native_view::{NativeViews, PlaneSplit},
+    native_view::{NativeViews, PlaneSplit, PointerStep},
     scene::{Rect, Scene},
     widgets::Ui,
 };
 
 #[cfg(target_os = "macos")]
 pub use macos::{BackdropReport, NativeDiagnostics, NativeViewReport};
+#[cfg(target_os = "macos")]
+pub(crate) use macos::{disable_cursor_rects, set_cursor};
 #[cfg(target_os = "macos")]
 pub(crate) type NativeDiagnosticsHandle = NativeDiagnostics;
 #[cfg(not(target_os = "macos"))]
@@ -53,9 +57,12 @@ pub(crate) struct NativeHost {
     #[cfg(target_os = "macos")]
     overlay_live: bool,
     /// Native geometry changed and has not been applied yet.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pending: bool,
-    /// What clip views' hit tests consult.
+    /// What clip views' hit tests consult (macOS's clip views).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     scene: std::rc::Weak<std::cell::RefCell<Scene>>,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     input: zgui::input::InputDispatcher,
     _waker: zgui::native_view::WakerGuard,
 }
@@ -93,6 +100,44 @@ impl NativeHost {
     pub fn is_native(&self, node: zgui::scene::NodeId) -> bool {
         self.natives.contains(node)
     }
+    /// The pointer moved to window point `(x, y)` (the host's own report):
+    /// what zgui hears of it (see `NativePointer`). `held`: a press of
+    /// zgui's follows the pointer.
+    pub fn pointer_moved(&self, x: f32, y: f32, held: bool) -> PointerStep {
+        #[cfg(target_os = "macos")]
+        if let Some(surfaces) = &self.surfaces {
+            let (step, report) = surfaces.router().track(x, y, held);
+            report.apply();
+            return step;
+        }
+        let _ = (x, y, held);
+        PointerStep::Move
+    }
+    /// The pointer left the window, or the window went to the back.
+    pub fn pointer_left(&self) {
+        #[cfg(target_os = "macos")]
+        if let Some(surfaces) = &self.surfaces {
+            surfaces.router().pointer.left().apply();
+        }
+    }
+    /// Whether the pointer is over a native view taking input (it shows
+    /// its own cursor).
+    pub fn pointer_over_native(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        if let Some(surfaces) = &self.surfaces {
+            return surfaces.router().pointer.over().is_some();
+        }
+        false
+    }
+    /// Where the pointer last moved to that the host did not hear itself
+    /// (a native view had keyboard focus, so AppKit sent the move there).
+    pub fn take_unheard_pointer(&self) -> Option<(f32, f32)> {
+        #[cfg(target_os = "macos")]
+        if let Some(surfaces) = &self.surfaces {
+            return surfaces.router().unheard.take();
+        }
+        None
+    }
     /// The native views went away with the window (suspend/recreate).
     pub fn suspend(&mut self) {
         #[cfg(target_os = "macos")]
@@ -119,6 +164,8 @@ impl NativeHost {
         renderer: &mut zgui_gpu::GpuRenderer,
         scale: f32,
     ) -> Result<Vec<Rect>, zgui_gpu::GpuError> {
+        // Frames go with native geometry, in one transaction, while there is any.
+        renderer.present_with_native_views(self.active());
         if !self.active() {
             return Ok(Vec::new());
         }
@@ -127,6 +174,8 @@ impl NativeHost {
                 scene: self.scene.clone(),
                 input: self.input.clone(),
                 natives: self.natives.clone(),
+                pointer: Default::default(),
+                unheard: Default::default(),
             };
             match macos::Surfaces::new(window, router) {
                 Ok(surfaces) => {
@@ -208,6 +257,9 @@ impl NativeHost {
             return Ok(());
         };
         let live = self.split.has_overlay();
+        if live != self.overlay_live {
+            zgui_gpu::present_log::log(|| format!("overlay live={live}"));
+        }
         if let Some(overlay) = &mut self.overlay
             && live
             && self.overlay_drawn
@@ -215,7 +267,11 @@ impl NativeHost {
             overlay.present()?;
         }
         if let Some(overlay) = &self.overlay {
-            surfaces.show_overlay(live.then(|| overlay.plane_rect()).flatten());
+            let rect = live.then(|| overlay.plane_rect()).flatten();
+            zgui_gpu::present_log::log(|| {
+                format!("overlay show rect={rect:?} drawn={}", self.overlay_drawn)
+            });
+            surfaces.show_overlay(rect);
         }
         if self.overlay_live
             && !live

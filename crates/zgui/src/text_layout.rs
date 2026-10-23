@@ -133,6 +133,23 @@ pub struct FontStyle {
     pub align: TextAlign,
     /// Explicit ordered families tried before platform fallback for missing glyphs.
     pub fallbacks: std::sync::Arc<[FontFamily]>,
+    /// Shown masked, a bullet per character (a password field's text). Set
+    /// by an editor on its own text; never inherited.
+    pub masked: bool,
+    /// Underlined (CSS `text-decoration: underline`): inherited.
+    pub underline: Option<TextUnderline>,
+}
+/// An underline under text, `offset` logical pixels below the baseline
+/// (CSS `text-underline-offset`; unset, a tenth of the font size).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct TextUnderline(Option<u32>);
+impl TextUnderline {
+    pub fn new(offset: Option<f32>) -> Self {
+        Self(offset.filter(|o| o.is_finite()).map(f32::to_bits))
+    }
+    pub fn offset(self) -> Option<f32> {
+        self.0.map(f32::from_bits)
+    }
 }
 impl Default for FontStyle {
     fn default() -> Self {
@@ -149,6 +166,8 @@ impl Default for FontStyle {
                     std::sync::OnceLock::new();
                 EMPTY.get_or_init(|| std::sync::Arc::from([])).clone()
             },
+            masked: false,
+            underline: None,
         }
     }
 }
@@ -286,7 +305,7 @@ impl FallbackTextLayout {
             let run = &rich.runs()[run_index];
             let line = run.font.line_height.resolve(run.font_size);
             let newline = grapheme.contains(['\r', '\n']);
-            let advance = (run.font_size * 0.6 + run.font.letter_spacing.pixels()).max(0.);
+            let advance = run.estimated_advance(grapheme, index);
             if newline || width.is_some_and(|w| x > 0. && x + advance > w.max(0.)) {
                 if newline {
                     pitch = pitch.max(line);

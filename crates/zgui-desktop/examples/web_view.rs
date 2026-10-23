@@ -7,7 +7,9 @@
 //! script evaluation against live AppKit state, prints `FIXTURE` lines,
 //! holds the window for a screenshot (`WINDOW <n>`, `screencapture -l <n>`),
 //! then exits (non-zero on failure).
-use std::{cell::RefCell, rc::Rc, time::Duration};
+#[cfg(target_os = "macos")]
+use std::time::Duration;
+use std::{cell::RefCell, rc::Rc};
 use zgui::{
     compose::prelude::*,
     web_view::{WebView, WebViewEvent, WebViewOptions},
@@ -80,7 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let subscription = {
                 let (messages, finished) = (messages.clone(), finished.clone());
                 web.on_event(move |event| match event {
-                    WebViewEvent::Message { body } => {
+                    WebViewEvent::Message { body, .. } => {
                         println!("MESSAGE {body}");
                         messages.update(|count| *count += 1);
                     }
@@ -273,6 +275,7 @@ fn run_fixture(
         let window = cx.window.clone();
         let diagnostics = cx.native_diagnostics();
         let ui_input = cx.ui.input.clone();
+        let runtime = cx.ui.runtime.clone();
         cx.tasks.spawn(async move {
             let mut failures = 0;
             let mut check = |name: &str, ok: bool, detail: String| {
@@ -448,6 +451,94 @@ fn run_fixture(
                 web.focused(),
                 format!("focused={}", web.focused()),
             );
+            // The pointer over the page. While the page has keyboard focus
+            // AppKit sends it the moves, and the pointer monitor routes them
+            // as the host routes its own: these are mouse-moved NSEvents made
+            // for this window and handed to the monitor, never sent.
+            input.focus(&scene, Some(page));
+            sleep(150).await;
+            // What follows `web.pointer` (a script's edge affordance): a
+            // page nothing follows is told nothing.
+            let follow = runtime.effect({
+                let web = web.clone();
+                move || {
+                    let _ = web.pointer();
+                }
+            });
+            let page_rect = bounds("page");
+            let menu_button = node("menu-button");
+            let (bx, by) = center(bounds("menu-button"));
+            diagnostics.pointer_moved(bx, by);
+            sleep(100).await;
+            check(
+                "pointer over zgui: zgui hovers",
+                input.hovered() == Some(menu_button) && diagnostics.pointer_over().is_none(),
+                format!("{:?} {:?}", input.hovered(), diagnostics.pointer_over()),
+            );
+            diagnostics.pointer_moved(px, py);
+            sleep(100).await;
+            check(
+                "pointer onto the page: zgui hears a leave",
+                input.hovered().is_none() && diagnostics.pointer_over() == Some(page),
+                format!("{:?} {:?}", input.hovered(), diagnostics.pointer_over()),
+            );
+            check(
+                "the page hears the pointer",
+                web.pointer() == Some((px - page_rect.x, py - page_rect.y)),
+                format!("{:?}", web.pointer()),
+            );
+            diagnostics.pointer_moved(px + 30., py + 10.);
+            sleep(100).await;
+            check(
+                "moves over the page: the page follows, zgui hovers nothing",
+                web.pointer() == Some((px + 30. - page_rect.x, py + 10. - page_rect.y))
+                    && input.hovered().is_none(),
+                format!("{:?} {:?}", web.pointer(), input.hovered()),
+            );
+            let (cx_, cy_) = center(bounds("composer"));
+            diagnostics.pointer_moved(cx_, cy_);
+            sleep(100).await;
+            check(
+                "over zgui drawn on the page: zgui's again, the page still knows",
+                diagnostics.pointer_over().is_none() && web.pointer().is_some(),
+                format!("{:?} {:?}", diagnostics.pointer_over(), web.pointer()),
+            );
+            diagnostics.pointer_moved(bx, by);
+            sleep(100).await;
+            check(
+                "back over the toolbar: hovered, and the page heard it go",
+                input.hovered() == Some(menu_button) && web.pointer().is_none(),
+                format!("{:?} {:?}", input.hovered(), web.pointer()),
+            );
+            drop(follow);
+            // Nothing follows the pointer over the page now: moving over it
+            // posts nothing, so the host is not woken for it.
+            diagnostics.pointer_moved(px, py);
+            sleep(100).await;
+            let mut posted = 0;
+            for step in 0..50 {
+                diagnostics.pointer_moved(px + step as f32, py);
+                posted += usize::from(zgui::native_view::deliver_posted());
+            }
+            check(
+                "moves over a page nothing follows wake nothing",
+                posted == 0 && web.pointer().is_none(),
+                format!("{posted} of 50 moves posted"),
+            );
+            // Idle: what the window costs while nothing happens.
+            let cpu = || {
+                std::process::Command::new("ps")
+                    .args(["-o", "time=", "-p", &std::process::id().to_string()])
+                    .output()
+                    .ok()
+                    .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+            };
+            let before = cpu();
+            sleep(3000).await;
+            println!(
+                "IDLE cpu time before {before:?}, after 3 s idle {:?}",
+                cpu()
+            );
             input.focus(&scene, None);
             sleep(150).await;
             check(
@@ -517,4 +608,7 @@ fn run_fixture(
             }
         });
     }
+    // The fixture checks AppKit state; elsewhere there is nothing to check.
+    #[cfg(not(target_os = "macos"))]
+    let _ = (cx, web, view, menu_open, page_shown, finished, messages);
 }

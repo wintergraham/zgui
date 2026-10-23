@@ -88,6 +88,56 @@ impl AppMenu {
         }
     }
 }
+/// An edit command the platform implements for whatever has focus, native
+/// views included: on macOS it is AppKit's own item, sent to the first
+/// responder (so a web page's selection copies). zgui's own view doesn't
+/// answer those actions, so there the item is disabled, and a disabled item
+/// still swallows its shortcut; while zgui's view has the keyboard, its
+/// shortcut goes straight to the view instead (see `edit_keys`), for zgui's
+/// editors to handle. Its shortcut (⌘C for Copy) and its action
+/// (`standard:copy`) are its own: no other item may have them. Elsewhere
+/// it is an ordinary item in zgui's menu bar, whose choosing reaches the
+/// app as that action.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StandardItem {
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+}
+impl StandardItem {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Undo => "Undo",
+            Self::Redo => "Redo",
+            Self::Cut => "Cut",
+            Self::Copy => "Copy",
+            Self::Paste => "Paste",
+            Self::SelectAll => "Select All",
+        }
+    }
+    /// Its shortcut, as [`MenuAccelerator`] names one (macOS's).
+    fn shortcut_name(self) -> &'static str {
+        match self {
+            Self::Undo => "Super+Z",
+            Self::Redo => "Super+Shift+Z",
+            Self::Cut => "Super+X",
+            Self::Copy => "Super+C",
+            Self::Paste => "Super+V",
+            Self::SelectAll => "Super+A",
+        }
+    }
+    /// The action a rendered menu bar dispatches for it.
+    pub fn action(self) -> MenuAction {
+        MenuAction(format!(
+            "standard:{}",
+            self.label().to_lowercase().replace(' ', "-")
+        ))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AppMenuEntry {
     Item {
@@ -99,6 +149,7 @@ pub enum AppMenuEntry {
     },
     Submenu(AppMenu),
     Separator,
+    Standard(StandardItem),
 }
 impl AppMenuEntry {
     pub fn item(label: impl Into<String>, action: impl Into<MenuAction>) -> Self {
@@ -183,6 +234,20 @@ pub(crate) fn validate(menus: &[AppMenu]) -> Result<(), AppMenuError> {
                     AppMenuEntry::Submenu(menu) => {
                         visit(std::slice::from_ref(menu), ids, shortcuts)?
                     }
+                    AppMenuEntry::Standard(item) => {
+                        if !shortcuts.insert(item.shortcut_name().to_owned()) {
+                            return Err(AppMenuError(format!(
+                                "the standard {} item's shortcut is another item's",
+                                item.label()
+                            )));
+                        }
+                        if !ids.insert(item.action().0) {
+                            return Err(AppMenuError(format!(
+                                "the standard {} item appears twice, or its action is another item's",
+                                item.label()
+                            )));
+                        }
+                    }
                     AppMenuEntry::Separator => {}
                 }
             }
@@ -202,7 +267,7 @@ pub(crate) fn enabled_action(menus: &[AppMenu], action: &MenuAction) -> bool {
                 ..
             } => *enabled && id == action,
             AppMenuEntry::Submenu(menu) => enabled_action(std::slice::from_ref(menu), action),
-            AppMenuEntry::Separator => false,
+            AppMenuEntry::Separator | AppMenuEntry::Standard(_) => false,
         })
 }
 /// Accessible retained menus with keyboard traversal, Escape dismissal, focus
@@ -283,6 +348,13 @@ fn entries(
             AppMenuEntry::Separator => compose::row()
                 .h(1.)
                 .bg(zgui::scene::Color(100, 100, 100, 255)),
+            AppMenuEntry::Standard(item) => {
+                let dispatch = dispatch.clone();
+                compose::menu_item(item.label())
+                    .h(30.)
+                    .p(6.)
+                    .on_click(move || dispatch(item.action()))
+            }
         })
         .collect()
 }
@@ -362,58 +434,99 @@ pub(crate) fn update_entry(
     false
 }
 
+/// A menu model as an AppKit submenu: items, check items, shortcuts, the
+/// standard edit items and nested submenus.
+#[cfg(target_os = "macos")]
+fn native_submenu(model: &AppMenu) -> Result<muda::Submenu, AppMenuError> {
+    let menu = muda::Submenu::new(&model.label, true);
+    for entry in &model.entries {
+        let result = match entry {
+            AppMenuEntry::Item {
+                label,
+                action,
+                enabled,
+                checked,
+                accelerator,
+            } => {
+                let accelerator = accelerator
+                    .as_ref()
+                    .map(|a| {
+                        a.name()?
+                            .parse::<muda::accelerator::KeyAccelerator>()
+                            .map_err(|e| AppMenuError(e.to_string()))
+                    })
+                    .transpose()?;
+                if let Some(checked) = checked {
+                    let item = muda::CheckMenuItem::with_id(
+                        action.0.clone(),
+                        label,
+                        *enabled,
+                        *checked,
+                        None,
+                    );
+                    item.set_key_accelerator(accelerator)
+                        .map_err(|e| AppMenuError(e.to_string()))?;
+                    menu.append(&item)
+                } else {
+                    let item = muda::MenuItem::with_id(action.0.clone(), label, *enabled, None);
+                    item.set_key_accelerator(accelerator)
+                        .map_err(|e| AppMenuError(e.to_string()))?;
+                    menu.append(&item)
+                }
+            }
+            AppMenuEntry::Submenu(child) => menu.append(&native_submenu(child)?),
+            AppMenuEntry::Separator => menu.append(&muda::PredefinedMenuItem::separator()),
+            AppMenuEntry::Standard(item) => menu.append(&match item {
+                StandardItem::Undo => muda::PredefinedMenuItem::undo(None),
+                StandardItem::Redo => muda::PredefinedMenuItem::redo(None),
+                StandardItem::Cut => muda::PredefinedMenuItem::cut(None),
+                StandardItem::Copy => muda::PredefinedMenuItem::copy(None),
+                StandardItem::Paste => muda::PredefinedMenuItem::paste(None),
+                StandardItem::SelectAll => muda::PredefinedMenuItem::select_all(None),
+            }),
+        };
+        result.map_err(|e| AppMenuError(e.to_string()))?;
+    }
+    Ok(menu)
+}
+
+/// Shows `entries` as a native pop-up menu at `(x, y)`, in points from the
+/// top left of the window's content, as AppKit's own controls do (a held
+/// back button's history, a context menu): press, drag to an item and let
+/// go, or click. A chosen item arrives as a menu action, like the menu
+/// bar's. Returns once the menu closes.
+#[cfg(target_os = "macos")]
+pub(crate) fn show_context_menu(
+    window: &winit::window::Window,
+    entries: &[AppMenuEntry],
+    x: f64,
+    y: f64,
+) -> Result<(), AppMenuError> {
+    use muda::ContextMenu;
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    // As the menu bar's are: unique actions and shortcuts, valid labels.
+    validate(&[AppMenu::new("Menu", entries.iter().cloned())])?;
+    let menu = native_submenu(&AppMenu::new("", entries.iter().cloned()))?;
+    let handle = window
+        .window_handle()
+        .map_err(|e| AppMenuError(e.to_string()))?;
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return Err(AppMenuError("not an AppKit window".into()));
+    };
+    let position = muda::dpi::Position::Logical(muda::dpi::LogicalPosition::new(x, y));
+    // SAFETY: winit's content view, alive while its window is.
+    unsafe { menu.show_context_menu_for_nsview(handle.ns_view.as_ptr(), Some(position)) };
+    Ok(())
+}
 #[cfg(target_os = "macos")]
 pub(crate) struct NativeMenu {
     menu: muda::Menu,
+    /// The standard edit items it has, whose shortcuts zgui's view takes.
+    standard: Vec<StandardItem>,
 }
 #[cfg(target_os = "macos")]
 impl NativeMenu {
     pub(crate) fn new(menus: &[AppMenu]) -> Result<Self, AppMenuError> {
-        fn submenu(model: &AppMenu) -> Result<muda::Submenu, AppMenuError> {
-            let menu = muda::Submenu::new(&model.label, true);
-            for entry in &model.entries {
-                let result = match entry {
-                    AppMenuEntry::Item {
-                        label,
-                        action,
-                        enabled,
-                        checked,
-                        accelerator,
-                    } => {
-                        let accelerator = accelerator
-                            .as_ref()
-                            .map(|a| {
-                                a.name()?
-                                    .parse::<muda::accelerator::KeyAccelerator>()
-                                    .map_err(|e| AppMenuError(e.to_string()))
-                            })
-                            .transpose()?;
-                        if let Some(checked) = checked {
-                            let item = muda::CheckMenuItem::with_id(
-                                action.0.clone(),
-                                label,
-                                *enabled,
-                                *checked,
-                                None,
-                            );
-                            item.set_key_accelerator(accelerator)
-                                .map_err(|e| AppMenuError(e.to_string()))?;
-                            menu.append(&item)
-                        } else {
-                            let item =
-                                muda::MenuItem::with_id(action.0.clone(), label, *enabled, None);
-                            item.set_key_accelerator(accelerator)
-                                .map_err(|e| AppMenuError(e.to_string()))?;
-                            menu.append(&item)
-                        }
-                    }
-                    AppMenuEntry::Submenu(child) => menu.append(&submenu(child)?),
-                    AppMenuEntry::Separator => menu.append(&muda::PredefinedMenuItem::separator()),
-                };
-                result.map_err(|e| AppMenuError(e.to_string()))?;
-            }
-            Ok(menu)
-        }
         validate(menus)?;
         let menu = muda::Menu::new();
         // AppKit reserves the first submenu for the application and replaces
@@ -434,15 +547,237 @@ impl NativeMenu {
         menu.append(&application)
             .map_err(|e| AppMenuError(e.to_string()))?;
         for model in menus {
-            menu.append(&submenu(model)?)
+            menu.append(&native_submenu(model)?)
                 .map_err(|e| AppMenuError(e.to_string()))?;
         }
-        Ok(Self { menu })
+        fn standard_items(model: &AppMenu, out: &mut Vec<StandardItem>) {
+            for entry in &model.entries {
+                match entry {
+                    AppMenuEntry::Standard(item) => out.push(*item),
+                    AppMenuEntry::Submenu(child) => standard_items(child, out),
+                    _ => {}
+                }
+            }
+        }
+        let mut standard = Vec::new();
+        for model in menus {
+            standard_items(model, &mut standard);
+        }
+        Ok(Self { menu, standard })
     }
     pub(crate) fn install(&self) {
         self.menu.init_for_nsapp();
+        edit_keys::watch(&self.standard);
     }
 }
+/// The standard edit items' shortcuts while zgui's own view has the keyboard.
+/// AppKit offers a ⌘ key to the menu bar before the view, and the item for it
+/// (⌘V: Paste) is disabled there, since zgui's view doesn't answer `paste:`;
+/// a disabled item still swallows its key, with a beep, so zgui's editors
+/// never heard ⌘V, ⌘C, ⌘X, ⌘A or ⌘Z. A local monitor sees each key before the
+/// menu does: one of those, for a zgui window whose view has the keyboard,
+/// goes straight to the view, which hands it to zgui as any key. A page or
+/// other native view with the keyboard gets the menu items as before.
+#[cfg(target_os = "macos")]
+mod edit_keys {
+    use super::StandardItem;
+    use objc2::MainThreadMarker;
+    use objc2::rc::Retained;
+    use objc2_app_kit::{NSEvent, NSEventMask, NSEventModifierFlags};
+    use std::cell::{Cell, RefCell};
+    use std::ptr::NonNull;
+
+    thread_local! {
+        static WATCHING: Cell<bool> = const { Cell::new(false) };
+        /// (key, shift) for each standard item in the installed menu bar.
+        static SHORTCUTS: RefCell<Vec<(&'static str, bool)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn shortcut(item: StandardItem) -> (&'static str, bool) {
+        match item {
+            StandardItem::Undo => ("z", false),
+            StandardItem::Redo => ("z", true),
+            StandardItem::Cut => ("x", false),
+            StandardItem::Copy => ("c", false),
+            StandardItem::Paste => ("v", false),
+            StandardItem::SelectAll => ("a", false),
+        }
+    }
+
+    /// Whether `event` is one of the menu bar's standard edit shortcuts.
+    fn is_edit_shortcut(event: &NSEvent) -> bool {
+        let flags = event.modifierFlags() & NSEventModifierFlags::DeviceIndependentFlagsMask;
+        if !flags.contains(NSEventModifierFlags::Command)
+            || flags.intersects(NSEventModifierFlags::Control | NSEventModifierFlags::Option)
+        {
+            return false;
+        }
+        let shift = flags.contains(NSEventModifierFlags::Shift);
+        let Some(mut key) = event
+            .charactersIgnoringModifiers()
+            .map(|k| k.to_string().to_lowercase())
+        else {
+            return false;
+        };
+        // A layout that types no Latin letters (Cyrillic, Greek): the key in
+        // the ANSI position, as AppKit matches menu shortcuts then. A Latin
+        // layout (Dvorak) keeps its letters.
+        if !key.is_ascii() {
+            key = match event.keyCode() {
+                0 => "a",
+                6 => "z",
+                7 => "x",
+                8 => "c",
+                9 => "v",
+                _ => return false,
+            }
+            .to_owned();
+        }
+        SHORTCUTS.with(|keys| keys.borrow().iter().any(|(k, s)| *k == key && *s == shift))
+    }
+
+    /// The zgui view `event` should go to: its window is key and zgui's view
+    /// (winit's, its content view) is the first responder.
+    fn zgui_view(event: &NSEvent) -> Option<Retained<objc2_app_kit::NSView>> {
+        let mtm = MainThreadMarker::new()?;
+        let window = event.window(mtm).filter(|w| w.isKeyWindow())?;
+        let content = window.contentView()?;
+        let responder = window.firstResponder()?;
+        let is_content = std::ptr::eq(
+            Retained::as_ptr(&responder) as *const u8,
+            Retained::as_ptr(&content) as *const u8,
+        );
+        // winit's view, or the subclass AccessKit makes of it at run time.
+        let mut class = Some(content.class());
+        let mut winit = false;
+        while let Some(c) = class {
+            if c.name().to_str() == Ok("WinitView") {
+                winit = true;
+                break;
+            }
+            class = c.superclass();
+        }
+        (is_content && winit).then_some(content)
+    }
+
+    /// ZGUI_TRACE_KEYS: what the monitor makes of a ⌘ key, on stderr.
+    fn trace(event: &NSEvent) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let window = event.window(mtm);
+        let responder = window
+            .as_ref()
+            .and_then(|w| w.firstResponder())
+            .map(|r| r.class().name().to_string_lossy().into_owned());
+        let content = window
+            .as_ref()
+            .and_then(|w| w.contentView())
+            .map(|c| c.class().name().to_string_lossy().into_owned());
+        eprintln!(
+            "TRACE edit-keys {:?} shortcut={} key-window={:?} responder={:?} content={:?} to-view={}",
+            event.charactersIgnoringModifiers().map(|k| k.to_string()),
+            is_edit_shortcut(event),
+            window.as_ref().map(|w| w.isKeyWindow()),
+            responder,
+            content,
+            zgui_view(event).is_some()
+        );
+    }
+
+    pub(super) fn watch(items: &[StandardItem]) {
+        SHORTCUTS
+            .with(|keys| *keys.borrow_mut() = items.iter().map(|item| shortcut(*item)).collect());
+        if WATCHING.replace(true) {
+            return;
+        }
+        let block = block2::RcBlock::new(|event: NonNull<NSEvent>| -> *mut NSEvent {
+            // SAFETY: AppKit passes a valid event for the handler's duration.
+            let key = unsafe { event.as_ref() };
+            if std::env::var_os("ZGUI_TRACE_KEYS").is_some()
+                && key.modifierFlags().contains(NSEventModifierFlags::Command)
+            {
+                trace(key);
+            }
+            if is_edit_shortcut(key)
+                && let Some(view) = zgui_view(key)
+            {
+                // To the view, not the menu bar: taken here, AppKit sends it nowhere else.
+                view.keyDown(key);
+                return std::ptr::null_mut();
+            }
+            event.as_ptr()
+        });
+        // The monitor lives as long as the app.
+        let monitor = unsafe {
+            NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &block)
+        };
+        std::mem::forget(monitor);
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use objc2_app_kit::NSEventType;
+        use objc2_foundation::{NSPoint, NSString};
+
+        fn key(characters: &str, flags: NSEventModifierFlags) -> Retained<NSEvent> {
+            key_at(characters, flags, 0)
+        }
+        fn key_at(characters: &str, flags: NSEventModifierFlags, code: u16) -> Retained<NSEvent> {
+            let text = NSString::from_str(characters);
+            NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+                NSEventType::KeyDown, NSPoint::new(0., 0.), flags, 0., 0, None, &text, &text, false, code,
+            )
+            .unwrap()
+        }
+
+        #[test]
+        fn takes_only_the_menu_bars_edit_shortcuts() {
+            let command = NSEventModifierFlags::Command;
+            SHORTCUTS.with(|keys| {
+                *keys.borrow_mut() = [StandardItem::Paste, StandardItem::Copy, StandardItem::Redo]
+                    .iter()
+                    .map(|i| shortcut(*i))
+                    .collect()
+            });
+            assert!(is_edit_shortcut(&key("v", command)));
+            assert!(is_edit_shortcut(&key("c", command)));
+            assert!(
+                is_edit_shortcut(&key("Z", command | NSEventModifierFlags::Shift)),
+                "redo"
+            );
+            assert!(
+                !is_edit_shortcut(&key("z", command)),
+                "undo isn't in this menu bar"
+            );
+            assert!(!is_edit_shortcut(&key("x", command)), "nor cut");
+            assert!(
+                !is_edit_shortcut(&key("v", NSEventModifierFlags::empty())),
+                "a plain v is typing"
+            );
+            assert!(
+                !is_edit_shortcut(&key("v", command | NSEventModifierFlags::Option)),
+                "⌥⌘V is something else"
+            );
+            assert!(
+                !is_edit_shortcut(&key("v", command | NSEventModifierFlags::Shift)),
+                "nor ⇧⌘V"
+            );
+            assert!(
+                !is_edit_shortcut(&key("t", command)),
+                "an app shortcut stays with the menu bar"
+            );
+            // A Russian layout's ⌘C types "с": the key in C's place.
+            assert!(is_edit_shortcut(&key_at("с", command, 8)), "⌘C on Cyrillic");
+            assert!(
+                !is_edit_shortcut(&key_at("щ", command, 31)),
+                "a key in no edit shortcut's place"
+            );
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 impl Drop for NativeMenu {
     fn drop(&mut self) {
@@ -453,6 +788,41 @@ impl Drop for NativeMenu {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_standard_items_shortcut_and_action_are_its_own() {
+        use zgui::input::{Key, Modifiers};
+        let command = |shift| Modifiers {
+            meta: true,
+            shift,
+            ..Default::default()
+        };
+        let c = |shift| MenuAccelerator::new(Key::Character("c".into()), command(shift));
+        let clash = [AppMenu::new(
+            "Edit",
+            [
+                AppMenuEntry::Standard(StandardItem::Copy),
+                AppMenuEntry::item("Copy Path", "copy-path").accelerator(c(false)),
+            ],
+        )];
+        assert!(validate(&clash).is_err(), "⌘C is Copy's");
+        let taken = [AppMenu::new(
+            "Edit",
+            [
+                AppMenuEntry::Standard(StandardItem::Paste),
+                AppMenuEntry::item("Paste", "standard:paste"),
+            ],
+        )];
+        assert!(validate(&taken).is_err(), "so is its action");
+        let fine = [AppMenu::new(
+            "Edit",
+            [
+                AppMenuEntry::Standard(StandardItem::Copy),
+                AppMenuEntry::Standard(StandardItem::Paste),
+                AppMenuEntry::item("Copy Path", "copy-path").accelerator(c(true)),
+            ],
+        )];
+        assert_eq!(validate(&fine), Ok(()));
+    }
     #[test]
     fn rendered_menu_keyboard_dispatches_shared_identifier_and_skips_disabled() {
         use zgui::{

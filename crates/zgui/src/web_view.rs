@@ -52,6 +52,150 @@ pub enum WebProfile {
     Named(String),
 }
 
+/// A script run in each page before the page's own (see
+/// [`WebViewOptions::scripts`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UserScript {
+    pub source: String,
+    /// Only in the top frame, not in iframes.
+    pub main_frame_only: bool,
+}
+
+/// A request for a URL in a scheme the app serves (see [`SchemeHandler`]).
+/// Any page in the view can make one (an `<img>`, an `<iframe>`, a
+/// `fetch` on a site the view shows): a handler whose requests do more than
+/// read checks who asked (`main_document_url`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SchemeRequest {
+    /// The [`WebView::id`] of the page asking.
+    pub web_view: u64,
+    pub url: String,
+    /// The top page the request is made for (empty when the platform does
+    /// not say): a site that embeds or fetches the scheme's URLs shows here.
+    pub main_document_url: String,
+    pub method: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SchemeResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+/// Answers one [`SchemeRequest`], from any thread, once. Dropping it
+/// unanswered fails the request; an answer after the page gave up on the
+/// request (it navigated away, or closed) is dropped.
+pub struct SchemeResponder(Option<Box<dyn FnOnce(Option<SchemeResponse>) + Send>>);
+impl SchemeResponder {
+    /// `deliver` gets the response, or `None` if the responder was dropped.
+    pub fn new(deliver: impl FnOnce(Option<SchemeResponse>) + Send + 'static) -> Self {
+        Self(Some(Box::new(deliver)))
+    }
+    pub fn respond(mut self, response: SchemeResponse) {
+        if let Some(deliver) = self.0.take() {
+            deliver(Some(response));
+        }
+    }
+}
+impl Drop for SchemeResponder {
+    fn drop(&mut self) {
+        if let Some(deliver) = self.0.take() {
+            deliver(None);
+        }
+    }
+}
+impl std::fmt::Debug for SchemeResponder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SchemeResponder")
+    }
+}
+
+/// Serves a URL scheme of the app's own (`myapp://…`) to pages: `serve` is
+/// called on the UI thread for each request and may answer later, from
+/// another thread, through its responder.
+///
+/// The scheme is lowercase letters, digits, `+`, `-` and `.`, starting with
+/// a letter, and not one the platform serves itself (`http`, `https`,
+/// `file`, `data`, `blob`, `about`…): a web view leaves out a scheme it
+/// cannot register, with a warning, rather than fail. `serve` lives as long
+/// as the page: hold the page in it through a [`WeakWebView`], or the two
+/// keep each other alive.
+#[derive(Clone)]
+pub struct SchemeHandler {
+    pub scheme: String,
+    pub serve: Rc<dyn Fn(SchemeRequest, SchemeResponder)>,
+}
+impl SchemeHandler {
+    pub fn new(
+        scheme: impl Into<String>,
+        serve: impl Fn(SchemeRequest, SchemeResponder) + 'static,
+    ) -> Self {
+        Self {
+            scheme: scheme.into(),
+            serve: Rc::new(serve),
+        }
+    }
+}
+impl std::fmt::Debug for SchemeHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SchemeHandler")
+            .field("scheme", &self.scheme)
+            .finish()
+    }
+}
+impl PartialEq for SchemeHandler {
+    fn eq(&self, other: &Self) -> bool {
+        self.scheme == other.scheme && Rc::ptr_eq(&self.serve, &other.serve)
+    }
+}
+
+/// A navigation about to start, for [`WebView::set_navigation_policy`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NavigationRequest {
+    pub url: String,
+    /// The top frame navigates (not an iframe).
+    pub main_frame: bool,
+    /// What started it: a link, a form, history, a reload, or anything else
+    /// (a script, a redirect, the app).
+    pub kind: NavigationKind,
+    /// The page of the frame that started it (empty for the app's own).
+    pub source_url: String,
+}
+/// What started a navigation ([`NavigationRequest::kind`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NavigationKind {
+    Link,
+    FormSubmission,
+    BackForward,
+    Reload,
+    FormResubmission,
+    Other,
+}
+/// Whether `scheme` can be one an app serves (see [`SchemeHandler`]): its
+/// syntax, and not a scheme every platform's web view serves itself.
+pub fn is_app_scheme(scheme: &str) -> bool {
+    const BUILT_IN: &[&str] = &[
+        "http",
+        "https",
+        "file",
+        "data",
+        "blob",
+        "about",
+        "javascript",
+        "ws",
+        "wss",
+        "ftp",
+    ];
+    let mut chars = scheme.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '+' | '-' | '.'))
+        && !BUILT_IN.contains(&scheme)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct WebViewOptions {
     /// Draw no page background of the view's own: the node's (and what lies
@@ -68,6 +212,11 @@ pub struct WebViewOptions {
     /// Pages may open windows (`window.open`, target=_blank): each request
     /// arrives as [`WebViewEvent::NewWindowRequested`] and opens nothing.
     pub new_windows: bool,
+    /// Scripts injected at document start, in order, before the page's own.
+    pub scripts: Vec<UserScript>,
+    /// Schemes the app serves itself. On macOS each page served this way is
+    /// its own origin and, like `https`, a secure context.
+    pub schemes: Vec<SchemeHandler>,
 }
 impl Default for WebViewOptions {
     fn default() -> Self {
@@ -78,8 +227,17 @@ impl Default for WebViewOptions {
             user_agent: None,
             messages: true,
             new_windows: true,
+            scripts: Vec::new(),
+            schemes: Vec::new(),
         }
     }
+}
+
+/// A page in a web view's history.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HistoryItem {
+    pub url: String,
+    pub title: String,
 }
 
 /// A page's navigation state, kept by the controller.
@@ -92,6 +250,10 @@ pub struct WebViewState {
     pub progress: f64,
     pub can_go_back: bool,
     pub can_go_forward: bool,
+    /// The pages back and forward from this one, nearest first: what a
+    /// browser's held back and forward buttons list.
+    pub back_list: Vec<HistoryItem>,
+    pub forward_list: Vec<HistoryItem>,
     /// The page has keyboard focus.
     pub focused: bool,
     /// The last navigation's failure, until the next starts.
@@ -120,9 +282,17 @@ pub enum WebViewEvent {
     UrlChanged {
         url: String,
     },
-    /// A page message (see [`WebViewOptions::messages`]), as JSON.
+    /// A page message (see [`WebViewOptions::messages`]), as JSON, with
+    /// who sent it. Every page in the view, and every frame in it (an ad's
+    /// iframe), can post one: check `origin` (and `main_frame`) before
+    /// acting on a message that does anything.
     Message {
         body: String,
+        /// The sending frame's origin: `https://example.com`,
+        /// `myapp://settings` (a port only when it is not the scheme's own).
+        origin: String,
+        /// Sent by the top frame, not an iframe.
+        main_frame: bool,
     },
     NewWindowRequested {
         url: String,
@@ -145,6 +315,8 @@ pub enum WebViewCommand {
     Stop,
     GoBack,
     GoForward,
+    /// Go `n` pages through history: negative back, positive forward.
+    GoToHistory(i32),
     Evaluate {
         script: String,
         reply: Option<Box<dyn FnOnce(ScriptResult)>>,
@@ -167,6 +339,7 @@ impl std::fmt::Debug for WebViewCommand {
             Self::Stop => f.write_str("Stop"),
             Self::GoBack => f.write_str("GoBack"),
             Self::GoForward => f.write_str("GoForward"),
+            Self::GoToHistory(n) => f.debug_tuple("GoToHistory").field(n).finish(),
             Self::Evaluate { script, .. } => {
                 f.debug_struct("Evaluate").field("script", script).finish()
             }
@@ -184,17 +357,23 @@ pub trait WebViewBackend {
 }
 
 type Listener = Rc<RefCell<dyn FnMut(&WebViewEvent)>>;
+type Policy = Rc<dyn Fn(&NavigationRequest) -> bool>;
 struct Inner {
     id: u64,
     options: WebViewOptions,
     state: Signal<WebViewState>,
+    /// The pointer over the page, in points from its top left.
+    pointer: Signal<Option<(f32, f32)>>,
     attached: Signal<bool>,
     backend: RefCell<Option<Rc<dyn WebViewBackend>>>,
+    /// Closed (`close`): no page again, commands go nowhere.
+    closed: Cell<bool>,
     queued: RefCell<Vec<WebViewCommand>>,
     listeners: RefCell<Vec<(u64, Listener)>>,
     next_listener: Cell<u64>,
     /// The last `set_src`, so an unchanged reactive source navigates once.
     src: RefCell<Option<String>>,
+    policy: RefCell<Option<Policy>>,
 }
 /// A web page's controller; clones share it.
 #[derive(Clone)]
@@ -249,12 +428,15 @@ impl WebView {
             id,
             options,
             state: runtime.signal(WebViewState::default()),
+            pointer: runtime.signal(None),
             attached: runtime.signal(false),
             backend: RefCell::new(None),
+            closed: Cell::new(false),
             queued: RefCell::new(Vec::new()),
             listeners: RefCell::new(Vec::new()),
             next_listener: Cell::new(0),
             src: RefCell::new(None),
+            policy: RefCell::new(None),
         }))
     }
     /// Unique per controller in this thread.
@@ -292,16 +474,53 @@ impl WebView {
     pub fn focused(&self) -> bool {
         self.0.state.with(|state| state.focused)
     }
+    /// Where the pointer is over the page, in points from its top left;
+    /// `None` outside it (reactive, its own signal: following it does not
+    /// rerun what reads the rest of the state). Over the page zgui hears no
+    /// pointer moves (its nodes had their leave), so this is how to follow
+    /// the pointer there, as `Terminal::pointer` is over a terminal.
+    pub fn pointer(&self) -> Option<(f32, f32)> {
+        self.0.pointer.get()
+    }
+    /// Report the pointer (the platform's report; call from a delivery).
+    pub fn set_pointer(&self, pointer: Option<(f32, f32)>) {
+        if self.0.pointer.with_untracked(|p| *p != pointer) {
+            self.0.pointer.set(pointer);
+        }
+    }
+    /// Whether a report would change anything: something follows the
+    /// pointer, or it has one to clear.
+    pub(crate) fn wants_pointer(&self) -> bool {
+        self.0.pointer.is_observed() || self.0.pointer.with_untracked(Option::is_some)
+    }
     /// Whether a platform page exists for it (reactive).
     pub fn is_attached(&self) -> bool {
         self.0.attached.get()
     }
     fn run(&self, command: WebViewCommand) {
+        if self.0.closed.get() {
+            return;
+        }
         let backend = self.0.backend.borrow().clone();
         match backend {
             Some(backend) => backend.run(command),
             None => self.0.queued.borrow_mut().push(command),
         }
+    }
+    /// End the page now: its platform page goes (with the process and the
+    /// timers behind it), however many handles to this controller remain,
+    /// and none is made for it again. Handles still kept (a script's, until
+    /// it collects them) do nothing.
+    pub fn close(&self) {
+        if self.0.closed.replace(true) {
+            return;
+        }
+        self.0.queued.borrow_mut().clear();
+        drop(self.detach());
+    }
+    /// Whether it was closed (`close`).
+    pub fn is_closed(&self) -> bool {
+        self.0.closed.get()
     }
     pub fn load_url(&self, url: impl Into<String>) {
         let url = url.into();
@@ -342,6 +561,17 @@ impl WebView {
     pub fn go_forward(&self) {
         self.run(WebViewCommand::GoForward);
     }
+    /// Go `n` pages through history (`-1` is back, `1` forward); see
+    /// [`WebViewState::back_list`].
+    pub fn go_to_history(&self, n: i32) {
+        self.run(WebViewCommand::GoToHistory(n));
+    }
+    pub fn back_list(&self) -> Vec<HistoryItem> {
+        self.0.state.with(|state| state.back_list.clone())
+    }
+    pub fn forward_list(&self) -> Vec<HistoryItem> {
+        self.0.state.with(|state| state.forward_list.clone())
+    }
     /// Evaluate `script` in the page; `reply` gets its result as JSON (an
     /// `undefined` result is `null`), on the UI thread at a safe point.
     pub fn evaluate_js(
@@ -376,6 +606,18 @@ impl WebView {
     pub fn set_zoom(&self, zoom: f64) {
         self.run(WebViewCommand::SetZoom(zoom));
     }
+    /// Decide each navigation before it starts: `false` cancels it. Called on
+    /// the UI thread from inside the platform's callback, so it must answer
+    /// at once and not call back into this controller.
+    pub fn set_navigation_policy(&self, policy: impl Fn(&NavigationRequest) -> bool + 'static) {
+        *self.0.policy.borrow_mut() = Some(Rc::new(policy));
+    }
+    /// Whether the navigation policy lets `request` go ahead (the platform's
+    /// question; with no policy, everything may).
+    pub fn allows(&self, request: &NavigationRequest) -> bool {
+        let policy = self.0.policy.borrow().clone();
+        policy.is_none_or(|policy| policy(request))
+    }
     /// Call `listener` with each platform event, until the subscription drops.
     pub fn on_event(&self, listener: impl FnMut(&WebViewEvent) + 'static) -> WebViewSubscription {
         let id = self.0.next_listener.get() + 1;
@@ -394,6 +636,9 @@ impl WebView {
 
     /// Attach the platform page; queued commands run now, in order.
     pub fn attach(&self, backend: Rc<dyn WebViewBackend>) {
+        if self.0.closed.get() {
+            return;
+        }
         *self.0.backend.borrow_mut() = Some(backend.clone());
         let queued = std::mem::take(&mut *self.0.queued.borrow_mut());
         for command in queued {
@@ -667,4 +912,37 @@ fn placeholder_box(label: crate::compose::View) -> View {
                 .text_size(12.)
                 .text_color(crate::style::rgba(0xa0a0_a0ff)),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_app_scheme_is_its_own_and_well_formed() {
+        assert!(is_app_scheme("myapp"));
+        assert!(is_app_scheme("zgui-ui.v2+x"));
+        for taken in ["https", "http", "file", "blob", "data", "about"] {
+            assert!(!is_app_scheme(taken), "{taken} is the web view's");
+        }
+        for malformed in ["", "MyApp", "2app", "my app", "my:app", "app/x"] {
+            assert!(!is_app_scheme(malformed), "{malformed:?}");
+        }
+    }
+
+    #[test]
+    fn a_policy_decides_and_none_allows() {
+        let runtime = crate::reactive::Runtime::new();
+        let web = WebView::new(&runtime, WebViewOptions::default());
+        let request = |url: &str| NavigationRequest {
+            url: url.into(),
+            main_frame: true,
+            kind: NavigationKind::Link,
+            source_url: String::new(),
+        };
+        assert!(web.allows(&request("https://a.test/")));
+        web.set_navigation_policy(|r| !r.url.starts_with("file:"));
+        assert!(web.allows(&request("https://a.test/")));
+        assert!(!web.allows(&request("file:///etc/passwd")));
+    }
 }

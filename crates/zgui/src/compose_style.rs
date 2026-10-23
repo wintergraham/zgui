@@ -4,16 +4,168 @@ use crate::{
     reactive::Signal,
     scene::{Color, NodeId, NodeKind, QuadStyle},
     style::Styles,
+    theme::{ThemeScope, Themed, tok},
     widgets::Ui,
 };
 
+/// What text inherits. A colour, size or family that comes from a theme
+/// token stays the token: each text node resolves it from its own theme
+/// scope, so a theme change restyles the text that shows it without
+/// changing (and so re-running) what it is inherited through, and text in a
+/// scoped subtree (a light card) takes the scope's value.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Typography {
     pub display: crate::text_layout::TextOptions,
-    pub color: Color,
-    pub size: f32,
+    pub color: Themed<Color>,
+    pub size: Themed<f32>,
     pub wrap: bool,
     pub font: crate::text_layout::FontStyle,
+    /// The family's token, when it comes from one (`font.family` is then
+    /// the default and unused).
+    pub family: Option<crate::theme::TokenId>,
+}
+impl Typography {
+    /// The colour to show, read from `scope` if it is a token (subscribing).
+    pub(crate) fn color_in(&self, scope: Option<&ThemeScope>) -> Color {
+        resolve_color(self.color, scope)
+    }
+    pub(crate) fn size_in(&self, scope: Option<&ThemeScope>) -> f32 {
+        resolve_size(self.size, scope)
+    }
+    pub(crate) fn font_in(&self, scope: Option<&ThemeScope>) -> crate::text_layout::FontStyle {
+        let mut font = self.font.clone();
+        if let Some(token) = self.family
+            && scope.is_some()
+        {
+            font.family = resolve_family(token, scope);
+        }
+        font
+    }
+    /// With colour, size and family resolved: what a text node shows. The
+    /// body tokens (`text.primary`, `font.size.md`, `font.sans`, what text
+    /// inherits unless a view says otherwise) are read together, in place.
+    fn shown(mut self, scope: Option<&ThemeScope>, subscribed: &mut bool) -> Self {
+        let is = |value: Themed<f32>, token: crate::theme::TokenId| matches!(value, Themed::Token(t) if t == token);
+        let body_color = matches!(self.color, Themed::Token(t) if t == tok::TEXT_PRIMARY.0);
+        let body_size = is(self.size, tok::FONT_SIZE_MD.0);
+        let body_family = self.family == Some(tok::FONT_SANS.0);
+        if let Some(scope) = scope
+            && (body_color || body_size || body_family)
+        {
+            read_body(scope, subscribed, |body| {
+                if body_color {
+                    self.color = Themed::Value(body.color);
+                }
+                if body_size {
+                    self.size = Themed::Value(body.size);
+                }
+                if body_family && self.font.family != body.family {
+                    self.font.family = body.family.clone();
+                }
+            });
+            if body_family {
+                self.family = None;
+            }
+        }
+        self.color = Themed::Value(resolve_color(self.color, scope));
+        self.size = Themed::Value(resolve_size(self.size, scope));
+        if let Some(token) = self.family.take()
+            && scope.is_some()
+        {
+            self.font.family = resolve_family(token, scope);
+        }
+        self
+    }
+    /// A resolved size (see `shown`).
+    fn size_value(size: Themed<f32>) -> f32 {
+        match size {
+            Themed::Value(size) => size,
+            Themed::Token(_) => 16.,
+        }
+    }
+}
+/// A colour, read from `scope` if it is a token (subscribing).
+#[inline(always)]
+fn resolve_color(color: Themed<Color>, scope: Option<&ThemeScope>) -> Color {
+    match (color, scope) {
+        (Themed::Value(color), _) => color,
+        // The body tokens text inherits read as one dependency.
+        (Themed::Token(token), Some(scope)) if token == tok::TEXT_PRIMARY.0 => {
+            scope.with_body(|body| body.color)
+        }
+        (Themed::Token(token), Some(scope)) => {
+            scope.get(token).color().unwrap_or(Color(0, 0, 0, 0))
+        }
+        (Themed::Token(_), None) => Color(0, 0, 0, 0),
+    }
+}
+fn resolve_family(
+    token: crate::theme::TokenId,
+    scope: Option<&ThemeScope>,
+) -> crate::text_layout::FontFamily {
+    match scope {
+        Some(scope) if token == tok::FONT_SANS.0 => scope.with_body(|body| body.family.clone()),
+        Some(scope) => scope.get(token).font().unwrap_or_default(),
+        None => Default::default(),
+    }
+}
+/// The body text style in `scope`, read by a text node's style effect: it
+/// subscribes the effect the first time, for good, and reads untracked.
+fn read_body<R>(
+    scope: &ThemeScope,
+    subscribed: &mut bool,
+    f: impl FnOnce(&crate::theme::Body) -> R,
+) -> R {
+    if !std::mem::replace(subscribed, true) {
+        scope.subscribe_body();
+    }
+    scope.with_body_untracked(f)
+}
+/// Whether `token` resolves to `family` in `scope` (subscribing), without
+/// cloning what it resolves to.
+fn family_is(
+    token: crate::theme::TokenId,
+    scope: Option<&ThemeScope>,
+    family: &crate::text_layout::FontFamily,
+    subscribed: &mut bool,
+) -> bool {
+    match scope {
+        Some(scope) if token == tok::FONT_SANS.0 => {
+            read_body(scope, subscribed, |body| body.family == *family)
+        }
+        _ => resolve_family(token, scope) == *family,
+    }
+}
+#[inline(always)]
+fn resolve_size(size: Themed<f32>, scope: Option<&ThemeScope>) -> f32 {
+    match (size, scope) {
+        (Themed::Value(size), _) => size,
+        (Themed::Token(token), Some(scope)) if token == tok::FONT_SIZE_MD.0 => {
+            scope.with_body(|body| body.size)
+        }
+        (Themed::Token(token), Some(scope)) => scope.get(token).number().unwrap_or(16.),
+        (Themed::Token(_), None) => 16.,
+    }
+}
+/// Which token, if any, sets `field` in `styles` (a blend of two is passed
+/// on as the colour it resolved to).
+fn token_of(styles: &Styles, field: crate::theme::Field) -> Option<crate::theme::TokenId> {
+    styles
+        .tokens
+        .as_ref()?
+        .0
+        .iter()
+        .rev()
+        .find(|(bound, _, _)| *bound == field)
+        .and_then(|(_, token, mix)| mix.is_none().then_some(*token))
+}
+/// A resolved text colour as typography carries it: the token if one set it.
+fn themed_color(styles: &Styles) -> Option<Themed<Color>> {
+    let color = styles.text_color?;
+    Some(match token_of(styles, crate::theme::Field::TextColor) {
+        Some(token) => Themed::Token(token),
+        None => Themed::Value(color),
+    })
 }
 /// Styles laid over a node's own while it is hovered, active, focused or
 /// disabled. Boxed: most views set none, and every view carries the set.
@@ -23,7 +175,20 @@ pub(crate) struct Variants {
     pub active: Option<Box<Styles>>,
     pub focus: Option<Box<Styles>>,
     pub disabled: Option<Box<Styles>>,
+    /// A built-in widget's own hover, active and focus styles, where the
+    /// view sets none: made the first time each comes into effect, so a
+    /// widget never hovered, pressed or focused keeps none of them. They
+    /// set no typography.
+    pub defaults: [Option<fn() -> Styles>; 3],
+    /// Hover, active, focus and disabled styles that change (`View::
+    /// reactive_interaction`): they replace the four above when it returns
+    /// them.
+    pub reactive: Option<InteractionStyles>,
 }
+/// Run in a node's style effect, so it follows what it reads: the hover,
+/// active, focus and disabled styles when they changed since its last call,
+/// or `None` to keep them.
+pub(crate) type InteractionStyles = Box<dyn FnMut() -> Option<[Option<Styles>; 4]>>;
 #[derive(Clone, Copy, PartialEq)]
 enum ActivationKey {
     Space,
@@ -35,6 +200,9 @@ struct Interaction {
     pointer_active: bool,
     key_active: Option<ActivationKey>,
     focus: bool,
+    /// The focus shows (CSS's `:focus-visible`): it came from the keyboard,
+    /// the node edits text, or a key went to it since.
+    focus_visible: bool,
 }
 
 #[cfg(test)]
@@ -58,6 +226,7 @@ pub(crate) fn mount_style(
         variants,
         disabled,
         interactive,
+        None,
         None,
         None,
         None,
@@ -202,6 +371,9 @@ struct Settled {
     parent: Option<Typography>,
     intrinsic: Option<(f32, f32)>,
     content: Option<NodeId>,
+    /// A text node's size and family as inherited (tokens, maybe): a
+    /// paint-only run resolves them again, to follow their tokens.
+    text: Option<(Themed<f32>, Option<crate::theme::TokenId>)>,
 }
 /// What a re-run compares against: the inputs last applied to the scene
 /// (unchanged results skip rebuilding and rewriting the node) and, for
@@ -223,10 +395,15 @@ pub(crate) fn mount_style_with_intrinsic(
     intrinsic: Option<Signal<(f32, f32)>>,
     layout_target: Option<Signal<Option<NodeId>>>,
     object_fit: Option<Signal<crate::style::ObjectFit>>,
+    theme: Option<std::rc::Rc<crate::theme::ThemeScope>>,
 ) -> Signal<Typography> {
+    let mut base = base;
+    let mut reactive = variants.reactive;
     // A node setting no typography (nor through a variant or a dynamic
     // style) shows its parent's: it passes that signal on, not a copy.
+    // Interaction styles that change might set it.
     let own = dynamic.is_some()
+        || reactive.is_some()
         || base.sets_typography()
         || [
             &variants.hover,
@@ -236,6 +413,14 @@ pub(crate) fn mount_style_with_intrinsic(
         ]
         .into_iter()
         .any(|variant| variant.as_deref().is_some_and(Styles::sets_typography));
+    let defaults = variants.defaults;
+    debug_assert!(
+        defaults
+            .iter()
+            .flatten()
+            .all(|default| !default().sets_typography()),
+        "default variants set no typography"
+    );
     let typography = if own {
         ui.signal(inherited.with_untracked(Clone::clone))
     } else {
@@ -244,11 +429,19 @@ pub(crate) fn mount_style_with_intrinsic(
     let output = own.then(|| typography.clone());
     let interaction = ui.signal(Interaction::default());
     if interactive
+        || reactive.is_some()
         || variants.hover.is_some()
         || variants.active.is_some()
         || variants.focus.is_some()
+        || defaults.iter().any(Option::is_some)
     {
         let interaction = interaction.clone();
+        // Only a press that shows (or activates) follows the pointer: a
+        // view styled on hover alone leaves it to what is under it (a window
+        // drag region around it).
+        let presses =
+            interactive || reactive.is_some() || variants.active.is_some() || defaults[1].is_some();
+        let (input, owner) = (ui.input.clone(), ui.downgrade());
         ui.on_event(node, interactive, move |event| {
             if event.phase == EventPhase::Capture {
                 return;
@@ -272,7 +465,7 @@ pub(crate) fn mount_style_with_intrinsic(
                     ..
                 } => {
                     state.pointer_active = true;
-                    if event.target == node {
+                    if event.target == node && presses {
                         event.capture_pointer();
                     }
                 }
@@ -281,9 +474,14 @@ pub(crate) fn mount_style_with_intrinsic(
                     ..
                 }
                 | InputEvent::PointerCancel => state.pointer_active = false,
-                InputEvent::Focus if event.target == node => state.focus = true,
+                InputEvent::Focus if event.target == node => {
+                    state.focus = true;
+                    state.focus_visible = input.focus_visible_now()
+                        || owner.upgrade().is_some_and(|ui| ui.is_editor(node));
+                }
                 InputEvent::Blur if event.target == node => {
                     state.focus = false;
+                    state.focus_visible = false;
                     state.pointer_active = false;
                     state.key_active = None;
                 }
@@ -291,12 +489,27 @@ pub(crate) fn mount_style_with_intrinsic(
                     key: Key::Space,
                     repeat: false,
                     ..
-                } if event.target == node => state.key_active = Some(ActivationKey::Space),
+                } if event.target == node => {
+                    state.key_active = Some(ActivationKey::Space);
+                    state.focus_visible = true;
+                }
                 InputEvent::KeyDown {
                     key: Key::Enter,
                     repeat: false,
                     ..
-                } if event.target == node => state.key_active = Some(ActivationKey::Enter),
+                } if event.target == node => {
+                    state.key_active = Some(ActivationKey::Enter);
+                    state.focus_visible = true;
+                }
+                // A key to it (not a shortcut) shows its focus.
+                InputEvent::KeyDown { modifiers, .. }
+                    if event.target == node
+                        && !modifiers.meta
+                        && !modifiers.control
+                        && !modifiers.alt =>
+                {
+                    state.focus_visible = true;
+                }
                 InputEvent::KeyUp {
                     key: Key::Space, ..
                 } if event.target == node && state.key_active == Some(ActivationKey::Space) => {
@@ -311,104 +524,286 @@ pub(crate) fn mount_style_with_intrinsic(
             });
         });
     }
-    let variants: [Option<Box<Styles>>; 4] = [
+    let mut variants: [Option<Box<Styles>>; 4] = [
         variants.hover,
         variants.active,
         variants.focus,
         variants.disabled,
     ];
     let weak = ui.downgrade();
-    let original_style = ui.scene.borrow().style(node);
-    let original_effects = ui.scene.borrow().effects(node);
-    let original_transform = ui.scene.borrow().transform(node);
-    let original_local = ui.scene.borrow().local_transform(node);
-    let original_isolated = ui.scene.borrow().is_isolated(node);
-    let original_mask = ui.scene.borrow().mask(node).cloned();
-    let original_inset = ui.scene.borrow().clip_inset(node);
-    let original_kind = ui.scene.borrow().kind(node).clone();
+    let originals = Originals {
+        style: ui.scene.borrow().style(node),
+        effects: ui.scene.borrow().effects(node),
+        transform: ui.scene.borrow().transform(node),
+        local: ui.scene.borrow().local_transform(node),
+        isolated: ui.scene.borrow().is_isolated(node),
+        mask: ui.scene.borrow().mask(node).cloned(),
+        inset: ui.scene.borrow().clip_inset(node),
+        kind: ui.scene.borrow().kind(node).clone(),
+    };
     let mut previous_disabled = None;
     // What re-runs compare against, kept from a node's second run: most
     // nodes are styled once, and each memo costs about 1.2 KB.
     let mut memo: Option<Box<Memo>> = None;
     let mut ran = false;
+    // Theme tokens in the base and variants resolve in place, each run
+    // reading (and so subscribing to) exactly the tokens they use.
+    // Text resolves inherited tokens from the scope; styles with tokens of
+    // their own, or computed ones (which may return tokens), resolve theirs.
+    let is_text = matches!(originals.kind, NodeKind::Text { .. });
+    let scope = if is_text { theme.clone() } else { None };
+    let needs_theme = dynamic.is_some()
+        || reactive.is_some()
+        || base.has_tokens()
+        || variants
+            .iter()
+            .any(|v| v.as_deref().is_some_and(Styles::has_tokens))
+        || defaults.iter().any(Option::is_some);
+    let lazy = defaults.iter().any(Option::is_some);
+    let mut theme = theme
+        .filter(|_| needs_theme)
+        .map(|scope| crate::theme::StyleTheme::new(scope, &base, &variants));
+    // Whether this text node's effect subscribed to its scope's body text
+    // style (`read_body`).
+    let mut body_subscribed = false;
     ui.bind(node, move || {
         let Some(mut ui) = weak.upgrade() else { return };
-        if !ui.scene.borrow().contains(node) { return; }
+        if !ui.scene.borrow().contains(node) {
+            return;
+        }
         if std::mem::replace(&mut ran, true) && memo.is_none() {
-            memo = Some(Box::new(Memo { applied: None, settled: None }));
+            memo = Some(Box::new(Memo {
+                applied: None,
+                settled: None,
+            }));
+        }
+        // Interaction styles that changed take their slots, their tokens
+        // resolved below as those of a slot never resolved.
+        let mut swapped = false;
+        if let Some(next) = reactive.as_mut().and_then(|styles| styles()) {
+            for (slot, (variant, next)) in variants.iter_mut().zip(next).enumerate() {
+                if let Some(theme) = &mut theme {
+                    if let Some(next) = &next {
+                        theme.include(next);
+                    }
+                    theme.replaced(slot + 1);
+                }
+                *variant = next.map(Box::new);
+            }
+            swapped = true;
         }
         let mut produced = dynamic.as_mut().map(|dynamic| dynamic());
         let state = interaction.get();
         let is_disabled = disabled.as_mut().is_some_and(|read| read());
+        let in_effect = [
+            !is_disabled && state.hover,
+            !is_disabled && (state.pointer_active || state.key_active.is_some()),
+            !is_disabled && state.focus && state.focus_visible,
+            is_disabled,
+        ];
+        if lazy {
+            for (i, default) in defaults.iter().enumerate() {
+                if in_effect[i]
+                    && variants[i].is_none()
+                    && let Some(make) = default
+                {
+                    let variant = make();
+                    if let Some(theme) = &mut theme {
+                        theme.include(&variant);
+                    }
+                    variants[i] = Some(Box::new(variant));
+                }
+            }
+        }
+        let themed = theme
+            .as_mut()
+            .is_some_and(|theme| theme.refresh(&mut base, &mut variants, in_effect));
+        if let (Some(theme), Some(produced)) = (&theme, &mut produced) {
+            theme.resolve(produced);
+        }
         let [hover, active, focus, disabled_variant] = &variants;
-        let active_variants = [(!is_disabled && state.hover, hover), (!is_disabled && (state.pointer_active || state.key_active.is_some()), active), (!is_disabled && state.focus, focus), (is_disabled, disabled_variant)];
+        let active_variants = [
+            (in_effect[0], hover),
+            (in_effect[1], active),
+            (in_effect[2], focus),
+            (in_effect[3], disabled_variant),
+        ];
         // Animations re-run this every frame, mostly to change paint alone:
         // when nothing else differs from the last full application, update
         // just that, without resolving styles and typography again.
-        if let Some(Memo { applied: Some(applied), settled: Some(last) }) = memo.as_deref_mut()
+        if let Some(Memo {
+            applied: Some(applied),
+            settled: Some(last),
+        }) = memo.as_deref_mut()
             && last.state == state
             && last.disabled == is_disabled
+            && !themed
+            && !swapped
         {
             let paint = produced.as_mut().map(Paint::take);
             let unchanged = paint.map(|p| p.set()) == last.paint
                 && produced == last.dynamic
-                && last.parent.as_ref().is_none_or(|parent| inherited.with(|now| now == parent))
+                && last
+                    .parent
+                    .as_ref()
+                    .is_none_or(|parent| inherited.with(|now| now == parent))
                 && intrinsic.as_ref().map(|size| size.get()) == last.intrinsic
-                && layout_target.as_ref().and_then(|target| target.get()) == last.content;
+                && layout_target.as_ref().and_then(|target| target.get()) == last.content
+                && last.text.as_ref().is_none_or(|(size, family)| {
+                    let scope = scope.as_deref();
+                    resolve_size(*size, scope) == Typography::size_value(applied.1.size)
+                        && family.is_none_or(|token| {
+                            family_is(token, scope, &applied.1.font.family, &mut body_subscribed)
+                        })
+                });
             if unchanged {
                 let mut resolved = Paint::of(&base);
-                if let Some(paint) = paint { resolved = resolved.over(paint); }
-                for (enabled, variant) in active_variants {
-                    if enabled && let Some(variant) = variant { resolved = resolved.over(Paint::of(variant)); }
+                if let Some(paint) = paint {
+                    resolved = resolved.over(paint);
                 }
-                let parent_color = match &last.parent {
-                    Some(parent) => parent.color,
-                    None => inherited.with_untracked(|parent| parent.color),
-                };
-                let color = resolved.text_color.unwrap_or(parent_color);
+                for (enabled, variant) in active_variants {
+                    if enabled && let Some(variant) = variant {
+                        resolved = resolved.over(Paint::of(variant));
+                    }
+                }
+                let paint_color = resolved.text_color;
+                let bound = theme.as_ref().is_some_and(|theme| theme.themed())
+                    || produced.as_ref().is_some_and(Styles::has_tokens);
                 resolved.put(&mut applied.0);
-                let mut effects = original_effects;
-                if let Some(value) = resolved.opacity { effects.opacity = value; }
-                if let Some(value) = resolved.blur { effects.blur_radius = value; }
-                if let Some(value) = resolved.edge_fade { effects.edge_fade = value; }
-                if let Some(value) = resolved.filter_blur { effects.filter_blur = value; }
-                if let Some(value) = resolved.brightness { effects.brightness = value; }
-                if let Some(value) = resolved.contrast { effects.contrast = value; }
-                if let Some(value) = resolved.saturate { effects.saturate = value; }
-                if applied.1.color != color {
-                    applied.1.color = color;
-                    if let Some(output) = &output {
-                        output.update(|typography| typography.color = color);
+                let mut effects = originals.effects;
+                if let Some(value) = resolved.opacity {
+                    effects.opacity = value;
+                }
+                if let Some(value) = resolved.blur {
+                    effects.blur_radius = value;
+                }
+                if let Some(value) = resolved.edge_fade {
+                    effects.edge_fade = value;
+                }
+                if let Some(value) = resolved.filter_blur {
+                    effects.filter_blur = value;
+                }
+                if let Some(value) = resolved.brightness {
+                    effects.brightness = value;
+                }
+                if let Some(value) = resolved.contrast {
+                    effects.contrast = value;
+                }
+                if let Some(value) = resolved.saturate {
+                    effects.saturate = value;
+                }
+                // The text colour matters to text, and to what inherits it:
+                // the last patch that sets it decides it, a token if it
+                // bound one (only patches with tokens need looking at).
+                let mut text_color = None;
+                if is_text || output.is_some() {
+                    let parent_color = match &last.parent {
+                        Some(parent) => parent.color,
+                        None => inherited.with_untracked(|parent| parent.color),
+                    };
+                    let color = match paint_color {
+                        None => parent_color,
+                        Some(value) if !bound => Themed::Value(value),
+                        Some(value) => {
+                            let mut color = themed_color(&base);
+                            if let (Some(value), Some(produced)) =
+                                (paint.and_then(|p| p.text_color), &produced)
+                            {
+                                color = Some(
+                                    match token_of(produced, crate::theme::Field::TextColor) {
+                                        Some(token) => Themed::Token(token),
+                                        None => Themed::Value(value),
+                                    },
+                                );
+                            }
+                            for (enabled, variant) in active_variants {
+                                if enabled
+                                    && let Some(variant) = variant
+                                    && let Some(own) = themed_color(variant)
+                                {
+                                    color = Some(own);
+                                }
+                            }
+                            color.unwrap_or(Themed::Value(value))
+                        }
+                    };
+                    if is_text {
+                        let shown = resolve_color(color, scope.as_deref());
+                        applied.1.color = Themed::Value(shown);
+                        text_color = Some(shown);
+                        if let Some(output) = &output
+                            && output.with_untracked(|typography| typography.color != color)
+                        {
+                            output.update(|typography| typography.color = color);
+                        }
+                    } else if applied.1.color != color {
+                        applied.1.color = color;
+                        if let Some(output) = &output {
+                            output.update(|typography| typography.color = color);
+                        }
                     }
                 }
                 let mut scene = ui.scene.borrow_mut();
                 scene.set_effects(node, effects);
-                apply_mask(&mut scene, node, &applied.0, &original_mask);
-                scene.set_clip_inset(node, applied.0.clip_inset.or(original_inset));
-                scene.set_transform(node, resolved.transform.unwrap_or(original_transform));
-                scene.set_local_transform(node, resolved.local.resolve(original_local));
-                if let NodeKind::Text { text, font_size, color: old } = scene.kind(node)
+                apply_mask(&mut scene, node, &applied.0, &originals.mask);
+                scene.set_clip_inset(node, applied.0.clip_inset.or(originals.inset));
+                scene.set_transform(node, resolved.transform.unwrap_or(originals.transform));
+                scene.set_local_transform(node, resolved.local.resolve(originals.local));
+                if let Some(color) = text_color
+                    && let NodeKind::Text {
+                        text,
+                        font_size,
+                        color: old,
+                    } = scene.kind(node)
                     && *old != color
                 {
-                    let kind = NodeKind::Text { text: text.clone(), color, font_size: *font_size };
+                    let kind = NodeKind::Text {
+                        text: text.clone(),
+                        color,
+                        font_size: *font_size,
+                    };
                     scene.set_kind(node, kind);
                 }
                 return;
             }
-            if let (Some(produced), Some(paint)) = (&mut produced, paint) { paint.put(produced); }
+            if let (Some(produced), Some(paint)) = (&mut produced, paint) {
+                paint.put(produced);
+            }
         }
         let mut resolved = base.clone();
-        if let Some(produced) = &produced { resolved.merge(produced); }
+        if let Some(produced) = &produced {
+            resolved.merge(produced);
+        }
         for (enabled, variant) in active_variants {
-            if enabled && let Some(variant) = variant { resolved.merge(variant); }
+            if enabled && let Some(variant) = variant {
+                resolved.merge(variant);
+            }
         }
         if disabled.is_some() && previous_disabled != Some(is_disabled) {
             previous_disabled = Some(is_disabled);
-            ui.runtime.clone().untracked(|| ui.set_disabled(node, is_disabled));
+            ui.runtime
+                .clone()
+                .untracked(|| ui.set_disabled(node, is_disabled));
         }
-        if let Some(output) = &object_fit { output.set(resolved.object_fit.unwrap_or_default()); }
+        if let Some(output) = &object_fit {
+            output.set(resolved.object_fit.unwrap_or_default());
+        }
         // Only observe inherited typography when a field is actually inherited.
-        let tracks_parent = resolved.rare().text_overflow.is_none() || resolved.rare().line_clamp.is_none() || resolved.text_color.is_none() || resolved.text_size.is_none() || resolved.text_wrap.is_none() || resolved.font_family.is_none() || resolved.rare().font_features.is_none() || resolved.text_align.is_none() || resolved.rare().font_fallbacks.is_none() || resolved.font_weight.is_none() || resolved.italic.is_none() || resolved.line_height.is_none() || resolved.rare().letter_spacing.is_none();
+        let tracks_parent = resolved.rare().text_overflow.is_none()
+            || resolved.rare().line_clamp.is_none()
+            || resolved.text_color.is_none()
+            || resolved.text_size.is_none()
+            || resolved.text_wrap.is_none()
+            || resolved.font_family.is_none()
+            || resolved.rare().font_features.is_none()
+            || resolved.text_align.is_none()
+            || resolved.rare().font_fallbacks.is_none()
+            || resolved.font_weight.is_none()
+            || resolved.italic.is_none()
+            || resolved.line_height.is_none()
+            || resolved.rare().letter_spacing.is_none()
+            || resolved.rare().underline.is_none()
+            || resolved.rare().underline_offset.is_none();
         let parent = if tracks_parent {
             inherited.get()
         } else {
@@ -419,7 +814,69 @@ pub(crate) fn mount_style_with_intrinsic(
         let current = if !resolved.sets_typography() {
             parent.clone()
         } else {
-            Typography { display: crate::text_layout::TextOptions {overflow: resolved.rare().text_overflow.unwrap_or(parent.display.overflow),line_clamp:resolved.rare().line_clamp.unwrap_or(parent.display.line_clamp)}, color: resolved.text_color.unwrap_or(parent.color), size: resolved.text_size.unwrap_or(parent.size), wrap: resolved.text_wrap.unwrap_or(parent.wrap), font: crate::text_layout::FontStyle { family: resolved.font_family.clone().unwrap_or_else(|| parent.font.family.clone()), features: resolved.rare().font_features.clone().unwrap_or_else(|| parent.font.features.clone()), align: resolved.text_align.unwrap_or(parent.font.align), fallbacks: resolved.rare().font_fallbacks.clone().unwrap_or_else(|| parent.font.fallbacks.clone()), weight: resolved.font_weight.unwrap_or(parent.font.weight), italic: resolved.italic.unwrap_or(parent.font.italic), line_height: resolved.line_height.unwrap_or(parent.font.line_height), letter_spacing: resolved.rare().letter_spacing.unwrap_or(parent.font.letter_spacing) } }
+            let size = match (
+                resolved.text_size,
+                token_of(&resolved, crate::theme::Field::TextSize),
+            ) {
+                (Some(_), Some(token)) => Themed::Token(token),
+                (Some(size), None) => Themed::Value(size),
+                (None, _) => parent.size,
+            };
+            let family = match (
+                &resolved.font_family,
+                token_of(&resolved, crate::theme::Field::FontFamily),
+            ) {
+                (Some(_), Some(token)) => (Default::default(), Some(token)),
+                (Some(family), None) => (family.clone(), None),
+                (None, _) => (parent.font.family.clone(), parent.family),
+            };
+            Typography {
+                family: family.1,
+                display: crate::text_layout::TextOptions {
+                    overflow: resolved
+                        .rare()
+                        .text_overflow
+                        .unwrap_or(parent.display.overflow),
+                    line_clamp: resolved
+                        .rare()
+                        .line_clamp
+                        .unwrap_or(parent.display.line_clamp),
+                },
+                color: themed_color(&resolved).unwrap_or(parent.color),
+                size,
+                wrap: resolved.text_wrap.unwrap_or(parent.wrap),
+                font: crate::text_layout::FontStyle {
+                    family: family.0,
+                    features: resolved
+                        .rare()
+                        .font_features
+                        .clone()
+                        .unwrap_or_else(|| parent.font.features.clone()),
+                    align: resolved.text_align.unwrap_or(parent.font.align),
+                    fallbacks: resolved
+                        .rare()
+                        .font_fallbacks
+                        .clone()
+                        .unwrap_or_else(|| parent.font.fallbacks.clone()),
+                    weight: resolved.font_weight.unwrap_or(parent.font.weight),
+                    italic: resolved.italic.unwrap_or(parent.font.italic),
+                    line_height: resolved.line_height.unwrap_or(parent.font.line_height),
+                    letter_spacing: resolved
+                        .rare()
+                        .letter_spacing
+                        .unwrap_or(parent.font.letter_spacing),
+                    masked: false,
+                    underline: {
+                        let rare = resolved.rare();
+                        let offset = rare
+                            .underline_offset
+                            .or_else(|| parent.font.underline.and_then(|u| u.offset()));
+                        rare.underline
+                            .unwrap_or(parent.font.underline.is_some())
+                            .then(|| crate::text_layout::TextUnderline::new(offset))
+                    },
+                },
+            }
         };
         let tracked_parent = tracks_parent.then_some(parent);
         // Compare before cloning: unchanged typography notifies nothing.
@@ -443,166 +900,422 @@ pub(crate) fn mount_style_with_intrinsic(
                 parent: tracked_parent,
                 intrinsic: intrinsic_size,
                 content: content_layout,
+                text: is_text.then_some((current.size, current.family)),
             });
         }
+        // Text shows its colour, size and family resolved in its scope (a
+        // token's change re-runs it); other nodes do not show typography.
+        let current = if is_text {
+            current.shown(scope.as_deref(), &mut body_subscribed)
+        } else {
+            current
+        };
         let inputs = (resolved, current, intrinsic_size, content_layout);
-        if memo.as_ref().is_some_and(|memo| memo.applied.as_ref() == Some(&inputs)) {
+        if memo
+            .as_ref()
+            .is_some_and(|memo| memo.applied.as_ref() == Some(&inputs))
+        {
             return;
         }
         // Animations mostly change paint effects or the transform, which need
         // neither layout nor a new paint kind: update just those.
-        if let Some(Memo { applied: Some(previous), .. }) = memo.as_deref_mut()
+        if let Some(Memo {
+            applied: Some(previous),
+            ..
+        }) = memo.as_deref_mut()
             && previous.1 == inputs.1
             && previous.2 == inputs.2
             && previous.3 == inputs.3
         {
-            let before = (previous.0.opacity, previous.0.blur, previous.0.edge_fade, previous.0.filter_blur, previous.0.brightness, previous.0.contrast, previous.0.saturate, previous.0.mask_offset, previous.0.clip_inset, previous.0.transform, previous.0.local_transform);
+            let before = (
+                previous.0.opacity,
+                previous.0.blur,
+                previous.0.edge_fade,
+                previous.0.filter_blur,
+                previous.0.brightness,
+                previous.0.contrast,
+                previous.0.saturate,
+                previous.0.mask_offset,
+                previous.0.clip_inset,
+                previous.0.transform,
+                previous.0.local_transform,
+            );
             let next = &inputs.0;
-            (previous.0.opacity, previous.0.blur, previous.0.edge_fade, previous.0.filter_blur, previous.0.brightness, previous.0.contrast, previous.0.saturate, previous.0.mask_offset, previous.0.clip_inset, previous.0.transform, previous.0.local_transform) =
-                (next.opacity, next.blur, next.edge_fade, next.filter_blur, next.brightness, next.contrast, next.saturate, next.mask_offset, next.clip_inset, next.transform, next.local_transform);
+            (
+                previous.0.opacity,
+                previous.0.blur,
+                previous.0.edge_fade,
+                previous.0.filter_blur,
+                previous.0.brightness,
+                previous.0.contrast,
+                previous.0.saturate,
+                previous.0.mask_offset,
+                previous.0.clip_inset,
+                previous.0.transform,
+                previous.0.local_transform,
+            ) = (
+                next.opacity,
+                next.blur,
+                next.edge_fade,
+                next.filter_blur,
+                next.brightness,
+                next.contrast,
+                next.saturate,
+                next.mask_offset,
+                next.clip_inset,
+                next.transform,
+                next.local_transform,
+            );
             if previous.0 == *next {
-                let mut effects = original_effects;
-                if let Some(value) = next.opacity { effects.opacity = value; }
-                if let Some(value) = next.blur { effects.blur_radius = value; }
-                if let Some(value) = next.edge_fade { effects.edge_fade = value; }
-                if let Some(value) = next.filter_blur { effects.filter_blur = value; }
-                if let Some(value) = next.brightness { effects.brightness = value; }
-                if let Some(value) = next.contrast { effects.contrast = value; }
-                if let Some(value) = next.saturate { effects.saturate = value; }
+                let mut effects = originals.effects;
+                if let Some(value) = next.opacity {
+                    effects.opacity = value;
+                }
+                if let Some(value) = next.blur {
+                    effects.blur_radius = value;
+                }
+                if let Some(value) = next.edge_fade {
+                    effects.edge_fade = value;
+                }
+                if let Some(value) = next.filter_blur {
+                    effects.filter_blur = value;
+                }
+                if let Some(value) = next.brightness {
+                    effects.brightness = value;
+                }
+                if let Some(value) = next.contrast {
+                    effects.contrast = value;
+                }
+                if let Some(value) = next.saturate {
+                    effects.saturate = value;
+                }
                 let mut scene = ui.scene.borrow_mut();
                 scene.set_effects(node, effects);
-                apply_mask(&mut scene, node, next, &original_mask);
-                scene.set_clip_inset(node, next.clip_inset.or(original_inset));
-                scene.set_transform(node, next.transform.unwrap_or(original_transform));
-                scene.set_local_transform(node, next.local_transform.resolve(original_local));
+                apply_mask(&mut scene, node, next, &originals.mask);
+                scene.set_clip_inset(node, next.clip_inset.or(originals.inset));
+                scene.set_transform(node, next.transform.unwrap_or(originals.transform));
+                scene.set_local_transform(node, next.local_transform.resolve(originals.local));
                 return;
             }
-            (previous.0.opacity, previous.0.blur, previous.0.edge_fade, previous.0.filter_blur, previous.0.brightness, previous.0.contrast, previous.0.saturate, previous.0.mask_offset, previous.0.clip_inset, previous.0.transform, previous.0.local_transform) = before;
+            (
+                previous.0.opacity,
+                previous.0.blur,
+                previous.0.edge_fade,
+                previous.0.filter_blur,
+                previous.0.brightness,
+                previous.0.contrast,
+                previous.0.saturate,
+                previous.0.mask_offset,
+                previous.0.clip_inset,
+                previous.0.transform,
+                previous.0.local_transform,
+            ) = before;
         }
         let mut first: Option<AppliedInputs> = None;
         let (resolved, current, _, _) = match &mut memo {
             Some(memo) => &*memo.applied.insert(inputs),
             None => &*first.insert(inputs),
         };
-        let mut style = original_style.clone();
-        if let Some(resolved_options) = &resolved.layout_options {
-            if let Some(original) = &style.layout_options {
-                let mut options = **original;
-                options.merge(**resolved_options);
-                if options != **original { style.layout_options = Some(std::sync::Arc::new(options)); }
-            } else {
-                style.layout_options = Some(resolved_options.clone());
-            }
-        }
-        macro_rules! field { ($($field:ident),* $(,)?) => { $(if let Some(value) = resolved.$field { style.$field = value; })* }; }
-        let rare = resolved.rare();
-        macro_rules! dimension { ($($field:ident),* $(,)?) => { $(if let Some(value) = rare.$field { style.$field = Some(value); })* }; }
-        dimension!(min_width,max_width,min_height,max_height);
-        if resolved.width.is_some() || resolved.width_percent.is_some() {
-            style.width = resolved.width;
-            style.width_percent = resolved.width_percent;
-        }
-        if resolved.height.is_some() || resolved.height_percent.is_some() {
-            style.height = resolved.height;
-            style.height_percent = resolved.height_percent;
-        }
-        field!(absolute,gap,clip,flex_grow,flex_shrink,align,justify,text_wrap,margin);
-        if let Some(value) = rare.fade_edges { style.fade_edges = value; }
-        if let Some(value) = rare.fade_insets { style.fade_insets = value; }
-        if let Some(value) = rare.fade_edges_x { style.fade_edges_x = value; }
-        if let Some(value) = rare.fade_insets_x { style.fade_insets_x = value; }
-        if matches!(original_kind, NodeKind::Text { .. } | NodeKind::RichText { .. }) { style.text_wrap = current.wrap; style.text_options = current.display; }
-        if let Some(padding) = resolved.padding { style.padding_edges = Some(padding); }
-        if let Some((width, height)) = intrinsic_size {
-            let padding = style.padding_edges.unwrap_or(crate::scene::Insets::all(style.padding));
-            if resolved.width.is_none() && resolved.width_percent.is_none() { style.width = Some(width + padding.left.max(0.) + padding.right.max(0.)); }
-            if resolved.height.is_none() && resolved.height_percent.is_none() { style.height = Some(height + padding.top.max(0.) + padding.bottom.max(0.)); }
-        }
-
-        let mut content_options = crate::layout::LayoutOptions::default();
-        if layout_target.is_some() {
-            style.gap = 0.; style.align = crate::scene::Align::Stretch; style.justify = crate::scene::Justify::Start;
-            if let Some(options) = &mut style.layout_options {
-                let options = std::sync::Arc::make_mut(options);
-                if options.display != Some(crate::layout::Display::None) { content_options.display = options.display.take(); }
-                content_options.wrap = options.wrap.take();
-                content_options.reverse = options.reverse.take();
-                content_options.align_content = options.align_content.take();
-                content_options.gap_x = options.gap_x.take(); content_options.gap_y = options.gap_y.take();
-                content_options.columns = options.columns.take(); content_options.rows = options.rows.take();
-            }
-        }
-        let mut effects = original_effects;
-        if let Some(value) = resolved.opacity { effects.opacity = value; }
-        if let Some(value) = resolved.blur { effects.blur_radius = value; }
-        if let Some(value) = resolved.edge_fade { effects.edge_fade = value; }
-        if let Some(value) = resolved.filter_blur { effects.filter_blur = value; }
-        if let Some(value) = resolved.brightness { effects.brightness = value; }
-        if let Some(value) = resolved.contrast { effects.contrast = value; }
-        if let Some(value) = resolved.saturate { effects.saturate = value; }
-        let mut scene = ui.scene.borrow_mut();
-        scene.set_style(node, style);
-        if let Some(content) = content_layout {
-            let mut content_style = scene.style(content);
-            content_style.gap = resolved.gap.unwrap_or(0.);
-            content_style.align = resolved.align.unwrap_or(crate::scene::Align::Stretch);
-            content_style.justify = resolved.justify.unwrap_or(crate::scene::Justify::Start);
-            content_style.layout_options = (!content_options.is_empty()).then(|| std::sync::Arc::new(content_options));
-            scene.set_style(content, content_style);
-            if let Some(layout) = resolved.layout { scene.set_kind(content, NodeKind::Container(layout)); }
-        }
-
-        scene.set_cursor(node, resolved.cursor);
-        scene.set_effects(node, effects);
-        apply_mask(&mut scene, node, resolved, &original_mask);
-        scene.set_clip_inset(node, resolved.clip_inset.or(original_inset));
-        scene.set_transform(node, resolved.transform.unwrap_or(original_transform));
-        scene.set_local_transform(node, resolved.local_transform.resolve(original_local));
-        scene.set_isolated(node, resolved.isolated.unwrap_or(original_isolated));
-        let kind = match &original_kind {
-            NodeKind::Container(layout) | NodeKind::Panel { layout, .. } => {
-                let mut quad = match &original_kind { NodeKind::Panel { quad, .. } => quad.clone(), _ => QuadStyle::default() };
-                if let Some(value) = resolved.background { quad.fill = value; }
-                if let Some(value) = resolved.radius { quad.radius = value; }
-                if let Some(value) = resolved.border_color { quad.border_color = value; }
-                if let Some(value) = resolved.border_width { quad.border_width = value; }
-                if let Some(value) = resolved.rare().shadow { quad.shadow = value; }
-                if let Some(value) = resolved.rare().border_over { quad.border_over = value; }
-                if let Some(value) = resolved.rare().outline {
-                    quad.outline = value.map(|(width, color)| crate::scene::Outline { width, color, offset: 0. });
-                }
-                if let (Some(offset), Some(outline)) = (resolved.rare().outline_offset, &mut quad.outline) { outline.offset = offset; }
-                if quad.decoration.is_some() || resolved.paint_background.is_some() || resolved.corners.is_some() || resolved.border_edges.is_some() || resolved.rare().border_style.is_some() || resolved.rare().shadows.is_some() {
-                    let mut detail = quad.decoration.as_deref().cloned().unwrap_or_default();
-                    if let Some(value) = &resolved.paint_background { detail.background = value.clone(); }
-                    if let Some(value) = resolved.corners { detail.corners = value; }
-                    if let Some(value) = resolved.border_edges { detail.border_widths = value; }
-                    if let Some(value) = resolved.rare().border_style { detail.border_style = value; }
-                    if let Some(value) = &resolved.rare().shadows { detail.shadows = value.clone(); }
-                    quad.decoration = (detail != crate::decoration::Decoration::default()).then(|| std::sync::Arc::new(detail));
-                }
-                if quad == QuadStyle::default() { NodeKind::Container(if layout_target.is_some() { *layout } else { resolved.layout.unwrap_or(*layout) }) }
-                else { NodeKind::Panel { layout: if layout_target.is_some() { *layout } else { resolved.layout.unwrap_or(*layout) }, quad } }
-            }
-            NodeKind::Text { .. } => match scene.kind(node) {
-                NodeKind::Text { text, .. } => NodeKind::Text { text: text.clone(), color: current.color, font_size: current.size },
-                kind => kind.clone(),
-            },
-            _ => scene.kind(node).clone(),
-        };
-        if matches!(kind, NodeKind::Text { .. }) { scene.set_font(node, current.font.clone()); }
-        scene.set_kind(node, kind);
-        if let Some(uniforms) = resolved.rare().shader_uniforms {
-            scene.set_shader_uniforms(node, uniforms);
-        }
+        apply_resolved(
+            &ui,
+            node,
+            &originals,
+            resolved,
+            current,
+            intrinsic_size,
+            content_layout,
+            layout_target.is_some(),
+        );
     });
     typography
+}
+
+/// What a node showed before its style first applied: what properties no
+/// style sets fall back to.
+struct Originals {
+    style: crate::scene::Style,
+    effects: crate::scene::Effects,
+    transform: crate::scene::Transform,
+    local: crate::scene::LocalTransform,
+    isolated: bool,
+    mask: Option<crate::scene::ImageMask>,
+    inset: Option<crate::scene::ClipInset>,
+    kind: NodeKind,
+}
+/// Write a fully resolved style to the scene: the style effect's slow path
+/// (layout, kind and paint), out of line so that the paint-only path every
+/// animation frame takes stays small.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn apply_resolved(
+    ui: &Ui,
+    node: NodeId,
+    originals: &Originals,
+    resolved: &Styles,
+    current: &Typography,
+    intrinsic_size: Option<(f32, f32)>,
+    content_layout: Option<NodeId>,
+    layout_target: bool,
+) {
+    let mut style = originals.style.clone();
+    if let Some(resolved_options) = &resolved.layout_options {
+        if let Some(original) = &style.layout_options {
+            let mut options = **original;
+            options.merge(**resolved_options);
+            if options != **original {
+                style.layout_options = Some(std::sync::Arc::new(options));
+            }
+        } else {
+            style.layout_options = Some(resolved_options.clone());
+        }
+    }
+    macro_rules! field { ($($field:ident),* $(,)?) => { $(if let Some(value) = resolved.$field { style.$field = value; })* }; }
+    let rare = resolved.rare();
+    macro_rules! dimension { ($($field:ident),* $(,)?) => { $(if let Some(value) = rare.$field { style.$field = Some(value); })* }; }
+    dimension!(min_width, max_width, min_height, max_height);
+    if resolved.width.is_some() || resolved.width_percent.is_some() {
+        style.width = resolved.width;
+        style.width_percent = resolved.width_percent;
+    }
+    if resolved.height.is_some() || resolved.height_percent.is_some() {
+        style.height = resolved.height;
+        style.height_percent = resolved.height_percent;
+    }
+    field!(
+        absolute,
+        gap,
+        clip,
+        flex_grow,
+        flex_shrink,
+        align,
+        justify,
+        text_wrap,
+        margin
+    );
+    // CSS `position`: relative and absolute exclude each other.
+    if let Some(value) = rare.relative {
+        style.relative = value;
+    }
+    if style.absolute {
+        style.relative = false;
+    }
+    // A size set here is a constraint, not the default it replaces.
+    if resolved.width.is_some() || resolved.width_percent.is_some() {
+        style.intrinsic_width = false;
+    }
+    if resolved.height.is_some() || resolved.height_percent.is_some() {
+        style.intrinsic_height = false;
+    }
+    if let Some(value) = rare.fade_edges {
+        style.fade_edges = value;
+    }
+    if let Some(value) = rare.fade_insets {
+        style.fade_insets = value;
+    }
+    if let Some(value) = rare.fade_edges_x {
+        style.fade_edges_x = value;
+    }
+    if let Some(value) = rare.fade_insets_x {
+        style.fade_insets_x = value;
+    }
+    if let Some(value) = rare.fade_overflow {
+        style.fade_overflow = value;
+    }
+    if let Some(value) = rare.snap {
+        style.snap = value;
+    }
+    if matches!(
+        originals.kind,
+        NodeKind::Text { .. } | NodeKind::RichText { .. }
+    ) {
+        style.text_wrap = current.wrap;
+        style.text_options = current.display;
+    }
+    if let Some(padding) = resolved.padding {
+        style.padding_edges = Some(padding);
+    }
+    if let Some((width, height)) = intrinsic_size {
+        let padding = style
+            .padding_edges
+            .unwrap_or(crate::scene::Insets::all(style.padding));
+        if resolved.width.is_none() && resolved.width_percent.is_none() {
+            style.width = Some(width + padding.left.max(0.) + padding.right.max(0.));
+        }
+        if resolved.height.is_none() && resolved.height_percent.is_none() {
+            style.height = Some(height + padding.top.max(0.) + padding.bottom.max(0.));
+        }
+    }
+
+    let mut content_options = crate::layout::LayoutOptions::default();
+    if layout_target {
+        style.gap = 0.;
+        style.align = crate::scene::Align::Stretch;
+        style.justify = crate::scene::Justify::Start;
+        if let Some(options) = &mut style.layout_options {
+            let options = std::sync::Arc::make_mut(options);
+            if options.display != Some(crate::layout::Display::None) {
+                content_options.display = options.display.take();
+            }
+            content_options.wrap = options.wrap.take();
+            content_options.reverse = options.reverse.take();
+            content_options.align_content = options.align_content.take();
+            content_options.gap_x = options.gap_x.take();
+            content_options.gap_y = options.gap_y.take();
+            content_options.columns = options.columns.take();
+            content_options.rows = options.rows.take();
+        }
+    }
+    let mut effects = originals.effects;
+    if let Some(value) = resolved.opacity {
+        effects.opacity = value;
+    }
+    if let Some(value) = resolved.blur {
+        effects.blur_radius = value;
+    }
+    if let Some(value) = resolved.edge_fade {
+        effects.edge_fade = value;
+    }
+    if let Some(value) = resolved.filter_blur {
+        effects.filter_blur = value;
+    }
+    if let Some(value) = resolved.brightness {
+        effects.brightness = value;
+    }
+    if let Some(value) = resolved.contrast {
+        effects.contrast = value;
+    }
+    if let Some(value) = resolved.saturate {
+        effects.saturate = value;
+    }
+    let mut scene = ui.scene.borrow_mut();
+    scene.set_style(node, style);
+    if let Some(content) = content_layout {
+        let mut content_style = scene.style(content);
+        content_style.gap = resolved.gap.unwrap_or(0.);
+        content_style.align = resolved.align.unwrap_or(crate::scene::Align::Stretch);
+        content_style.justify = resolved.justify.unwrap_or(crate::scene::Justify::Start);
+        content_style.layout_options =
+            (!content_options.is_empty()).then(|| std::sync::Arc::new(content_options));
+        scene.set_style(content, content_style);
+        if let Some(layout) = resolved.layout {
+            scene.set_kind(content, NodeKind::Container(layout));
+        }
+    }
+
+    scene.set_cursor(node, resolved.cursor);
+    scene.set_effects(node, effects);
+    apply_mask(&mut scene, node, resolved, &originals.mask);
+    scene.set_clip_inset(node, resolved.clip_inset.or(originals.inset));
+    scene.set_transform(node, resolved.transform.unwrap_or(originals.transform));
+    scene.set_local_transform(node, resolved.local_transform.resolve(originals.local));
+    scene.set_isolated(node, resolved.isolated.unwrap_or(originals.isolated));
+    let kind = match &originals.kind {
+        NodeKind::Container(layout) | NodeKind::Panel { layout, .. } => {
+            let mut quad = match &originals.kind {
+                NodeKind::Panel { quad, .. } => quad.clone(),
+                _ => QuadStyle::default(),
+            };
+            if let Some(value) = resolved.background {
+                quad.fill = value;
+            }
+            if let Some(value) = resolved.radius {
+                quad.radius = value;
+            }
+            if let Some(value) = resolved.border_color {
+                quad.border_color = value;
+            }
+            if let Some(value) = resolved.border_width {
+                quad.border_width = value;
+            }
+            if let Some(value) = resolved.rare().shadow {
+                quad.shadow = value;
+            }
+            if let Some(value) = resolved.rare().border_over {
+                quad.border_over = value;
+            }
+            if let Some(value) = resolved.rare().outline {
+                quad.outline = value.map(|(width, color)| crate::scene::Outline {
+                    width,
+                    color,
+                    offset: 0.,
+                });
+            }
+            if let (Some(offset), Some(outline)) =
+                (resolved.rare().outline_offset, &mut quad.outline)
+            {
+                outline.offset = offset;
+            }
+            if quad.decoration.is_some()
+                || resolved.paint_background.is_some()
+                || resolved.corners.is_some()
+                || resolved.border_edges.is_some()
+                || resolved.rare().border_style.is_some()
+                || resolved.rare().shadows.is_some()
+                || resolved.rare().inset_shadows.is_some()
+            {
+                let mut detail = quad.decoration.as_deref().cloned().unwrap_or_default();
+                if let Some(value) = &resolved.paint_background {
+                    detail.background = value.clone();
+                }
+                if let Some(value) = resolved.corners {
+                    detail.corners = value;
+                }
+                if let Some(value) = resolved.border_edges {
+                    detail.border_widths = value;
+                }
+                if let Some(value) = resolved.rare().border_style {
+                    detail.border_style = value;
+                }
+                if let Some(value) = &resolved.rare().shadows {
+                    detail.shadows = value.clone();
+                }
+                if let Some(value) = &resolved.rare().inset_shadows {
+                    detail.inset_shadows = value.clone();
+                }
+                quad.decoration = (detail != crate::decoration::Decoration::default())
+                    .then(|| std::sync::Arc::new(detail));
+            }
+            if quad == QuadStyle::default() {
+                NodeKind::Container(if layout_target {
+                    *layout
+                } else {
+                    resolved.layout.unwrap_or(*layout)
+                })
+            } else {
+                NodeKind::Panel {
+                    layout: if layout_target {
+                        *layout
+                    } else {
+                        resolved.layout.unwrap_or(*layout)
+                    },
+                    quad,
+                }
+            }
+        }
+        NodeKind::Text { .. } => match scene.kind(node) {
+            NodeKind::Text { text, .. } => NodeKind::Text {
+                text: text.clone(),
+                color: resolve_color(current.color, None),
+                font_size: Typography::size_value(current.size),
+            },
+            kind => kind.clone(),
+        },
+        _ => scene.kind(node).clone(),
+    };
+    if matches!(kind, NodeKind::Text { .. }) {
+        scene.set_font(node, current.font.clone());
+    }
+    scene.set_kind(node, kind);
+    if let Some(uniforms) = resolved.rare().shader_uniforms {
+        scene.set_shader_uniforms(node, uniforms);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::scene::{Layout, Style};
+    use crate::style::Styled;
     fn color(value: u8) -> Styles {
         Styles {
             background: Some(Color(value, 0, 0, 255)),
@@ -618,10 +1331,11 @@ mod tests {
     fn inherited(ui: &Ui) -> Signal<Typography> {
         ui.signal(Typography {
             display: Default::default(),
-            color: Color(255, 255, 255, 255),
-            size: 16.,
+            color: Themed::Value(Color(255, 255, 255, 255)),
+            size: Themed::Value(16.),
             wrap: false,
             font: Default::default(),
+            family: None,
         })
     }
     #[test]
@@ -648,11 +1362,11 @@ mod tests {
             Variants {
                 hover: Some(Box::new(color(2))),
                 active: Some(Box::new(color(3))),
-                focus: Some(Box::new(Styles {
-                    border_width: Some(2.),
-                    ..Default::default()
-                })),
+                // An inset stroke: a focus ring that takes no layout room.
+                focus: Some(Box::new(Styles::new().border(2.).border_over(true))),
                 disabled: Some(Box::new(color(4))),
+                defaults: Default::default(),
+                reactive: None,
             },
             Some(Box::new(move || read_disabled.get())),
             true,
@@ -667,6 +1381,15 @@ mod tests {
         });
         assert_eq!(fill(&ui, node), Color(3, 0, 0, 255));
         assert_eq!(ui.input.focused(), Some(node));
+        // A press's focus shows no ring (`:focus-visible`); a key to it does.
+        assert!(
+            matches!(ui.scene.borrow().kind(node), NodeKind::Panel { quad, .. } if quad.border_width == 0.)
+        );
+        ui.dispatch(InputEvent::KeyDown {
+            key: Key::Character("x".into()),
+            modifiers: Default::default(),
+            repeat: false,
+        });
         assert!(
             matches!(ui.scene.borrow().kind(node), NodeKind::Panel { quad, .. } if quad.border_width == 2.)
         );
@@ -701,17 +1424,18 @@ mod tests {
         let explicit = ui.label(ui.root(), "fixed", Style::default());
         let fixed = Typography {
             display: Default::default(),
-            color: Color(12, 34, 56, 255),
-            size: 20.,
+            color: Themed::Value(Color(12, 34, 56, 255)),
+            size: Themed::Value(20.),
             wrap: false,
             font: Default::default(),
+            family: None,
         };
         let stable = mount_style(
             &mut ui,
             explicit,
             Styles {
-                text_color: Some(fixed.color),
-                text_size: Some(fixed.size),
+                text_color: Some(Color(12, 34, 56, 255)),
+                text_size: Some(20.),
                 ..Default::default()
             },
             parent.clone(),
@@ -723,22 +1447,24 @@ mod tests {
         ui.scene.borrow_mut().flush();
         parent.set(Typography {
             display: Default::default(),
-            color: Color(1, 2, 3, 255),
-            size: 16.,
+            color: Themed::Value(Color(1, 2, 3, 255)),
+            size: Themed::Value(16.),
             wrap: false,
             font: Default::default(),
+            family: None,
         });
-        assert_eq!(output.get().color, Color(1, 2, 3, 255));
+        assert_eq!(output.get().color, Themed::Value(Color(1, 2, 3, 255)));
         assert_eq!(stable.get(), fixed);
         assert_eq!(ui.scene.borrow_mut().flush().layout_nodes, 0);
         parent.set(Typography {
             display: Default::default(),
-            color: Color(1, 2, 3, 255),
-            size: 24.,
+            color: Themed::Value(Color(1, 2, 3, 255)),
+            size: Themed::Value(24.),
             wrap: false,
             font: Default::default(),
+            family: None,
         });
-        assert_eq!(output.get().size, 24.);
+        assert_eq!(output.get().size, Themed::Value(24.));
         assert_eq!(stable.get(), fixed);
         assert!(ui.scene.borrow_mut().flush().layout_nodes > 0);
     }
@@ -770,18 +1496,18 @@ mod tests {
             None,
             false,
         );
-        assert_eq!(output.get().size, 40.);
+        assert_eq!(output.get().size, Themed::Value(40.));
         assert_eq!(fill(&ui, node), Color(9, 0, 0, 255));
         toggled.set(false);
-        assert_eq!(output.get().size, 16.);
+        assert_eq!(output.get().size, Themed::Value(16.));
         assert_eq!(fill(&ui, node), Color(1, 0, 0, 255));
         assert_eq!(ui.scene.borrow().effects(node).opacity, 1.);
         parent.set(Typography {
             display: Default::default(),
-            size: 20.,
+            size: Themed::Value(20.),
             ..parent.get()
         });
-        assert_eq!(output.get().size, 20.);
+        assert_eq!(output.get().size, Themed::Value(20.));
     }
     #[test]
     fn styled_noninteractive_child_preserves_button_activation() {

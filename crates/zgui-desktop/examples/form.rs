@@ -19,7 +19,11 @@ fn action(label: &str) -> View {
         .rounded(6.0)
         .bg(Color(47, 64, 88, 255))
         .hover(|s| s.bg(Color(65, 85, 116, 255)))
-        .focus(|s| s.border(2.0).border_color(Color(122, 184, 255, 255)))
+        .focus(|s| {
+            s.border(2.0)
+                .border_over(true)
+                .border_color(Color(122, 184, 255, 255))
+        })
         .child(text(label))
 }
 
@@ -42,7 +46,11 @@ fn form(report: Rc<RefCell<Option<FormState>>>) -> View {
             .p(10.0)
             .rounded(6.0)
             .bg(Color(28, 35, 48, 255))
-            .focus(|s| s.border(2.0).border_color(Color(122, 184, 255, 255)))
+            .focus(|s| {
+                s.border(2.0)
+                    .border_over(true)
+                    .border_color(Color(122, 184, 255, 255))
+            })
             .disabled_style(|s| {
                 s.bg(Color(38, 39, 43, 255))
                     .text_color(Color(138, 142, 153, 255))
@@ -61,7 +69,11 @@ fn form(report: Rc<RefCell<Option<FormState>>>) -> View {
             .p(10.0)
             .rounded(6.0)
             .bg(Color(28, 35, 48, 255))
-            .focus(|s| s.border(2.0).border_color(Color(122, 184, 255, 255)))
+            .focus(|s| {
+                s.border(2.0)
+                    .border_over(true)
+                    .border_color(Color(122, 184, 255, 255))
+            })
             .disabled_style(|s| {
                 s.bg(Color(38, 39, 43, 255))
                     .text_color(Color(138, 142, 153, 255))

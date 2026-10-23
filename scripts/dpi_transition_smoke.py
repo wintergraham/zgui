@@ -113,7 +113,8 @@ def main():
                 assert "viewport=" + expected_viewport in report, report
                 assert 'model="' + model + '"' in report and "selection=1 " in report, report
                 assert "editor=Rect { x: 20.0, y: 54.0, width: 400.0, height: 44.0 }" in report, report
-                assert "caret=Rect { x: 37.6, y: 62.0, width: 1.0, height: 23.0 }" in report, report
+                # The single line is centred in the 44-pixel box: (44 - 23) / 2 below its top.
+                assert "caret=Rect { x: 37.6, y: 64.5, width: 1.0, height: 23.0 }" in report, report
             protocol = (args.output / "protocol.log").read_text()
             scales = re.findall(r"preferred_scale\((\d+)\)", protocol)
             assert scales == ["120", "240", "120"], scales

@@ -1,0 +1,148 @@
+# Controls: button, input, textarea, checkbox, slider, progress
+
+Controls take keyboard focus, show it with an accent ring, and (except `button`) bind a state both ways: the control shows the state, and the user's changes write it. They take any [property](properties.md) and [event](events.md); their defaults below are only defaults.
+
+```luau
+ui.button(props: ContainerProps?) -> Node
+ui.input(props: InputProps) -> Node
+ui.textarea(props: InputProps) -> Node
+ui.checkbox(props: CheckboxProps) -> Node
+ui.slider(props: SliderProps) -> Node
+ui.progress(props: ProgressProps) -> Node
+```
+
+## button
+
+A focusable box whose children lie in a row; `on_click` runs on a click, Space or Enter.
+
+| Option | Type | Default | |
+| --- | --- | --- | --- |
+| children | `Child` | none | its face: text, icons, anything |
+| `on_click` | `Handler \| Action` | none | |
+| `disabled` | `boolean \| Readable<boolean> \| (() -> boolean) \| Styles` | not disabled | a condition, or the styles shown while disabled |
+| `px`, `py` | `Length` | `12`, `8` | |
+| `gap` | `number` | `6` | |
+| `items` | `Align` | `"center"` | |
+| `bg` | `Color` | `"#232e40"` | `hover` defaults to `{ bg = "#2f4058" }` |
+| `rounded` | `number` | `6` | |
+| `focus` | `Styles` | an accent ring | `focus = { border = 0 }` removes it |
+
+## input and textarea
+
+A text editor bound to a string state: selection, undo, clipboard and IME included. `input` is one line (pasted line breaks are removed); `textarea` keeps them.
+
+| Option | Type | Default | |
+| --- | --- | --- | --- |
+| `value` | `State<string>` | required | the text, both ways |
+| `label` | `string` | `""` | its accessible name (not drawn) |
+| `placeholder` | `Reactive<string>` | none | shown while the value is empty, never part of it |
+| `placeholder_color` | `Reactive<Color>` | `"#8a9ab0"` | |
+| `select_on_focus` | `boolean` | `false` | focusing selects all the text (an address bar) |
+| `multiline` | `boolean` | `false` (`textarea`: always) | `input` with several lines |
+| `w`, `h` | `Length` | `240` wide (an intrinsic width), `36` high (`textarea`: `156`) | |
+| `px`, `py` | `Length` | `8`, `6` | |
+| `bg`, `rounded` | | `"#232e40"`, `6` | |
+| `shrink` | `number` | `1` | a row too narrow for it shrinks it; `shrink = 0` or a `w` holds it |
+| `wrap` | `boolean` | `false` | `textarea`: wrap long lines rather than scroll them |
+| `line_numbers` | `boolean` | `false` | `textarea`: number the lines in a gutter at the left, the caret's brighter (a code editor); only the lines in view are built |
+
+Its element (`on_mount`, a [ref](state.md#refs)) selects text: `el:select_all()`, `el:set_selection(a, b)`, `local a, b = el:selection()`, in characters ([events](events.md#elements)).
+
+## checkbox
+
+A toggle showing ☑ or ☐ and its label, bound to a boolean state; a click on either, Space or Enter toggles it.
+
+| Option | Type | Default | |
+| --- | --- | --- | --- |
+| `value` | `State<boolean>` | required | |
+| `label` | `string` | `""` | shown beside the box, and its accessible name |
+| `on_click` | `Handler \| Action` | none | runs after the value toggled |
+| `gap`, `px`, `py` | | `6`, `4`, `4` | |
+
+## slider
+
+A horizontal number control: dragging, the arrow keys (1% of the range) and Home/End move it.
+
+| Option | Type | Default | |
+| --- | --- | --- | --- |
+| `value` | `State<number>` | required | clamped to the range |
+| `min`, `max` | `number` | `0`, `1` | finite, `min < max` |
+| `label` | `string` | `""` | its accessible name (not drawn) |
+| `w`, `h` | `Length` | `240`, `36` | |
+| `px`, `py` | `Length` | `8`, `6` | |
+| `bg`, `rounded` | | `"#232e40"`, `6` | the rail |
+| `color` | `Color` | inherited | the thumb |
+
+## progress
+
+A determinate bar from a 0-to-1 state; it takes no input.
+
+| Option | Type | Default | |
+| --- | --- | --- | --- |
+| `value` | `State<number>` | required | 0 to 1, clamped |
+| `label` | `string` | `""` | its accessible name (not drawn) |
+| `w`, `h` | `Length` | `240`, `8` | |
+| `bg` | `Color` | `"#232e40"` | the track |
+| `color` | `Color` | inherited | the fill |
+
+## Example
+
+```lua
+local name = ui.state("name", "")
+local notes = ui.state("notes", "")
+local loud = ui.state("loud", false)
+local volume = ui.state("volume", 40)
+local field: Ref = ui.ref()
+return ui.column {
+	p = 24,
+	gap = 12,
+	w = 360,
+	items = "stretch",
+	ui.input { label = "Name", value = name, placeholder = "Your name", ref = field },
+	ui.textarea { label = "Notes", value = notes, placeholder = "Anything else", h = 90, wrap = true },
+	ui.checkbox { label = "Loud", value = loud },
+	ui.row {
+		gap = 10,
+		items = "center",
+		ui.slider { label = "Volume", value = volume, min = 0, max = 100, grow = 1 },
+		ui.text { "{volume}", w = 32 },
+	},
+	ui.progress {
+		label = "Volume",
+		value = ui.computed(function()
+			return volume:get() / 100
+		end),
+		w_full = true,
+		color = "#5ea5ff",
+	},
+	ui.row {
+		gap = 8,
+		ui.button {
+			on_click = function()
+				name:set("")
+				local el = field:peek()
+				if el then
+					el:focus()
+				end
+			end,
+			"Clear",
+		},
+		ui.button {
+			disabled = function()
+				return name:get() == ""
+			end,
+			on_click = ui.action("save", "profile"),
+			"Save",
+		},
+	},
+}
+```
+
+## Gotchas
+
+- A button's `label` is not read (a type error): its face is its children. Inputs', sliders' and progress bars' `label` is only their accessible name; put a `ui.text` beside them to show one. A checkbox draws its label.
+- `value` is a state, not a value: `value = "text"` or a plain number is an error. An input's state holds a string; bound to a number state it shows the number and writes text back on the first edit.
+- A control writes its state only once the user changes it: mounting never rewrites the script's value (a slider does not round `0.1`).
+- `ui.computed` makes a read-only derived value for a `progress`; a slider or input bound to a computed would have its edits overwritten when the inputs change.
+- Inputs are 240 points wide whatever their text; a long value scrolls inside. Use `w_full = true` (or a stretching parent) for a field that fills its row.
+- Controls take no children, except `button`.

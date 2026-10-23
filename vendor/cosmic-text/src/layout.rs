@@ -22,6 +22,8 @@ pub struct LayoutGlyph {
     pub font_size: f32,
     /// Font weight of the glyph
     pub font_weight: fontdb::Weight,
+    /// zgui: the optical size it was shaped at (0: the font's default).
+    pub font_optical: u16,
     /// Line height of the glyph, will override buffer setting
     pub line_height_opt: Option<f32>,
     /// Font id of the glyph
@@ -99,6 +101,7 @@ impl LayoutGlyph {
                 math::truncf((self.y - y_offset).mul_add(scale, offset.1)), // Hinting in Y axis
             ),
             self.font_weight,
+            self.font_optical,
             self.cache_key_flags,
         );
 

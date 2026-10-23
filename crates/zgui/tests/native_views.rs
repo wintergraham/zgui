@@ -510,7 +510,7 @@ fn a_host_view_takes_the_pointer_through_pass_through_paint_and_focus() {
                     .w(800.)
                     .h(600.)
                     .bg(rgba(0x0000_0040))
-                    .pointer_events_when(move || Some(!layer.get())),
+                    .pointer_events_when(move || !layer.get()),
             ),
     ));
     ui.prepare_frame();
@@ -569,5 +569,99 @@ fn a_layer_away_from_the_page_stays_on_the_base_plane() {
     let items = scene.layer_items(None);
     let mut base = items.clone();
     split.filter(&mut base, Plane::Base);
-    assert!(base.iter().any(|item| item.id == button), "the pressed button's layer left the base plane");
+    assert!(
+        base.iter().any(|item| item.id == button),
+        "the pressed button's layer left the base plane"
+    );
+}
+
+#[test]
+fn a_layer_far_from_native_views_stays_on_the_base_plane() {
+    let mut ui = Ui::new(1000., 600.);
+    let natives = supported();
+    let web = WebView::new(&ui.runtime, WebViewOptions::default());
+    let view = ui.mount(provide(
+        natives.clone(),
+        row()
+            .w(1000.)
+            .h(600.)
+            .child(
+                // A spinner in a sidebar: a layer (it turns) away from the page.
+                div().w(200.).h(600.).child(
+                    div()
+                        .id("spinner")
+                        .w(10.)
+                        .h(10.)
+                        .bg(zgui::scene::Color(255, 0, 0, 255)),
+                ),
+            )
+            .child(web_view(&web).w(800.).h(600.)),
+    ));
+    ui.prepare_frame();
+    let (first, _) = split(&ui, &natives, &PlaneSplit::default());
+    // It becomes a layer after the first split: later splits walk only what
+    // reaches the page, so never visit it.
+    let spinner = view.find("spinner").unwrap();
+    ui.scene.borrow_mut().set_isolated(spinner, true);
+    ui.prepare_frame();
+    let (later, _) = split(&ui, &natives, &first);
+    let scene = ui.scene.borrow();
+    let item = scene
+        .layer_items(None)
+        .into_iter()
+        .find(|item| item.id == spinner)
+        .expect("painted");
+    assert!(item.isolated);
+    assert!(later.keeps(&item, Plane::Base));
+    assert!(!later.keeps(&item, Plane::Overlay));
+}
+
+#[test]
+fn a_painted_pointer_transparent_layer_leaves_the_page_its_input() {
+    // A tinted scrim over the page that lets the pointer through: it paints
+    // on the overlay plane, but the page still takes the pointer under it.
+    let mut ui = Ui::new(1000., 600.);
+    let natives = supported();
+    let web = WebView::new(&ui.runtime, WebViewOptions::default());
+    let view = ui.mount(provide(
+        natives.clone(),
+        browser(&web, false).child(
+            div()
+                .absolute()
+                .left(0.)
+                .top(0.)
+                .w(1000.)
+                .h(600.)
+                .bg(rgba(0x00000020))
+                .pointer_events(false),
+        ),
+    ));
+    ui.prepare_frame();
+    let page = view.find("page").unwrap();
+    let (split, _) = split(&ui, &natives, &PlaneSplit::default());
+    let scene = ui.scene.borrow();
+    assert_eq!(
+        split.route(&scene, &ui.input, 500., 350.),
+        PointerRoute::Native(page)
+    );
+}
+
+#[test]
+fn closing_a_page_drops_its_platform_page_while_handles_remain() {
+    let ui = Ui::new(100., 100.);
+    let web = WebView::new(&ui.runtime, WebViewOptions::default());
+    // A handle a script still holds (until it collects it).
+    let kept = web.clone();
+    let backend = Rc::new(Recorder(RefCell::new(Vec::new())));
+    web.attach(backend.clone());
+    assert_eq!(Rc::strong_count(&backend), 2);
+    web.close();
+    assert!(kept.is_closed() && !kept.is_attached());
+    assert_eq!(Rc::strong_count(&backend), 1, "the page let go of it");
+    // Nothing reaches a page, and none attaches again.
+    kept.load_url("https://late.test/");
+    let again = Rc::new(Recorder(RefCell::new(Vec::new())));
+    kept.attach(again.clone());
+    assert!(!kept.is_attached());
+    assert!(backend.0.borrow().is_empty() && again.0.borrow().is_empty());
 }

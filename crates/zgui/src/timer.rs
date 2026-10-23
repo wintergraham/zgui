@@ -299,9 +299,10 @@ mod hosted_tests {
         assert_eq!(woken.load(Ordering::SeqCst), 1);
         assert!(!driver.host.lock().unwrap().thread);
         assert_eq!(hosted.deadline(), Some(deadline));
-        // A later one changes nothing the loop waits for.
+        // A later one changes nothing the loop waits for. Far enough later
+        // that a slow machine's oversleep below does not make it due too.
         let mut later = Sleep {
-            deadline: deadline + Duration::from_millis(20),
+            deadline: deadline + Duration::from_millis(400),
             registration: Some((driver.clone(), 2)),
         };
         assert!(Pin::new(&mut later).poll(&mut cx).is_pending());

@@ -17,6 +17,10 @@ use zgui::{
 pub(crate) enum Key {
     X,
     Y,
+    /// A layout animation's translation, over the node's own (`x`, `y`):
+    /// Rust's moves and a script's compose. Scripts do not name it.
+    OffsetX,
+    OffsetY,
     Opacity,
     Blur,
     /// CSS filter color functions, on the compositor.
@@ -136,7 +140,8 @@ impl Key {
     }
     pub fn unit(&self) -> Unit {
         match self {
-            Key::X => Unit::Length(Basis::OwnWidth),
+            Key::X | Key::OffsetX => Unit::Length(Basis::OwnWidth),
+            Key::OffsetY => Unit::Length(Basis::OwnHeight),
             Key::Blur | Key::MaskX => Unit::Length(Basis::OwnWidth),
             Key::MaskY => Unit::Length(Basis::OwnHeight),
             Key::ClipTop | Key::ClipBottom => Unit::Length(Basis::OwnHeight),
@@ -266,6 +271,8 @@ fn read_element(e: &Element, key: &Key) -> V {
     match key {
         Key::X => V::Num(e.translate().0 as f64),
         Key::Y => V::Num(e.translate().1 as f64),
+        Key::OffsetX => V::Num(e.offset().0 as f64),
+        Key::OffsetY => V::Num(e.offset().1 as f64),
         Key::Opacity => V::Num(e.opacity() as f64),
         Key::Blur => V::Num(e.blur() as f64),
         Key::Brightness => V::Num(e.color()[0] as f64),
@@ -386,6 +393,8 @@ fn write_element(e: &Element, key: &Key, v: &V) {
     match key {
         Key::X => e.set_translate((n(), e.translate().1)),
         Key::Y => e.set_translate((e.translate().0, n())),
+        Key::OffsetX => e.set_offset((n(), e.offset().1)),
+        Key::OffsetY => e.set_offset((e.offset().0, n())),
         Key::Opacity => e.set_opacity(n().clamp(0., 1.)),
         Key::Blur => e.set_blur(n().max(0.)),
         Key::Brightness => e.set_color_part(0, n().max(0.)),

@@ -131,6 +131,59 @@ fn terminal_sessions_outlive_reloads_and_end_when_closed() {
 }
 
 #[test]
+fn options_after_a_lookup_still_say_how_the_session_starts() {
+    // A list reading every pane's state looks a session up before the code
+    // owning it gives its command: the command still applies.
+    let mut h = Harness::inline(
+        r##"local first = ui.term("p1")
+        local _ = first.title
+        local term = ui.term("p1", { command = "attach p1" })
+        return ui.terminal { term = term, w = 200, h = 100 }"##,
+    );
+    let term = terminal(&mut h);
+    assert_eq!(term.options().command.as_deref(), Some("attach p1"));
+    // Once started, a terminal keeps how it started.
+    term.attach(std::rc::Rc::new(NoBackend));
+    assert!(!term.set_options(zgui::terminal::TerminalOptions::default()));
+    assert_eq!(term.options().command.as_deref(), Some("attach p1"));
+}
+#[test]
+fn reading_a_terminal_field_follows_that_field_alone() {
+    // A list of panes reads titles; a resize (columns, rows) must not rerun it.
+    let mut h = Harness::inline(
+        r##"local term = ui.term("p1", { command = "zsh" })
+        local runs = ui.state("runs", 0)
+        ui.effect(function()
+            local _ = term.title
+            runs:set(runs:peek() + 1)
+        end)
+        return ui.column {
+            ui.terminal { term = term, w = 200, h = 100 },
+            ui.text { id = "runs", function() return tostring(runs:get()) end },
+        }"##,
+    );
+    let term = terminal(&mut h);
+    h.settle();
+    let before = h.text("runs");
+    term.update_state(|state| {
+        state.columns = 120;
+        state.rows = 40;
+    });
+    h.settle();
+    assert_eq!(h.text("runs"), before, "a resize reran a title reader");
+    term.update_state(|state| state.title = "vim".into());
+    h.settle();
+    assert_ne!(h.text("runs"), before, "a title change reruns it");
+}
+struct NoBackend;
+impl zgui::terminal::TerminalBackend for NoBackend {
+    fn run(&self, _: zgui::terminal::TerminalCommand) {}
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+#[test]
 fn terminal_handlers_follow_the_latest_run() {
     let mut h = Harness::inline(
         r##"local log = ui.state("log", "")
@@ -320,4 +373,163 @@ fn context_menus_show_what_scripts_return_at_the_pointer() {
     h.click("copy");
     assert_eq!(h.text("log"), "copy at 25");
     assert_eq!(h.host.error().get(), None);
+}
+
+#[test]
+fn host_functions_answer_now() {
+    let mut h = Harness::new(|runtime| {
+        let host = zgui_script::ScriptHost::inline(
+            runtime,
+            "app.luau",
+            r##"local row = ui.call_sync("row", 41)
+            return ui.text { row.label .. " " .. tostring(row.n), id = "t" }"##,
+        );
+        host.function("row", |arg| {
+            let n = arg.as_f64().unwrap_or(0.) + 1.;
+            Value::Map(vec![("label".into(), "row".into()), ("n".into(), Value::Num(n))].into())
+        });
+        host
+    });
+    assert_eq!(h.text("t"), "row 42");
+    assert_eq!(h.host.error().get(), None);
+}
+
+#[test]
+fn host_images_show_and_follow_replacement() {
+    let image = |shade: u8| {
+        std::sync::Arc::new(zgui::image::ImageData::new(2, 2, vec![shade; 16]).unwrap())
+    };
+    let mut h = Harness::inline(
+        r##"return ui.column { ui.image { id = "i", src = "host:art", w = 10, h = 10 } }"##,
+    );
+    let shown = |h: &mut Harness| {
+        h.ui.prepare_frame();
+        let node = h.find("i").unwrap();
+        let scene = h.ui.scene.borrow();
+        let mut stack = vec![node];
+        while let Some(n) = stack.pop() {
+            if let zgui::scene::NodeKind::Image(image) = scene.kind(n) {
+                return Some(image.pixels()[0]);
+            }
+            stack.extend(scene.children(n).iter().copied());
+        }
+        None
+    };
+    assert_ne!(
+        shown(&mut h),
+        Some(10),
+        "nothing of it until the host has it"
+    );
+    h.host.image("art", Some(image(10)));
+    h.frame();
+    assert_eq!(shown(&mut h), Some(10));
+    h.host.image("art", Some(image(200)));
+    h.frame();
+    assert_eq!(shown(&mut h), Some(200));
+    assert_eq!(h.host.error().get(), None);
+}
+
+#[test]
+fn menu_items_draw_content_of_their_own() {
+    let mut h = Harness::inline(
+        r##"local log = ui.state("log", "")
+        local open = ui.state("open", true)
+        return ui.column {
+            ui.menu {
+                open = open,
+                anchor = ui.button { id = "anchor", w = 40, h = 20 },
+                ui.menu_item {
+                    label = "Rename",
+                    id = "rename",
+                    on_click = function() log:set("renamed") end,
+                    ui.div { id = "icon", w = 14, h = 14 },
+                    ui.text { "Rename", id = "name" },
+                    ui.text { "⌘R", id = "shortcut" },
+                },
+            },
+            ui.text { "{log}", id = "log" },
+        }"##,
+    );
+    h.ui.prepare_frame();
+    assert!(
+        h.find("icon").is_some() && h.find("shortcut").is_some(),
+        "the item's own content"
+    );
+    assert_eq!(h.text("name"), "Rename");
+    h.click("rename");
+    assert_eq!(h.text("log"), "renamed");
+    assert_eq!(h.host.error().get(), None);
+}
+
+fn page(h: &mut Harness) -> zgui::web_view::WebView {
+    h.ui.prepare_frame();
+    let node = h.natives.nodes()[0];
+    match h.natives.content(node) {
+        Some(NativeContent::Web(web)) => web,
+        _ => panic!("no page mounted"),
+    }
+}
+
+#[test]
+fn keyed_web_pages_outlive_reloads_until_closed() {
+    let mut h = Harness::inline(
+        r##"local web = ui.web("b1", { profile = "ephemeral" })
+        return ui.column {
+            ui.webview { web = web, w = 200, h = 100 },
+            ui.button { id = "close", w = 20, h = 20, on_click = function() web:close() end },
+        }"##,
+    );
+    let first = page(&mut h);
+    h.host.reload().unwrap();
+    h.settle();
+    assert!(first == page(&mut h), "a reload keeps the page");
+    // Closed, the next run asking for "b1" gets a new one.
+    h.click("close");
+    h.host.reload().unwrap();
+    h.settle();
+    assert!(first != page(&mut h), "closing ends it");
+}
+
+#[test]
+fn an_element_takes_focus_when_asked() {
+    let mut h = Harness::inline(
+        r##"local field = nil
+        local took = ui.state("took", false)
+        return ui.column {
+            ui.input { id = "field", value = ui.state("v", ""), w = 100, h = 24,
+                on_mount = function(el) field = el end },
+            ui.button { id = "go", w = 20, h = 20, on_click = function() took:set(field:focus()) end },
+            ui.text { id = "took", function() return tostring(took:get()) end },
+        }"##,
+    );
+    h.click("go");
+    h.settle();
+    assert_eq!(h.text("took"), "true");
+    let field = h.find("field").unwrap();
+    let focused = h.ui.input.focused().unwrap();
+    let scene = h.ui.scene.borrow();
+    let mut node = Some(focused);
+    let mut inside = false;
+    while let Some(n) = node {
+        inside |= n == field;
+        node = scene.parent(n);
+    }
+    assert!(inside, "the input has focus");
+}
+
+#[test]
+fn values_round_trip_through_json() {
+    let value = Value::Map(
+        vec![
+            (
+                "a".into(),
+                Value::List(vec![Value::Num(1.), Value::Str("x".into())].into()),
+            ),
+            ("b".into(), Value::Bool(true)),
+        ]
+        .into(),
+    );
+    let json = value.to_json();
+    assert_eq!(Value::from_json(&json), Some(value));
+    assert_eq!(Value::from_json("not json"), None);
 }

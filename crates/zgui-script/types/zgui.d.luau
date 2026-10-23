@@ -1,76 +1,589 @@
 --!strict
 -- Type definitions for zgui-script's globals, `ui` and `anime`, for
--- luau-lsp (editor completion and checking) and `luau-lsp analyze`:
+-- luau-lsp (editor completion and checking) and `zgui check`, which runs
 --   luau-lsp analyze --definitions=crates/zgui-script/types/zgui.d.luau app.luau
 -- In VS Code, set `luau-lsp.platform.type` to "standard" (requires resolve
 -- by path), put `"languageMode": "strict"` in the project's .luaurc, add
--- this file to `luau-lsp.types.definitionFiles`, and turn on
--- Luau's new type solver (`"luau-lsp.fflags.override": { "LuauSolverV2":
--- "true" }`, or `--flag:LuauSolverV2=true`): it reports misspelled
--- properties, which the old solver lets through.
--- The style properties and animation keys are generated from the engine's
--- tables; `tests/types.rs` fails if they drift.
+-- this file to `luau-lsp.types.definitionFiles`, and turn on Luau's new
+-- type solver (`"luau-lsp.fflags.override": { "LuauSolverV2": "true" }`,
+-- or `--flag:LuauSolverV2=true`): the types below need it.
+--
+-- Edit zgui.d.luau.in: zgui.d.luau, what editors and `zgui check` read, is
+-- that file with each `export type X = Merge<…>` written out as its table
+-- (luau-lsp finds that many type function calls too complex to check);
+-- `ZGUI_BLESS=1 cargo test -p zgui-script --test types` writes it.
+--
+-- The `export type`s are global type names scripts can use in their own
+-- annotations: `State<T>`, `Props`, `ContainerProps`, `Child`, `Color`…
+-- `Merge<A, B>` makes a props type of your own from these.
+--
+-- The style properties and animation keys follow the engine's tables;
+-- `tests/types.rs` fails if they drift, or if a `ui` function, an element's
+-- option, an event, or a method of State, Element, Ref, Web, Term, Canvas
+-- or Animation goes untyped.
 
-type Color = string | number
--- Points, or a string: "50%", "auto", "1.5rem".
-type Len = number | string
-type Pair = number | { number }
-type Corners = { number } | { tl: number?, tr: number?, br: number?, bl: number? }
-type ShadowSpec = { x: number?, y: number?, blur: number?, spread: number?, color: Color? }
-type Shadow = ShadowSpec | { ShadowSpec } | false
-type Gradient = { Color | { any } } | { angle: number?, stops: { Color | { any } } }
+---------------------------------------------------------------------------
+-- Type functions.
 
--- What a script keeps: Rust-owned state.
-type Value = nil | boolean | number | string | { [any]: any }
-
-declare extern type State with
-	function get(self): any
-	function peek(self): any
-	function set(self, value: any): ()
-	function update(self, f: (any) -> any): ()
-	function toggle(self): ()
-	function add(self, by: number?): ()
-	function push(self, item: any): ()
-	function remove(self, index: number): any
-	function len(self): number
+-- `A` with `B`'s properties added (B's win), and B's indexer if it has one
+-- (else A's): `Merge<Props, { tone: string? }>`.
+export type function Merge(a, b)
+	local out = types.newtable()
+	for _, t in { a, b } do
+		for key, property in t:properties() do
+			if property.read then
+				out:setreadproperty(key, property.read)
+			end
+			if property.write then
+				out:setwriteproperty(key, property.write)
+			end
+		end
+	end
+	local indexer = b:indexer() or a:indexer()
+	if indexer then
+		out:setindexer(indexer.index, indexer.readresult)
+	end
+	return out
 end
-declare extern type Node with end
-declare extern type Ref with end
-declare extern type Action with end
-declare extern type Binding with end
+
+-- A list's item type: `Item<{ Tab }>` is `Tab` (`Item<{ Tab }?>` too).
+-- Anything else has no items. (`index<T, number>` would fail for State of a
+-- number, and generic methods lose inference.)
+type function Item(t)
+	if t:is("any") then
+		return types.any
+	end
+	local parts = if t:is("union") then t:components() else { t }
+	for _, part in parts do
+		if part:is("table") then
+			local indexer = part:indexer()
+			if indexer then
+				return indexer.readresult
+			end
+		end
+	end
+	return types.never
+end
+
+-- What a `ui.variants` definition's axes accept, the choosing table its
+-- recipe is called with: each axis its options' names (a boolean for an
+-- on-off axis, `[true]` / `[false]`), or `extra` (a state or a function
+-- choosing it). Closed, as props tables are: an unknown axis is an error.
+type function VariantChoice(definition, extra)
+	local out = types.newtable()
+	if not definition:is("table") then
+		return out
+	end
+	local variants = definition:readproperty(types.singleton("variants"))
+	if not variants or not variants:is("table") then
+		return out
+	end
+	for axis, property in variants:properties() do
+		local options = property.read
+		local names: { type } = {}
+		local boolean = false
+		if options and options:is("table") then
+			for option in options:properties() do
+				local name = option:value()
+				if name == "true" or name == "false" then
+					boolean = true
+				else
+					names[#names + 1] = option
+				end
+			end
+			local indexer = options:indexer()
+			if indexer and indexer.index:is("boolean") then
+				boolean = true
+			end
+		end
+		if boolean then
+			names[#names + 1] = types.boolean
+		end
+		names[#names + 1] = extra
+		local choice = if #names == 1 then names[1] else types.unionof(table.unpack(names))
+		out:setproperty(axis, types.optional(choice))
+	end
+	out:setindexer(types.number, types.never)
+	return out
+end
+
+-- A recipe's variant props, for a component's own props type:
+-- `Merge<ContainerProps, VariantProps<typeof(button)>>` (the axes alone,
+-- so the props keep their children).
+export type function VariantProps(recipe)
+	local out = types.newtable()
+	if not recipe:is("function") then
+		return out
+	end
+	local head: { type } = recipe:parameters().head or {}
+	local choice: type? = head[1]
+	if choice and choice:is("table") then
+		for key, property in choice:properties() do
+			if property.read then
+				out:setproperty(key, property.read)
+			end
+		end
+	end
+	return out
+end
+
+-- A table's fields, each optional: what `state:patch` takes.
+type function Partial(t)
+	if t:is("any") then
+		return types.any
+	end
+	if not t:is("table") then
+		return types.never
+	end
+	local out = types.newtable()
+	for key, property in t:properties() do
+		if property.read then
+			out:setproperty(key, types.optional(property.read))
+		end
+	end
+	return out
+end
+
+---------------------------------------------------------------------------
+-- Values.
+
+-- Theme tokens: a style names one as `"$surface.raised"` and follows the
+-- theme (see docs/scripting.md#theming). These are the standard tokens,
+-- which every theme defines; an app's own (`"$terminal.pane"`) are strings
+-- too. The lists follow the engine's schema; `tests/types.rs` checks them.
+export type ColorToken =
+	"$background"
+	| "$surface.sunken"
+	| "$surface.base"
+	| "$surface.raised"
+	| "$surface.overlay"
+	| "$text.primary"
+	| "$text.secondary"
+	| "$text.tertiary"
+	| "$text.disabled"
+	| "$border"
+	| "$border.subtle"
+	| "$border.strong"
+	| "$accent"
+	| "$accent.hover"
+	| "$accent.text"
+	| "$danger"
+	| "$warning"
+	| "$success"
+	| "$info"
+	| "$selection"
+	| "$selection.item"
+	| "$focus.ring"
+	| "$hover"
+	| "$pressed"
+	| "$scrollbar.thumb"
+	| "$scrollbar.thumb.active"
+	| "$scrollbar.track"
+	| "$glass.tint"
+	| "$button.bg"
+	| "$button.hover"
+	| "$button.pressed"
+	| "$input.bg"
+	| "$menu.bg"
+	| "$menu.hover"
+export type NumberToken =
+	"$glass.blur"
+	| "$font.size.xs"
+	| "$font.size.sm"
+	| "$font.size.md"
+	| "$font.size.lg"
+	| "$font.size.xl"
+	| "$font.size.xxl"
+	| "$font.line.xs"
+	| "$font.line.sm"
+	| "$font.line.md"
+	| "$font.line.lg"
+	| "$font.line.xl"
+	| "$font.line.xxl"
+	| "$font.weight.regular"
+	| "$font.weight.medium"
+	| "$font.weight.semibold"
+	| "$font.weight.bold"
+	| "$radius.sm"
+	| "$radius.md"
+	| "$radius.lg"
+	| "$radius.xl"
+	| "$radius.full"
+	| "$space.1"
+	| "$space.2"
+	| "$space.3"
+	| "$space.4"
+	| "$space.5"
+	| "$space.6"
+	| "$space.7"
+	| "$space.8"
+	| "$control.height"
+	| "$motion.duration.fast"
+	| "$motion.duration.normal"
+	| "$motion.duration.slow"
+export type FontToken = "$font.sans"
+	| "$font.mono"
+export type ShadowToken = "$shadow.sm"
+	| "$shadow.md"
+	| "$shadow.lg"
+export type EaseToken = "$motion.ease.standard"
+	| "$motion.ease.enter"
+	| "$motion.ease.exit"
+-- A token's name without the `$`, for `ui.theme.get`.
+export type TokenName =
+	"background"
+	| "surface.sunken"
+	| "surface.base"
+	| "surface.raised"
+	| "surface.overlay"
+	| "text.primary"
+	| "text.secondary"
+	| "text.tertiary"
+	| "text.disabled"
+	| "border"
+	| "border.subtle"
+	| "border.strong"
+	| "accent"
+	| "accent.hover"
+	| "accent.text"
+	| "danger"
+	| "warning"
+	| "success"
+	| "info"
+	| "selection"
+	| "selection.item"
+	| "focus.ring"
+	| "hover"
+	| "pressed"
+	| "scrollbar.thumb"
+	| "scrollbar.thumb.active"
+	| "scrollbar.track"
+	| "glass.tint"
+	| "glass.blur"
+	| "font.sans"
+	| "font.mono"
+	| "font.size.xs"
+	| "font.size.sm"
+	| "font.size.md"
+	| "font.size.lg"
+	| "font.size.xl"
+	| "font.size.xxl"
+	| "font.line.xs"
+	| "font.line.sm"
+	| "font.line.md"
+	| "font.line.lg"
+	| "font.line.xl"
+	| "font.line.xxl"
+	| "font.weight.regular"
+	| "font.weight.medium"
+	| "font.weight.semibold"
+	| "font.weight.bold"
+	| "radius.sm"
+	| "radius.md"
+	| "radius.lg"
+	| "radius.xl"
+	| "radius.full"
+	| "space.1"
+	| "space.2"
+	| "space.3"
+	| "space.4"
+	| "space.5"
+	| "space.6"
+	| "space.7"
+	| "space.8"
+	| "control.height"
+	| "shadow.sm"
+	| "shadow.md"
+	| "shadow.lg"
+	| "motion.duration.fast"
+	| "motion.duration.normal"
+	| "motion.duration.slow"
+	| "motion.ease.standard"
+	| "motion.ease.enter"
+	| "motion.ease.exit"
+	| "button.bg"
+	| "button.hover"
+	| "button.pressed"
+	| "input.bg"
+	| "menu.bg"
+	| "menu.hover"
+
+-- "#rgb", "#rrggbb", "#rrggbbaa", "rgb(…)", "rgba(…)", "hsl(…)", a few
+-- names, 0xrrggbb, or a colour token ("$text.secondary"; `ColorToken`
+-- lists the standard ones). Plain `string`: the new solver would carry a
+-- union of token names through a script's own string code.
+export type Color = string | number
+-- A number, or a number token: a standard one (`"$radius.md"`, see
+-- `NumberToken`) or an app's (`"$terminal.inset"`), hence any string.
+export type Num = number | string
+-- Points, or a string: "50%", "auto" (margins), "12px", "$space.3".
+export type Length = number | string
+-- Two numbers, `{ a, b }`, or one for both.
+export type Pair = number | { number }
+-- `{ tl, tr, br, bl }` (a list in that order, or keyed).
+export type Corners = { number } | { tl: number?, tr: number?, br: number?, bl: number? }
+-- `{ top, right, bottom, left }`, in CSS's order.
+export type Sides = { number }
+export type ShadowSpec = { x: number?, y: number?, blur: number?, spread: number?, color: Color? }
+-- Or a shadow token (`"$shadow.md"`, an app's own too).
+export type Shadow = string | ShadowSpec | { ShadowSpec } | false
+-- Stops are colors (evenly spaced) or `{ offset, color }` pairs.
+export type Gradient = { read [number]: Color | { Color } } | { angle: number?, stops: { read [number]: Color | { Color } } }
+
+export type Direction = "row" | "row_reverse" | "column" | "column_reverse"
+-- `items` and `self`.
+export type Align = "start" | "center" | "end" | "baseline" | "stretch"
+export type Justify = "start" | "center" | "end" | "between" | "around" | "evenly" | "stretch"
+export type AlignContent = "start" | "center" | "end" | "stretch" | "between" | "around" | "evenly"
+export type Overflow = "visible" | "hidden" | "clip"
+export type Fit = "fill" | "contain" | "cover" | "none" | "scale_down"
+export type TextAlign = "start" | "left" | "center" | "right"
+-- "mono" (or "monospace"), "sans" ("sans-serif"), "serif", or a family name.
+-- A family name, or a font token (`FontToken`).
+export type Font = string
+export type Cursor =
+	"default"
+	| "pointer"
+	| "text"
+	| "vertical_text"
+	| "crosshair"
+	| "move"
+	| "grab"
+	| "grabbing"
+	| "not_allowed"
+	| "wait"
+	| "progress"
+	| "help"
+	| "context_menu"
+	| "copy"
+	| "alias"
+	| "no_drop"
+	| "all_scroll"
+	| "col_resize"
+	| "row_resize"
+	| "ew_resize"
+	| "ns_resize"
+	| "nesw_resize"
+	| "nwse_resize"
+	| "zoom_in"
+	| "zoom_out"
+
+-- A key into a state's table, an index into its list (from 1), or a path
+-- of them: `{ "tabs", 3, "title" }`.
+export type StatePath = string | number | { string | number }
+
+---------------------------------------------------------------------------
+-- State.
+
+-- Rust-owned state (`ui.state`, `ui.shared`, `ui.persist`, `ui.use_state`,
+-- `ui.computed`). Values are read-only snapshots: `get` and `peek` return
+-- tables that cannot be changed; change state with its methods. Each
+-- shares what it does not touch, and a write of an equal value notifies
+-- nobody. The type is the initial value's: give `nil` or `{}` a type,
+-- `ui.state("selected", nil :: string?)`, `ui.state("tabs", {} :: { Tab })`.
+export type State<T> = {
+	-- The value; reading it in a computed, effect or function property
+	-- subscribes that to it.
+	get: (self: State<T>) -> T,
+	-- The value, without subscribing.
+	peek: (self: State<T>) -> T,
+	set: (self: State<T>, value: T) -> (),
+	-- `f` gets a mutable copy: change it and return nothing, or return the
+	-- new value. It copies the whole value; prefer the others for large state.
+	update: (self: State<T>, f: (value: T) -> ...T) -> (),
+	-- One key or path: `set_key("k", v)`, `set_key({ "tabs", 3, "title" }, v)`;
+	-- nil removes the key. The value's type depends on the path, which Luau
+	-- cannot follow: it is not checked.
+	set_key: (self: State<T>, path: StatePath, value: any) -> (),
+	-- A shallow merge into the table.
+	patch: (self: State<T>, fields: Partial<T>) -> (),
+	-- Sets `not value` (a boolean).
+	toggle: (self: State<T>) -> (),
+	-- Adds to a number (1 by default).
+	add: (self: State<T>, by: number?) -> (),
+	-- Lists: append, insert at an index from 1, remove (returning the item,
+	-- nil outside the list), and the length (tracked, as `get` is).
+	push: (self: State<T>, item: Item<T>) -> (),
+	insert: (self: State<T>, index: number, item: Item<T>) -> (),
+	remove: (self: State<T>, index: number) -> Item<T>?,
+	len: (self: State<T>) -> number,
+}
+-- What a property bound to state reads: any state whose value is a `T`.
+export type Readable<T> = { read get: (self: never) -> T }
+
+---------------------------------------------------------------------------
+-- Engine objects.
+
+-- What `ui` element functions return; children and arguments of others.
+declare extern type Node with
+end
+-- `ui.span { … }`: a run of rich text, used once.
+declare extern type Span with
+end
+-- `ui.set`, `ui.toggle`, `ui.add`, `ui.action`: a handler Rust runs.
+declare extern type Action with
+end
+-- `ui.tween`, `ui.spring`, `ui.loop`: a property eased in Rust.
+declare extern type Binding with
+end
+-- Variants chosen from a `ui.variants` recipe: give it to an element as
+-- `variants = …`.
+declare extern type Variants with
+end
 declare extern type Bitmap with
 	w: number
 	h: number
 end
+declare extern type Shader with
+end
+declare extern type Brush with
+end
+
+export type FetchOptions = {
+	-- "GET" unless set.
+	method: string?,
+	headers: { [string]: string }?,
+	-- Text, or data sent as JSON (with its content type).
+	body: unknown?,
+}
+-- What `ui.fetch` settles with (a promise's `value`).
+export type Response = {
+	status: number,
+	-- 2xx.
+	ok: boolean,
+	-- Names in lower case.
+	headers: { [string]: string },
+	body: string,
+	-- The body decoded, when it is JSON.
+	json: unknown?,
+}
+
+-- A file the user picked (`ui.open_files`, `ui.save_file`): the only
+-- files a script reads or writes.
+export type File = { path: string, name: string }
+export type FilePickerOptions = {
+	title: string?,
+	-- Where the dialog opens.
+	directory: string?,
+	-- The name a save dialog suggests.
+	name: string?,
+	-- `{ { "Images", { "png", "jpg" } } }`: extensions without the dot.
+	filters: { { any } }?,
+	multiple: boolean?,
+}
+
+-- `ui.call(name, arg)`: a host call's result to come. Reads of its fields
+-- are tracked: what reads them follows it as it settles.
+declare extern type Promise with
+	-- It settled, with a value or an error.
+	done: boolean
+	value: unknown
+	error: string?
+	-- `on_value(value)` or `on_error(message)` once it settles (at once if
+	-- it has). Without `on_error` (or a read of `error`, or an `await` in a
+	-- pcall), a rejection is reported as a script error.
+	function after(self, on_value: ((value: unknown) -> ())?, on_error: ((message: string) -> ())?): ()
+	-- Inside `ui.task`: wait for it, and return its value (or raise its
+	-- error, the host's message as it wrote it).
+	function await(self): unknown
+end
+
+-- A mounted node a script reaches: through `on_mount`, `on_resize`, a ref
+-- or an animation's function values.
 declare extern type Element with
 	id: string?
+	-- Its kind, as selectors name it: "column", "button", "text"…
 	tag: string
 	mounted: boolean
+	-- Its laid-out box, in points from the window's top left; nil while it
+	-- is not in a scene.
 	width: number?
 	height: number?
 	x: number?
 	y: number?
 	-- Holds keyboard focus.
 	focused: boolean
-	function has_class(self, class: string): boolean
-	-- Keyboard focus to the element, or the first focusable node inside it
-	-- (an input's editor), once the handler's writes settle (an input it
-	-- reveals can take it); blur releases focus on or inside it.
+	-- Keyboard focus to the element or its first focusable descendant
+	-- (shown ones only), once the handler's writes settle (an input it
+	-- reveals can take it).
 	function focus(self): boolean
-	function blur(self): boolean
-	-- An input's selection in bytes of its text, applied after the
-	-- handler's writes (so text set in the same handler is selected).
-	function select(self, anchor: number, focus: number?): boolean
+	function has_class(self, class: string): boolean
+	-- An input's selection, in characters (Unicode code points from 0, as
+	-- `utf8.len` counts them). Each returns false (or nil) for elements
+	-- that are not inputs. `b` defaults to `a`: a caret. `select_all`
+	-- applies after the handler's writes (text set in it is selected).
 	function select_all(self): boolean
+	function set_selection(self, a: number, b: number?): boolean
+	-- The selection in bytes of its text, applied after the handler's
+	-- writes.
+	function select(self, anchor: number, focus: number?): boolean
+	-- The anchor and the focus (where the caret is).
+	function selection(self): (number?, number?)
+	-- Clear keyboard focus if it is on the element or inside it; whether
+	-- it did.
+	function blur(self): boolean
 end
+
+-- `ref = r` on a node. Reading it in an effect or computed follows it: the
+-- element while one is mounted, nil when none is.
+declare extern type Ref with
+	element: Element?
+	mounted: boolean
+	-- How many mounted nodes share it.
+	count: number
+	function get(self): Element?
+	-- Without following.
+	function peek(self): Element?
+	-- Every mounted node sharing it, in document order.
+	function elements(self): { Element }
+end
+
+-- `ui.path()`: a path for a canvas, built by chaining.
 declare extern type Path with
 	function move(self, x: number, y: number): Path
 	function line(self, x: number, y: number): Path
 	function quad(self, cx: number, cy: number, x: number, y: number): Path
 	function cubic(self, c1x: number, c1y: number, c2x: number, c2y: number, x: number, y: number): Path
+	-- Angles in degrees, clockwise from +x.
 	function arc(self, cx: number, cy: number, r: number, start: number, sweep: number): Path
 	function close(self): Path
 end
+export type Paint = Color | Brush
+export type LineCap = "butt" | "round" | "square"
+export type LineJoin = "miter" | "round" | "bevel"
+export type LineOptions = { cap: LineCap?, join: LineJoin?, dash: { number }?, dash_offset: number?, [number]: never }
+-- `draw` strokes a fraction of the path (`0.5`) or a span of it
+-- (`{ start, end }`), as anime.js draws SVG lines.
+export type MarkdownOptions = {
+	-- Names a text that grows (a streaming reply): parsed incrementally.
+	key: string?,
+	-- Single newlines break lines, as people's messages show them.
+	breaks: boolean?,
+	-- Repository paths (`src/main.rs:12`) are files: runs with `f`.
+	paths: boolean?,
+}
+export type MarkdownBlock = { t: string, [string]: any }
+
+export type StrokeOptions = {
+	cap: LineCap?,
+	join: LineJoin?,
+	dash: { number }?,
+	dash_offset: number?,
+	[number]: never,
+	draw: Pair?,
+}
+-- What a canvas's `draw(c, w, h)` paints with.
+declare extern type Canvas with
+	function rect(self, x: number, y: number, w: number, h: number, paint: Paint, radius: number?): ()
+	function circle(self, cx: number, cy: number, r: number, paint: Paint): ()
+	function line(self, x1: number, y1: number, x2: number, y2: number, paint: Paint, width: number?, opts: LineOptions?): ()
+	function fill(self, path: Path, paint: Paint, rule: ("nonzero" | "evenodd")?): ()
+	function stroke(self, path: Path, paint: Paint, width: number?, opts: StrokeOptions?): ()
+	-- Clips what follows to the path, until `restore`.
+	function clip(self, path: Path): ()
+	function restore(self): ()
+end
+
 -- `ui.web(opts)`: a web page's controller. Its fields are tracked, so a
 -- text or computed reading `web.title` follows the page.
 declare extern type Web with
@@ -82,6 +595,9 @@ declare extern type Web with
 	can_go_forward: boolean
 	focused: boolean
 	error: string?
+	-- The pointer over the page, in points from its top left; nil outside.
+	-- (Over a page zgui hears no pointer moves: its nodes had their leave.)
+	pointer: { x: number, y: number }?
 	function load(self, url: string): ()
 	function html(self, html: string, base_url: string?): ()
 	function back(self): ()
@@ -93,10 +609,14 @@ declare extern type Web with
 	function devtools(self): ()
 	function zoom(self, zoom: number): ()
 	function run(self, js: string): ()
-	-- The script's value as Luau data, or nil and the error.
-	function eval(self, js: string, reply: ((value: any, err: string?) -> ())?): ()
+	-- The script's value as Luau data (JSON's shape, whatever the page
+	-- returns: `any`), or nil and the error.
+	function eval(self, js: string, reply: ((value: any, err: string?) -> ...unknown)?): ()
+	-- A page from `ui.web(id, opts)` leaves the host's registry: the next
+	-- `ui.web(id)` makes a new one.
+	function close(self): ()
 end
-type WebOptions = {
+export type WebOptions = {
 	transparent: boolean?,
 	-- "default" (shared cookies and storage), "ephemeral", or a name.
 	profile: string?,
@@ -105,11 +625,27 @@ type WebOptions = {
 	-- `window.zgui.postMessage(value)` from the page reaches on_message.
 	messages: boolean?,
 	new_windows: boolean?,
+	[number]: never,
 }
-type WebEvent = { kind: "started" | "committed" | "finished" | "failed" | "changed", url: string }
---- `ui.term(id, opts)`: a terminal session (a Ghostty surface with the
---- desktop host's `ghostty` feature). Sessions outlive reloads: the run that
---- asks for `id` again gets the same one. Its fields are tracked.
+export type WebEvent = { kind: "started" | "committed" | "finished" | "failed" | "changed", url: string }
+
+-- `ui.term(id, opts)`: a terminal session (a Ghostty surface with the
+-- desktop host's `ghostty` feature). Sessions outlive reloads: the run that
+-- asks for `id` again gets the same one. Its fields are tracked.
+export type TermStatus = {
+	state: "idle" | "working" | "done" | "blocked" | "error",
+	-- With "blocked": what it waits for.
+	kind: ("permission" | "question" | "auth")?,
+	-- 0 to 100 while working or blocked; nil: indeterminate.
+	progress: number?,
+	app: string?,
+	title: string?,
+	msg: string?,
+	-- A worker under the program is blocked, whatever its own state.
+	child_blocked: boolean,
+	since: number,
+}
+
 declare extern type Term with
 	id: string
 	-- What the running program set (OSC 0/2); "" until it does.
@@ -124,6 +660,12 @@ declare extern type Term with
 	bell: boolean
 	-- A program's progress (OSC 9;4): 0 to 1, negative while indeterminate.
 	progress: number?
+	-- The progress report is in its error state (OSC 9;4;2).
+	progress_error: boolean
+	-- What the program reports it is doing (the Program Status Protocol,
+	-- OSC 7501), nil until it reports. `since`: Unix seconds the state began.
+	status: TermStatus?
+	-- The exit code, once its process ended.
 	exited: number?
 	columns: number
 	rows: number
@@ -141,7 +683,7 @@ declare extern type Term with
 	-- End the session (its process is hung up).
 	function close(self): ()
 end
-type TermOptions = {
+export type TermOptions = {
 	-- A command line; nil runs the login shell.
 	command: string?,
 	-- Where it starts ("~" is home); nil is home.
@@ -149,96 +691,139 @@ type TermOptions = {
 	env: { [string]: string }?,
 	font_size: number?,
 	-- Handlers (the latest run's are called).
-	on_title: ((title: string) -> ())?,
-	on_pwd: ((pwd: string) -> ())?,
-	on_process: ((name: string) -> ())?,
-	on_exit: ((code: number) -> ())?,
+	on_title: ((title: string) -> ...unknown)?,
+	on_pwd: ((pwd: string) -> ...unknown)?,
+	on_process: ((name: string) -> ...unknown)?,
+	on_exit: ((code: number) -> ...unknown)?,
 	-- The terminal asks to close: its process exited (alive = false), or
 	-- a close binding ran with something still running.
-	on_close: ((alive: boolean) -> ())?,
-	on_bell: (() -> ())?,
+	on_close: ((alive: boolean) -> ...unknown)?,
+	on_bell: (() -> ...unknown)?,
 	-- A shell-integrated command finished.
-	on_command: ((exit_code: number?, duration_ms: number) -> ())?,
-	on_notify: ((title: string, body: string) -> ())?,
+	on_command: ((exit_code: number?, duration_ms: number) -> ...unknown)?,
+	on_notify: ((title: string, body: string) -> ...unknown)?,
+	[number]: never,
 }
---- `ui.command(opts)`: an app command, shown as a menu item; its key
---- reaches it wherever focus is (terminals and web pages included).
-type CommandOptions = {
+
+-- `ui.command(opts)`: an app command, shown as a menu item; its key
+-- reaches it wherever focus is (terminals and web pages included). `id`
+-- and `run` are required unless `separator` is set (Luau checks table
+-- unions poorly, so this is one table).
+export type CommandOptions = {
 	id: string?,
+	-- Defaults to the id.
 	title: string?,
-	-- "File", "Edit", "View", "Window" or any other menu.
+	-- "File" (the default), "Edit", "View", "Window" or any other menu.
 	menu: string?,
 	-- Modifiers and a key joined by "+": "cmd+shift+d", "cmd+alt+arrowleft".
 	key: string?,
-	run: (() -> ())?,
+	run: (() -> ...unknown)?,
 	-- A separator line in `menu` instead of a command.
 	separator: boolean?,
+	[number]: never,
 }
-declare extern type Brush with end
-declare extern type Shader with end
-type Paint = Color | Brush
-declare extern type Canvas with
-	function rect(self, x: number, y: number, w: number, h: number, paint: Paint, radius: number?): ()
-	function circle(self, x: number, y: number, r: number, paint: Paint): ()
-	function line(self, x1: number, y1: number, x2: number, y2: number, paint: Paint, width: number?, opts: { [string]: any }?): ()
-	function fill(self, path: Path, paint: Paint, rule: string?): ()
-	function stroke(self, path: Path, paint: Paint, width: number?, opts: { cap: string?, join: string?, dash: { number }?, dash_offset: number?, draw: (number | { number })? }?): ()
-	function clip(self, path: Path): ()
-	function restore(self): ()
-end
+
+---------------------------------------------------------------------------
+-- Properties.
 
 -- A property's value: a literal, a state, a function of state (rerun when
 -- what it reads changes) or an animation binding.
-type P<T> = T | State | (() -> T) | Binding
--- Called with nothing; what it returns is ignored.
-type Handler = () -> ...unknown
-type Child = Node | string | (() -> string) | { Child } | false | nil
+export type Reactive<T> = T | Readable<T> | (() -> T) | Binding
+-- What a computed text function may return.
+export type TextValue = (string | number | boolean)?
+-- Text: a string (`"{name}"` shows the state named `name`), a number, or
+-- a function of state.
+export type Text = string | number | (() -> TextValue)
+-- Children: nodes, strings (text), functions (computed text) and lists of
+-- them, which flatten; `false` and `nil` are skipped.
+export type Child = Node | string | (() -> TextValue) | { read [number]: Child } | false | nil
 
--- Plain styles, for `hover`, `active`, `focus` and `disabled`.
-type Styles = {
-	w: Len?,
-	h: Len?,
+-- Event handlers: a function, or an action Rust runs.
+export type Handler = () -> ...unknown
+-- `clicks` (on_press): the press's count, 2 for a double click's second.
+-- `shift`, `ctrl`, `alt`, `meta`: the keys held.
+export type PointerEvent = {
+	x: number,
+	y: number,
+	local_x: number,
+	local_y: number,
+	clicks: number?,
+	shift: boolean,
+	ctrl: boolean,
+	alt: boolean,
+	meta: boolean,
+}
+-- What `on_click` is told: the keys held as it was clicked (a ⌘-click).
+export type ClickEvent = { shift: boolean, ctrl: boolean, alt: boolean, meta: boolean }
+-- A node's click: told the keys held, which it may ignore.
+export type ClickHandler = (e: ClickEvent) -> ...unknown
+-- `code`: the physical key, as the DOM's `KeyboardEvent.code` (`"KeyA"`,
+-- `"Digit1"`, `"BracketLeft"`), whatever the layout and modifiers typed;
+-- nil when the platform doesn't say.
+export type KeyEvent = {
+	key: string,
+	code: string?,
+	-- A text field holds focus: a bare-key shortcut gives way to typing.
+	editing: boolean,
+	shift: boolean,
+	ctrl: boolean,
+	alt: boolean,
+	meta: boolean,
+	["repeat"]: boolean,
+}
+export type WheelEvent = { dx: number, dy: number }
+export type Size = { w: number, h: number }
+export type DragPoint = { x: number, y: number, local_x: number, local_y: number, w: number, h: number }
+
+-- Plain styles, for `hover`, `active`, `focus`, `disabled` and
+-- `context_menu_style`.
+export type Styles = {
+	-- Size and position.
+	w: Length?,
+	h: Length?,
 	size: Pair?,
-	min_w: Len?,
-	max_w: Len?,
-	min_h: Len?,
-	max_h: Len?,
+	min_w: Length?,
+	max_w: Length?,
+	min_h: Length?,
+	max_h: Length?,
 	w_full: boolean?,
 	h_full: boolean?,
 	aspect: number?,
 	absolute: boolean?,
 	relative: boolean?,
-	top: Len?,
-	left: Len?,
-	right: Len?,
-	bottom: Len?,
-	p: Len?,
-	px: Len?,
-	py: Len?,
-	pt: Len?,
-	pr: Len?,
-	pb: Len?,
-	pl: Len?,
-	m: Len?,
-	mx: Len?,
-	my: Len?,
-	mt: Len?,
-	mr: Len?,
-	mb: Len?,
-	ml: Len?,
-	gap: number?,
-	gap_x: Len?,
-	gap_y: Len?,
-	direction: string?,
+	top: Length?,
+	left: Length?,
+	right: Length?,
+	bottom: Length?,
+	-- Spacing.
+	p: Length?,
+	px: Length?,
+	py: Length?,
+	pt: Length?,
+	pr: Length?,
+	pb: Length?,
+	pl: Length?,
+	m: Length?,
+	mx: Length?,
+	my: Length?,
+	mt: Length?,
+	mr: Length?,
+	mb: Length?,
+	ml: Length?,
+	gap: Num?,
+	gap_x: Length?,
+	gap_y: Length?,
+	-- Flex and grid.
+	direction: Direction?,
 	grow: number?,
 	shrink: number?,
-	basis: Len?,
+	basis: Length?,
 	flex_wrap: boolean?,
 	wrap_reverse: boolean?,
-	items: string?,
-	justify: string?,
-	self: string?,
-	content: string?,
+	items: Align?,
+	justify: Justify?,
+	self: Align?,
+	content: AlignContent?,
 	grid: boolean?,
 	cols: number?,
 	rows: number?,
@@ -248,53 +833,74 @@ type Styles = {
 	row_span: number?,
 	col_span_full: boolean?,
 	row_span_full: boolean?,
-	overflow: string?,
-	overflow_x: string?,
-	overflow_y: string?,
+	overflow: Overflow?,
+	overflow_x: Overflow?,
+	overflow_y: Overflow?,
 	hidden: boolean?,
 	invisible: boolean?,
+	-- Paint.
 	bg: Color?,
 	gradient: Gradient?,
 	color: Color?,
 	bg_image: string?,
-	bg_fit: string?,
-	rounded: number?,
+	bg_fit: Fit?,
+	rounded: Num?,
 	corners: Corners?,
 	rounded_tl: number?,
 	rounded_tr: number?,
 	rounded_br: number?,
 	rounded_bl: number?,
-	border: number?,
-	border_sides: Corners?,
+	border: Num?,
+	border_sides: Sides?,
 	border_color: Color?,
 	border_over: boolean?,
 	border_dash: Pair?,
+	-- An outline around the box (CSS's): its width, colour, and how far
+	-- outside it starts (negative: over the box's edge, an inset ring).
+	outline: Num?,
+	outline_color: Color?,
+	outline_offset: Num?,
 	shadow: Shadow?,
-	opacity: number?,
+	-- Shadows inside the box (CSS's inset): a ring as wide on each side as
+	-- the offset pushes it, plus the spread; drawn sharp (no blur).
+	inset_shadow: Shadow?,
+	opacity: Num?,
 	brightness: number?,
 	contrast: number?,
 	saturate: number?,
 	blur: number?,
-	backdrop_blur: number?,
+	backdrop_blur: Num?,
 	fade: Pair?,
 	fade_x: Pair?,
-	fade_sides: Corners?,
-	clip_inset: Corners?,
+	fade_sides: Sides?,
+	-- Fade an edge only as far as content runs past it (a list at its top shows no top band).
+	fade_overflow: boolean?,
+	-- Lay its edges on whole points (crisp borders where percentages leave fractions).
+	snap: boolean?,
+	clip_inset: Sides?,
 	layer: boolean?,
-	fit: string?,
+	fit: Fit?,
 	tint: Color?,
-	cursor: string?,
-	text_size: number?,
-	weight: number?,
+	cursor: Cursor?,
+	-- Text.
+	text_size: Num?,
+	weight: Num?,
 	bold: boolean?,
 	italic: boolean?,
-	align: string?,
-	font: string?,
+	align: TextAlign?,
+	font: Font?,
 	wrap: boolean?,
 	truncate: boolean?,
 	lines: number?,
-	line_height: number?,
-	letter_spacing: number?,
+	line_height: Num?,
+	letter_spacing: Num?,
+	-- Tabular figures: every digit the same width.
+	tabular: boolean?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: boolean?,
+	underline_offset: Num?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
 	x: number?,
 	y: number?,
 	scale: number?,
@@ -305,263 +911,6246 @@ type Styles = {
 	skew_x: number?,
 	skew_y: number?,
 	origin: Pair?,
+	[number]: never,
 }
 
-type Props = {
-	w: P<Len>?,
-	h: P<Len>?,
-	size: P<Pair>?,
-	min_w: P<Len>?,
-	max_w: P<Len>?,
-	min_h: P<Len>?,
-	max_h: P<Len>?,
-	w_full: P<boolean>?,
-	h_full: P<boolean>?,
-	aspect: P<number>?,
-	absolute: P<boolean>?,
-	relative: P<boolean>?,
-	top: P<Len>?,
-	left: P<Len>?,
-	right: P<Len>?,
-	bottom: P<Len>?,
-	p: P<Len>?,
-	px: P<Len>?,
-	py: P<Len>?,
-	pt: P<Len>?,
-	pr: P<Len>?,
-	pb: P<Len>?,
-	pl: P<Len>?,
-	m: P<Len>?,
-	mx: P<Len>?,
-	my: P<Len>?,
-	mt: P<Len>?,
-	mr: P<Len>?,
-	mb: P<Len>?,
-	ml: P<Len>?,
-	gap: P<number>?,
-	gap_x: P<Len>?,
-	gap_y: P<Len>?,
-	direction: P<string>?,
-	grow: P<number>?,
-	shrink: P<number>?,
-	basis: P<Len>?,
-	flex_wrap: P<boolean>?,
-	wrap_reverse: P<boolean>?,
-	items: P<string>?,
-	justify: P<string>?,
-	self: P<string>?,
-	content: P<string>?,
-	grid: P<boolean>?,
-	cols: P<number>?,
-	rows: P<number>?,
-	col_start: P<number>?,
-	row_start: P<number>?,
-	col_span: P<number>?,
-	row_span: P<number>?,
-	col_span_full: P<boolean>?,
-	row_span_full: P<boolean>?,
-	overflow: P<string>?,
-	overflow_x: P<string>?,
-	overflow_y: P<string>?,
-	hidden: P<boolean>?,
-	invisible: P<boolean>?,
-	bg: P<Color>?,
-	gradient: P<Gradient>?,
-	color: P<Color>?,
-	bg_image: P<string>?,
-	bg_fit: P<string>?,
-	rounded: P<number>?,
-	corners: P<Corners>?,
-	rounded_tl: P<number>?,
-	rounded_tr: P<number>?,
-	rounded_br: P<number>?,
-	rounded_bl: P<number>?,
-	border: P<number>?,
-	border_sides: P<Corners>?,
-	border_color: P<Color>?,
-	border_over: P<boolean>?,
-	border_dash: P<Pair>?,
-	shadow: P<Shadow>?,
-	opacity: P<number>?,
-	brightness: P<number>?,
-	contrast: P<number>?,
-	saturate: P<number>?,
-	blur: P<number>?,
-	backdrop_blur: P<number>?,
-	fade: P<Pair>?,
-	fade_x: P<Pair>?,
-	fade_sides: P<Corners>?,
-	clip_inset: P<Corners>?,
-	layer: P<boolean>?,
-	fit: P<string>?,
-	tint: P<Color>?,
-	cursor: P<string>?,
-	text_size: P<number>?,
-	weight: P<number>?,
-	bold: P<boolean>?,
-	italic: P<boolean>?,
-	align: P<string>?,
-	font: P<string>?,
-	wrap: P<boolean>?,
-	truncate: P<boolean>?,
-	lines: P<number>?,
-	line_height: P<number>?,
-	letter_spacing: P<number>?,
-	x: P<number>?,
-	y: P<number>?,
-	scale: P<number>?,
-	scale_x: P<number>?,
-	scale_y: P<number>?,
-	rotate: P<number>?,
-	skew: P<number>?,
-	skew_x: P<number>?,
-	skew_y: P<number>?,
-	origin: P<Pair>?,
+-- Style properties as elements take them: each may also be a state, a
+-- function or a binding.
+export type StyleProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+}
+
+-- What every element takes besides its styles.
+export type PointerEvents = "none" | "auto" | boolean
+export type NodeProps = {
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
 	-- Identity, for selectors, refs and animations.
 	id: string?,
+	-- Space-separated class names.
 	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
 	ref: (Ref | { Ref })?,
 	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
 	-- Pressing the node leaves focus where it is (an editor's popup chrome).
 	keep_focus: boolean?,
-	-- CSS pointer-events, inherited: false ("none") lets the pointer through
-	-- the node and everything in it to what is below; true ("auto") takes it
-	-- again under such an ancestor (a layer's menus and panels).
-	pointer_events: P<boolean>? | "none" | "auto",
 	-- The fill behind an input's selected text.
 	selection_color: Color?,
-	disabled: (boolean | State | (() -> boolean) | Styles)?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
 	hover: Styles?,
 	active: Styles?,
 	focus: Styles?,
-	-- Size animation and masks.
-	layout: ("height" | "width" | "size" | false)?,
-	layout_ease: (string | any)?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
 	layout_duration: number?,
 	layout_enter: boolean?,
 	layout_clip: boolean?,
-	mask: (Bitmap | { any })?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
 	bg_shader: Shader?,
-	shader_params: { Color | { number } }?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
 	-- Events.
-	on_click: (Handler | Action)?,
-	on_press: (Handler | Action)?,
-	on_release: (Handler | Action)?,
-	on_hover: ((inside: boolean) -> ())?,
-	on_pointer_move: ((e: { x: number, y: number, local_x: number, local_y: number }) -> ())?,
-	on_key: ((e: { key: string, shift: boolean, ctrl: boolean, alt: boolean, meta: boolean, ["repeat"]: boolean }) -> boolean?)?,
-	on_key_up: ((key: string) -> ())?,
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
 	on_focus: (Handler | Action)?,
 	on_blur: (Handler | Action)?,
-	on_wheel: ((e: { dx: number, dy: number }) -> ())?,
-	on_mount: ((element: Element) -> ())?,
-	on_resize: ((size: { w: number, h: number }, element: Element) -> ())?,
-	-- Widget fields.
-	label: string?,
-	value: State?,
-	min: number?,
-	max: number?,
-	multiline: boolean?,
-	offset: State?,
-	follow: boolean?,
-	src: P<string>?,
-	code: string?,
-	draw: ((c: Canvas, w: number, h: number) -> ())?,
-	count: P<number>?,
-	height: number?,
-	overscan: number?,
-	row: ((index: number) -> Node)?,
-	open: State?,
-	-- popover and menu: the trigger, shown where the popover is written.
-	anchor: Node?,
-	-- Web views: a ui.web() controller (so the page outlives the node), or
-	-- the options to make one; `src` is the page, or `html` with `base_url`.
-	web: Web?,
-	html: string?,
-	base_url: string?,
-	transparent: boolean?,
-	profile: string?,
-	inspectable: boolean?,
-	user_agent: string?,
-	messages: boolean?,
-	new_windows: boolean?,
-	on_navigate: ((e: WebEvent) -> ())?,
-	on_load: ((url: string) -> ())?,
-	on_title: ((title: string) -> ())?,
-	on_message: ((value: any) -> ())?,
-	on_error: ((url: string, err: string) -> ())?,
-	on_new_window: ((url: string) -> ())?,
-	-- Terminals: the session (`ui.term(id)`).
-	term: Term?,
-	-- Native views: the name the host provides the view under
-	-- (`ScriptHost::native`); state or a function swaps it in place.
-	key: P<string>?,
-	-- Drag and drop within the window; payloads are plain values.
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: (() -> any)?,
 	drag_preview: ((payload: any) -> Node)?,
-	on_drag_end: ((payload: any, accepted: boolean) -> ())?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
 	-- A destination: `drop_when` filters payloads (default: all).
-	drop_when: ((payload: any) -> boolean)?,
-	on_drag_over: ((payload: any, e: DragPoint) -> ())?,
-	on_drag_leave: ((payload: any) -> ())?,
-	on_drop: ((payload: any, e: DragPoint) -> ())?,
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
-	context_menu: ((e: { x: number, y: number, local_x: number, local_y: number }) -> { Node }?)?,
-	-- The context menu panel's look (plain values): bg, rounded, p, gap,
-	-- backdrop_blur, border, shadow, w, …
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
 	context_menu_style: Styles?,
 	-- Open the context menu under the node, from its left edge (a tab's),
 	-- rather than at the pointer.
 	context_menu_below: boolean?,
-	-- Children.
+}
+export type MaskOptions = { [number]: Bitmap, w: number?, h: number?, x: number?, y: number?, sweep: MaskSweep? }
+-- The mask moving `x`, `y` points from where it starts, over and over every
+-- `duration` ms, at `frame_rate` steps a second at most (60): the engine
+-- moves it on its own frame clock, with no script, style pass or layout
+-- per step, compositing only the masked node again (a text shimmer).
+export type MaskSweep = { x: number?, y: number?, duration: number?, frame_rate: number? }
+
+-- Every element's properties, without children: an unknown key is an
+-- error (`[number]: never` makes Luau check them).
+export type Props = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: never,
+}
+-- column, row, div, overlay, grid, button: and children.
+export type ContainerProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
 	[number]: Child,
 }
+export type ScrollProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: Child,
+	-- The scroll position in points, both ways.
+	offset: State<number>?,
+	-- Stays at the end while the content grows, until scrolled away.
+	follow: boolean?,
+}
+-- `ui.text { "Count: {count}", text_size = 18 }`: the text first.
+export type TextProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: Text,
+	-- Show a string as it is, braces and all, not as a template: for data
+	-- (code, titles, messages) that might hold `{name}`.
+	literal: boolean?,
+}
+-- `ui.span`'s options are plain values.
+export type SpanProps = {
+	-- The text first.
+	[number]: Text,
+	color: Color?,
+	bg: Color?,
+	text_size: number?,
+	weight: number?,
+	bold: boolean?,
+	italic: boolean?,
+	underline: boolean?,
+	-- How far below the baseline the underline sits (CSS's
+	-- `text-underline-offset`).
+	underline_offset: number?,
+	strike: boolean?,
+	font: "mono"?,
+	-- A link (`on_click`) under the pointer: underlined, recoloured. With
+	-- it, the link isn't underlined at rest unless `underline` says so.
+	hover: { underline: boolean?, color: Color? }?,
+	-- An icon before the text, in the line (a file chip's file type):
+	-- `src` (a file, `https://…`) or `code` (SVG markup), `size` square
+	-- (12), `gap` from the text (4), centred on the line; `tint` a colour,
+	-- or `"currentColor"` for the span's.
+	icon: {
+		src: string?,
+		code: string?,
+		size: number?,
+		gap: number?,
+		tint: Color?,
+	}?,
+	on_click: (Handler | Action)?,
+	-- Its text as it is, not a template (see TextProps).
+	literal: boolean?,
+	-- Room around it: across (before and after it, taking space in the
+	-- line), or `{ across, down }`; with `bg`, the background hugs the text
+	-- plus this (an inline code chip) instead of filling the line.
+	padding: (number | { number })?,
+	-- The background's corner radius.
+	radius: number?,
+}
+-- Runs: spans, strings, functions, or span options. `literal`: the runs'
+-- strings as they are (a span's own `literal` wins).
+export type RichProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: Span | Text | SpanProps,
+	literal: boolean?,
+}
+export type ImageProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: never,
+	-- PNG or JPEG, relative to the script; `https://…` (through the
+	-- host's fetcher); `host:<name>` (an image the app made).
+	src: Reactive<string>,
+	-- For accessibility.
+	label: string?,
+	-- Shown in its place while a remote picture loads and if it fails (an
+	-- avatar's initials).
+	fallback: Node?,
+}
+-- One of `src` (a file) and `code` (SVG markup) is required.
+export type SvgProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: never,
+	src: Reactive<string>?,
+	code: string?,
+	label: string?,
+}
+export type CanvasProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: never,
+	-- Runs again when the size or the state it reads changes.
+	draw: (c: Canvas, w: number, h: number) -> ...unknown,
+}
+export type CheckboxProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: never,
+	value: State<boolean>,
+	label: string?,
+}
+export type InputProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: never,
+	value: State<string>,
+	label: string?,
+	-- input only: several lines (textarea always has them).
+	multiline: boolean?,
+	-- Shown while the value is empty (never part of it), in the input's
+	-- typography and `placeholder_color`.
+	placeholder: Reactive<string>?,
+	placeholder_color: Reactive<Color>?,
+	-- Focusing it selects all its text (an address bar).
+	select_on_focus: boolean?,
+	-- A password field: its text shows as a bullet per character, and
+	-- copying or cutting it gives nothing.
+	secure: boolean?,
+	-- Several lines only: numbered in a gutter at the left (a code editor).
+	line_numbers: boolean?,
+}
+export type ProgressProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: never,
+	value: State<number>,
+	label: string?,
+}
+export type SliderProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: never,
+	value: State<number>,
+	label: string?,
+	-- 0 and 1 by default; min < max.
+	min: number?,
+	max: number?,
+}
+-- A virtualized list: only visible rows are built.
+export type ListProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: never,
+	-- The row count (with `heights`, their length).
+	count: Reactive<number>?,
+	-- Builds row `index` (from 1).
+	row: (index: number) -> Node,
+	-- Every row's height in points (28 by default).
+	height: number?,
+	-- Each row's own height instead, in order: a list, a state holding one
+	-- (a host's shared value costs the script nothing), or a function
+	-- returning one (tracked). The row count is its length.
+	heights: ({ number } | Readable<{ number }> | (() -> { number }))?,
+	-- Rows (from 1, in order) that stick to the top while their section
+	-- scrolls past, each pushed up by the next: section headers. With
+	-- `heights`.
+	sticky: ({ number } | Readable<{ number }> | (() -> { number }))?,
+	-- How far below the top the sticky rows stick (CSS's sticky `top`).
+	sticky_top: number?,
+	-- Rows built beyond each edge (2 by default).
+	overscan: number?,
+	offset: State<number>?,
+}
+-- Where a modal's panel sits in the window: lined up with its start,
+-- centre or end across (`x`) and down (`y`), `inset` points from the edges
+-- (a number, or { top, right, bottom, left }). Centred unless set.
+export type ModalPlacement = {
+	x: ("start" | "center" | "end")?,
+	y: ("start" | "center" | "end")?,
+	inset: (number | { number })?,
+}
+export type LayerProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: Child,
+	open: State<boolean>?,
+	label: string?,
+	placement: ModalPlacement?,
+}
+export type ModalProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: Child,
+	open: State<boolean>,
+	label: string?,
+	placement: ModalPlacement?,
+	autofocus: boolean?,
+}
+-- Where an anchored popover or menu opens: on `side` of its trigger
+-- (flipping when that side lacks room), lined up with its start, centre
+-- or end, `offset` points away (bottom, start, 4 by default).
+export type Placement = {
+	side: ("bottom" | "top" | "left" | "right")?,
+	align: ("start" | "center" | "end")?,
+	offset: number?,
+}
+export type PopoverProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: Child,
+	open: State<boolean>,
+	-- The trigger, shown where the popover is written.
+	anchor: Node,
+	label: string?,
+	placement: Placement?,
+	-- Focus its first control as it opens (true); false keeps the panel
+	-- itself focused (a menu whose search field waits to be clicked).
+	autofocus: boolean?,
+}
+-- `ui.menu_item { "Copy", on_click = … }`: the label first.
+-- The label (`{ "Copy" }`), or `label` with content of its own after it
+-- (an icon, the label, a shortcut).
+export type MenuItemProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: Child,
+	label: string?,
+	-- Chosen, it leaves the menu open (a toggle, a pin).
+	keep_open: boolean?,
+}
+export type SubmenuProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: Child,
+	open: State<boolean>,
+	label: string?,
+	-- Its trigger row, drawn by the app (a `ui.menu_item` with an icon, the
+	-- label, a value, a chevron); the label and a "›" otherwise. It opens
+	-- when the pointer moves onto it.
+	trigger: Node?,
+}
+export type WebViewProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	transparent: boolean?,
+	-- "default" (shared cookies and storage), "ephemeral", or a name.
+	profile: string?,
+	inspectable: boolean?,
+	user_agent: string?,
+	-- `window.zgui.postMessage(value)` from the page reaches on_message.
+	messages: boolean?,
+	new_windows: boolean?,
+	[number]: never,
+	-- A `ui.web()` controller, so the page outlives the node; the options
+	-- above make one otherwise.
+	web: Web?,
+	-- The page: a URL (followed when it changes), or `html` with `base_url`.
+	src: Reactive<string>?,
+	html: string?,
+	base_url: string?,
+	on_navigate: ((e: WebEvent) -> ...unknown)?,
+	on_load: ((url: string) -> ...unknown)?,
+	on_title: ((title: string) -> ...unknown)?,
+	-- What the page posted, as Luau data: JSON from the page, so `any`.
+	-- `origin` is the sending frame's (any page, any iframe, can post):
+	-- check it before acting on a message.
+	on_message: ((value: any, origin: string, main_frame: boolean) -> ...unknown)?,
+	on_error: ((url: string, err: string) -> ...unknown)?,
+	on_new_window: ((url: string) -> ...unknown)?,
+}
+export type TerminalProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: never,
+	term: Term,
+}
+-- `ui.native`: the name the host provides the view under
+-- (`ScriptHost::native`); state or a function swaps it in place.
+export type NativeProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: never,
+	key: Reactive<string>,
+}
+-- `from`: only what that plugin (by name) contributes.
+export type SlotProps = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: never,
+	context: unknown?,
+	from: string?,
+}
+-- How `ui.each` rows slide when the list moves them: `true` (a spring,
+-- bounce .1 over 400 ms), an ease, `{ duration, ease }`, `{ bounce,
+-- duration }` or `{ spring = anime.spring {...} }`.
+export type Motion = boolean | Easing | { duration: number?, ease: Easing?, bounce: number?, spring: AnimeEase? }
+-- `ui.each`'s options; the rest style the box the rows lay out in.
+export type EachOptions = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: never,
+	-- A row's identity: rows keep their state as the list reorders. The
+	-- item is `any`, as `build`'s is.
+	key: ((item: any) -> string | number)?,
+	animate: Motion?,
+	-- anime.js parameters played on rows that come and go.
+	enter: ElementParams?,
+	exit: ElementParams?,
+	-- The first rows play `enter` too.
+	initial: boolean?,
+}
+-- `ui.presence`'s options; sizing makes it a box its content fills.
+export type PresenceOptions = {
+	-- Size and position.
+	w: Reactive<Length>?,
+	h: Reactive<Length>?,
+	size: Reactive<Pair>?,
+	min_w: Reactive<Length>?,
+	max_w: Reactive<Length>?,
+	min_h: Reactive<Length>?,
+	max_h: Reactive<Length>?,
+	w_full: Reactive<boolean>?,
+	h_full: Reactive<boolean>?,
+	aspect: Reactive<number>?,
+	absolute: Reactive<boolean>?,
+	relative: Reactive<boolean>?,
+	top: Reactive<Length>?,
+	left: Reactive<Length>?,
+	right: Reactive<Length>?,
+	bottom: Reactive<Length>?,
+	-- Spacing.
+	p: Reactive<Length>?,
+	px: Reactive<Length>?,
+	py: Reactive<Length>?,
+	pt: Reactive<Length>?,
+	pr: Reactive<Length>?,
+	pb: Reactive<Length>?,
+	pl: Reactive<Length>?,
+	m: Reactive<Length>?,
+	mx: Reactive<Length>?,
+	my: Reactive<Length>?,
+	mt: Reactive<Length>?,
+	mr: Reactive<Length>?,
+	mb: Reactive<Length>?,
+	ml: Reactive<Length>?,
+	gap: Reactive<Num>?,
+	gap_x: Reactive<Length>?,
+	gap_y: Reactive<Length>?,
+	-- Flex and grid.
+	direction: Reactive<Direction>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	basis: Reactive<Length>?,
+	flex_wrap: Reactive<boolean>?,
+	wrap_reverse: Reactive<boolean>?,
+	items: Reactive<Align>?,
+	justify: Reactive<Justify>?,
+	self: Reactive<Align>?,
+	content: Reactive<AlignContent>?,
+	grid: Reactive<boolean>?,
+	cols: Reactive<number>?,
+	rows: Reactive<number>?,
+	col_start: Reactive<number>?,
+	row_start: Reactive<number>?,
+	col_span: Reactive<number>?,
+	row_span: Reactive<number>?,
+	col_span_full: Reactive<boolean>?,
+	row_span_full: Reactive<boolean>?,
+	overflow: Reactive<Overflow>?,
+	overflow_x: Reactive<Overflow>?,
+	overflow_y: Reactive<Overflow>?,
+	hidden: Reactive<boolean>?,
+	invisible: Reactive<boolean>?,
+	-- Paint.
+	bg: Reactive<Color>?,
+	gradient: Reactive<Gradient>?,
+	color: Reactive<Color>?,
+	bg_image: Reactive<string>?,
+	bg_fit: Reactive<Fit>?,
+	rounded: Reactive<Num>?,
+	corners: Reactive<Corners>?,
+	rounded_tl: Reactive<number>?,
+	rounded_tr: Reactive<number>?,
+	rounded_br: Reactive<number>?,
+	rounded_bl: Reactive<number>?,
+	border: Reactive<Num>?,
+	border_sides: Reactive<Sides>?,
+	border_color: Reactive<Color>?,
+	border_over: Reactive<boolean>?,
+	border_dash: Reactive<Pair>?,
+	outline: Reactive<Num>?,
+	outline_color: Reactive<Color>?,
+	outline_offset: Reactive<Num>?,
+	shadow: Reactive<Shadow>?,
+	inset_shadow: Reactive<Shadow>?,
+	opacity: Reactive<Num>?,
+	brightness: Reactive<number>?,
+	contrast: Reactive<number>?,
+	saturate: Reactive<number>?,
+	blur: Reactive<number>?,
+	backdrop_blur: Reactive<Num>?,
+	fade: Reactive<Pair>?,
+	fade_x: Reactive<Pair>?,
+	fade_sides: Reactive<Sides>?,
+	fade_overflow: Reactive<boolean>?,
+	snap: Reactive<boolean>?,
+	clip_inset: Reactive<Sides>?,
+	layer: Reactive<boolean>?,
+	fit: Reactive<Fit>?,
+	tint: Reactive<Color>?,
+	cursor: Reactive<Cursor>?,
+	-- Text.
+	text_size: Reactive<Num>?,
+	weight: Reactive<Num>?,
+	bold: Reactive<boolean>?,
+	italic: Reactive<boolean>?,
+	align: Reactive<TextAlign>?,
+	font: Reactive<Font>?,
+	wrap: Reactive<boolean>?,
+	truncate: Reactive<boolean>?,
+	lines: Reactive<number>?,
+	line_height: Reactive<Num>?,
+	letter_spacing: Reactive<Num>?,
+	-- Tabular figures: every digit the same width.
+	tabular: Reactive<boolean>?,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Reactive<boolean>?,
+	underline_offset: Reactive<Num>?,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Reactive<number>?,
+	y: Reactive<number>?,
+	scale: Reactive<number>?,
+	scale_x: Reactive<number>?,
+	scale_y: Reactive<number>?,
+	rotate: Reactive<number>?,
+	skew: Reactive<number>?,
+	skew_x: Reactive<number>?,
+	skew_y: Reactive<number>?,
+	origin: Reactive<Pair>?,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Reactive<ThemeSpec>?,
+	-- Identity, for selectors, refs and animations.
+	id: string?,
+	-- Space-separated class names.
+	class: string?,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: (Variants | ((choice: any) -> Variants))?,
+	ref: (Ref | { Ref })?,
+	focusable: boolean?,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events, inherited: "none" (or false) lets the pointer
+	-- through the node and what it holds to what is under it (presses,
+	-- hover, the wheel, drops, a native view), unless a descendant sets
+	-- "auto" (true) again, as a layer's menus and panels do. A state or
+	-- function follows; nil inherits.
+	pointer_events: (PointerEvents | Readable<PointerEvents?> | (() -> PointerEvents?))?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
+	window_drag: boolean?,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: (string | Node)?,
+	tooltip_placement: Placement?,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: boolean?,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: (boolean | Readable<boolean> | (() -> boolean) | Styles)?,
+	hover: Styles?,
+	active: Styles?,
+	focus: Styles?,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: ("height" | "width" | "size" | "position" | boolean)?,
+	layout_id: string?,
+	layout_ease: Easing?,
+	-- Milliseconds.
+	layout_duration: number?,
+	layout_enter: boolean?,
+	layout_clip: boolean?,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: (Bitmap | MaskOptions)?,
+	bg_shader: Shader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: { read [number]: Color | { number } }?,
+	-- Events.
+	on_click: (ClickHandler | Handler | Action)?,
+	-- Primary pointer down and up.
+	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
+	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- Return true to consume the key.
+	on_key: (((e: KeyEvent) -> ...boolean?) | Action)?,
+	on_key_up: (((key: string) -> ...unknown) | Action)?,
+	on_focus: (Handler | Action)?,
+	on_blur: (Handler | Action)?,
+	on_wheel: (((e: WheelEvent) -> ...unknown) | Action)?,
+	on_mount: ((element: Element) -> ...unknown)?,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: ((visible: boolean, element: Element) -> ...unknown)?,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: (() -> any)?,
+	drag_preview: ((payload: any) -> Node)?,
+	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: ((payload: any) -> unknown)?,
+	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
+	on_drag_leave: ((payload: any) -> ...unknown)?,
+	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: ((e: PointerEvent) -> ...{ Node }?)?,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Styles?,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: boolean?,
+	[number]: never,
+	enter: ElementParams?,
+	exit: ElementParams?,
+	-- The new content enters once the old has left.
+	mode: "wait"?,
+	-- The first content plays `enter` too.
+	initial: boolean?,
+}
+-- What `ui.switch` matches: a case's key equals the value (or its text).
+export type CaseKey = string | number | boolean
 
-type DragPoint = { x: number, y: number, local_x: number, local_y: number, w: number, h: number }
-
-type Container = (props: Props) -> Node
-
-
--- Animation values: numbers, strings with units ("10px", "1turn", "+=10"),
--- colors, keyframe lists, tween tables, staggers and functions of
--- (target, index, total).
-type AnimValue = any
-type Ease = string | ((t: number) -> number) | any
-type Callback = (anim: Animation) -> ()
-
-type Timing = {
-	duration: (number | ((any, number, number) -> number))?,
-	delay: (number | ((any, number, number) -> number) | any)?,
-	ease: Ease?,
-	composition: ("replace" | "none" | "add")?,
-	modifier: ((number) -> number)?,
-	loop: (number | boolean)?,
-	loopDelay: number?,
-	alternate: boolean?,
-	reversed: boolean?,
-	autoplay: (boolean | any)?,
-	frameRate: number?,
-	playbackRate: number?,
-	playbackEase: Ease?,
-	keyframes: any?,
-	onBegin: Callback?,
-	onBeforeUpdate: Callback?,
-	onUpdate: Callback?,
-	onRender: Callback?,
-	onLoop: Callback?,
-	onPause: Callback?,
-	onComplete: Callback?,
-	-- No array part: an unknown key is an error (with the new solver).
+-- Durations are milliseconds, as in `anime`.
+export type TweenEnd = number | string | { number }
+export type TweenOptions = { duration: number?, ease: Easing?, from: TweenEnd?, to: TweenEnd?, [number]: never }
+export type SpringOptions = { stiffness: number?, damping: number?, from: TweenEnd?, to: TweenEnd?, [number]: never }
+export type LoopOptions = {
+	duration: number?,
+	ease: Easing?,
+	-- Back and forth (true by default), or restart each cycle.
+	yoyo: boolean?,
+	-- Caps the frames it asks for.
+	fps: number?,
+	from: TweenEnd?,
+	to: TweenEnd?,
 	[number]: never,
 }
 
--- An element animation: its properties are checked, so a misspelled one
--- (`bgColor`) is an error here rather than at the first frame.
-type ElementParams = {
+-- `theme = …` on an element.
+export type ThemeSpec = string | { [string]: string | number | { [string]: any } }
+-- A theme as a table (or the JSON a theme file holds).
+export type ThemeTable = {
+	name: string,
+	type: ("dark" | "light" | "high-contrast" | "high-contrast-light")?,
+	extends: string?,
+	tokens: { [string]: string | number | { [string]: any } }?,
+}
+export type ThemeApi = {
+	-- Apply the theme `name` (stops following the system).
+	set: (name: string) -> (),
+	-- Apply `name` unless the app chose a theme: a default reloads keep.
+	default: (name: string) -> (),
+	-- The applied theme's name, as state: `current:get()` (tracked),
+	-- `current:set(name)` applies one.
+	current: State<string>,
+	-- The applied theme's kind (tracked).
+	kind: () -> ("dark" | "light" | "high-contrast" | "high-contrast-light"),
+	names: () -> { string },
+	-- Read a theme file (zgui's, or a VS Code colour theme) beside the
+	-- script, register it and watch it; returns the theme's name.
+	load: (path: string) -> string,
+	register: (theme: ThemeTable) -> string,
+	-- Declare the app's tokens with defaults in terms of the standard ones.
+	tokens: (tokens: { [string]: string | number | { [string]: any } }) -> (),
+	-- A token's value (tracked): colours as "#rrggbbaa", numbers, font names.
+	get: (name: TokenName | string) -> any,
+	follow_system: (themes: { dark: string, light: string } | false) -> (),
+	-- The design lint: styles that hard-code a colour, spacing, radius,
+	-- type size, weight, font or shadow warn ("warn", true) or fail
+	-- ("error"), naming the token to use. `ZGUI_DESIGN_LINT` overrides it.
+	strict: (mode: "warn" | "error" | "off" | boolean) -> (),
+}
+
+declare ui: {
+	theme: ThemeApi,
+	-- Call `fn` every `ms` milliseconds on zgui's clock (no frames between);
+	-- returning false stops it. Returns a function that stops it. It lives as
+	-- long as what made it: a component, a builder, or the script.
+	every: (ms: number, fn: () -> ...unknown) -> () -> (),
+	-- Call `fn` once, after `ms` milliseconds; returns a function that cancels it.
+	after: (ms: number, fn: () -> ()) -> () -> (),
+	column: (props: ContainerProps?) -> Node,
+	row: (props: ContainerProps?) -> Node,
+	div: (props: ContainerProps?) -> Node,
+	-- Children stack in one box, each aligned on its own.
+	overlay: (props: ContainerProps?) -> Node,
+	button: (props: ContainerProps?) -> Node,
+	-- A div with `grid = true`.
+	grid: (props: ContainerProps?) -> Node,
+	scroll: (props: ScrollProps?) -> Node,
+	scroll_x: (props: ScrollProps?) -> Node,
+	text: (content: Text | TextProps) -> Node,
+	span: (content: Text | SpanProps) -> Span,
+	rich: (props: RichProps) -> Node,
+	image: (props: ImageProps) -> Node,
+	svg: (props: SvgProps) -> Node,
+	canvas: (props: CanvasProps) -> Node,
+	webview: (props: WebViewProps) -> Node,
+	-- `ui.web(opts)`: a page for this run. `ui.web(id, opts)`: the host's
+	-- page for `id`, made with `opts` the first time, kept across reloads.
+	web: ((opts: WebOptions?) -> Web) & ((id: string, opts: WebOptions?) -> Web),
+	terminal: (props: TerminalProps) -> Node,
+	-- A native view the host provides (an NSView on macOS), placed like a
+	-- web view.
+	native: (props: NativeProps) -> Node,
+	-- The session for `id`, started the first time; `ui.term(id)` without
+	-- options only looks it up.
+	term: (id: string, opts: TermOptions?) -> Term,
+	command: (opts: CommandOptions) -> (),
+	checkbox: (props: CheckboxProps) -> Node,
+	input: (props: InputProps) -> Node,
+	textarea: (props: InputProps) -> Node,
+	progress: (props: ProgressProps) -> Node,
+	slider: (props: SliderProps) -> Node,
+	modal: (props: ModalProps) -> Node,
+	-- Over the window and non-modal (toasts): no focus, no backdrop; the
+	-- pointer passes through but for what it holds, which stays live while
+	-- a dialog holds focus. Raised over everything as it opens (`open`, a
+	-- state; open unless given).
+	layer: (props: LayerProps) -> Node,
+	popover: (props: PopoverProps) -> Node,
+	menu: (props: PopoverProps) -> Node,
+	menu_item: (props: MenuItemProps) -> Node,
+	submenu: (props: SubmenuProps) -> Node,
+	list: (props: ListProps) -> Node,
+	-- `node` while `cond` is truthy, else `otherwise` (or nothing).
+	show: (cond: boolean | Readable<unknown> | (() -> unknown), node: Node, otherwise: Node?) -> Node,
+	switch: (value: string | Readable<unknown> | (() -> unknown), cases: { [CaseKey]: Node }, default: Node?) -> Node,
+	-- A row per item of a list state; `build` gets the item and its index
+	-- (from 1). The item is `any`: annotate it to check it,
+	-- `function(tab: Tab, i)` (Luau infers a generic callback's parameter
+	-- from its uses, which misfires). A row whose item changes is built
+	-- again; a `build` taking a third parameter gets the row's item as
+	-- state instead, kept current, and its row updates in place.
+	each: (list: State<{ any }>, build: (item: any, index: number, row: State<any>) -> Node, opts: EachOptions?) -> Node,
+	-- What `build` makes of the value, entering and exiting as it changes;
+	-- nil shows nothing. The value is `any`, as `each`'s item is.
+	presence: (value: string | Readable<unknown> | (() -> unknown), build: (value: any) -> Node, opts: PresenceOptions?) -> Node,
+	-- Where plugins' contributions to `name` go.
+	-- A plugin extension point. `context` reaches what is contributed to
+	-- it: a contributed component gets it as `props.slot` (one component,
+	-- an instance per slot: a panel per pane).
+	slot: (name: string, props: SlotProps?) -> Node,
+	contribute: (name: string, node: Node) -> (),
+	-- The script's (or module's) state for `key`, kept across reloads.
+	state: <T>(key: string, initial: T) -> State<T>,
+	-- State shared with Rust and every script.
+	shared: <T>(key: string, initial: T) -> State<T>,
+	-- State saved across runs, in the host's storage (`ScriptHost::app_id`).
+	persist: <T>(key: string, initial: T) -> State<T>,
+	-- A component instance's own state.
+	use_state: <T>(initial: T) -> State<T>,
+	computed: <T>(f: () -> T) -> State<T>,
+	-- A component's styles by variant (shadcn's `cva`): `base`, then the
+	-- chosen option of each axis in `variants` (by name), then the matching
+	-- `compound` rules, then the element's own properties; each replaces
+	-- what it covers (`p` an earlier `px`). Returns a recipe: call it with
+	-- the options (names, or states or functions choosing them) and give
+	-- the result to an element as `variants = …`.
+	variants: <D>(definition: D) -> (choice: VariantChoice<D, Readable<any> | (() -> any)>) -> Variants,
+	-- A style value the design lint lets through, with the reason.
+	raw: <T>(value: T, reason: string) -> T,
+	-- Markdown parsed into blocks (`t`: p, h, code, ul, ol, quote, hr,
+	-- table, img; runs `{ x, b?, i?, c?, s?, a?, f? }`). With `key` (a
+	-- reply's id), text growing under it parses only its new end, and its
+	-- earlier blocks are the same tables as before.
+	markdown: (text: string, opts: MarkdownOptions?) -> { MarkdownBlock },
+	effect: (f: () -> ...unknown) -> (),
+	-- One update for many writes; returns what `f` returns.
+	batch: <R...>(f: () -> R...) -> R...,
+	-- In a component: runs once it is mounted.
+	on_mount: (f: () -> ...unknown) -> (),
+	ref: () -> Ref,
+	-- `Card { title = "…", child }`: `build(props)` runs as each instance
+	-- mounts; children also arrive as `props.children`. Annotate `props`
+	-- with your own type (and `[number]: Child` if it takes children).
+	component: <P>(build: (props: P) -> Node) -> (props: P) -> Node,
+	-- A host action (`ScriptHost::action`) as a handler. `arg` is plain
+	-- data (what state holds: no functions); Luau cannot say so of a
+	-- table typed as a record, so it is `unknown` here.
+	action: (name: string, arg: unknown?) -> Action,
+	-- Call a host action now.
+	invoke: (name: string, arg: unknown?) -> (),
+	-- JSON's null, as a value that keeps its key in a table (nil drops it):
+	-- `{ caps = ui.null }` reaches Rust as `{"caps": null}`.
+	null: any,
+	-- Runs `f` when what is being built goes away: a component unmounting,
+	-- an effect running again, the script reloading.
+	on_cleanup: (f: () -> ()) -> (),
+	-- Milliseconds since the epoch, to the microsecond (`os.time` counts
+	-- whole seconds). Not tracked.
+	now: () -> number,
+	-- `t` (or a new table) marked a JSON object: empty, it sends `{}`, not
+	-- `[]` (a Lua table can't tell). An empty object from the host comes
+	-- marked, so it goes back as one.
+	object: <T>(t: T?) -> T,
+	-- A host function's value, now (`ScriptHost::function`): a read of data the
+	-- host keeps, so large data is never copied into the script whole.
+	call_sync: (name: string, arg: unknown?) -> any,
+	-- Call a host action for its result (`ScriptHost::async_action`; a
+	-- plain action settles at once with nil): a promise of what it returns.
+	call: (name: string, arg: unknown?) -> Promise,
+	-- Run `f(...)` as a task: `p:await()` inside it waits for a promise
+	-- without blocking anything else.
+	task: <A...>(f: (A...) -> (), A...) -> (),
+	-- An HTTP request through the host's transport (`ScriptHost::fetcher`):
+	-- a promise of a `Response`. A plugin needs the host's grant.
+	fetch: (url: string, opts: FetchOptions?) -> Promise,
+	-- The clipboard's text (nil if it holds none), and putting text on it.
+	clipboard: {
+		read: () -> string?,
+		write: (text: string) -> boolean,
+	},
+	-- The files the user picks: a promise of a list of `File` (empty if
+	-- they cancel).
+	open_files: (opts: FilePickerOptions?) -> Promise,
+	-- Where the user chooses to save: a promise of a `File`, or nil.
+	save_file: (opts: FilePickerOptions?) -> Promise,
+	-- A file the user picked, read as text off the main thread: a promise.
+	read_file: (file: File | string) -> Promise,
+	-- Write `text` to a file the user picked (beside it, then over it).
+	write_file: (file: File | string, text: string) -> Promise,
+	set: <T>(state: State<T>, value: T) -> Action,
+	toggle: (state: State<boolean>) -> Action,
+	add: (state: State<number>, by: number?) -> Action,
+	-- The state's truthiness (or number) drives a 0-to-1 scalar, or
+	-- `from` to `to`. Durations are milliseconds, as in `anime`.
+	tween: (state: State<any>, opts: TweenOptions?) -> Binding,
+	spring: (state: State<any>, opts: SpringOptions?) -> Binding,
+	loop: (opts: LoopOptions?) -> Binding,
+	-- White pixels with the alpha `alpha(x, y)` gives (0 to 1), for masks.
+	bitmap: (w: number, h: number, alpha: (x: number, y: number) -> number) -> Bitmap,
+	-- A WGSL fill: `fn fill(input: FillInput) -> vec4<f32>`, with input.p,
+	-- input.size, input.time, input.scale and input.params (four vec4s).
+	shader: (source: string, opts: { fps: number? }?) -> Shader,
+	path: () -> Path,
+	linear: (x1: number, y1: number, x2: number, y2: number, colors: { read [number]: Color }) -> Brush,
+}
+
+---------------------------------------------------------------------------
+-- anime: anime.js v4's API.
+
+-- `anime.eases.*()`, `anime.spring {…}`, `anime.createSpring {…}`: an
+-- ease, callable as `ease(t)`.
+declare extern type AnimeEase with
+end
+-- What eases take in `ui` (layout, tweens, `each` motion): a name
+-- ("outQuint", "inOut(3)", "steps(4)", "cubicBezier(.2,0,0,1)") or an
+-- anime ease.
+export type Easing = string | AnimeEase
+-- anime's own parameters also take functions of progress.
+export type Ease = Easing | ((t: number) -> number)
+-- `anime.stagger(…)`, as a value, delay or duration.
+declare extern type Stagger with
+end
+-- `anime.utils.round(decimals)` and friends called without a value: a
+-- modifier that runs in Rust, callable as `modifier(n)`.
+declare extern type AnimeModifier with
+end
+export type Modifier = AnimeModifier | ((value: number) -> number)
+-- `anime.onScroll(…)`, as an animation's `autoplay`.
+declare extern type ScrollObserver with
+end
+-- One axis of `anime.svg.createMotionPath(d)`.
+declare extern type MotionPathValue with
+end
+
+-- A function value: `(target, index, total)`. Targets are elements or the
+-- script's tables, so `any`.
+export type AnimFunction = (target: any, index: number, total: number) -> (number | string)
+-- Numbers, strings with units ("10px", "1turn", "+=10"), colors, staggers,
+-- functions of (target, index, total), keyframe lists (`{ 0, 240 }`) and
+-- tween tables.
+export type AnimValue = number | string | Stagger | MotionPathValue | AnimFunction | { read [number]: AnimValue } | Tween
+export type AnimNumber = number | Stagger | AnimFunction
+export type Composition = "replace" | "none" | "add"
+export type Tween = {
+	to: AnimValue?,
+	from: AnimValue?,
+	duration: AnimNumber?,
+	delay: AnimNumber?,
+	ease: Ease?,
+	composition: Composition?,
+	modifier: Modifier?,
+	[number]: never,
+}
+-- Positions in a timeline: 500, "+=100", "-=100", "<", "<<", "<+=50",
+-- "label", "label+=50".
+export type Position = number | string
+export type Callback = (anim: Animation) -> ...unknown
+
+export type Timing = {
+	-- Names the animation (`anim.id`).
+	id: string?,
+	duration: AnimNumber?,
+	delay: AnimNumber?,
+	ease: Ease?,
+	composition: Composition?,
+	modifier: Modifier?,
+	-- A count, or true for ever.
+	loop: (number | boolean)?,
+	-- Each timing name also takes its snake_case spelling (`on_complete`).
+	loopDelay: number?,
+	loop_delay: number?,
+	alternate: boolean?,
+	reversed: boolean?,
+	autoplay: (boolean | ScrollObserver)?,
+	frameRate: number?,
+	frame_rate: number?,
+	playbackRate: number?,
+	playback_rate: number?,
+	playbackEase: Ease?,
+	playback_ease: Ease?,
+	-- A list of property sets, or `{ ["0%"] = …, ["50%"] = … }`.
+	keyframes: ({ ElementKeys } | { [string]: ElementKeys })?,
+	onBegin: Callback?,
+	on_begin: Callback?,
+	onBeforeUpdate: Callback?,
+	on_before_update: Callback?,
+	onUpdate: Callback?,
+	on_update: Callback?,
+	onRender: Callback?,
+	on_render: Callback?,
+	onLoop: Callback?,
+	on_loop: Callback?,
+	onPause: Callback?,
+	on_pause: Callback?,
+	onComplete: Callback?,
+	on_complete: Callback?,
+	-- No array part: an unknown key is an error.
+	[number]: never,
+}
+
+-- An element's animatable properties: a misspelled one (`bgColor`) is an
+-- error here rather than at the first frame.
+export type ElementKeys = {
 	aspect: AnimValue?,
 	backdrop_blur: AnimValue?,
 	background: AnimValue?,
@@ -707,46 +7296,303 @@ type ElementParams = {
 	width: AnimValue?,
 	x: AnimValue?,
 	y: AnimValue?,
-	duration: (number | ((any, number, number) -> number))?,
-	delay: (number | ((any, number, number) -> number) | any)?,
-	ease: Ease?,
-	composition: ("replace" | "none" | "add")?,
-	modifier: ((number) -> number)?,
-	loop: (number | boolean)?,
-	loopDelay: number?,
-	alternate: boolean?,
-	reversed: boolean?,
-	autoplay: (boolean | any)?,
-	frameRate: number?,
-	playbackRate: number?,
-	playbackEase: Ease?,
-	keyframes: any?,
-	onBegin: Callback?,
-	onBeforeUpdate: Callback?,
-	onUpdate: Callback?,
-	onRender: Callback?,
-	onLoop: Callback?,
-	onPause: Callback?,
-	onComplete: Callback?,
-	-- No array part: an unknown key is an error (with the new solver).
 	[number]: never,
 }
+-- An element animation's parameters: its properties and `Timing`'s (the
+-- two written out: a type function cannot take what refers to Animation).
+export type ElementParams = {
+	aspect: AnimValue?,
+	backdrop_blur: AnimValue?,
+	background: AnimValue?,
+	backgroundColor: AnimValue?,
+	background_color: AnimValue?,
+	basis: AnimValue?,
+	bg: AnimValue?,
+	blur: AnimValue?,
+	border: AnimValue?,
+	borderBottomLeftRadius: AnimValue?,
+	borderBottomRightRadius: AnimValue?,
+	borderColor: AnimValue?,
+	borderRadius: AnimValue?,
+	borderTopLeftRadius: AnimValue?,
+	borderTopRightRadius: AnimValue?,
+	borderWidth: AnimValue?,
+	border_color: AnimValue?,
+	border_dash: AnimValue?,
+	border_radius: AnimValue?,
+	border_width: AnimValue?,
+	bottom: AnimValue?,
+	brightness: AnimValue?,
+	contrast: AnimValue?,
+	saturate: AnimValue?,
+	shaderTime: AnimValue?,
+	shader_time: AnimValue?,
+	shaderParam0: AnimValue?,
+	shaderParam1: AnimValue?,
+	shaderParam2: AnimValue?,
+	shaderParam3: AnimValue?,
+	shaderParam4: AnimValue?,
+	shaderParam5: AnimValue?,
+	shaderParam6: AnimValue?,
+	shaderParam7: AnimValue?,
+	shaderParam8: AnimValue?,
+	shaderParam9: AnimValue?,
+	shaderParam10: AnimValue?,
+	shaderParam11: AnimValue?,
+	shaderParam12: AnimValue?,
+	shaderParam13: AnimValue?,
+	shaderParam14: AnimValue?,
+	shaderParam15: AnimValue?,
+	clipBottom: AnimValue?,
+	clipLeft: AnimValue?,
+	clipRight: AnimValue?,
+	clipTop: AnimValue?,
+	clip_bottom: AnimValue?,
+	clip_left: AnimValue?,
+	clip_right: AnimValue?,
+	clip_top: AnimValue?,
+	col_span: AnimValue?,
+	col_start: AnimValue?,
+	color: AnimValue?,
+	cols: AnimValue?,
+	fade: AnimValue?,
+	fade_x: AnimValue?,
+	filter: AnimValue?,
+	fontSize: AnimValue?,
+	fontWeight: AnimValue?,
+	font_size: AnimValue?,
+	gap: AnimValue?,
+	gap_x: AnimValue?,
+	gap_y: AnimValue?,
+	grow: AnimValue?,
+	h: AnimValue?,
+	height: AnimValue?,
+	left: AnimValue?,
+	letter_spacing: AnimValue?,
+	line_height: AnimValue?,
+	lines: AnimValue?,
+	m: AnimValue?,
+	margin: AnimValue?,
+	marginBottom: AnimValue?,
+	marginLeft: AnimValue?,
+	marginRight: AnimValue?,
+	marginTop: AnimValue?,
+	maskX: AnimValue?,
+	maskY: AnimValue?,
+	mask_x: AnimValue?,
+	mask_y: AnimValue?,
+	maxHeight: AnimValue?,
+	maxWidth: AnimValue?,
+	max_h: AnimValue?,
+	max_w: AnimValue?,
+	mb: AnimValue?,
+	minHeight: AnimValue?,
+	minWidth: AnimValue?,
+	min_h: AnimValue?,
+	min_w: AnimValue?,
+	ml: AnimValue?,
+	mr: AnimValue?,
+	mt: AnimValue?,
+	mx: AnimValue?,
+	my: AnimValue?,
+	opacity: AnimValue?,
+	origin: AnimValue?,
+	p: AnimValue?,
+	padding: AnimValue?,
+	paddingBottom: AnimValue?,
+	paddingLeft: AnimValue?,
+	paddingRight: AnimValue?,
+	paddingTop: AnimValue?,
+	pb: AnimValue?,
+	pl: AnimValue?,
+	pr: AnimValue?,
+	pt: AnimValue?,
+	px: AnimValue?,
+	py: AnimValue?,
+	right: AnimValue?,
+	rotate: AnimValue?,
+	rotateZ: AnimValue?,
+	rotate_z: AnimValue?,
+	rotation: AnimValue?,
+	rounded: AnimValue?,
+	rounded_bl: AnimValue?,
+	rounded_br: AnimValue?,
+	rounded_tl: AnimValue?,
+	rounded_tr: AnimValue?,
+	row_span: AnimValue?,
+	row_start: AnimValue?,
+	rows: AnimValue?,
+	scale: AnimValue?,
+	scaleX: AnimValue?,
+	scaleY: AnimValue?,
+	scale_x: AnimValue?,
+	scale_y: AnimValue?,
+	shrink: AnimValue?,
+	size: AnimValue?,
+	skew: AnimValue?,
+	skewX: AnimValue?,
+	skewY: AnimValue?,
+	skew_x: AnimValue?,
+	skew_y: AnimValue?,
+	text_size: AnimValue?,
+	tint: AnimValue?,
+	top: AnimValue?,
+	translateX: AnimValue?,
+	translateY: AnimValue?,
+	translate_x: AnimValue?,
+	translate_y: AnimValue?,
+	w: AnimValue?,
+	weight: AnimValue?,
+	width: AnimValue?,
+	x: AnimValue?,
+	y: AnimValue?,
+	-- Names the animation (`anim.id`).
+	id: string?,
+	duration: AnimNumber?,
+	delay: AnimNumber?,
+	ease: Ease?,
+	composition: Composition?,
+	modifier: Modifier?,
+	-- A count, or true for ever.
+	loop: (number | boolean)?,
+	loopDelay: number?,
+	loop_delay: number?,
+	alternate: boolean?,
+	reversed: boolean?,
+	autoplay: (boolean | ScrollObserver)?,
+	frameRate: number?,
+	frame_rate: number?,
+	playbackRate: number?,
+	playback_rate: number?,
+	playbackEase: Ease?,
+	playback_ease: Ease?,
+	-- A list of property sets, or `{ ["0%"] = …, ["50%"] = … }`.
+	keyframes: ({ ElementKeys } | { [string]: ElementKeys })?,
+	onBegin: Callback?,
+	on_begin: Callback?,
+	onBeforeUpdate: Callback?,
+	on_before_update: Callback?,
+	onUpdate: Callback?,
+	on_update: Callback?,
+	onRender: Callback?,
+	on_render: Callback?,
+	onLoop: Callback?,
+	on_loop: Callback?,
+	onPause: Callback?,
+	on_pause: Callback?,
+	onComplete: Callback?,
+	on_complete: Callback?,
+	[number]: never,
+}
+-- A state or plain table animates any of its fields.
+export type TableParams = {
+	-- Names the animation (`anim.id`).
+	id: string?,
+	duration: AnimNumber?,
+	delay: AnimNumber?,
+	ease: Ease?,
+	composition: Composition?,
+	modifier: Modifier?,
+	-- A count, or true for ever.
+	loop: (number | boolean)?,
+	-- Each timing name also takes its snake_case spelling (`on_complete`).
+	loopDelay: number?,
+	loop_delay: number?,
+	alternate: boolean?,
+	reversed: boolean?,
+	autoplay: (boolean | ScrollObserver)?,
+	frameRate: number?,
+	frame_rate: number?,
+	playbackRate: number?,
+	playback_rate: number?,
+	playbackEase: Ease?,
+	playback_ease: Ease?,
+	-- A list of property sets, or `{ ["0%"] = …, ["50%"] = … }`.
+	keyframes: ({ ElementKeys } | { [string]: ElementKeys })?,
+	onBegin: Callback?,
+	on_begin: Callback?,
+	onBeforeUpdate: Callback?,
+	on_before_update: Callback?,
+	onUpdate: Callback?,
+	on_update: Callback?,
+	onRender: Callback?,
+	on_render: Callback?,
+	onLoop: Callback?,
+	on_loop: Callback?,
+	onPause: Callback?,
+	on_pause: Callback?,
+	onComplete: Callback?,
+	on_complete: Callback?,
+	[string]: AnimValue,
+}
+-- Selectors ("#id", ".class", "button", "button.primary", comma lists),
+-- elements, refs, or lists of them.
+export type ElementTargets = string | Element | Ref | { read [number]: Element | Ref | string }
+export type TimelineParams = {
+	-- Names the animation (`anim.id`).
+	id: string?,
+	duration: AnimNumber?,
+	delay: AnimNumber?,
+	ease: Ease?,
+	composition: Composition?,
+	modifier: Modifier?,
+	-- A count, or true for ever.
+	loop: (number | boolean)?,
+	-- Each timing name also takes its snake_case spelling (`on_complete`).
+	loopDelay: number?,
+	loop_delay: number?,
+	alternate: boolean?,
+	reversed: boolean?,
+	autoplay: (boolean | ScrollObserver)?,
+	frameRate: number?,
+	frame_rate: number?,
+	playbackRate: number?,
+	playback_rate: number?,
+	playbackEase: Ease?,
+	playback_ease: Ease?,
+	-- A list of property sets, or `{ ["0%"] = …, ["50%"] = … }`.
+	keyframes: ({ ElementKeys } | { [string]: ElementKeys })?,
+	onBegin: Callback?,
+	on_begin: Callback?,
+	onBeforeUpdate: Callback?,
+	on_before_update: Callback?,
+	onUpdate: Callback?,
+	on_update: Callback?,
+	onRender: Callback?,
+	on_render: Callback?,
+	onLoop: Callback?,
+	on_loop: Callback?,
+	onPause: Callback?,
+	on_pause: Callback?,
+	onComplete: Callback?,
+	on_complete: Callback?,
+	-- No array part: an unknown key is an error.
+	[number]: never,
+	defaults: Merge<Timing, { [string]: AnimValue }>?,
+}
 
-type ElementTargets = string | Element | Ref | { Element | Ref | string }
-
+-- An animation, timer or timeline. Methods work as `a:play()` and
+-- `a.play()`, and return it.
 declare extern type Animation with
-	id: any
+	-- The `id` parameter, or a number.
+	id: number | string
+	-- Settable: seeks.
 	currentTime: number
+	-- Settable: seeks to that fraction.
 	progress: number
 	iterationProgress: number
+	iterationCurrentTime: number
 	currentIteration: number
 	duration: number
 	iterationDuration: number
+	-- Settable: pauses or resumes.
 	paused: boolean
 	began: boolean
 	completed: boolean
 	reversed: boolean
+	-- Settable.
 	speed: number
+	playbackRate: number
 	labels: { [string]: number }
 	function play(self): Animation
 	function pause(self): Animation
@@ -761,159 +7607,244 @@ declare extern type Animation with
 	function reset(self): Animation
 	function stretch(self, duration: number): Animation
 	function refresh(self): Animation
-	function done(self, f: (Animation) -> ()): Animation
-	function add(self, targets: any, params: any?, position: (number | string)?): Animation
-	function set(self, targets: any, params: any, position: (number | string)?): Animation
-	function call(self, f: () -> (), position: (number | string)?): Animation
-	function label(self, name: string, position: (number | string)?): Animation
-	function sync(self, animation: Animation, position: (number | string)?): Animation
-	function remove(self, targets: any, property: string?): Animation
+	-- Builds it now (its targets resolve when it first plays otherwise).
+	function init(self): Animation
+	-- anime.js `then` (a Luau keyword; `a["then"](fn)` works too).
+	function done(self, f: (anim: Animation) -> ...unknown): Animation
+	-- Timelines: `add(targets, params, position)`, or `add(timerParams,
+	-- position)`.
+	function add(self, targets: ElementTargets | Timing, params: (ElementParams | Position)?, position: Position?): Animation
+	function set(self, targets: ElementTargets, params: ElementKeys, position: Position?): Animation
+	function call(self, f: () -> ...unknown, position: Position?): Animation
+	function label(self, name: string, position: Position?): Animation
+	function sync(self, animation: Animation, position: Position?): Animation
+	function remove(self, targets: ElementTargets): Animation
 end
 
+export type Axis = boolean | { snap: (number | { number })? }
+export type DraggableCallback = (draggable: Draggable) -> ...unknown
+export type DraggableParams = {
+	x: Axis?,
+	y: Axis?,
+	-- A step or points, for both axes.
+	snap: (number | { number })?,
+	-- A selector, element or ref, or `{ top, right, bottom, left }`.
+	container: (ElementTargets | Sides)?,
+	containerPadding: (number | { number })?,
+	containerFriction: number?,
+	dragSpeed: number?,
+	velocityMultiplier: number?,
+	minVelocity: number?,
+	maxVelocity: number?,
+	releaseMass: number?,
+	releaseStiffness: number?,
+	releaseDamping: number?,
+	-- false keeps the cursor.
+	cursor: boolean?,
+	onGrab: DraggableCallback?,
+	onDrag: DraggableCallback?,
+	onUpdate: DraggableCallback?,
+	onRelease: DraggableCallback?,
+	onSnap: DraggableCallback?,
+	onSettle: DraggableCallback?,
+	[number]: never,
+}
 declare extern type Draggable with
 	x: number
 	y: number
 	isDragging: boolean
+	enabled: boolean
 	velocity: number
-	function enable(self): Draggable
-	function disable(self): Draggable
-	function reset(self): Draggable
-	function revert(self): Draggable
-	function stop(self): Draggable
-	function setX(self, x: number): Draggable
-	function setY(self, y: number): Draggable
+	function enable(self): ()
+	function disable(self): ()
+	function reset(self): ()
+	function revert(self): ()
+	function stop(self): ()
+	function setX(self, x: number): ()
+	function setY(self, y: number): ()
 end
 
+export type ScrollParams = {
+	-- The nearest scroll ancestor by default.
+	container: ElementTargets?,
+	target: ElementTargets?,
+	-- "<container edge> <target edge>": start, center, end, %, points,
+	-- +=/-=. "end start" and "start end" by default.
+	enter: string?,
+	leave: string?,
+	-- true, a smoothing amount (0 to 1), or an ease name.
+	sync: (boolean | number | string)?,
+	-- Plays again each time it enters (true by default).
+	["repeat"]: boolean?,
+	onEnter: Callback?,
+	onLeave: Callback?,
+	onUpdate: Callback?,
+	on_update: Callback?,
+	onSync: Callback?,
+	[number]: never,
+}
+export type StaggerParams = {
+	start: number?,
+	-- "first", "center", "last", "random", or an index (from 0).
+	from: ("first" | "center" | "last" | "random" | number)?,
+	reversed: boolean?,
+	ease: Ease?,
+	-- `{ columns, rows }`.
+	grid: { number }?,
+	axis: ("x" | "y")?,
+	-- The index a target staggers by: `(target, index, total)`.
+	use: AnimFunction?,
+	total: number?,
+	modifier: Modifier?,
+	[number]: never,
+}
+-- `createAnimatable(targets, { x = 400, y = { duration = 600 } })`: each
+-- property is a function: `a.x(value, duration?, ease?)` animates to
+-- `value`, `a.x()` reads it. The names are the script's.
+export type Animatable = {
+	revert: () -> (),
+	cancel: () -> (),
+	[string]: (value: (number | string)?, duration: number?, ease: Ease?) -> (number | string)?,
+}
 declare extern type Scope with
-	function add(self, f: () -> ()): Scope
+	-- Runs `f(scope)`; what it creates takes the scope's defaults and
+	-- reverts with it.
+	function add(self, f: (scope: Scope) -> ...unknown): Scope
 	function revert(self): ()
 end
+export type EaseMaker = (...number) -> AnimeEase
 
-declare ui: {
-	column: Container,
-	row: Container,
-	div: Container,
-	overlay: Container,
-	button: Container,
-	grid: Container,
-	scroll: Container,
-	scroll_x: Container,
-	image: Container,
-	svg: Container,
-	canvas: Container,
-	webview: Container,
-	web: (opts: WebOptions?) -> Web,
-	terminal: Container,
-	term: (id: string, opts: TermOptions?) -> Term,
-	native: Container,
-	command: (opts: CommandOptions) -> (),
-	checkbox: Container,
-	input: Container,
-	textarea: Container,
-	progress: Container,
-	slider: Container,
-	modal: Container,
-	popover: Container,
-	menu: Container,
-	menu_item: Container,
-	submenu: Container,
-	list: Container,
-	rich: Container,
-	text: (content: string | (() -> string) | Props) -> Node,
-	span: (content: string | { [any]: any }) -> any,
-	show: (cond: boolean | State | (() -> boolean), node: Node, otherwise: Node?) -> Node,
-	switch: (value: State | (() -> any), cases: { [any]: Node }, default: Node?) -> Node,
-	each: (list: State, build: (item: any, index: number) -> Node, opts: { key: ((item: any) -> any)? }?) -> Node,
-	presence: (value: State | (() -> any) | any, build: (value: any) -> Node, opts: (Props & {
-		enter: ElementParams?,
-		exit: ElementParams?,
-		mode: "wait"?,
-		initial: boolean?,
-	})?) -> Node,
-	slot: (name: string, props: Props?) -> Node,
-	contribute: (name: string, node: Node) -> (),
-	state: (key: string, initial: any) -> State,
-	shared: (key: string, initial: any) -> State,
-	use_state: (initial: any) -> State,
-	computed: (f: () -> any) -> State,
-	effect: (f: () -> ()) -> (),
-	batch: (f: () -> ()) -> (),
-	on_mount: (f: () -> ()) -> (),
-	ref: () -> Ref,
-	component: (build: (props: { [any]: any }) -> Node) -> ((props: { [any]: any }?) -> Node),
-	action: (name: string, arg: any?) -> Action,
-	-- Call a host action now (`ui.action` binds one to a handler instead).
-	invoke: (name: string, arg: any?) -> (),
-	set: (state: State, value: any) -> Action,
-	toggle: (state: State) -> Action,
-	add: (state: State, by: number?) -> Action,
-	tween: (state: State, opts: { duration: number?, ease: Ease?, from: any?, to: any? }?) -> Binding,
-	spring: (state: State, opts: { stiffness: number?, damping: number?, from: any?, to: any? }?) -> Binding,
-	loop: (opts: { duration: number?, ease: Ease?, yoyo: boolean?, fps: number?, from: any?, to: any? }?) -> Binding,
-	bitmap: (w: number, h: number, alpha: (x: number, y: number) -> number) -> Bitmap,
-	-- A WGSL fill: `fn fill(input: FillInput) -> vec4<f32>`, with input.p,
-	-- input.size, input.time, input.scale and input.params (four vec4s).
-	shader: (source: string, opts: { fps: number? }?) -> Shader,
-	path: () -> Path,
-	linear: (x1: number, y1: number, x2: number, y2: number, colors: { Color }) -> Brush,
-}
-
+-- Besides elements, animations and utils target a state's or a plain
+-- table's fields: the script's own data, so `{ [string]: any }`.
 declare anime: {
 	animate: ((targets: ElementTargets, params: ElementParams) -> Animation)
-		& ((targets: State | { [string]: any }, params: { [string]: any }) -> Animation),
-	createTimeline: (params: (Timing & { defaults: { [string]: any }? })?) -> Animation,
+		& ((targets: State<any> | { [string]: any }, params: TableParams) -> Animation),
+	createTimeline: (params: TimelineParams?) -> Animation,
+	-- anime.js v3's name.
+	timeline: (params: TimelineParams?) -> Animation,
+	-- Endless unless given a duration.
 	createTimer: (params: Timing?) -> Animation,
-	createAnimatable: (targets: any, params: { [string]: any }) -> any,
-	createDraggable: (target: ElementTargets, params: { [string]: any }?) -> Draggable,
-	onScroll: (params: { [string]: any }?) -> any,
-	stagger: (value: number | string | { any }, params: { [string]: any }?) -> any,
-	createSpring: (params: { mass: number?, stiffness: number?, damping: number?, velocity: number? }?) -> any,
-	spring: (params: { bounce: number?, duration: number? }?) -> any,
-	createScope: (params: { defaults: { [string]: any }? }?) -> Scope,
-	eases: { [string]: any },
+	createAnimatable: (targets: ElementTargets | State<any> | { [string]: any }, params: { [string]: number | Ease | Modifier | Composition | Tween }) -> Animatable,
+	createDraggable: (target: ElementTargets, params: DraggableParams?) -> Draggable,
+	onScroll: (params: ScrollParams?) -> ScrollObserver,
+	-- A value (5, "1rem") or a range (`{ -100, 100 }`).
+	stagger: (value: number | string | { read [number]: number | string }, params: StaggerParams?) -> Stagger,
+	createSpring: (params: { mass: number?, stiffness: number?, damping: number?, velocity: number? }?) -> AnimeEase,
+	-- A spring of that perceived bounce, settling in `duration` ms.
+	spring: (params: { bounce: number?, duration: number? }?) -> AnimeEase,
+	createScope: (params: { defaults: Merge<Timing, { [string]: AnimValue }>? }?) -> Scope,
+	eases: {
+		linear: EaseMaker,
+		none: EaseMaker,
+		["in"]: EaseMaker,
+		out: EaseMaker,
+		inOut: EaseMaker,
+		outIn: EaseMaker,
+		inQuad: EaseMaker,
+		outQuad: EaseMaker,
+		inOutQuad: EaseMaker,
+		outInQuad: EaseMaker,
+		inCubic: EaseMaker,
+		outCubic: EaseMaker,
+		inOutCubic: EaseMaker,
+		outInCubic: EaseMaker,
+		inQuart: EaseMaker,
+		outQuart: EaseMaker,
+		inOutQuart: EaseMaker,
+		outInQuart: EaseMaker,
+		inQuint: EaseMaker,
+		outQuint: EaseMaker,
+		inOutQuint: EaseMaker,
+		outInQuint: EaseMaker,
+		inSine: EaseMaker,
+		outSine: EaseMaker,
+		inOutSine: EaseMaker,
+		outInSine: EaseMaker,
+		inCirc: EaseMaker,
+		outCirc: EaseMaker,
+		inOutCirc: EaseMaker,
+		outInCirc: EaseMaker,
+		inExpo: EaseMaker,
+		outExpo: EaseMaker,
+		inOutExpo: EaseMaker,
+		outInExpo: EaseMaker,
+		inBounce: EaseMaker,
+		outBounce: EaseMaker,
+		inOutBounce: EaseMaker,
+		outInBounce: EaseMaker,
+		inBack: EaseMaker,
+		outBack: EaseMaker,
+		inOutBack: EaseMaker,
+		outInBack: EaseMaker,
+		inElastic: EaseMaker,
+		outElastic: EaseMaker,
+		inOutElastic: EaseMaker,
+		outInElastic: EaseMaker,
+		steps: EaseMaker,
+		cubicBezier: EaseMaker,
+		irregular: EaseMaker,
+	},
 	engine: {
 		speed: number,
 		playbackRate: number,
-		fps: number,
+		-- nil: every display frame.
+		fps: number?,
 		timeUnit: "ms" | "s",
-		currentTime: number,
+		read currentTime: number,
+		read paused: boolean,
 		pause: () -> (),
 		resume: () -> (),
 	},
 	utils: {
-		set: (targets: any, params: { [string]: any }) -> (),
-		get: (target: any, property: string, unit: string?) -> any,
-		remove: (targets: any, animation: any?, property: string?) -> (),
-		cleanInlineStyles: (targets: any, props: (string | { string })?) -> (),
-		random: (min: number, max: number, decimals: number?) -> number,
-		randomPick: (items: { any }) -> any,
-		shuffle: (items: { any }) -> { any },
-		round: (value: number?, decimals: number?) -> any,
+		set: (targets: ElementTargets | State<any> | { [string]: any }, params: { [string]: AnimValue }) -> (),
+		-- The current value: a number (angles in degrees) or a string.
+		get: (target: ElementTargets | State<any> | { [string]: any }, property: string) -> (number | string)?,
+		-- Stops every animation of the targets.
+		remove: (targets: ElementTargets | State<any> | { [string]: any }) -> (),
+		-- Animated values return to the node's own: all, or the named ones.
+		cleanInlineStyles: (targets: ElementTargets | Animation, props: (string | { string })?) -> (),
+		-- Without decimals, whole bounds give whole numbers.
+		random: (min: number?, max: number?, decimals: number?) -> number,
+		randomPick: <T>(items: { T }) -> T?,
+		shuffle: <T>(items: { T }) -> { T },
+		-- `round(value, decimals)`; `round(decimals)` is a modifier.
+		round: ((value: number, decimals: number) -> number) & ((decimals: number) -> AnimeModifier),
 		clamp: (value: number, min: number, max: number) -> number,
-		snap: (value: number, step: number | { number }) -> number,
+		snap: (value: number, step: number) -> number,
 		wrap: (value: number, min: number, max: number) -> number,
-		mapRange: (value: number, a1: number, b1: number, a2: number, b2: number) -> number,
+		mapRange: (value: number, inLow: number, inHigh: number, outLow: number, outHigh: number) -> number,
 		lerp: (a: number, b: number, t: number) -> number,
+		-- Frame-rate independent `lerp`: `dt` in ms.
 		damp: (a: number, b: number, dt: number, factor: number) -> number,
 		degToRad: (deg: number) -> number,
 		radToDeg: (rad: number) -> number,
 		roundPad: (value: number, decimals: number) -> string,
-		padStart: (value: any, length: number, pad: string) -> string,
-		padEnd: (value: any, length: number, pad: string) -> string,
+		padStart: (value: string | number, length: number, pad: string?) -> string,
+		padEnd: (value: string | number, length: number, pad: string?) -> string,
 		createSeededRandom: (seed: number?) -> (min: number?, max: number?, decimals: number?) -> number,
 	},
 	svg: {
-		createMotionPath: (d: string) -> { translateX: any, translateY: any, rotate: any },
+		-- Animate `x` (or translateX), `y` and `rotate` with these to follow
+		-- the path.
+		createMotionPath: (d: string) -> {
+			translateX: MotionPathValue,
+			translateY: MotionPathValue,
+			rotate: MotionPathValue,
+			x: MotionPathValue,
+			y: MotionPathValue,
+			length: number,
+		},
 		getTotalLength: (d: string) -> number,
 	},
 	text: {
+		-- A row of one text per character (`chars`) or word (`words`), each
+		-- with a class to animate; `style` styles each piece, `props` the row.
 		split: (text: string, params: {
 			words: (boolean | { class: string? })?,
 			chars: (boolean | { class: string? })?,
 			class: string?,
-			style: Styles?,
+			style: Props?,
 			props: Props?,
 		}?) -> Node,
 	},
 }
-

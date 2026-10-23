@@ -13,11 +13,8 @@ use zgui::{
     text_layout::{FontFeatures, TextAlign},
     timer::sleep,
 };
-use zgui_desktop::{Application, WindowOptions};
+use zgui_desktop::{Application, Glass, Titlebar, WindowOptions};
 
-#[cfg(target_os = "macos")]
-#[path = "support/glass.rs"]
-mod glass;
 #[path = "support/transcript.rs"]
 mod transcript;
 
@@ -75,9 +72,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             title: TITLE.into(),
             width: WIDTH,
             height: HEIGHT,
-            transparent: true,
             decorations: cfg!(target_os = "macos"),
             min_size: Some((900., 620.)),
+            titlebar: Titlebar::Inset,
+            glass: Some(Glass::default()),
             // ZGUI_MAX_FPS=<hz> caps the window's frame rate from the start.
             max_frame_rate: std::env::var("ZGUI_MAX_FPS")
                 .ok()
@@ -85,19 +83,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..Default::default()
         })
         .run(move |cx| {
-            #[cfg(target_os = "macos")]
+            // The default dark theme with clear hovers and a faint white
+            // accent: overlay scrollbars paint their track and thumb from it.
             {
-                let window = cx.window.clone();
-                cx.tasks.spawn(async move {
-                    sleep(Duration::from_millis(1)).await;
-                    if glass::inset_titlebar(TITLE) {
-                        window.set_inner_size(WIDTH, HEIGHT);
-                    }
-                });
+                use zgui::theme::{DARK, Theme, ThemeKind, tok};
+                let clear = rgba(0xffffff00);
+                cx.ui.theme().register(
+                    Theme::new("kitchen-sink", ThemeKind::Dark)
+                        .extending(DARK)
+                        .with(tok::HOVER, clear)
+                        .with(tok::BUTTON_HOVER, clear)
+                        .with(tok::MENU_HOVER, clear)
+                        .with(tok::SCROLLBAR_TRACK, clear)
+                        .with(tok::ACCENT, rgba(0xffffff38)),
+                );
+                cx.ui.theme().set("kitchen-sink").unwrap();
             }
-            // Overlay scrollbars paint their track and thumb from the theme.
-            cx.ui.theme.hover = rgba(0xffffff00);
-            cx.ui.theme.accent = rgba(0xffffff38);
             let log = Log {
                 lines: cx.ui.signal(Vec::new()),
                 start: Instant::now(),
@@ -184,9 +185,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             {
                 let window = cx.window.clone();
                 cx.tasks.spawn(async move {
-                    for step in 0_u32.. {
+                    for step in (0_u32..40).cycle() {
                         sleep(Duration::from_millis(ms)).await;
-                        let grow = f64::from(step % 40) * 6.;
+                        let grow = f64::from(step) * 6.;
                         window.set_inner_size(WIDTH + grow, HEIGHT + grow * 0.5);
                     }
                 });
@@ -199,7 +200,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             spawn_heartbeat(&cx.tasks, log.clone(), uptime.clone(), gaps.clone());
             log.push("READY kitchen sink");
 
-            let drag = cx.window.clone();
             let content = {
                 let (log, displays, window) = (log.clone(), displays.clone(), cx.window.clone());
                 let page = page.clone();
@@ -228,7 +228,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .items_stretch()
                     .bg(rgba(0x0a0d1440))
                     .text_color(rgb(WHITE))
-                    .child(sidebar(&section, &page, &log, move || drag.drag_window()))
+                    .child(sidebar(&section, &page, &log))
                     .child(
                         // Stretched to the window height: `h_full` plus the
                         // vertical margins would overflow the bottom edge.
@@ -277,28 +277,13 @@ fn spawn_heartbeat(
     });
 }
 
-fn sidebar(
-    section: &Signal<usize>,
-    page: &Signal<f32>,
-    log: &Log,
-    drag: impl Fn() + 'static,
-) -> View {
+fn sidebar(section: &Signal<usize>, page: &Signal<f32>, log: &Log) -> View {
     column()
         .w(220.)
         .h_full()
         .px(12.)
         .gap(2.)
-        .child(div().w_full().h(52.).on_event(move |event| {
-            if matches!(
-                event.event,
-                InputEvent::PointerDown {
-                    button: zgui::input::PointerButton::Primary,
-                    ..
-                }
-            ) {
-                drag();
-            }
-        }))
+        .child(div().w_full().h(52.).window_drag())
         .child(
             text("TESTS")
                 .px(10.)

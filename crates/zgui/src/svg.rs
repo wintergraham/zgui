@@ -9,6 +9,8 @@ pub struct SvgData {
     source_id: u64,
     bytes: Arc<[u8]>,
     tint: Option<Color>,
+    /// Tinted with the text colour the view inherits (CSS `currentColor`).
+    current_color: bool,
     transform: Affine,
 }
 impl SvgData {
@@ -23,6 +25,7 @@ impl SvgData {
             source_id: crate::image::next_identity()?,
             bytes,
             tint: None,
+            current_color: false,
             transform: Affine::IDENTITY,
         })
     }
@@ -39,8 +42,22 @@ impl SvgData {
     pub fn tinted(&self, color: Color) -> Self {
         Self {
             tint: Some(color),
+            current_color: false,
             ..self.clone()
         }
+    }
+    /// Tinted, wherever it is shown, with the text colour its view inherits
+    /// (CSS `currentColor`): an icon in a button takes the button's colour,
+    /// hover and theme changes included.
+    pub fn current_color(&self) -> Self {
+        Self {
+            tint: None,
+            current_color: true,
+            ..self.clone()
+        }
+    }
+    pub fn follows_text_color(&self) -> bool {
+        self.current_color
     }
     pub fn transformed(&self, transform: Affine) -> Self {
         Self {

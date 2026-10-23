@@ -9,7 +9,7 @@ use std::{
 use zgui::{
     components::{Dialog, Popover, ScrollView, VirtualListView},
     input::{EventPhase, InputEvent, NodeInput},
-    scene::{Align, Color, Layout, NodeId, NodeKind, QuadStyle, Style, Transform},
+    scene::{Align, Color, Justify, Layout, NodeId, NodeKind, QuadStyle, Style, Transform},
     semantics::{Role, SemanticNode, Semantics},
     widgets::{Ui, fixed},
 };
@@ -46,6 +46,7 @@ fn panel(ui: &mut Ui, parent: NodeId, style: Style) -> (NodeId, NodeId) {
         Layout::Overlay,
         Style {
             align: Align::Stretch,
+            justify: Justify::Stretch,
             ..style
         },
     );
@@ -95,10 +96,22 @@ fn build(cx: &mut zgui_desktop::WindowContext) {
     let viewport = cx.viewport.clone();
     let tasks = cx.tasks.clone();
     let ui = &mut cx.ui;
-    ui.theme.background = Color(13, 19, 29, 255);
-    ui.theme.surface = Color(37, 51, 72, 255);
-    ui.theme.accent = Color(89, 158, 237, 255);
-    ui.theme.text = TEXT;
+    {
+        use zgui::theme::{DARK, Theme, ThemeKind, tok};
+        let surface = Color(37, 51, 72, 255);
+        ui.theme().register(
+            Theme::new("workbench", ThemeKind::Dark)
+                .extending(DARK)
+                .with(tok::BACKGROUND, Color(13, 19, 29, 255))
+                .with(tok::SURFACE_RAISED, surface)
+                .with(tok::SURFACE_OVERLAY, surface)
+                // The hover colour the widgets always had, over this surface.
+                .with(tok::BUTTON_HOVER, Color(47, 64, 88, 255))
+                .with(tok::ACCENT, Color(89, 158, 237, 255))
+                .with(tok::TEXT_PRIMARY, TEXT),
+        );
+        ui.theme().set("workbench").unwrap();
+    }
     let root = ui.root();
     ui.scene
         .borrow_mut()
@@ -533,6 +546,7 @@ fn build(cx: &mut zgui_desktop::WindowContext) {
             sidebar,
             Style {
                 align: Align::Stretch,
+                justify: Justify::Stretch,
                 ..fixed(290.0, main_height)
             },
         );
@@ -540,6 +554,7 @@ fn build(cx: &mut zgui_desktop::WindowContext) {
             details,
             Style {
                 align: Align::Stretch,
+                justify: Justify::Stretch,
                 flex_grow: 1.0,
                 min_width: Some(480.0),
                 height: Some(main_height),

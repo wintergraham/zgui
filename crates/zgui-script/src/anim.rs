@@ -52,7 +52,7 @@ pub(crate) fn drive(cx: &mut Context, anim: &Anim) -> Signal<f32> {
         let out = cx.state(0_f32);
         let value = out.clone();
         let Curve::Loop {
-            seconds,
+            ms,
             ease,
             yoyo,
             fps,
@@ -67,7 +67,7 @@ pub(crate) fn drive(cx: &mut Context, anim: &Anim) -> Signal<f32> {
                     Some(hz) => frames.next().max_rate(hz).await,
                     None => frames.next().await,
                 };
-                let cycles = (frame.time - start).as_secs_f32() / seconds;
+                let cycles = (frame.time - start).as_secs_f32() * 1000. / ms;
                 let phase = if yoyo {
                     let p = cycles % 2.;
                     if p > 1. { 2. - p } else { p }
@@ -106,13 +106,13 @@ pub(crate) fn drive(cx: &mut Context, anim: &Anim) -> Signal<f32> {
                 }
                 let frame = frames.next().await;
                 match &curve {
-                    Curve::Tween { seconds, ease } => {
+                    Curve::Tween { ms, ease } => {
                         // A retarget mid-flight restarts from where it is.
                         let (t0, from, to) = match start {
                             Some(s) if s.2 == target.get() => s,
                             _ => *start.insert((frame.time, current, target.get())),
                         };
-                        let t = (frame.time - t0).as_secs_f32() / *seconds;
+                        let t = (frame.time - t0).as_secs_f32() * 1000. / *ms;
                         value.set(if t >= 1. {
                             to
                         } else {

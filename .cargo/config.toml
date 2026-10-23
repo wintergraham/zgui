@@ -1,0 +1,6 @@
+[env]
+# Test threads get Rust's 2 MiB stack; an app's main thread has 8 MiB. In
+# debug builds the engine's mount and lowering recursion takes more than
+# 2 MiB for the deepest example interfaces, so tests run with the main
+# thread's stack.
+RUST_MIN_STACK = "8388608"

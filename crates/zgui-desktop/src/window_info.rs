@@ -67,6 +67,10 @@ pub struct WindowInfo {
     pub capabilities: Signal<WindowCapabilities>,
     /// The most recent rejected explicit placement/drag request, if any.
     pub last_request_error: Signal<Option<String>>,
+    /// The window's corner radius in points, once it is made (macOS; 0
+    /// elsewhere): content inset from the window's edge keeps its corners
+    /// concentric with it.
+    pub corner_radius: Signal<f64>,
 }
 impl WindowInfo {
     pub(crate) fn new(ui: &Ui, width: f64, height: f64) -> Self {
@@ -81,6 +85,7 @@ impl WindowInfo {
             current_display: ui.signal(None),
             capabilities: ui.signal(WindowCapabilities::default()),
             last_request_error: ui.signal(None),
+            corner_radius: ui.signal(0.),
         }
     }
     pub(crate) fn refresh(&self, window: &Window) {
@@ -153,7 +158,7 @@ pub(crate) fn attributes(
         .with_title(&options.title)
         .with_inner_size(winit::dpi::LogicalSize::new(options.width, options.height))
         .with_resizable(options.resizable)
-        .with_transparent(options.transparent)
+        .with_transparent(options.is_transparent())
         .with_decorations(options.decorations)
         .with_visible(false);
     if let Some((w, h)) = options.min_size {

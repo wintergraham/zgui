@@ -5,7 +5,10 @@
 //! static archive (upstream only builds it into an XCFramework), and Metal
 //! shaders compile at runtime (upstream precompiles them with Xcode's `metal`).
 //! It also adds `GHOSTTY_QUIET_LOGIN`: a surface whose environment sets it
-//! starts without login(1)'s "Last login" banner. Builds are cached across targets and checkouts in
+//! starts without login(1)'s "Last login" banner. And it cuts, rather than
+//! wraps, the background-only cells at the end of a row that narrows (the
+//! spaces TUIs fill their rows with), so resizing leaves no stub rows of
+//! background. Builds are cached across targets and checkouts in
 //! `~/Library/Caches/zgui-ghostty` (or `$ZGUI_GHOSTTY_CACHE`).
 //!
 //! `ZIG` picks the Zig executable (default: Homebrew's `zig@0.16`, then

@@ -73,7 +73,8 @@ fn detailed_panels_cache_resize_and_restore_all_shadow_extents() {
         let mut gpu = GpuRenderer::new(160, 130).unwrap();
         let report = scene.flush();
         let stats = gpu.render(&scene, &report.damage).unwrap();
-        assert_eq!(stats.canvas_rasterizations, 1);
+        // A gradient straight across draws as a ramp on the GPU: no raster.
+        assert_eq!(stats.canvas_rasterizations, 0);
         let data = gpu.readback().unwrap();
         let pixel = |x: usize, y: usize| &data[(y * 160 + x) * 4..][..4];
         assert!(pixel(50, 65)[0] > 200);
@@ -195,4 +196,103 @@ fn flat_fill_with_per_corner_radii_draws_on_the_gpu_without_a_raster() {
     assert_eq!(at(98, 1)[3], 0, "rounded top-right corner is cut");
     assert_eq!(at(98, 98)[3], 0, "rounded bottom-right corner is cut");
     assert_eq!(at(50, 50), &[255, 0, 0, 255]);
+}
+
+#[test]
+fn gradients_along_an_axis_draw_as_ramps_matching_the_raster() {
+    // The same gradient straight down (a ramp) and at a hair off it (a
+    // raster): the pixels agree, and only the second rasterizes.
+    let render = |angle: f32| {
+        let mut scene = Scene::new(100., 200.);
+        let quad = QuadStyle {
+            decoration: Some(Arc::new(Decoration {
+                background: Some(Background::Linear {
+                    angle,
+                    stops: vec![
+                        GradientStop {
+                            offset: 0.2,
+                            color: Color(255, 0, 0, 255),
+                        },
+                        GradientStop {
+                            offset: 0.5,
+                            color: Color(0, 0, 255, 128),
+                        },
+                        GradientStop {
+                            offset: 1.,
+                            color: Color(0, 255, 0, 255),
+                        },
+                    ]
+                    .into(),
+                }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        scene.append(
+            scene.root(),
+            NodeKind::Quad(quad),
+            Style {
+                width: Some(100.),
+                height: Some(200.),
+                ..Default::default()
+            },
+        );
+        let mut gpu = GpuRenderer::new(100, 200).unwrap();
+        let report = scene.flush();
+        let stats = gpu.render(&scene, &report.damage).unwrap();
+        (stats.canvas_rasterizations, gpu.readback().unwrap())
+    };
+    let (ramps, ramp) = render(std::f32::consts::FRAC_PI_2);
+    let (rasters, raster) = render(std::f32::consts::FRAC_PI_2 + 1e-4);
+    assert_eq!((ramps, rasters), (0, 1));
+    for y in [2, 30, 40, 60, 99, 100, 150, 197] {
+        let at = |data: &[u8]| data[(y * 100 + 50) * 4..][..4].to_vec();
+        let (a, b) = (at(&ramp), at(&raster));
+        assert!(
+            a.iter().zip(&b).all(|(a, b)| a.abs_diff(*b) <= 6),
+            "row {y}: ramp {a:?}, raster {b:?}"
+        );
+    }
+}
+
+#[test]
+fn underlined_plain_text_draws_a_line_under_each_line_of_glyphs() {
+    let render = |underline: Option<zgui::text_layout::TextUnderline>| {
+        let mut gpu = GpuRenderer::new(120, 40).unwrap();
+        let mut scene = Scene::new(120., 40.);
+        let text = scene.append(
+            scene.root(),
+            NodeKind::Text {
+                text: "HHHH".into(),
+                font_size: 20.,
+                color: Color(255, 255, 255, 255),
+            },
+            Style {
+                width: Some(120.),
+                height: Some(40.),
+                ..Default::default()
+            },
+        );
+        scene.set_font(
+            text,
+            zgui::text_layout::FontStyle {
+                underline,
+                ..Default::default()
+            },
+        );
+        let d = scene.flush().damage;
+        gpu.render(&scene, &d).unwrap();
+        gpu.readback().unwrap()
+    };
+    // The rows lit all along the text: only an underline's.
+    let full_rows = |pixels: &[u8]| {
+        (0..40)
+            .filter(|y| (4..30).all(|x| pixels[(y * 120 + x) * 4 + 3] > 0))
+            .collect::<Vec<_>>()
+    };
+    assert!(full_rows(&render(None)).is_empty());
+    let rows = full_rows(&render(Some(zgui::text_layout::TextUnderline::new(Some(
+        3.,
+    )))));
+    assert!(!rows.is_empty(), "a line under the glyphs");
 }

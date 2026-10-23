@@ -287,6 +287,12 @@ fn image_and_svg_decoding_are_bounded_and_alpha_correct() {
     .unwrap();
     let decoded = zgui_gpu::assets::decode_image(png.get_ref()).unwrap();
     assert_eq!(&decoded.pixels()[..4], &[12, 34, 56, 128]);
+    // A raster sent where an SVG was asked for draws as the raster, scaled.
+    let raster = zgui_gpu::assets::decode_svg(png.get_ref(), 4, 4).unwrap();
+    assert_eq!((raster.width(), raster.height()), (4, 4));
+    let middle = &raster.pixels()[(4 + 1) * 4..][..4];
+    assert!(middle[0].abs_diff(12) <= 2 && middle[1].abs_diff(34) <= 2);
+    assert!(middle[2].abs_diff(56) <= 2 && middle[3].abs_diff(128) <= 2);
 }
 
 #[test]

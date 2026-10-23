@@ -117,9 +117,10 @@ impl Navigation {
         Self { request, rows }
     }
     pub fn mount_row(&self, ui: &mut Ui, row: NodeId, _row_height: f32) {
+        let theme = ui.theme_scope();
         let marker = ui.scene.borrow_mut().append(
             row,
-            NodeKind::Rect(ui.theme.accent),
+            NodeKind::Rect(theme.color_untracked(crate::theme::tok::ACCENT)),
             crate::scene::Style {
                 width: Some(2.),
                 height_percent: Some(1.),
@@ -135,7 +136,6 @@ impl Navigation {
             },
         );
         let scene = ui.scene.clone();
-        let color = ui.theme.hover;
         ui.on_event(row, true, move |cx| {
             if cx.phase != EventPhase::Target {
                 return;
@@ -150,7 +150,7 @@ impl Navigation {
                         NodeKind::Panel {
                             layout: Layout::Overlay,
                             quad: QuadStyle {
-                                fill: color,
+                                fill: theme.color_untracked(crate::theme::tok::BUTTON_HOVER),
                                 ..Default::default()
                             },
                         },

@@ -13,16 +13,11 @@ use std::{
     rc::Rc,
     time::Duration,
 };
-use zgui::{
-    compose::prelude::*, cursor::Cursor, input::InputEvent, reactive::Signal, timer::sleep,
-};
-use zgui_desktop::{Application, WindowOptions};
+use zgui::{compose::prelude::*, cursor::Cursor, reactive::Signal, timer::sleep};
+use zgui_desktop::{Application, Glass, GlassMaterial, Titlebar, WindowOptions};
 
 #[path = "support/zeron_composer.rs"]
 mod composer;
-#[cfg(target_os = "macos")]
-#[path = "support/glass.rs"]
-mod glass;
 #[path = "support/zeron_markdown.rs"]
 mod markdown;
 #[path = "support/zeron_model.rs"]
@@ -59,35 +54,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             title: TITLE.into(),
             width: WIDTH,
             height: HEIGHT,
-            transparent: true,
             decorations: cfg!(target_os = "macos"),
             min_size: Some((900., 600.)),
+            titlebar: Titlebar::Inset,
+            // Zeron's backdrop: the colourless under-window material,
+            // untinted, unsaturated and blurred at 60 pt, under the shell's
+            // own 80% tint.
+            glass: Some(Glass::new(GlassMaterial::UnderWindowBackground).plain()),
             ..Default::default()
         })
         .run(move |cx| {
-            #[cfg(target_os = "macos")]
+            // Clear hovers, and Zeron's scrollbar thumb: text at 30%.
             {
-                let window = cx.window.clone();
-                cx.tasks.spawn(async move {
-                    sleep(Duration::from_millis(1)).await;
-                    // Zeron's backdrop: the colourless under-window material,
-                    // untinted, unsaturated and blurred at 60 pt, under the
-                    // shell's own 80% tint.
-                    if glass::inset_titlebar_with(TITLE, glass::UNDER_WINDOW_BACKGROUND) {
-                        window.set_inner_size(WIDTH, HEIGHT);
-                    }
-                    // AppKit rebuilds the effect layers on focus and
-                    // appearance changes; gpui re-strips them on every layer
-                    // update, this on a slow timer.
-                    loop {
-                        glass::plain_backdrop(TITLE);
-                        sleep(Duration::from_millis(750)).await;
-                    }
-                });
+                use zgui::theme::{DARK, Theme, ThemeKind, tok};
+                cx.ui.theme().register(
+                    Theme::new("zeron", ThemeKind::Dark)
+                        .extending(DARK)
+                        .with(tok::HOVER, white(0))
+                        .with(tok::BUTTON_HOVER, white(0))
+                        .with(tok::MENU_HOVER, white(0))
+                        .with(tok::SCROLLBAR_TRACK, white(0))
+                        .with(tok::ACCENT, theme::alpha(theme::TEXT, 0.3)),
+                );
+                cx.ui.theme().set("zeron").unwrap();
             }
-            cx.ui.theme.hover = white(0);
-            // Zeron's scrollbar thumb: text at 30%.
-            cx.ui.theme.accent = theme::alpha(theme::TEXT, 0.3);
             // One connection at a time; the UI below remounts on each one.
             let generation = cx.ui.signal(0_u32);
             let offline = cx.ui.signal(Some("Connecting to Zeron…".to_owned()));
@@ -128,13 +118,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
                 return;
             }
-            let window = cx.window.clone();
             cx.render(
                 switch(
                     move || generation.get(),
                     move |_, cx| match current.borrow().clone() {
-                        Some(client) => app(cx, client, window.clone()),
-                        None => waiting(offline.clone(), window.clone()),
+                        Some(client) => app(cx, client),
+                        None => waiting(offline.clone()),
                     },
                 )
                 .w_full()
@@ -216,28 +205,18 @@ fn preview(cx: &mut Context, path: &str) -> View {
         )
 }
 
-fn drag_region(view: View, window: zgui_desktop::WindowHandle) -> View {
-    view.on_event(move |event| {
-        if matches!(
-            event.event,
-            InputEvent::PointerDown {
-                button: zgui::input::PointerButton::Primary,
-                ..
-            }
-        ) {
-            window.drag_window();
-        }
-    })
+fn drag_region(view: View) -> View {
+    view.window_drag()
 }
 
-fn waiting(message: Signal<Option<String>>, window: zgui_desktop::WindowHandle) -> View {
+fn waiting(message: Signal<Option<String>>) -> View {
     column()
         .w_full()
         .h_full()
         .bg(theme::GLASS)
         .font_family(theme::SANS)
         .text_color(TEXT)
-        .child(drag_region(div().w_full().h(52.), window))
+        .child(drag_region(div().w_full().h(52.)))
         .child(
             column()
                 .grow()
@@ -276,7 +255,7 @@ struct App {
     anim: Anim,
 }
 
-fn app(cx: &mut Context, rpc: Rpc, window: zgui_desktop::WindowHandle) -> View {
+fn app(cx: &mut Context, rpc: Rpc) -> View {
     let state = App {
         rows: cx.state(Vec::new()),
         statuses: cx.state(HashMap::new()),
@@ -344,14 +323,14 @@ fn app(cx: &mut Context, rpc: Rpc, window: zgui_desktop::WindowHandle) -> View {
         });
     }
     let content = {
-        let (state, window) = (state.clone(), window.clone());
+        let state = state.clone();
         switch(
             {
                 let selected = state.selected.clone();
                 move || selected.get()
             },
             move |selected, cx| match selected {
-                Some(id) => chat_view(cx, &state, id, window.clone()),
+                Some(id) => chat_view(cx, &state, id),
                 None => column()
                     .w_full()
                     .h_full()
@@ -373,7 +352,7 @@ fn app(cx: &mut Context, rpc: Rpc, window: zgui_desktop::WindowHandle) -> View {
         .font_family(theme::SANS)
         .text_size(14.)
         .text_color(TEXT)
-        .child(sidebar::sidebar(cx, &state, window))
+        .child(sidebar::sidebar(cx, &state))
         // Shrinkable (zgui's flex items keep their content size by default):
         // the transcript's rows, laid out at the last width, would otherwise
         // hold the pane at it when the window narrows.
@@ -382,12 +361,7 @@ fn app(cx: &mut Context, rpc: Rpc, window: zgui_desktop::WindowHandle) -> View {
 
 // Chat -----------------------------------------------------------------------
 
-fn chat_view(
-    cx: &mut Context,
-    state: &App,
-    id: String,
-    window: zgui_desktop::WindowHandle,
-) -> View {
+fn chat_view(cx: &mut Context, state: &App, id: String) -> View {
     let anim = state.anim.clone();
     let transcript: model::Shared = Rc::new(RefCell::new(Transcript::new(cx.runtime())));
     let (blocks, loaded, streaming) = {
@@ -751,7 +725,7 @@ fn chat_view(
         .w_full()
         .h_full()
         .child(subscription)
-        .child(titlebar(chat.clone(), window))
+        .child(titlebar(chat.clone()))
         .child(viewport)
 }
 
@@ -886,10 +860,7 @@ fn replay_schedule(entries: &[Value], tail: usize) -> (Value, Vec<(u64, Value)>)
 /// Zeron's session title row (`render_session_title_bar`): 38 px with the
 /// row centred on the traffic lights, 16 px in from the sidebar, the
 /// harness mark and the session title. The rest of the strip drags.
-fn titlebar(
-    chat: impl Fn() -> Option<ChatRow> + Clone + 'static,
-    window: zgui_desktop::WindowHandle,
-) -> View {
+fn titlebar(chat: impl Fn() -> Option<ChatRow> + Clone + 'static) -> View {
     let (title_of, harness_of) = (chat.clone(), chat);
     let mark = switch(
         move || harness_of().map(|c| c.harness()),
@@ -916,7 +887,6 @@ fn titlebar(
                     .font_weight(500)
                     .text_color(theme::alpha(TEXT, 0.85)),
             ),
-        window,
     )
 }
 

@@ -62,6 +62,8 @@ pub struct SemanticNode {
     pub position_in_set: Option<usize>,
     /// Total set size, including items not currently mounted.
     pub size_of_set: Option<usize>,
+    /// A text input's placeholder, shown while it is empty.
+    pub placeholder: Option<String>,
 }
 impl SemanticNode {
     pub fn new(role: Role, label: impl Into<String>) -> Self {
@@ -83,6 +85,7 @@ impl SemanticNode {
             scroll_axis: None,
             position_in_set: None,
             size_of_set: None,
+            placeholder: None,
         }
     }
 }
@@ -105,7 +108,7 @@ impl Default for Semantics {
     fn default() -> Self {
         static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(0);
         let instance = NEXT_INSTANCE
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
             .expect("semantic store identity exhausted");
@@ -199,9 +202,22 @@ impl Semantics {
         self.revision = self.revision.wrapping_add(1);
         entry.revision = self.revision;
     }
+    /// Set a text input's placeholder; an equal one changes nothing.
+    pub fn set_placeholder(&mut self, id: NodeId, placeholder: Option<&str>) {
+        let Some(entry) = self.nodes.get_mut(&id) else {
+            return;
+        };
+        if entry.node.placeholder.as_deref() == placeholder {
+            return;
+        }
+        entry.node.placeholder = placeholder.map(str::to_owned);
+        self.revision = self.revision.wrapping_add(1);
+        entry.revision = self.revision;
+    }
     pub fn remove(&mut self, id: NodeId) {
         if self.nodes.remove(&id).is_some() {
             self.revision = self.revision.wrapping_add(1);
+            crate::shrink_sparse(&mut self.nodes);
         }
     }
     pub fn retain_mounted(&mut self, scene: &Scene) {

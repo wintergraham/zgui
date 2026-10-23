@@ -153,6 +153,11 @@ fn borders_over_content_paint_after_the_nodes_children() {
             );
             // A child filling the panel, as a photo fills its frame.
             let child = scene.append(id, NodeKind::Rect(RED), fixed(120., 80.));
+            // Over the border band: a layout border lays its content out
+            // inside it, so move the child back onto the frame's edge.
+            if !over {
+                scene.set_transform(child, Transform { x: -4., y: -4. });
+            }
             let (_, p) = render(&mut gpu, &mut scene);
             let case = format!("direct {direct}, over {over}");
             let border = pixel(&p, 100, 41);

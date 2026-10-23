@@ -43,6 +43,22 @@ impl MenuContext {
         }
         context
     }
+    /// Close this menu's open submenus but `keep` (the one the pointer
+    /// moved onto), as moving over another item does.
+    pub(crate) fn close_children(&self, keep: Option<&Signal<bool>>) {
+        let children: Vec<Rc<MenuContext>> = self
+            .children
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect();
+        for child in children {
+            if keep.is_none_or(|keep| !keep.same(&child.open)) && child.open.with_untracked(|o| *o)
+            {
+                child.open.set(false);
+            }
+        }
+    }
     pub(crate) fn close_chain(&self) {
         self.open.set(false);
         if let Some(parent) = &self.parent {

@@ -29,12 +29,38 @@ cargo run --release -p zgui-desktop --example dynamic_menus
 cargo run --release -p zgui-desktop --example platform_services
 ```
 
-A terminal multiplexer written in Luau, its terminals Ghostty's (macOS; needs
-Zig 0.16, `brew install zig@0.16`: see `crates/zgui-ghostty-sys`):
+A terminal multiplexer written in Luau, its terminals Ghostty's and its
+browser panes WebKit's (macOS; needs Zig 0.16, `brew install zig@0.16`: see
+`crates/zgui-ghostty-sys`):
 
 ```sh
 cargo run --release -p zgui-desktop --features ghostty --example terminal
 ```
+
+Its shells outlive the window, as tmux's do: they run in a session server
+(the same binary, started on demand), and closing the app only detaches them.
+Opening it again restores the tabs, splits and pages it had and reattaches
+each pane to its shell. State lives in
+`~/Library/Application Support/zgui-terminal`.
+
+Interfaces can be Luau scripts that hot reload ([scripting](docs/scripting.md);
+the [Luau reference](docs/reference/index.md) has a page per element, and
+[app structure](docs/reference/app-structure.md) shows a large app in modules).
+Check them before they run with
+[luau-lsp](https://github.com/JohnnyMorganz/luau-lsp) and the bundled types;
+it reports `file:line:col` and fails on errors, such as a local function used
+before its definition:
+
+```sh
+cargo run -p zgui-script --bin zgui -- check app.luau   # or a directory
+```
+
+A script error shows in a banner over the window, with its file and line,
+until the next good reload. Ctrl+Option+Cmd+I (Ctrl+Alt+Shift+I on Linux)
+or `ZGUI_INSPECT=1` shows the layout inspector: every box outlined, and the
+one under the pointer described with the script line that created it.
+`ZGUI_LAYOUT_WARNINGS=1` reports suspicious layouts (a collapsed box, content
+cut off by a clip that does not scroll, an unresolvable percentage) to stderr.
 
 Linux builds need the native development libraries for fontconfig, xkbcommon and
 D-Bus, plus `pkg-config` (for example `libfontconfig1-dev libxkbcommon-dev

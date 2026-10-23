@@ -1208,7 +1208,7 @@ mod tests {
                 },
             );
             s.set_transform(frame, Transform { x: 30., y: 10. });
-            s.append(
+            let fill = s.append(
                 frame,
                 NodeKind::Rect(Color(255, 0, 0, 255)),
                 Style {
@@ -1217,6 +1217,11 @@ mod tests {
                     ..Default::default()
                 },
             );
+            // Over the border band: a layout border lays its content out
+            // inside it, so move the child back onto the frame's edge.
+            if !over {
+                s.set_transform(fill, Transform { x: -3., y: -3. });
+            }
             let mut raster = Raster::new(100, 80);
             let (pixels, full) = incremental_and_full(&mut raster, &mut s);
             assert_eq!(pixels, full);

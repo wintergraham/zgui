@@ -2,12 +2,8 @@
 //! lab's animated transitions between them.
 //! Run: cargo run --release -p zgui-script --example composer_states
 //! Edit `examples/composer_states/app.luau` and save to reload it.
-#[cfg(target_os = "macos")]
-#[path = "../../zgui-desktop/examples/support/glass.rs"]
-mod glass;
-
 use std::{path::Path, sync::Arc, time::Duration};
-use zgui_desktop::{Application, FontData, WindowOptions};
+use zgui_desktop::{Application, FontData, Glass, Titlebar, WindowOptions};
 use zgui_script::ScriptHost;
 
 const TITLE: &str = "zgui · composer states";
@@ -31,21 +27,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         width: WIDTH,
         height: HEIGHT,
         transparent: true,
+        titlebar: Titlebar::Inset,
+        // The HUD glass the lab's pages sit on.
+        glass: Some(Glass::default()),
         decorations: cfg!(target_os = "macos"),
         min_size: Some((640., 720.)),
         ..Default::default()
     })
     .run(move |cx| {
-        #[cfg(target_os = "macos")]
-        {
-            let window = cx.window.clone();
-            cx.tasks.spawn(async move {
-                zgui::timer::sleep(Duration::from_millis(1)).await;
-                if glass::inset_titlebar(TITLE) {
-                    window.set_inner_size(WIDTH, HEIGHT);
-                }
-            });
-        }
         let host = ScriptHost::new(&cx.ui.runtime, dir.join("app.luau"));
         // `COMPOSER_STATE=12` opens on the twelfth state (for screenshots).
         if let Some(n) = std::env::var("COMPOSER_STATE")
@@ -58,8 +47,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if std::env::var("COMPOSER_COMPARE").is_ok() {
             host.shared("composer_compare", true);
         }
-        let window = cx.window.clone();
-        host.action("drag_window", move |_| window.drag_window());
         let _ = host.reload();
         cx.tasks.spawn(host.watch(Duration::from_millis(250)));
         cx.render(host.view());

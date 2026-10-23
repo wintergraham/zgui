@@ -4,12 +4,15 @@
 //! macOS: the window keeps its native traffic lights over a transparent,
 //! full-size-content titlebar, and the desktop behind it is blurred. Other
 //! platforms fall back to a frameless translucent window with drawn controls.
+//!
+//! `-- --fixture`: checks the chrome `WindowOptions` asked for against live
+//! AppKit state, prints `FIXTURE` lines, then exits (non-zero on failure).
 use zgui::{
     compose::prelude::*,
-    input::{EventPhase, InputEvent, Key, PointerButton},
+    input::{EventPhase, InputEvent, Key},
     text_layout::{FontFeatures, TextAlign},
 };
-use zgui_desktop::{Application, WindowOptions};
+use zgui_desktop::{Application, Glass, Titlebar, WindowOptions};
 
 const TITLE: &str = "zgui glass counter";
 const WIDTH: f64 = 340.;
@@ -17,6 +20,7 @@ const HEIGHT: f64 = 420.;
 const TITLEBAR: f32 = 40.;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = std::env::args().any(|arg| arg == "--fixture");
     Application::new()
         .window(WindowOptions {
             title: TITLE.into(),
@@ -25,22 +29,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             transparent: true,
             decorations: cfg!(target_os = "macos"),
             min_size: Some((280., 340.)),
+            // Content under inset traffic lights, on frosted glass.
+            titlebar: Titlebar::Inset,
+            glass: Some(Glass::default()),
             ..Default::default()
         })
         .run(move |cx| {
-            #[cfg(target_os = "macos")]
-            {
-                // The native window is realised after this closure returns.
-                let window = cx.window.clone();
-                cx.tasks.spawn(async move {
-                    zgui::timer::sleep(std::time::Duration::from_millis(1)).await;
-                    if glass::inset_titlebar(TITLE) {
-                        // Content now spans the titlebar; resize so the host observes it.
-                        window.set_inner_size(WIDTH, HEIGHT);
-                    }
-                });
+            if fixture {
+                run_fixture(cx);
             }
-            let window = cx.window.clone();
             let view = cx.render(component(move |cx| {
                 let count = cx.state(0_i64);
                 let (inc, dec, reset, keys, label, tint) = (
@@ -51,19 +48,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     count.clone(),
                     count.clone(),
                 );
-                let drag = window.clone();
                 // Untitled drag strip under the traffic lights.
-                let titlebar = div().w_full().h(TITLEBAR).on_event(move |event| {
-                    if matches!(
-                        event.event,
-                        InputEvent::PointerDown {
-                            button: PointerButton::Primary,
-                            ..
-                        }
-                    ) {
-                        drag.drag_window();
-                    }
-                });
+                let titlebar = div().w_full().h(TITLEBAR).window_drag();
                 let number = text_signal(move || label.get().to_string())
                     .text_size(104.)
                     .font_weight(200)
@@ -182,6 +168,125 @@ fn step_button(plus: bool) -> View {
         .child(icon)
 }
 
-#[cfg(target_os = "macos")]
-#[path = "support/glass.rs"]
-mod glass;
+/// Checks against live AppKit state (see the module documentation).
+fn run_fixture(cx: &mut zgui_desktop::WindowContext) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::{MainThreadMarker, msg_send, runtime::AnyObject, sel};
+        use objc2_app_kit::{NSApplication, NSWindowStyleMask, NSWindowTitleVisibility};
+        let radius = cx.window_info.corner_radius.clone();
+        let window = cx.window.clone();
+        cx.tasks.spawn(async move {
+            zgui::timer::sleep(std::time::Duration::from_millis(600)).await;
+            let mut failures = 0;
+            let mut check = |name: &str, ok: bool, detail: String| {
+                println!(
+                    "FIXTURE {} {name}: {detail}",
+                    if ok { "ok" } else { "FAIL" }
+                );
+                failures += usize::from(!ok);
+            };
+            let mtm = MainThreadMarker::new().expect("the UI thread");
+            let found = NSApplication::sharedApplication(mtm)
+                .windows()
+                .into_iter()
+                .find(|w| w.title().to_string() == TITLE);
+            check("window", found.is_some(), String::new());
+            let Some(ns) = found else {
+                std::process::exit(1);
+            };
+            check(
+                "content under the title bar",
+                ns.styleMask()
+                    .contains(NSWindowStyleMask::FullSizeContentView)
+                    && ns.titlebarAppearsTransparent()
+                    && ns.titleVisibility() == NSWindowTitleVisibility::Hidden,
+                format!("{:?}", ns.styleMask()),
+            );
+            let (toolbar, toolbar_style): (*mut AnyObject, isize) =
+                unsafe { (msg_send![&*ns, toolbar], msg_send![&*ns, toolbarStyle]) };
+            check(
+                "traffic lights inset by a compact unified toolbar",
+                !toolbar.is_null() && toolbar_style == 4,
+                format!("style {toolbar_style}"),
+            );
+            let content = ns.contentView().expect("a content view");
+            let size = content.frame().size;
+            check(
+                "content keeps the size asked for",
+                (size.width, size.height) == (WIDTH, HEIGHT),
+                format!("{size:?}"),
+            );
+            let corner: f64 = if ns.class().responds_to(sel!(_cornerRadius)) {
+                unsafe { msg_send![&*ns, _cornerRadius] }
+            } else {
+                10.
+            };
+            check(
+                "WindowInfo::corner_radius",
+                radius.get() == corner && corner > 0.,
+                format!("{} vs {corner}", radius.get()),
+            );
+            let frame = unsafe { content.superview() }.expect("a frame view");
+            let subviews = frame.subviews();
+            let glass = subviews
+                .iter()
+                .position(|view| view.class().name().to_string_lossy() == "ZguiWindowGlass");
+            let below = glass.zip(
+                subviews
+                    .iter()
+                    .position(|view| std::ptr::eq(&*view, &*content)),
+            );
+            check(
+                "glass under the content",
+                below.is_some_and(|(glass, content)| glass < content),
+                format!("{below:?}"),
+            );
+            if let Some(index) = glass {
+                let view = subviews.objectAtIndex(index);
+                let (material, blending, state): (isize, isize, isize) = unsafe {
+                    (
+                        msg_send![&*view, material],
+                        msg_send![&*view, blendingMode],
+                        msg_send![&*view, state],
+                    )
+                };
+                check(
+                    "HUD material, behind the window, always active",
+                    (material, blending, state) == (13, 0, 1),
+                    format!("{material} {blending} {state}"),
+                );
+                let layer: *mut AnyObject = unsafe { msg_send![&*view, layer] };
+                let rounded = unsafe { layer.as_ref() }.map(|layer| unsafe {
+                    let r: f64 = msg_send![layer, cornerRadius];
+                    let masks: bool = msg_send![layer, masksToBounds];
+                    (r, masks)
+                });
+                check(
+                    "cut to the window's corners",
+                    rounded == Some((corner, true)),
+                    format!("{rounded:?}"),
+                );
+            }
+            check(
+                "window buttons shown",
+                ["close", "minimize", "zoom"]
+                    .iter()
+                    .enumerate()
+                    .all(|(i, _)| unsafe {
+                        let button: *mut AnyObject =
+                            msg_send![&*ns, standardWindowButton: i as isize];
+                        button.as_ref().is_some_and(|b| !msg_send![b, isHidden])
+                    }),
+                String::new(),
+            );
+            println!("FIXTURE {failures} failures");
+            window.close();
+            if failures > 0 {
+                std::process::exit(1);
+            }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = cx;
+}

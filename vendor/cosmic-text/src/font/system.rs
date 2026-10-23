@@ -137,7 +137,8 @@ pub struct FontSystem {
     db: fontdb::Database,
 
     /// Cache for loaded fonts from the database.
-    font_cache: HashMap<(fontdb::ID, fontdb::Weight), Option<Arc<Font>>>,
+    /// zgui: by optical size too (0: the font's default).
+    font_cache: HashMap<(fontdb::ID, fontdb::Weight, u16), Option<Arc<Font>>>,
 
     /// Sorted unique ID's of all Monospace fonts in DB
     monospace_font_ids: Vec<fontdb::ID>,
@@ -300,14 +301,29 @@ impl FontSystem {
 
     /// Get a font by its ID and weight.
     pub fn get_font(&mut self, id: fontdb::ID, weight: fontdb::Weight) -> Option<Arc<Font>> {
+        self.get_font_at(id, weight, 0)
+    }
+
+    /// zgui: the font instanced at an optical size (pixels; 0 for its
+    /// default), for fonts with an `opsz` axis.
+    pub fn get_font_at(
+        &mut self,
+        id: fontdb::ID,
+        weight: fontdb::Weight,
+        optical: u16,
+    ) -> Option<Arc<Font>> {
+        // A font without the axis is one instance at every size.
+        if optical > 0 && !self.get_font_at(id, weight, 0)?.has_optical() {
+            return self.get_font_at(id, weight, 0);
+        }
         self.font_cache
-            .entry((id, weight))
+            .entry((id, weight, optical))
             .or_insert_with(|| {
                 #[cfg(feature = "std")]
                 unsafe {
                     self.db.make_shared_face_data(id);
                 }
-                if let Some(font) = Font::new(&self.db, id, weight) {
+                if let Some(font) = Font::new_at(&self.db, id, weight, optical) {
                     Some(Arc::new(font))
                 } else {
                     log::warn!(

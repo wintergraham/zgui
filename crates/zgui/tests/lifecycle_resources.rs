@@ -216,3 +216,40 @@ fn task_completion_check_can_spawn_and_new_guard_stays_owned_until_unmount() {
         "retained capability cannot recreate a dead owner"
     );
 }
+
+#[test]
+fn spawning_many_tasks_checks_each_a_bounded_number_of_times() {
+    use std::cell::RefCell;
+    use zgui::compose::{TaskRunner, TaskToken, Tasks};
+    // A burst of spawns while none finish (a script calling the host in a
+    // loop): pruning finished tasks must not rescan every task per spawn.
+    let mut ui = Ui::new(400., 300.);
+    let tasks = Rc::new(RefCell::new(None::<Tasks>));
+    let output = tasks.clone();
+    let checks = Rc::new(Cell::new(0usize));
+    let counted = checks.clone();
+    let runner = TaskRunner::new(move |_future| {
+        let counted = counted.clone();
+        TaskToken::new((), move |_| {
+            counted.set(counted.get() + 1);
+            false
+        })
+    });
+    let _mounted = ui.mount(provide(
+        runner,
+        component(move |cx| {
+            *output.borrow_mut() = Some(cx.tasks());
+            text("Tasks")
+        }),
+    ));
+    let capability = tasks.borrow().as_ref().unwrap().clone();
+    const N: usize = 5_000;
+    for _ in 0..N {
+        capability.spawn(async {});
+    }
+    assert!(
+        checks.get() <= 3 * N,
+        "{} finished-checks for {N} spawns",
+        checks.get()
+    );
+}

@@ -13,25 +13,24 @@ local raised = "#212833"
 local accent = "#5b8def"
 local muted = "#8b95a5"
 
-local function button(label, on_click, extra)
-	local props = {
+-- `extra` overrides the defaults (a primary button's fill, a compact row's padding).
+type ButtonStyle = { bg: Color?, hover: Styles?, py: number? }
+local function button(label: string | () -> string, on_click: Handler | Action, extra: ButtonStyle?)
+	local style: ButtonStyle = extra or {}
+	return ui.button {
 		px = 14,
-		py = 8,
+		py = style.py or 8,
 		rounded = 8,
-		bg = raised,
+		bg = style.bg or raised,
 		cursor = "pointer",
-		hover = { bg = "#2b3442" },
+		hover = style.hover or { bg = "#2b3442" },
 		active = { bg = "#344052" },
 		on_click = on_click,
 		label,
 	}
-	for key, value in pairs(extra or {}) do
-		props[key] = value
-	end
-	return ui.button(props)
 end
 
-local function card(title, ...)
+local function card(title: string, ...: Child)
 	return ui.column {
 		p = 16,
 		gap = 12,
@@ -85,7 +84,7 @@ return ui.row {
 					h = 8,
 					rounded = 4,
 					bg = "#3fb950",
-					opacity = ui.loop { duration = 1.2, from = 0.3, to = 1, fps = 30 },
+					opacity = ui.loop { duration = 1200, from = 0.3, to = 1, fps = 30 },
 				},
 				ui.text { "Hello from Luau", text_size = 24, bold = true },
 			},
@@ -112,8 +111,8 @@ return ui.row {
 					h = 64,
 					p = 16,
 					rounded = 10,
-					bg = ui.tween(open, { from = raised, to = "#24406e", duration = 0.35 }),
-					opacity = ui.tween(open, { from = 0.4, to = 1, duration = 0.35 }),
+					bg = ui.tween(open, { from = raised, to = "#24406e", duration = 350 }),
+					opacity = ui.tween(open, { from = 0.4, to = 1, duration = 350 }),
 					x = ui.spring(open, { from = 0, to = 16, stiffness = 220, damping = 18 }),
 					mr = 16,
 					ui.text("Colour and opacity tween, offset springs. Rust runs every frame."),

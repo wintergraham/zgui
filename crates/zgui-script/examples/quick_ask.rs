@@ -3,12 +3,8 @@
 //! a canned answer, paste it back, drop Finder files onto it.
 //! Run: cargo run --release -p zgui-script --example quick_ask
 //! Edit `examples/quick_ask/app.luau` and save to reload it.
-#[cfg(target_os = "macos")]
-#[path = "../../zgui-desktop/examples/support/glass.rs"]
-mod glass;
-
 use std::{path::Path, sync::Arc, time::Duration};
-use zgui_desktop::{Application, FontData, WindowOptions};
+use zgui_desktop::{Application, FontData, Glass, Titlebar, WindowOptions};
 use zgui_script::ScriptHost;
 
 const TITLE: &str = "zgui · quick ask";
@@ -29,21 +25,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         width: WIDTH,
         height: HEIGHT,
         transparent: true,
+        // Content under inset traffic lights, on frosted glass.
+        titlebar: Titlebar::Inset,
+        glass: Some(Glass::default()),
         decorations: cfg!(target_os = "macos"),
         min_size: Some((1100., 720.)),
         ..Default::default()
     })
     .run(move |cx| {
-        #[cfg(target_os = "macos")]
-        {
-            let window = cx.window.clone();
-            cx.tasks.spawn(async move {
-                zgui::timer::sleep(Duration::from_millis(1)).await;
-                if glass::inset_titlebar(TITLE) {
-                    window.set_inner_size(WIDTH, HEIGHT);
-                }
-            });
-        }
         let host = ScriptHost::new(&cx.ui.runtime, dir.join("app.luau"));
         // `QUICK_ASK_SCENE=3` opens over the third app (Mail), for screenshots.
         if let Some(n) = std::env::var("QUICK_ASK_SCENE")

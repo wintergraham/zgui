@@ -55,6 +55,8 @@ pub struct Font {
     id: fontdb::ID,
     monospace_fallback: Option<FontMonospaceFallback>,
     pub(crate) italic_or_oblique: bool,
+    /// zgui: whether it has an optical size axis (`opsz`).
+    optical: bool,
 }
 
 impl fmt::Debug for Font {
@@ -94,6 +96,12 @@ impl Font {
         self.harfrust.borrow_dependent()
     }
 
+    /// zgui: whether it has an optical size axis (`opsz`), so its shapes
+    /// and advances follow the size.
+    pub fn has_optical(&self) -> bool {
+        self.optical
+    }
+
     pub(crate) fn shaper_instance(&self) -> &harfrust::ShaperInstance {
         &self.harfrust.borrow_owner().shaper_instance
     }
@@ -120,6 +128,17 @@ impl Font {
 
 impl Font {
     pub fn new(db: &fontdb::Database, id: fontdb::ID, weight: fontdb::Weight) -> Option<Self> {
+        Self::new_at(db, id, weight, 0)
+    }
+
+    /// zgui: instanced at an optical size too (pixels, the `opsz` axis; 0
+    /// leaves the font's default), for fonts that have one.
+    pub fn new_at(
+        db: &fontdb::Database,
+        id: fontdb::ID,
+        weight: fontdb::Weight,
+        optical: u16,
+    ) -> Option<Self> {
         let info = db.face(id)?;
 
         let data = match &info.source {
@@ -138,9 +157,17 @@ impl Font {
         // `ShaperData`, and once to create the persistent `FontRef` tied to the
         // lifetime of the face data.
         let font_ref = FontRef::from_index((*data).as_ref(), info.index).ok()?;
-        let location = font_ref
-            .axes()
-            .location([(Tag::new(b"wght"), weight.0 as f32)]);
+        let has_optical = font_ref.axes().iter().any(|axis| axis.tag() == Tag::new(b"opsz"));
+        let location = if optical > 0 {
+            font_ref.axes().location([
+                (Tag::new(b"wght"), weight.0 as f32),
+                (Tag::new(b"opsz"), f32::from(optical)),
+            ])
+        } else {
+            font_ref
+                .axes()
+                .location([(Tag::new(b"wght"), weight.0 as f32)])
+        };
         let metrics = font_ref.metrics(Size::unscaled(), &location);
 
         let monospace_fallback = if cfg!(feature = "monospace_fallback") {
@@ -206,6 +233,7 @@ impl Font {
 
         Some(Self {
             id: info.id,
+            optical: has_optical,
             monospace_fallback,
             #[cfg(feature = "swash")]
             swash: {

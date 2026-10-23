@@ -8,6 +8,8 @@ license.workspace = true
 # Terminals (`zgui::terminal`) as Ghostty surfaces: builds Ghostty with Zig
 # 0.16 (see crates/zgui-ghostty-sys). macOS only for now.
 ghostty = ["dep:zgui-ghostty-sys", "zgui-ghostty-sys/link", "dep:libc"]
+# The terminal example's interface compiled into it (build.rs), as it ships.
+terminal-bundle = ["dep:zgui-script"]
 
 [dependencies]
 zgui = { path = "../zgui" }
@@ -37,12 +39,14 @@ wayland-protocols = { version = "=0.32.13", features = ["client", "unstable"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { version = "=0.18.0", default-features = false }
 objc2 = "=0.6.4"
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSView", "NSWindow", "NSTextInputContext", "NSColor", "NSGraphics", "NSEvent", "objc2-core-foundation", "objc2-quartz-core", "block2", "NSTextInputClient", "NSTrackingArea", "NSCursor", "NSPasteboard", "NSGraphicsContext", "NSScreen"] }
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSObject", "NSString", "NSURL", "NSAppleEventManager", "NSAppleEventDescriptor", "objc2-core-services", "NSDictionary", "NSError", "NSURLRequest", "NSUUID", "NSKeyValueObserving", "NSValue", "NSData", "NSJSONSerialization", "NSGeometry", "objc2-core-foundation", "NSAttributedString", "NSRange"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSView", "NSWindow", "NSTextInputContext", "NSColor", "NSGraphics", "NSEvent", "objc2-core-foundation", "objc2-quartz-core", "block2", "NSTextInputClient", "NSTrackingArea", "NSCursor", "NSPasteboard", "NSGraphicsContext", "NSScreen", "NSVisualEffectView"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSObject", "NSString", "NSURL", "NSAppleEventManager", "NSAppleEventDescriptor", "objc2-core-services", "NSDictionary", "NSError", "NSURLRequest", "NSUUID", "NSKeyValueObserving", "NSValue", "NSData", "NSJSONSerialization", "NSGeometry", "objc2-core-foundation", "NSAttributedString", "NSRange", "NSURLResponse"] }
 zgui-ghostty-sys = { path = "../zgui-ghostty-sys", optional = true }
 libc = { version = "0.2", optional = true }
 # Native views over zgui (src/native_host): web pages, clipping masks, backdrops.
-objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKNavigationDelegate", "WKNavigation", "WKNavigationAction", "WKNavigationResponse", "WKWebsiteDataStore", "WKUserContentController", "WKUserScript", "WKScriptMessageHandler", "WKScriptMessage", "WKUIDelegate", "WKWindowFeatures", "WKFrameInfo", "WKPreferences"] }
+objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKBackForwardList", "WKBackForwardListItem", "WKNavigationDelegate", "WKNavigation", "WKNavigationAction", "WKNavigationResponse", "WKWebsiteDataStore", "WKUserContentController", "WKUserScript", "WKScriptMessageHandler", "WKScriptMessage", "WKUIDelegate", "WKWindowFeatures", "WKFrameInfo", "WKSecurityOrigin", "WKPreferences", "WKURLSchemeHandler", "WKURLSchemeTask"] }
+# Answers custom-scheme requests on the main queue, from whatever thread served them.
+dispatch2 = "0.3"
 block2 = "0.6"
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer", "CAShapeLayer", "CATransaction", "objc2-core-foundation", "objc2-core-graphics"] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes"] }
@@ -60,10 +64,17 @@ required-features = ["ghostty"]
 name = "terminal"
 required-features = ["ghostty"]
 
+[build-dependencies]
+# `terminal-bundle`: compiles the terminal example's scripts (build.rs).
+zgui-script = { path = "../zgui-script", optional = true }
+
 [dev-dependencies]
 accesskit_consumer = "0.38.0"
 # The terminal example's interface is a Luau script.
 zgui-script = { path = "../zgui-script" }
+# The terminal example's session server keeps each shell's screen to redraw
+# it for a new window.
+vt100 = "0.16"
 # The zeron example: a client of Zeron's local engine WebSocket.
 tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 serde_json = "1"

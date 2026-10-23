@@ -5,6 +5,10 @@
 //! show as menu items with key equivalents, and calls them back with
 //! [`crate::ScriptHost::run_command`]. Menus reach the app wherever focus is,
 //! a terminal or a web page included.
+//!
+//! A plugin's commands are its own: their ids are `<plugin>/<id>`, and a
+//! shortcut the app's commands (or an earlier plugin's) have stays theirs,
+//! so a plugin neither replaces nor breaks the app's ⌘C.
 use crate::{Vm, node::env};
 use mlua::{Function, Lua, Table};
 use std::{
@@ -30,8 +34,10 @@ pub struct Command {
 }
 
 type Runner = (Function, Weak<Vm>);
+/// A declared command, its runner and the plugin that declared it.
+type Pending = (Command, Option<Runner>, Option<Rc<str>>);
 pub(crate) struct Commands {
-    pending: RefCell<Vec<(Command, Option<Runner>)>>,
+    pending: RefCell<Vec<Pending>>,
     runners: RefCell<HashMap<String, Runner>>,
     pub list: Signal<Vec<Command>>,
 }
@@ -50,9 +56,21 @@ impl Commands {
     /// The load succeeded: publish what it declared.
     pub fn publish(&self) {
         let pending = std::mem::take(&mut *self.pending.borrow_mut());
+        // The app's shortcuts first, then each plugin's not yet taken.
+        let mut taken: std::collections::HashSet<String> = pending
+            .iter()
+            .filter(|(_, _, plugin)| plugin.is_none())
+            .filter_map(|(c, _, _)| c.key.as_deref().map(shortcut))
+            .collect();
         let mut runners = HashMap::new();
         let mut list = Vec::with_capacity(pending.len());
-        for (command, runner) in pending {
+        for (mut command, runner, plugin) in pending {
+            if plugin.is_some()
+                && let Some(key) = &command.key
+                && !taken.insert(shortcut(key))
+            {
+                command.key = None;
+            }
             if let Some(runner) = runner {
                 runners.insert(command.id.clone(), runner);
             }
@@ -79,6 +97,16 @@ impl Commands {
     }
 }
 
+/// A shortcut as compared: `Shift+Cmd+D` is `cmd+shift+d`.
+fn shortcut(key: &str) -> String {
+    let mut parts: Vec<String> = key.split('+').map(|p| p.trim().to_lowercase()).collect();
+    let key = parts.pop().unwrap_or_default();
+    parts.sort();
+    parts.dedup();
+    parts.push(key);
+    parts.join("+")
+}
+
 /// Installs `ui.command`.
 pub(crate) fn install(lua: &Lua, ui: &Table, commands: Rc<Commands>) -> mlua::Result<()> {
     ui.set(
@@ -97,12 +125,22 @@ pub(crate) fn install(lua: &Lua, ui: &Table, commands: Rc<Commands>) -> mlua::Re
                         separator: true,
                     },
                     None,
+                    None,
                 ));
                 return Ok(());
             }
+            let env = env(lua)?;
+            let plugin = match &*env.grants {
+                crate::Grants::All => None,
+                crate::Grants::Only(_) => Some(env.owner.clone()),
+            };
             let id: String = table
                 .get::<Option<String>>("id")?
                 .ok_or_else(|| mlua::Error::runtime("ui.command needs an `id`"))?;
+            let id = match &plugin {
+                Some(plugin) => format!("{plugin}/{id}"),
+                None => id,
+            };
             let title = table
                 .get::<Option<String>>("title")?
                 .unwrap_or_else(|| id.clone());
@@ -110,9 +148,9 @@ pub(crate) fn install(lua: &Lua, ui: &Table, commands: Rc<Commands>) -> mlua::Re
                 .get::<Option<Function>>("run")?
                 .ok_or_else(|| mlua::Error::runtime(format!("ui.command `{id}` needs `run`")))?;
             let key = table.get::<Option<String>>("key")?;
-            let vm = env(lua)?.vm.clone();
+            let vm = env.vm.clone();
             let mut pending = commands.pending.borrow_mut();
-            if pending.iter().any(|(c, _)| c.id == id) {
+            if pending.iter().any(|(c, _, _)| c.id == id) {
                 return Err(mlua::Error::runtime(format!(
                     "ui.command `{id}` is declared twice"
                 )));
@@ -126,6 +164,7 @@ pub(crate) fn install(lua: &Lua, ui: &Table, commands: Rc<Commands>) -> mlua::Re
                     separator: false,
                 },
                 Some((run, vm)),
+                plugin,
             ));
             Ok(())
         })?,

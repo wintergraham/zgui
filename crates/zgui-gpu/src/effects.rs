@@ -151,6 +151,7 @@ pub(crate) struct EffectAtlas {
     pub(crate) scratch: wgpu::Texture,
     scratch_bind: wgpu::BindGroup,
     /// Bound as the mask of jobs without one.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) blank: wgpu::Texture,
     blank_bind: wgpu::BindGroup,
     masks: FxHashMap<u64, wgpu::BindGroup>,

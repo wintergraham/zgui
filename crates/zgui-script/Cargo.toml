@@ -12,16 +12,17 @@ zgui-gpu = { path = "../zgui-gpu" }
 mlua = { version = "0.12.2", features = ["luau"] }
 # `.luaurc` aliases for `require("@alias/...")`.
 serde_json = "1"
+# Markdown for `ui.markdown` and `zgui_script::markdown`.
+pulldown-cmark = { version = "0.13", default-features = false }
 
 # The script time budget counts the thread's CPU time (clock_gettime).
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[[bin]]
+# `zgui check app.luau`: type checks scripts with luau-lsp (src/check.rs).
+name = "zgui"
+path = "src/bin/zgui.rs"
+
 [dev-dependencies]
 zgui-desktop = { path = "../zgui-desktop" }
-
-# The examples' frosted-glass chrome (zgui-desktop/examples/support/glass.rs).
-[target.'cfg(target_os = "macos")'.dev-dependencies]
-objc2 = "=0.6.4"
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSView", "NSWindow"] }
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSObject", "NSString"] }

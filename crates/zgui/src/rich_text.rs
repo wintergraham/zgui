@@ -51,6 +51,9 @@ impl TextMeasure {
 pub struct Decoration {
     pub color: Option<Color>,
     thickness: f32,
+    /// How far below the baseline it sits (CSS `text-underline-offset`);
+    /// None, a tenth of the font size.
+    offset: Option<f32>,
 }
 impl Decoration {
     pub fn new(thickness: f32) -> Self {
@@ -61,7 +64,16 @@ impl Decoration {
             } else {
                 1.
             },
+            offset: None,
         }
+    }
+    /// Below the baseline by `px` (an underline's; CSS `text-underline-offset`).
+    pub fn offset(mut self, px: f32) -> Self {
+        self.offset = px.is_finite().then_some(px);
+        self
+    }
+    pub fn offset_px(self) -> Option<f32> {
+        self.offset
     }
     pub fn color(mut self, color: Color) -> Self {
         self.color = Some(color);
@@ -87,6 +99,28 @@ pub struct TextRun {
     pub background: Option<Color>,
     pub underline: Option<Decoration>,
     pub strikethrough: Option<Decoration>,
+    /// Room around the run, as CSS's inline padding: across, it is added
+    /// before and after the run's text (it takes space in the line); both
+    /// widen its background, which then hugs the text (its font's content
+    /// area) instead of filling the line: an inline code chip.
+    pub padding: [f32; 2],
+    /// The background's corner radius.
+    pub radius: f32,
+}
+impl TextRun {
+    /// The approximate advance of `grapheme` at byte `at` (no shaper): 0.6
+    /// em a cell, zero-width characters none, and the run's padding on its
+    /// first and last.
+    pub(crate) fn estimated_advance(&self, grapheme: &str, at: usize) -> f32 {
+        let glyph = if matches!(grapheme, "\u{200B}" | "\u{2060}") {
+            0.
+        } else {
+            self.font_size * 0.6 + self.font.letter_spacing.pixels()
+        };
+        let first = (at == self.range.start) as u8 as f32;
+        let last = (at + grapheme.len() == self.range.end) as u8 as f32;
+        (glyph + (first + last) * self.padding[0]).max(0.)
+    }
 }
 
 impl Default for TextRun {
@@ -99,6 +133,8 @@ impl Default for TextRun {
             background: None,
             underline: None,
             strikethrough: None,
+            padding: [0.; 2],
+            radius: 0.,
         }
     }
 }
@@ -157,7 +193,8 @@ impl RichText {
         self.same_metrics(other)
             && self.runs.iter().zip(other.runs.iter()).all(|(a, b)| {
                 a.background.is_some() == b.background.is_some()
-                    && a.underline.map(|d| d.thickness()) == b.underline.map(|d| d.thickness())
+                    && a.underline.map(|d| (d.thickness(), d.offset))
+                        == b.underline.map(|d| (d.thickness(), d.offset))
                     && a.strikethrough.map(|d| d.thickness())
                         == b.strikethrough.map(|d| d.thickness())
             })
@@ -243,7 +280,7 @@ pub fn fallback_measure(rich: &RichText, width: Option<f32>) -> (f32, f32) {
             pitch = line;
             continue;
         }
-        let advance = (run.font_size * 0.6 + run.font.letter_spacing.pixels()).max(0.);
+        let advance = run.estimated_advance(grapheme, index);
         if width.is_some_and(|w| x > 0. && x + advance > w.max(0.)) {
             if limit.is_some_and(|limit| row >= limit) {
                 return (

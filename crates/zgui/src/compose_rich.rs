@@ -22,12 +22,38 @@ impl PartialEq for InlineAction {
 pub(crate) struct Link {
     pub range: Range<usize>,
     pub action: InlineAction,
+    /// It restyles under the pointer, so no hover ring.
+    pub styled_hover: bool,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Content {
     pub rich: Arc<crate::rich_text::RichText>,
     pub links: Vec<Link>,
+    pub icons: Vec<InlineIcon>,
 }
+/// An icon in the text (`TextSpan::icon`): drawn over the room its
+/// placeholder run (`range`) keeps in the line.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct InlineIcon {
+    pub range: Range<usize>,
+    pub svg: Arc<crate::svg::SvgData>,
+    pub size: f32,
+    /// How far into the room it starts (the span's padding before it).
+    pub inset: f32,
+}
+/// A span's leading icon: `size` square, `gap` before the text, tinted
+/// with `tint` (a colour or token) if set, else as the SVG says (one that
+/// follows the text colour takes the span's).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpanIcon {
+    pub svg: Arc<crate::svg::SvgData>,
+    pub size: f32,
+    pub gap: f32,
+    pub tint: Option<crate::theme::Themed<Color>>,
+}
+/// What keeps an icon's room in the line: a word joiner (zero width, and
+/// no line break either side, so the icon stays with its text), padded.
+pub(crate) const ICON_PLACEHOLDER: &str = "\u{2060}";
 
 /// An inline run. Only typography is supported; layout belongs to the paragraph.
 #[derive(Clone, Debug, PartialEq)]
@@ -38,6 +64,17 @@ pub struct TextSpan {
     pub(crate) background: Option<Color>,
     pub(crate) underline: Option<crate::rich_text::Decoration>,
     pub(crate) strikethrough: Option<crate::rich_text::Decoration>,
+    pub(crate) padding: [f32; 2],
+    pub(crate) radius: f32,
+    pub(crate) hover: Option<SpanHover>,
+    pub(crate) icon: Option<SpanIcon>,
+}
+/// How a link span looks under the pointer (`TextSpan::hover`): CSS's
+/// `a:hover { text-decoration: underline }`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SpanHover {
+    pub underline: Option<crate::rich_text::Decoration>,
+    pub text_color: Option<crate::theme::Themed<Color>>,
 }
 pub fn text_span(text: impl Into<Arc<str>>) -> TextSpan {
     TextSpan {
@@ -47,18 +84,55 @@ pub fn text_span(text: impl Into<Arc<str>>) -> TextSpan {
         background: None,
         underline: None,
         strikethrough: None,
+        padding: [0.; 2],
+        radius: 0.,
+        hover: None,
+        icon: None,
     }
 }
 impl TextSpan {
-    /// Make this span a keyboard-accessible link with shaped hit regions.
+    /// An icon before the text, in the line (a file chip's file type):
+    /// `size` square, centred on the line, `gap` from the text. An icon
+    /// that follows the text colour takes the span's.
+    pub fn icon(mut self, icon: SpanIcon) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+    /// Restyled under the pointer, once it's a link (`on_click`), in place
+    /// of the pointer's focus-ring outline. Not underlined at rest unless
+    /// asked (`underline`).
+    pub fn hover(mut self, hover: SpanHover) -> Self {
+        self.hover = Some(hover);
+        self
+    }
+    /// Room around the span (`x` before and after it, taking space in the
+    /// line; `y` above and below its background), its background hugging
+    /// the text: an inline code chip.
+    pub fn padding(mut self, x: f32, y: f32) -> Self {
+        self.padding = [x.max(0.), y.max(0.)];
+        self
+    }
+    /// The span background's corner radius.
+    pub fn radius(mut self, radius: f32) -> Self {
+        self.radius = radius.max(0.);
+        self
+    }
+    /// Make this span a keyboard-accessible link with shaped hit regions,
+    /// underlined unless it has a `hover` style.
     pub fn on_click(mut self, callback: impl FnMut() + 'static) -> Self {
         self.action = Some(InlineAction(Rc::new(RefCell::new(callback))));
-        self.underline.get_or_insert_with(Default::default);
         self
     }
 
-    pub fn background(mut self, color: Color) -> Self {
-        self.background = Some(color);
+    /// A colour or a colour token (`tok::SELECTION`).
+    pub fn background(mut self, color: impl Into<crate::theme::Themed<Color>>) -> Self {
+        match color.into() {
+            crate::theme::Themed::Value(color) => self.background = Some(color),
+            crate::theme::Themed::Token(token) => {
+                self.background = None;
+                self.styles = std::mem::take(&mut self.styles).bg(token);
+            }
+        }
         self
     }
     pub fn underline(mut self, decoration: crate::rich_text::Decoration) -> Self {
@@ -69,8 +143,9 @@ impl TextSpan {
         self.strikethrough = Some(decoration);
         self
     }
-    pub fn text_color(mut self, color: Color) -> Self {
-        self.styles.text_color = Some(color);
+    /// A colour or a colour token (`tok::TEXT_SECONDARY`).
+    pub fn text_color(mut self, color: impl Into<crate::theme::Themed<Color>>) -> Self {
+        self.styles = std::mem::take(&mut self.styles).text_color(color);
         self
     }
     pub fn text_size(mut self, size: f32) -> Self {
@@ -158,6 +233,7 @@ pub(crate) fn mount_links(
     owner: crate::scene::NodeId,
     paragraph: crate::scene::NodeId,
     content: crate::reactive::Signal<Content>,
+    hovered: crate::reactive::Signal<Option<usize>>,
 ) {
     use crate::{
         input::{EventPhase, InputEvent},
@@ -171,10 +247,13 @@ pub(crate) fn mount_links(
         action: Rc<RefCell<InlineAction>>,
         focus: Rc<Cell<bool>>,
         hover: Rc<Cell<bool>>,
+        /// Restyled under the pointer: no ring for hover.
+        styled: Rc<Cell<bool>>,
     }
     let bounds = ui.observe_bounds(paragraph);
     let owner_bounds = ui.observe_bounds(owner);
     let engine = ui.observe_text_geometry_revision();
+    let theme = ui.theme_scope();
     let weak = ui.downgrade();
     let mut mounted: Vec<Mounted> = Vec::new();
     let mut geometry_key = None;
@@ -245,13 +324,17 @@ pub(crate) fn mount_links(
                 let action = Rc::new(RefCell::new(link.action.clone()));
                 let focus = Rc::new(Cell::new(false));
                 let hover = Rc::new(Cell::new(false));
-                let (nodes, callback, focused, hovered) = (
+                let styled = Rc::new(Cell::new(link.styled_hover));
+                let (nodes, callback, focused, hovered, restyled, under) = (
                     fragments.clone(),
                     action.clone(),
                     focus.clone(),
                     hover.clone(),
+                    styled.clone(),
+                    hovered.clone(),
                 );
                 let weak = ui.downgrade();
+                let ring = theme.clone();
                 ui.on_event(node, true, move |cx| {
                     if cx.phase == EventPhase::Capture
                         || (cx.default_prevented()
@@ -273,14 +356,22 @@ pub(crate) fn mount_links(
                         }
                         InputEvent::Focus => focused.set(true),
                         InputEvent::Blur => focused.set(false),
-                        InputEvent::PointerEnter => hovered.set(true),
-                        InputEvent::PointerLeave | InputEvent::PointerCancel => hovered.set(false),
+                        InputEvent::PointerEnter => {
+                            hovered.set(true);
+                            under.set(Some(index));
+                        }
+                        InputEvent::PointerLeave | InputEvent::PointerCancel => {
+                            hovered.set(false);
+                            if under.with_untracked(|h| *h == Some(index)) {
+                                under.set(None);
+                            }
+                        }
                         _ => return,
                     }
                     let Some(ui) = weak.upgrade() else {
                         return;
                     };
-                    let border = if focused.get() || hovered.get() {
+                    let border = if focused.get() || (hovered.get() && !restyled.get()) {
                         1.
                     } else {
                         0.
@@ -291,7 +382,7 @@ pub(crate) fn mount_links(
                     }
                     let quad = QuadStyle {
                         border_width: border,
-                        border_color: ui.theme.accent,
+                        border_color: ring.color_untracked(crate::theme::tok::FOCUS_RING),
                         ..Default::default()
                     };
                     scene.set_kind(
@@ -313,9 +404,11 @@ pub(crate) fn mount_links(
                     action,
                     focus,
                     hover,
+                    styled,
                 });
             }
             let entry = &mut mounted[index];
+            entry.styled.set(link.styled_hover);
             let old = entry.action.replace(link.action.clone());
             drop(old);
             if !ui.scene.borrow().contains(owner) {
@@ -330,10 +423,8 @@ pub(crate) fn mount_links(
             let mut style = ui.scene.borrow().style(entry.node);
             style.width = Some(first.width);
             style.height = Some(first.height);
-            let owner_style = ui.scene.borrow().style(owner);
-            let padding = owner_style
-                .padding_edges
-                .unwrap_or(crate::scene::Insets::all(owner_style.padding));
+            // Placed from the owner's content box: inside its padding and border.
+            let padding = ui.scene.borrow().content_insets(owner);
             style.margin.left = bounds.x - owner_bounds.x + first.x - padding.left;
             style.margin.top = bounds.y - owner_bounds.y + first.y - padding.top;
             ui.scene.borrow_mut().set_style(entry.node, style);
@@ -346,12 +437,12 @@ pub(crate) fn mount_links(
                 ui.remove(nodes.pop().unwrap());
             }
             let quad = QuadStyle {
-                border_width: if entry.focus.get() || entry.hover.get() {
+                border_width: if entry.focus.get() || (entry.hover.get() && !entry.styled.get()) {
                     1.
                 } else {
                     0.
                 },
-                border_color: ui.theme.accent,
+                border_color: theme.color(crate::theme::tok::FOCUS_RING),
                 ..Default::default()
             };
             for (i, rect) in rects.iter().skip(1).enumerate() {
@@ -375,6 +466,87 @@ pub(crate) fn mount_links(
                     nodes.push(child);
                 } else {
                     ui.scene.borrow_mut().set_style(nodes[i], style);
+                }
+            }
+        }
+    });
+}
+
+/// Draws each inline icon over the room its placeholder keeps, following
+/// the paragraph's layout.
+pub(crate) fn mount_icons(
+    ui: &mut crate::widgets::Ui,
+    owner: crate::scene::NodeId,
+    paragraph: crate::scene::NodeId,
+    content: crate::reactive::Signal<Content>,
+) {
+    use crate::scene::{NodeId, NodeKind, Style};
+    let bounds = ui.observe_bounds(paragraph);
+    let owner_bounds = ui.observe_bounds(owner);
+    let engine = ui.observe_text_geometry_revision();
+    let weak = ui.downgrade();
+    let mut mounted: Vec<NodeId> = Vec::new();
+    // The icons' rects, kept while the text and its width are the same:
+    // scrolling moves the paragraph every frame without reshaping it.
+    let mut geometry_key = None;
+    let mut rects: Vec<Option<crate::scene::Rect>> = Vec::new();
+    ui.bind(owner, move || {
+        let data = content.get();
+        let bounds = bounds.get();
+        let owner_bounds = owner_bounds.get();
+        let engine = engine.get();
+        let Some(mut ui) = weak.upgrade() else {
+            return;
+        };
+        if !ui.scene.borrow().contains(owner) {
+            return;
+        }
+        while mounted.len() > data.icons.len() {
+            ui.remove(mounted.pop().unwrap());
+        }
+        if data.icons.is_empty() {
+            return;
+        }
+        let key = (data.rich.clone(), bounds.width.to_bits(), engine);
+        if geometry_key.as_ref() != Some(&key) {
+            let scene = ui.scene.borrow();
+            let layout = scene.shape_rich_text(&data.rich, Some(bounds.width));
+            rects = data
+                .icons
+                .iter()
+                .map(|icon| layout.selection(icon.range.clone()).into_iter().next())
+                .collect();
+            drop(scene);
+            geometry_key = Some(key);
+        }
+        let padding = ui.scene.borrow().content_insets(owner);
+        for (index, (icon, rect)) in data.icons.iter().zip(rects.iter()).enumerate() {
+            let rect = rect.unwrap_or_default();
+            // At the room's start, centred on the line; placed from the
+            // owner's content box.
+            let style = Style {
+                absolute: true,
+                width: Some(icon.size),
+                height: Some(icon.size),
+                margin: crate::scene::Insets {
+                    left: bounds.x - owner_bounds.x + rect.x + icon.inset - padding.left,
+                    top: bounds.y - owner_bounds.y + rect.y + (rect.height - icon.size) / 2.
+                        - padding.top,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut scene = ui.scene.borrow_mut();
+            if index == mounted.len() {
+                mounted.push(scene.append(owner, NodeKind::Svg(icon.svg.clone()), style));
+            } else {
+                // Unchanged (the paragraph only moved): nothing to lay out.
+                let node = mounted[index];
+                if !matches!(scene.kind(node), NodeKind::Svg(svg) if Arc::ptr_eq(svg, &icon.svg)) {
+                    scene.set_kind(node, NodeKind::Svg(icon.svg.clone()));
+                }
+                if scene.style(node) != style {
+                    scene.set_style(node, style);
                 }
             }
         }

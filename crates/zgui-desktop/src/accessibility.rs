@@ -202,6 +202,9 @@ impl AccessibilityTree {
             if let Some(v) = text_value {
                 n.set_value(v);
             }
+            if let Some(placeholder) = &semantic.placeholder {
+                n.set_placeholder(placeholder.clone());
+            }
             if let Some(v) = semantic.checked {
                 n.set_toggled(if v {
                     accesskit::Toggled::True
@@ -491,13 +494,11 @@ pub(crate) fn scroll_action(ui: &zgui::widgets::Ui, node: NodeId, action: Action
     {
         return false;
     }
-    let (bounds, style) = {
+    // A page is the content box: inside the padding and border.
+    let (bounds, padding) = {
         let scene = ui.scene.borrow();
-        (scene.bounds(node), scene.style(node))
+        (scene.bounds(node), scene.content_insets(node))
     };
-    let padding = style
-        .padding_edges
-        .unwrap_or(zgui::scene::Insets::all(style.padding));
     let (delta_x, delta_y) = match axis {
         ScrollAxis::Horizontal => (
             direction * (bounds.width - padding.left - padding.right).max(0.),

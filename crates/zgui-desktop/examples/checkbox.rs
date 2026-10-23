@@ -22,7 +22,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .rounded(6.)
                 .bg(rgb(0x253448))
                 .hover(|s| s.bg(rgb(0x354760)))
-                .focus(|s| s.bg(rgb(0x314d70)).border(2.).border_color(rgb(0x88bbff)))
+                .focus(|s| {
+                    s.bg(rgb(0x314d70))
+                        .border(2.)
+                        .border_over(true)
+                        .border_color(rgb(0x88bbff))
+                })
                 .disabled_style(|s| s.bg(rgb(0x30343b)).text_color(rgb(0x8893a2)))
                 .disabled_when({
                     let disabled = disabled.clone();

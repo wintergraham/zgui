@@ -2,12 +2,8 @@
 //! popovers), built from Luau. Interactive, with sample data.
 //! Run: cargo run --release -p zgui-script --example frame_profiler
 //! Edit `examples/frame_profiler/*.luau` and save to reload it.
-#[cfg(target_os = "macos")]
-#[path = "../../zgui-desktop/examples/support/glass.rs"]
-mod glass;
-
 use std::{path::Path, sync::Arc, time::Duration};
-use zgui_desktop::{Application, FontData, WindowOptions};
+use zgui_desktop::{Application, FontData, Titlebar, WindowOptions};
 use zgui_script::ScriptHost;
 
 const TITLE: &str = "zgui · Frame profiler";
@@ -28,21 +24,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         width: WIDTH,
         height: HEIGHT,
         transparent: true,
+        titlebar: Titlebar::Inset,
         decorations: cfg!(target_os = "macos"),
         min_size: Some((980., 560.)),
         ..Default::default()
     })
     .run(move |cx| {
-        #[cfg(target_os = "macos")]
-        {
-            let window = cx.window.clone();
-            cx.tasks.spawn(async move {
-                zgui::timer::sleep(Duration::from_millis(1)).await;
-                if glass::inset_titlebar(TITLE) {
-                    window.set_inner_size(WIDTH, HEIGHT);
-                }
-            });
-        }
         let host = ScriptHost::new(&cx.ui.runtime, script);
         let window = cx.window.clone();
         host.action("drag_window", move |_| window.drag_window());

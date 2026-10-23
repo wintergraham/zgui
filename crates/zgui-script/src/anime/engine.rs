@@ -672,6 +672,28 @@ impl Clip {
     }
     /// Stops without completing; values stay where they are.
     /// Whether the clip animates only elements, all removed since mounting.
+    /// An endless loop whose elements all sit where nothing shows: in a
+    /// closed dialog, under a faded-out ancestor, clipped away. Their own
+    /// opacity doesn't count (a blink fades its element out and back).
+    /// Advancing it would draw nothing, so it waits; a finite animation
+    /// always runs on, to finish and call back.
+    fn unseen_loop(&self) -> bool {
+        if !self.timing.borrow().loops.is_infinite() {
+            return false;
+        }
+        let tracks = self.tracks.borrow();
+        !tracks.is_empty()
+            && tracks.iter().all(|t| match &t.target {
+                Target::Element(e) => e
+                    .read(|scene, id| {
+                        scene
+                            .parent(id)
+                            .is_some_and(|parent| scene.visible_bounds(parent).is_none())
+                    })
+                    .unwrap_or(false),
+                _ => false,
+            })
+    }
     fn targets_gone(&self) -> bool {
         let tracks = self.tracks.borrow();
         !tracks.is_empty()
@@ -787,12 +809,19 @@ impl Notify {
     }
 }
 
+/// How often an engine whose loops all sit unseen looks again (Hz).
+const UNSEEN_RATE: f64 = 4.;
+
 pub(crate) struct Engine {
     pub runtime: Runtime,
     pub elements: Rc<crate::element::Elements>,
     clips: RefCell<Vec<Rc<Clip>>>,
     /// Reused each tick so playing does not allocate per frame.
     scratch: RefCell<Vec<Rc<Clip>>>,
+    /// Every playing clip last frame was an endless loop no one could see
+    /// (in a closed dialog, a faded-out or clipped-away subtree): the engine
+    /// then only looks again a few times a second (`UNSEEN_RATE`).
+    unseen: Cell<bool>,
     wake: Notify,
     dirty: RefCell<Vec<Rc<Element>>>,
     queue: RefCell<Vec<(Rc<Clip>, Event)>>,
@@ -830,6 +859,7 @@ impl Engine {
             elements,
             clips: RefCell::default(),
             scratch: RefCell::default(),
+            unseen: Cell::new(false),
             wake: Notify::default(),
             dirty: RefCell::default(),
             queue: RefCell::default(),
@@ -883,6 +913,9 @@ impl Engine {
     fn needed_rate(&self) -> Option<f64> {
         if !self.tickers.borrow().is_empty() {
             return None;
+        }
+        if self.unseen.get() {
+            return Some(UNSEEN_RATE);
         }
         let mut rate: Option<f64> = None;
         for clip in self.clips.borrow().iter().filter(|c| c.is_playing()) {
@@ -1041,7 +1074,10 @@ impl Engine {
         if self.elements.mounted_since_watch() {
             self.attach_pending();
         }
+        // Loops no one can see wait (their time stands still) until they show.
+        playing.retain(|clip| !clip.unseen_loop());
         let tickers = self.tickers.borrow().clone();
+        self.unseen.set(playing.is_empty() && tickers.is_empty());
         self.runtime.clone().batch(|| {
             for clip in &playing {
                 clip.advance(dt, self);

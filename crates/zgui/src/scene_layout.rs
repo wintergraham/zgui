@@ -103,14 +103,18 @@ fn style(style: &Style, layout: Layout, leaf: bool) -> t::Style {
         } else {
             t::Position::Relative
         },
+        // An intrinsic size is the child's measured content size to taffy,
+        // which a stretching parent then overrides.
         size: t::Size {
             width: style
                 .width
+                .filter(|_| !(leaf && style.intrinsic_width))
                 .map(Length::Px)
                 .or_else(|| style.width_percent.map(Length::Percent))
                 .map_or(t::Dimension::auto(), dim),
             height: style
                 .height
+                .filter(|_| !(leaf && style.intrinsic_height))
                 .map(Length::Px)
                 .or_else(|| style.height_percent.map(Length::Percent))
                 .map_or(t::Dimension::auto(), dim),
@@ -190,7 +194,8 @@ fn style(style: &Style, layout: Layout, leaf: bool) -> t::Style {
         align_self: options.align_self.map(align),
         align_content: options.align_content.map(content),
         justify_content: Some(match style.justify {
-            Justify::Start => t::JustifyContent::Start,
+            // As CSS's `justify-content: stretch` acts in flexbox.
+            Justify::Start | Justify::Stretch => t::JustifyContent::Start,
             Justify::End => t::JustifyContent::End,
             Justify::Center => t::JustifyContent::Center,
             Justify::SpaceBetween => t::JustifyContent::SpaceBetween,
@@ -215,13 +220,48 @@ fn style(style: &Style, layout: Layout, leaf: bool) -> t::Style {
         ),
         ..Default::default()
     };
-    // A leaf's natural padding is included by the retained child measurement.
-    // Overlay containers retain their old overlap behavior when an opted-in
-    // child introduces richer lengths; explicit Grid overrides this policy.
+    // A leaf's natural padding and border are included by the retained child
+    // measurement. An overlay stacks its children as CSS grid stacks items
+    // in one area: a single track each way, its children aligned there on
+    // their own, `align` across (`justify-items`) and `justify` down
+    // (`align-items`). Explicit Grid overrides this policy.
     if !leaf && layout == Layout::Overlay && options.display != Some(ViewDisplay::Grid) {
-        output.align_items = Some(align(style.align));
+        output.display = t::Display::Grid;
+        output.grid_template_columns = taffy::style_helpers::evenly_sized_tracks(1);
+        output.grid_template_rows = taffy::style_helpers::evenly_sized_tracks(1);
+        output.justify_items = Some(match style.align {
+            Align::Baseline => t::AlignItems::Start,
+            other => align(other),
+        });
+        output.align_items = Some(overlay_down(style.justify));
+        output.justify_content = None;
     }
     output
+}
+/// An overlay's vertical alignment of each child (see `Justify`).
+fn overlay_down(value: Justify) -> t::AlignItems {
+    match value {
+        Justify::Start | Justify::SpaceBetween => t::AlignItems::Start,
+        Justify::Center | Justify::SpaceAround | Justify::SpaceEvenly => t::AlignItems::Center,
+        Justify::End => t::AlignItems::End,
+        Justify::Stretch => t::AlignItems::Stretch,
+    }
+}
+/// A child's style in its overlay parent: in the one grid area, its own
+/// `align_self` across.
+fn stacked(mut mapped: t::Style) -> t::Style {
+    if mapped.position != t::Position::Absolute {
+        mapped.grid_row = t::Line {
+            start: line(1),
+            end: span(1),
+        };
+        mapped.grid_column = t::Line {
+            start: line(1),
+            end: span(1),
+        };
+    }
+    mapped.justify_self = mapped.align_self.take();
+    mapped
 }
 fn available(value: Option<f32>) -> t::AvailableSpace {
     value.map_or(t::AvailableSpace::MaxContent, |v| {
@@ -301,8 +341,8 @@ impl Scene {
             });
         }
         end + match down {
-            true => root.padding.bottom,
-            false => root.padding.right,
+            true => root.padding.bottom + root.border.bottom,
+            false => root.padding.right + root.border.right,
         }
     }
     /// Children resolve percentages against `bases` now: drop taffy's cached
@@ -475,7 +515,11 @@ impl Scene {
             .advanced_layout
             .take()
             .unwrap_or_else(|| Box::new(AdvancedLayoutCache::new()));
-        let ids = self.node(id).children.clone();
+        let mut ids = self.node(id).children.clone();
+        // Those whose containing block is further up are placed by it.
+        if self.relative_count > 0 {
+            ids.retain(|child| !self.escapes(*child));
+        }
         let live: std::collections::HashSet<_> = ids.iter().copied().collect();
         let removed: Vec<_> = cache
             .nodes
@@ -492,7 +536,7 @@ impl Scene {
             .map(|child| {
                 let mut mapped = style(&self.node(*child).style, Layout::Column, true);
                 if layout == Layout::Overlay && root_options.display != Some(ViewDisplay::Grid) {
-                    mapped.position = t::Position::Absolute;
+                    mapped = stacked(mapped);
                 }
                 if let Some(key) = cache.nodes.get(child).copied() {
                     if cache.tree.style(key).expect("retained style") != &mapped {
@@ -538,6 +582,15 @@ impl Scene {
         mapped.position = t::Position::Relative;
         mapped.margin = taffy::style_helpers::zero();
         mapped.inset = t::Rect::auto();
+        // Inside its size, around its padding (border-box); its absolute
+        // children's insets count from inside it.
+        let border = self.layout_border(id);
+        mapped.border = t::Rect {
+            left: t::LengthPercentage::length(border.left),
+            right: t::LengthPercentage::length(border.right),
+            top: t::LengthPercentage::length(border.top),
+            bottom: t::LengthPercentage::length(border.bottom),
+        };
         mapped.size.width = constraints
             .force_width
             .or(root_style.width)
@@ -548,27 +601,38 @@ impl Scene {
             .or(root_style.height)
             .or_else(|| percentage(root_style.height_percent, constraints.percent_height))
             .map_or(t::Dimension::auto(), |v| dim(Length::Px(v)));
-        // Overlay is a zgui stacking container: in-flow children contribute to
-        // intrinsic size even though Taffy positions its stacked leaves absolutely.
+        // An overlay sized by its content is as large as its largest in-flow
+        // child, measured within its content box (as the ordinary path
+        // does); its one grid area is then definite, and its children align
+        // and stretch in it.
         if layout == Layout::Overlay
             && root_options.display != Some(ViewDisplay::Grid)
             && (mapped.size.width.is_auto() || mapped.size.height.is_auto())
         {
             let padding = self.resolved_padding(id, constraints);
+            let inset_w = padding.left + padding.right + border.left + border.right;
+            let inset_h = padding.top + padding.bottom + border.top + border.bottom;
+            let (known_w, known_h) = (
+                mapped.size.width.into_option(),
+                mapped.size.height.into_option(),
+            );
+            let room = |known: Option<f32>, available: Option<f32>, inset: f32| {
+                known.or(available).map(|v| (v - inset).max(0.))
+            };
+            let natural_constraints = Constraints {
+                width: room(known_w, constraints.width, inset_w),
+                height: room(known_h, constraints.height, inset_h),
+                percent_width: known_w.map(|v| (v - inset_w).max(0.)),
+                percent_height: known_h.map(|v| (v - inset_h).max(0.)),
+                ..Default::default()
+            };
             let mut natural = (0_f32, 0_f32);
             for child in &ids {
                 let child_style = self.node(*child).style.clone();
                 if child_style.absolute {
                     continue;
                 }
-                let size = self.measure(
-                    *child,
-                    Constraints {
-                        width: constraints.width,
-                        height: constraints.height,
-                        ..Default::default()
-                    },
-                );
+                let size = self.measure(*child, natural_constraints);
                 natural.0 = natural
                     .0
                     .max(size.0 + child_style.margin.left + child_style.margin.right);
@@ -577,10 +641,10 @@ impl Scene {
                     .max(size.1 + child_style.margin.top + child_style.margin.bottom);
             }
             if mapped.size.width.is_auto() {
-                mapped.size.width = dim(Length::Px(natural.0 + padding.left + padding.right));
+                mapped.size.width = dim(Length::Px(natural.0 + inset_w));
             }
             if mapped.size.height.is_auto() {
-                mapped.size.height = dim(Length::Px(natural.1 + padding.top + padding.bottom));
+                mapped.size.height = dim(Length::Px(natural.1 + inset_h));
             }
         }
         let auto_width = mapped.size.width.is_auto();
@@ -590,7 +654,16 @@ impl Scene {
                 .set_style(root, mapped)
                 .expect("retained root style update");
         }
-        let padding = self.resolved_padding(id, constraints);
+        // Percentages count from the content box: inside padding and border.
+        let padding = {
+            let p = self.resolved_padding(id, constraints);
+            Insets {
+                top: p.top.max(0.) + border.top,
+                right: p.right.max(0.) + border.right,
+                bottom: p.bottom.max(0.) + border.bottom,
+                left: p.left.max(0.) + border.left,
+            }
+        };
         let mut child_percent_width = constraints
             .force_width
             .or(root_style.width)
@@ -688,11 +761,18 @@ impl Scene {
             }
         }
         let root_layout = *cache.tree.layout(root).expect("computed root");
-        let inner_width =
-            (root_layout.size.width - root_layout.padding.left - root_layout.padding.right).max(0.);
-        let inner_height =
-            (root_layout.size.height - root_layout.padding.top - root_layout.padding.bottom)
-                .max(0.);
+        let inner_width = (root_layout.size.width
+            - root_layout.padding.left
+            - root_layout.padding.right
+            - root_layout.border.left
+            - root_layout.border.right)
+            .max(0.);
+        let inner_height = (root_layout.size.height
+            - root_layout.padding.top
+            - root_layout.padding.bottom
+            - root_layout.border.top
+            - root_layout.border.bottom)
+            .max(0.);
         let mut asked = Vec::with_capacity(ids.len());
         let positions = ids
             .into_iter()

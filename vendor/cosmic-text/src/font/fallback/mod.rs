@@ -194,6 +194,8 @@ pub struct FontFallbackIter<'a> {
     other_i: usize,
     end: bool,
     ideal_weight: fontdb::Weight,
+    /// zgui: the optical size fonts are instanced at (0: their default).
+    optical: u16,
 }
 
 impl<'a> FontFallbackIter<'a> {
@@ -204,6 +206,7 @@ impl<'a> FontFallbackIter<'a> {
         scripts: &'a [Script],
         word: &'a str,
         ideal_weight: fontdb::Weight,
+        optical: u16,
     ) -> Self {
         font_system
             .fallbacks
@@ -221,6 +224,7 @@ impl<'a> FontFallbackIter<'a> {
             other_i: 0,
             end: false,
             ideal_weight,
+            optical,
         }
     }
 
@@ -290,7 +294,7 @@ impl<'a> FontFallbackIter<'a> {
         if let Some(fallback_info) = self.font_system.monospace_fallbacks_buffer.pop_first() {
             if let Some(font) = self
                 .font_system
-                .get_font(fallback_info.id, self.ideal_weight)
+                .get_font_at(fallback_info.id, self.ideal_weight, self.optical)
             {
                 return Some(font);
             }
@@ -340,7 +344,7 @@ impl<'a> FontFallbackIter<'a> {
                     break 'DEF_FAM;
                 }
                 (false, Some(m_key)) => {
-                    if let Some(font) = self.font_system.get_font(m_key.id, self.ideal_weight) {
+                    if let Some(font) = self.font_system.get_font_at(m_key.id, self.ideal_weight, self.optical) {
                         return Some(font);
                     }
                     break 'DEF_FAM;
@@ -355,7 +359,7 @@ impl<'a> FontFallbackIter<'a> {
                         // Otherewise, add to fallbacks set
                         if fallback_info.codepoint_non_matches == Some(0) {
                             if let Some(font) =
-                                self.font_system.get_font(m_key.id, self.ideal_weight)
+                                self.font_system.get_font_at(m_key.id, self.ideal_weight, self.optical)
                             {
                                 return Some(font);
                             }
@@ -416,7 +420,7 @@ impl<'a> FontFallbackIter<'a> {
             if let Some(fallback_info) = self.font_system.monospace_fallbacks_buffer.pop_first() {
                 if let Some(font) = self
                     .font_system
-                    .get_font(fallback_info.id, self.ideal_weight)
+                    .get_font_at(fallback_info.id, self.ideal_weight, self.optical)
                 {
                     return Some(font);
                 }
@@ -433,7 +437,7 @@ impl<'a> FontFallbackIter<'a> {
                 self.script_i.1 += 1;
                 for m_key in font_match_keys_iter(false) {
                     if self.face_contains_family(m_key.id, script_family) {
-                        if let Some(font) = self.font_system.get_font(m_key.id, self.ideal_weight) {
+                        if let Some(font) = self.font_system.get_font_at(m_key.id, self.ideal_weight, self.optical) {
                             return Some(font);
                         }
                     }
@@ -456,7 +460,7 @@ impl<'a> FontFallbackIter<'a> {
             self.common_i += 1;
             for m_key in font_match_keys_iter(false) {
                 if self.face_contains_family(m_key.id, common_family) {
-                    if let Some(font) = self.font_system.get_font(m_key.id, self.ideal_weight) {
+                    if let Some(font) = self.font_system.get_font_at(m_key.id, self.ideal_weight, self.optical) {
                         return Some(font);
                     }
                 }
@@ -474,7 +478,7 @@ impl<'a> FontFallbackIter<'a> {
                 .iter()
                 .all(|family_name| !self.face_contains_family(id, family_name))
             {
-                if let Some(font) = self.font_system.get_font(id, self.ideal_weight) {
+                if let Some(font) = self.font_system.get_font_at(id, self.ideal_weight, self.optical) {
                     return Some(font);
                 }
             }

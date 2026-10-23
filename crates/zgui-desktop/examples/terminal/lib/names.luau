@@ -4,7 +4,8 @@
 -- program running it is the title the program set, else the program's name;
 -- a title that starts with a symbol (Claude Code's "✳ Fix the build") shows
 -- that symbol as its icon. The program picks the icon otherwise.
-local theme = require("./theme")
+local theme = require("../theme")
+local icons = require("../icons")
 
 local SHELLS = {
 	zsh = true,
@@ -21,8 +22,9 @@ local SHELLS = {
 }
 
 -- Programs by kind: the icon each shows, and a tint for agents.
-local KINDS = {}
-local function kind(names: { string }, icon: string, tint: string?)
+export type Kind = { icon: icons.Name, tint: string? }
+local KINDS: { [string]: Kind } = {}
+local function kind(names: { string }, icon: icons.Name, tint: string?)
 	for _, name in names do
 		KINDS[name] = { icon = icon, tint = tint }
 	end
@@ -35,14 +37,32 @@ kind({ "ssh", "mosh", "et", "telnet" }, "globe")
 kind({ "htop", "btop", "top", "btm", "bottom", "glances", "atop" }, "gauge")
 kind({ "git", "lazygit", "tig", "gitui", "gh" }, "branch")
 kind({ "docker", "podman", "kubectl", "k9s", "lazydocker" }, "box")
-kind({ "cargo", "rustc", "go", "make", "cmake", "just", "ninja", "zig", "gradle", "mvn", "xcodebuild", "swift" }, "code")
+kind(
+	{ "cargo", "rustc", "go", "make", "cmake", "just", "ninja", "zig", "gradle", "mvn", "xcodebuild", "swift" },
+	"code"
+)
 kind({ "less", "more", "man", "bat", "most", "glow" }, "doc")
 kind({ "psql", "mysql", "sqlite3", "redis-cli", "mongosh", "duckdb" }, "database")
 
--- The symbols Claude Code's title starts with, idle (✳) and working.
+-- What agents call themselves, where it is not their command.
+local LABELS: { [string]: string } = {
+	claude = "Claude Code",
+	codex = "Codex",
+	opencode = "OpenCode",
+	["cursor-agent"] = "Cursor Agent",
+}
+
+-- The symbols Claude Code's title starts with, idle (✳) and working: it
+-- alternates ◐ and ◑ (2.1.3xx; earlier versions turned ✶ ✻ ✽ ✢ ·).
 local CLAUDE_SPINNER = {}
-for _, glyph in { "✳", "✶", "✻", "✽", "✢", "·" } do
+for _, glyph in { "✳", "◐", "◑", "✶", "✻", "✽", "✢", "·" } do
 	CLAUDE_SPINNER[glyph] = true
+end
+-- The braille spinner Codex (and others) turn before their title while
+-- they work.
+local SPINNER = {}
+for _, glyph in { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" } do
+	SPINNER[glyph] = true
 end
 
 local function trim(s: string): string
@@ -53,7 +73,8 @@ end
 local function path_of(pwd: string): string
 	local path = pwd:gsub("^file://[^/]*", "")
 	path = path:gsub("%%(%x%x)", function(hex)
-		return string.char(tonumber(hex, 16) :: number)
+		-- Two hex digits always convert.
+		return string.char(tonumber(hex, 16) or 0)
 	end)
 	return path
 end
@@ -78,22 +99,42 @@ end
 
 local M = {}
 
+-- Coding agents, by the icon their kind shows (Claude Code, Codex, the
+-- rest): what the sidebar lists.
+local AGENT_ICONS: { [string]: boolean } = { claude = true, openai = true, agent = true }
+
+-- `process`'s kind if it is a coding agent.
+function M.agent(process: string): Kind?
+	local known = KINDS[process]
+	return if known and AGENT_ICONS[known.icon] then known else nil
+end
+
+-- `process`'s name for people ("claude" is "Claude Code").
+function M.label(process: string): string
+	return LABELS[process] or (process:sub(1, 1):upper() .. process:sub(2))
+end
+
 function M.is_shell(process: string): boolean
 	return process == "" or SHELLS[process] == true
 end
 
 export type Description = {
 	name: string,
-	icon: string,
+	icon: icons.Name,
 	tint: string?,
 	glyph: string?,
 	busy: boolean,
 }
 
-function M.describe(term: any, home: string): Description
-	local process: string = term.process
-	local title = trim(term.title)
-	local pwd = path_of(term.pwd)
+function M.describe(term: Term, home: string): Description
+	return M.describe_parts(term.process, term.title, term.pwd, home)
+end
+
+-- `describe` from what runs, its title and its directory (a session the
+-- session server reports, shown in no window).
+function M.describe_parts(process: string, title: string, pwd: string, home: string): Description
+	title = trim(title)
+	pwd = path_of(pwd)
 	if M.is_shell(process) then
 		local dir = if pwd ~= "" then pwd else directory_in(title)
 		return {
@@ -102,14 +143,19 @@ function M.describe(term: any, home: string): Description
 			busy = false,
 		}
 	end
-	local known = KINDS[process] or { icon = "run" }
+	local known: Kind = KINDS[process] or { icon = "run" }
 	-- A leading symbol (anything not ASCII) is the program's own icon,
 	-- except Claude Code's spinner: Claude shows its mark.
 	local glyph, rest = title:match("^([\128-\255]+)%s+(.+)$")
-	if glyph and (known.icon == "claude" or CLAUDE_SPINNER[glyph]) then
+	-- (The captures match together.)
+	if glyph and rest and (known.icon == "claude" or CLAUDE_SPINNER[glyph]) then
 		return { name = trim(rest), icon = "claude", tint = theme.claude, busy = true }
 	end
-	if glyph then
+	-- A spinner frame says it works, not what it is: the program's icon.
+	if glyph and rest and SPINNER[glyph] then
+		return { name = trim(rest), icon = known.icon, tint = known.tint, busy = true }
+	end
+	if glyph and rest then
 		return { name = trim(rest), icon = known.icon, tint = known.tint, glyph = glyph, busy = true }
 	end
 	local name = process
@@ -117,6 +163,19 @@ function M.describe(term: any, home: string): Description
 		name = title
 	end
 	return { name = name, icon = known.icon, tint = known.tint, busy = true }
+end
+
+-- A browser pane: the page's title, else its host; "New Tab" before it
+-- has a page.
+function M.describe_page(web: Web): Description
+	local url = web.url
+	if url == "" or url == "about:blank" then
+		return { name = "New Tab", icon = "browser", busy = false }
+	end
+	local title = trim(web.title)
+	local host = url:match("^%a[%w+.-]*://([^/?#]+)") or url
+	host = host:gsub("^www%.", "")
+	return { name = if title ~= "" then title else host, icon = "browser", busy = false }
 end
 
 M.path_of = path_of

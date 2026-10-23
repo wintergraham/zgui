@@ -168,7 +168,7 @@ fn tweens_run_in_rust_and_stop_requesting_frames_at_rest() {
         r#"local open = ui.state("open", false)
         return ui.column {
             ui.button { id = "toggle", w = 80, h = 30, on_click = ui.toggle(open) },
-            ui.div { id = "panel", w = 50, h = 50, opacity = ui.tween(open, { duration = 0.1, from = 0.2, to = 1 }) },
+            ui.div { id = "panel", w = 50, h = 50, opacity = ui.tween(open, { duration = 100, from = 0.2, to = 1 }) },
         }"#,
     );
     assert!((h.opacity("panel") - 0.2).abs() < 1e-6, "starts at rest");
@@ -224,6 +224,8 @@ fn plugins_contribute_to_slots_and_read_shared_state() {
             r#"ui.contribute("toolbar", ui.text { "Hello, {user}", id = "greeting" })"#,
         );
         host.shared("user", "Ada");
+        // Plugins reach the shared state the app exposes to them.
+        host.expose_shared("user", None);
         host
     });
     assert_eq!(h.text("greeting"), "Hello, Ada");
@@ -270,6 +272,10 @@ fn the_hot_reload_example_loads() {
     let mut h = Harness::new(|runtime| {
         let host = ScriptHost::new(runtime, dir.join("app.luau")).plugins(dir.join("plugins"));
         host.shared("window", "820×560");
+        // What hot_reload.rs exposes to its plugins.
+        host.expose_shared("window", None);
+        host.expose_shared("count", None);
+        host.expose_action("quit", None);
         host
     });
     assert_eq!(h.host.error().get(), None);
@@ -414,9 +420,14 @@ fn modules_resolve_like_luau_and_keep_their_own_state() {
         local open = ui.state("open", "card")
         return function(label) return ui.text { label .. " " .. open:get() .. " " .. theme.accent, id = "card" } end"##,
     );
+    write("ui/lib/helper.luau", r##"return "helper""##);
     write(
         "ui/lib/init.luau",
-        r##"local open = ui.state("open", "lib") return { open = open }"##,
+        r##"-- An init.luau is its directory as a module: `./` is beside the
+        -- directory, `@self` inside it.
+        assert(require("./components/theme").accent == "#8b7cf6", "./ from an init.luau")
+        assert(require("@self/helper") == "helper", "@self from an init.luau")
+        local open = ui.state("open", "lib") return { open = open }"##,
     );
     write(
         "app.luau",
@@ -443,4 +454,81 @@ fn modules_resolve_like_luau_and_keep_their_own_state() {
     let error = h.host.reload().unwrap_err();
     assert!(error.contains("directory or below"), "{error}");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn text_templates_in_a_module_name_its_own_state() {
+    let dir = std::env::temp_dir().join(format!("zgui-module-templates-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("ui")).unwrap();
+    let write = |path: &str, code: &str| std::fs::write(dir.join(path), code).unwrap();
+    // The module's `count` is its own (`ui/counter.luau::count`); its
+    // templates find it, before the script's state of the same name.
+    write(
+        "ui/counter.luau",
+        r##"local count = ui.state("count", 7)
+        local saved = ui.persist("saved", "kept")
+        return function()
+            return ui.column {
+                ui.text { "Count: {count}", id = "module" },
+                ui.text { "{saved}", id = "saved" },
+                ui.button { id = "add", on_click = ui.add(count), "+" },
+            }
+        end"##,
+    );
+    write(
+        "app.luau",
+        r##"local count = ui.state("count", 1)
+        local counter = require("./ui/counter")
+        return ui.column { counter(), ui.text { "App: {count}", id = "app" } }"##,
+    );
+    let path = dir.join("app.luau");
+    let mut h = common::Harness::new(|runtime| zgui_script::ScriptHost::new(runtime, path));
+    assert_eq!(h.host.error().get(), None);
+    assert_eq!(h.text("module"), "Count: 7");
+    assert_eq!(h.text("saved"), "kept");
+    assert_eq!(h.text("app"), "App: 1");
+    h.click("add");
+    assert_eq!(h.text("module"), "Count: 8", "the template follows it");
+    assert_eq!(h.text("app"), "App: 1");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn editing_an_image_file_reloads_it() {
+    let path = temp_script(
+        "asset_reload",
+        r#"return ui.column { ui.svg { id = "icon", src = "icon.svg", w = 20, h = 20 } }"#,
+    );
+    let icon = path.with_file_name("icon.svg");
+    let square = |fill: &str| {
+        format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="{fill}"/></svg>"#
+        )
+    };
+    rewrite(&icon, &square("red"));
+    let mut h = Harness::new(|runtime| ScriptHost::new(runtime, &path));
+    let svg = |h: &mut Harness| {
+        let node = h.find("icon").unwrap();
+        let scene = h.ui.scene.borrow();
+        let mut stack = vec![node];
+        while let Some(n) = stack.pop() {
+            if let zgui::scene::NodeKind::Svg(svg) = scene.kind(n) {
+                return svg.clone();
+            }
+            stack.extend(scene.children(n).iter().copied());
+        }
+        panic!("no svg under `icon`")
+    };
+    let red = svg(&mut h);
+    assert!(!h.host.reload_if_changed(), "nothing changed yet");
+    rewrite(&icon, &square("blue"));
+    assert!(h.host.reload_if_changed(), "the edited image is seen");
+    h.settle();
+    let blue = svg(&mut h);
+    assert!(
+        !std::sync::Arc::ptr_eq(&red, &blue),
+        "read again, not the cached copy"
+    );
+    assert!(!h.host.reload_if_changed(), "and seen once");
 }

@@ -150,7 +150,8 @@ fn removing_subtree_disposes_subscriptions_and_editors() {
     ui.label_signal(group, value.clone(), fixed(100., 30.));
     let editor = ui.text_input(group, "Text", value.clone(), 200., false);
     ui.input.focus(&ui.scene, Some(editor.node));
-    assert_eq!(ui.runtime.effect_count(), 2);
+    // The label, the editor, and the editor's themed background.
+    assert_eq!(ui.runtime.effect_count(), 3);
     ui.remove(group);
     assert_eq!(ui.runtime.effect_count(), 0);
     assert!(ui.focused_editor().is_none());
@@ -197,7 +198,7 @@ fn disabling_focused_button_clears_focus_visual() {
     let scene = ui.scene.borrow();
     let bg = scene.children(node)[0];
     assert!(
-        matches!(scene.paint_items().find(|item|item.id==bg).unwrap().kind,zgui::scene::NodeKind::Quad(style) if style.fill==ui.theme.surface)
+        matches!(scene.paint_items().find(|item|item.id==bg).unwrap().kind,zgui::scene::NodeKind::Quad(style) if style.fill==ui.theme().color(zgui::theme::tok::INPUT_BG))
     );
 }
 

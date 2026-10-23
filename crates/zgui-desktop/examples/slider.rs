@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let wide = wide.clone();
                     move || Styles::new().w(if wide.get() { 580. } else { 420. })
                 })
-                .focus(|s| s.border(2.).border_color(rgb(0x88bbff)))
+                .focus(|s| s.border(2.).border_over(true).border_color(rgb(0x88bbff)))
                 .disabled_style(|s| s.opacity(0.4))
                 .disabled_when({
                     let disabled = disabled.clone();

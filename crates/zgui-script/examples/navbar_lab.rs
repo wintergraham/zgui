@@ -1,12 +1,10 @@
 //! Ask Motion Lab's Navbar page, rendered by native zgui nodes.
 //! Run: cargo run --release -p zgui-script --example navbar_lab
-#[cfg(target_os = "macos")]
-#[path = "../../zgui-desktop/examples/support/glass.rs"]
-mod glass;
-
 use std::{path::Path, time::Duration};
 use zgui::input::{Key, Modifiers};
-use zgui_desktop::{AppMenu, AppMenuEntry, Application, MenuAccelerator, WindowOptions};
+use zgui_desktop::{
+    AppMenu, AppMenuEntry, Application, Glass, MenuAccelerator, Titlebar, WindowOptions,
+};
 use zgui_gpu::text::FontData;
 use zgui_script::{Command, ScriptHost};
 
@@ -27,16 +25,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             width: 1180.,
             height: 1000.,
             transparent: true,
+            // Content under inset traffic lights, on frosted glass.
+            titlebar: Titlebar::Inset,
+            glass: Some(Glass::default()),
             decorations: cfg!(target_os = "macos"),
             min_size: Some((720., 600.)),
             ..Default::default()
         })
         .run(move |cx| {
-            #[cfg(target_os = "macos")]
-            cx.tasks.spawn(async {
-                zgui::timer::sleep(Duration::from_millis(1)).await;
-                glass::inset_titlebar(TITLE);
-            });
             let host = ScriptHost::new(&cx.ui.runtime, script);
             let window = cx.window.clone();
             host.action("drag_window", move |_| window.drag_window());

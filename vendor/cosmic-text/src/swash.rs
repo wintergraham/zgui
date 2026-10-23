@@ -36,9 +36,23 @@ fn swash_image(
         .size(f32::from_bits(cache_key.font_size_bits))
         .hint(!cache_key.flags.contains(CacheKeyFlags::DISABLE_HINTING));
     if let Some(variation) = variable_width {
-        scaler = scaler.normalized_coords(font.as_swash().variations().normalized_coords([(
+        let wght = (
             swash::Tag::from_be_bytes(*b"wght"),
             f32::from(cache_key.font_weight.0).clamp(variation.min_value(), variation.max_value()),
+        );
+        // zgui: and the optical size it was shaped at.
+        let opsz = (cache_key.font_optical > 0).then(|| {
+            (swash::Tag::from_be_bytes(*b"opsz"), f32::from(cache_key.font_optical))
+        });
+        scaler = scaler.normalized_coords(
+            font.as_swash()
+                .variations()
+                .normalized_coords(std::iter::once(wght).chain(opsz)),
+        );
+    } else if cache_key.font_optical > 0 {
+        scaler = scaler.normalized_coords(font.as_swash().variations().normalized_coords([(
+            swash::Tag::from_be_bytes(*b"opsz"),
+            f32::from(cache_key.font_optical),
         )]));
     }
     let mut scaler = scaler.build();
@@ -102,9 +116,23 @@ fn swash_outline_commands(
         .size(f32::from_bits(cache_key.font_size_bits))
         .hint(!cache_key.flags.contains(CacheKeyFlags::DISABLE_HINTING));
     if let Some(variation) = variable_width {
-        scaler = scaler.normalized_coords(font.as_swash().variations().normalized_coords([(
+        let wght = (
             swash::Tag::from_be_bytes(*b"wght"),
             f32::from(cache_key.font_weight.0).clamp(variation.min_value(), variation.max_value()),
+        );
+        // zgui: and the optical size it was shaped at.
+        let opsz = (cache_key.font_optical > 0).then(|| {
+            (swash::Tag::from_be_bytes(*b"opsz"), f32::from(cache_key.font_optical))
+        });
+        scaler = scaler.normalized_coords(
+            font.as_swash()
+                .variations()
+                .normalized_coords(std::iter::once(wght).chain(opsz)),
+        );
+    } else if cache_key.font_optical > 0 {
+        scaler = scaler.normalized_coords(font.as_swash().variations().normalized_coords([(
+            swash::Tag::from_be_bytes(*b"opsz"),
+            f32::from(cache_key.font_optical),
         )]));
     }
     let mut scaler = scaler.build();

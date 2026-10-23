@@ -848,7 +848,7 @@ local function run_block(block, prev, next)
 					return tostring(#items:get())
 				end, 10, C.muted),
 				icon("chevron", 11.33, C.muted, {
-					rotate = ui.tween(angle, { duration = 0.2, ease = "out(3)" }),
+					rotate = ui.tween(angle, { duration = 200, ease = "out(3)" }),
 					opacity = function()
 						return is_open() and 1 or 0
 					end,
@@ -954,7 +954,7 @@ local function chevron(size, open)
 	local angle = ui.computed(function()
 		return open() and 0 or -90
 	end)
-	return icon("chevron", size, C.muted, { rotate = ui.tween(angle, { duration = 0.2, ease = "out(3)" }) })
+	return icon("chevron", size, C.muted, { rotate = ui.tween(angle, { duration = 200, ease = "out(3)" }) })
 end
 local function summary()
 	return ui.row {
@@ -1444,7 +1444,7 @@ return col {
 		pr = 12,
 		gap = 6,
 		items = "center",
-		on_press = ui.action("drag_window"),
+		window_drag = true,
 		ui.text { "Agent trace", font = SANS, text_size = 15, weight = 500, color = C.text },
 		ui.text {
 			function()

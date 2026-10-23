@@ -181,15 +181,24 @@ fn runtime_settings_open_from_more_and_dropdowns_choose() {
     h.click("more_item_6");
     frames(&h, 30);
     healthy(&h);
-    assert!(h.find("runtime_menu").is_some(), "More › Runtime settings… opens it");
+    assert!(
+        h.find("runtime_menu").is_some(),
+        "More › Runtime settings… opens it"
+    );
     // A dropdown opens its options and closes on a choice.
     h.click("backend_select");
     frames(&h, 30);
-    assert!(h.find("backend_select_list").is_some(), "the dropdown opens");
+    assert!(
+        h.find("backend_select_list").is_some(),
+        "the dropdown opens"
+    );
     h.click("backend_select_option_2");
     frames(&h, 30);
     healthy(&h);
-    assert!(h.find("backend_select_list").is_none(), "a choice closes it");
+    assert!(
+        h.find("backend_select_list").is_none(),
+        "a choice closes it"
+    );
     assert_eq!(h.text("backend_select"), "wgpu · Vulkan");
     assert!(h.find("runtime_menu").is_some(), "the popover stays open");
 }
@@ -206,7 +215,10 @@ fn capture_options_arm_a_timed_capture() {
     h.click("record_toggle");
     frames(&h, 30);
     healthy(&h);
-    assert!(h.find("capture_menu").is_some(), "the chevron opens capture options");
+    assert!(
+        h.find("capture_menu").is_some(),
+        "the chevron opens capture options"
+    );
     h.click("capture_menu_item_1"); // 5 seconds
     h.click("capture_menu_item_6"); // after a 3 s countdown
     frames(&h, 10);
@@ -215,19 +227,34 @@ fn capture_options_arm_a_timed_capture() {
     h.click("record_start");
     frames(&h, 30);
     healthy(&h);
-    assert!(h.text("record").starts_with("starts in"), "counting down: {}", h.text("record"));
+    assert!(
+        h.text("record").starts_with("starts in"),
+        "counting down: {}",
+        h.text("record")
+    );
     frames(&h, 60 * 4);
     healthy(&h);
-    assert!(h.text("record").contains("/ 5 s"), "capturing: {}", h.text("record"));
+    assert!(
+        h.text("record").contains("/ 5 s"),
+        "capturing: {}",
+        h.text("record")
+    );
     frames(&h, 60 * 6);
-    assert!(h.text("record").contains(':'), "paused after the capture: {}", h.text("record"));
+    assert!(
+        h.text("record").contains(':'),
+        "paused after the capture: {}",
+        h.text("record")
+    );
 }
 
 #[test]
 fn record_control_previews_every_state_and_morphs_in_place() {
     let mut h = profiler();
     frames(&h, 30);
-    for (i, want) in ["", "", "Record", "starts in", "on first input", "/ 5 s"].iter().enumerate() {
+    for (i, want) in ["", "", "Record", "starts in", "on first input", "/ 5 s"]
+        .iter()
+        .enumerate()
+    {
         h.ui.dispatch(InputEvent::PointerDown {
             x: 0.,
             y: 0.,
@@ -246,7 +273,10 @@ fn record_control_previews_every_state_and_morphs_in_place() {
         }
         frames(&h, 20);
         healthy(&h);
-        assert!(h.find("rec_states_menu").is_some(), "right-click opens the state menu");
+        assert!(
+            h.find("rec_states_menu").is_some(),
+            "right-click opens the state menu"
+        );
         h.click(&format!("rec_states_menu_item_{}", i + 1));
         frames(&h, 40);
         healthy(&h);
@@ -269,11 +299,22 @@ fn record_tooltip_stays_and_changes_with_the_state() {
     frames(&h, 45);
     assert_eq!(h.text("tooltip_record"), "Stop recording");
     // Pressed, it stays open and says what a press does now.
-    h.ui.dispatch(InputEvent::PointerDown { x, y, button: PointerButton::Primary });
-    h.ui.dispatch(InputEvent::PointerUp { x, y, button: PointerButton::Primary });
+    h.ui.dispatch(InputEvent::PointerDown {
+        x,
+        y,
+        button: PointerButton::Primary,
+    });
+    h.ui.dispatch(InputEvent::PointerUp {
+        x,
+        y,
+        button: PointerButton::Primary,
+    });
     frames(&h, 2);
     healthy(&h);
-    assert!(h.find("tooltip_record").is_some(), "the tooltip stays through the press");
+    assert!(
+        h.find("tooltip_record").is_some(),
+        "the tooltip stays through the press"
+    );
     frames(&h, 20);
     assert_eq!(h.text("tooltip_record"), "Resume recording");
 }

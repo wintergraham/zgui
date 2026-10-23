@@ -70,6 +70,8 @@ Rows and columns support fixed/intrinsic sizing, min/max constraints, margin ins
 
 Use `.w_full()`, `.h_full()`, flex styles and `.reactive_style(...)` for responsive component geometry. `WindowContext.viewport` supplies logical `(width, height)` when application policy depends on the window size. Low-level integrations can bind it to an owner and update retained styles or call `ScrollView::resize`. Release any `RefCell<Scene>` borrow before setting signals, because a signal can synchronously run code that borrows the scene. The host performs physical-pixel surface resizing and DPI conversion separately. `Scene::prepare_layout` makes geometry current for hit testing without discarding pending damage; `flush` is the renderer's frame-consumption boundary.
 
+To see what layout did, press Ctrl+Option+Cmd+I (Ctrl+Alt+Shift+I on Linux and Windows) in a window, run with `ZGUI_INSPECT=1`, or call `cx.inspector.set_enabled(true)`: the layout inspector (`zgui::inspect`) outlines every box and describes the one under the pointer (kind, size, position, padding, margin, border, flex properties, clip). `ZGUI_LAYOUT_WARNINGS=1` alone reports suspicious results to stderr once per node: a collapsed box with content, content cut off by a clip that does not scroll, a percentage inside a parent sized by its content. Off, neither costs anything per frame. Other hosts call `Inspector::update(&ui, pointer)` after `Ui::prepare_frame` while `Inspector::active()`; `zgui::inspect::layout_warnings(&ui)` checks once.
+
 ## Scrolling and virtual rows
 
 Use `scroll(offset).children(...)` for ordinary retained content and

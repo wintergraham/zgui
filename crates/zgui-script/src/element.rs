@@ -26,6 +26,8 @@ pub(crate) type Listener = Rc<dyn Fn(&mut zgui::input::EventContext)>;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Animated {
     pub translate: Option<(f32, f32)>,
+    /// A layout animation's translation, added to the node's own.
+    pub offset: Option<(f32, f32)>,
     pub opacity: Option<f32>,
     /// Gaussian blur radius of the node's content, in points.
     pub blur: Option<f32>,
@@ -39,11 +41,15 @@ pub(crate) struct Animated {
     pub clip: Option<[f32; 4]>,
     /// A shader fill's time and parameters.
     pub shader: Option<zgui::decoration::ShaderUniforms>,
+    /// Which of them animations drive (bit 0 the time, 1 to 16 the
+    /// parameters): only those are written, so parameters the node's style
+    /// sets (theme colours) stay.
+    pub shader_slots: u32,
     pub styles: Vec<(Prop, Lit)>,
 }
 
 /// A node's literal translation and local transform.
-type BaseTransform = (Option<(f32, f32)>, Option<LocalTransform>);
+pub(crate) type BaseTransform = (Option<(f32, f32)>, Option<LocalTransform>);
 
 pub(crate) struct Element {
     handle: OnceCell<NodeHandle>,
@@ -152,9 +158,11 @@ impl Element {
         if let Some(t) = self.base.get().0 {
             return t;
         }
+        // The scene's has a layout animation's offset in it.
+        let (ox, oy) = self.offset();
         self.read(|scene, id| {
             let t = scene.transform(id);
-            (t.x, t.y)
+            (t.x - ox, t.y - oy)
         })
         .unwrap_or_default()
     }
@@ -287,7 +295,10 @@ impl Element {
             return;
         }
         *target = value;
-        self.animated.borrow_mut().shader = Some(u);
+        let mut animated = self.animated.borrow_mut();
+        animated.shader = Some(u);
+        animated.shader_slots |= 1 << slot;
+        drop(animated);
         self.compositor_changed.set(true);
     }
     pub fn set_base_clip(&self, clip: Option<[f32; 4]>) {
@@ -305,10 +316,47 @@ impl Element {
         self.base.set((translate, local));
         self.base_effects.set(effects);
     }
+    /// What the node's own literals translate and transform it by.
+    pub fn base_transform(&self) -> BaseTransform {
+        self.base.get()
+    }
+    /// Binds an element only Rust animates (a layout animation's) to its
+    /// mounted node, without making it something selectors find.
+    pub fn attach(&self, handle: NodeHandle) {
+        if let Some(scene) = handle.scene() {
+            let _ = self.scene.set(Rc::downgrade(&scene));
+        }
+        let _ = self.handle.set(handle);
+    }
     pub fn read<R>(&self, f: impl FnOnce(&Scene, NodeId) -> R) -> Option<R> {
         let scene = self.scene()?;
         let scene = scene.borrow();
         Some(f(&scene, self.node()?))
+    }
+    /// A layout animation's translation now.
+    pub fn offset(&self) -> (f32, f32) {
+        self.animated.borrow().offset.unwrap_or_default()
+    }
+    pub fn set_offset(&self, o: (f32, f32)) {
+        let mut animated = self.animated.borrow_mut();
+        if animated.offset != Some(o) {
+            animated.offset = Some(o);
+            self.compositor_changed.set(true);
+        }
+    }
+    /// The translation the node shows at: its own and a layout animation's.
+    pub fn shown_translate(&self, own: Option<(f32, f32)>) -> Option<(f32, f32)> {
+        self.shown(&self.animated.borrow(), own)
+    }
+    /// `shown_translate` from values already borrowed.
+    fn shown(&self, animated: &Animated, own: Option<(f32, f32)>) -> Option<(f32, f32)> {
+        match (animated.translate, animated.offset) {
+            (t, None) => t,
+            (t, Some((ox, oy))) => {
+                let (x, y) = t.or(own).or(self.base.get().0).unwrap_or_default();
+                Some((x + ox, y + oy))
+            }
+        }
     }
     pub fn set_translate(&self, t: (f32, f32)) {
         let mut animated = self.animated.borrow_mut();
@@ -353,6 +401,9 @@ impl Element {
             if any(&[Key::X, Key::Y]) {
                 cleared.translate = animated.translate.take();
             }
+            if any(&[Key::OffsetX, Key::OffsetY]) {
+                cleared.offset = animated.offset.take();
+            }
             if wants(&Key::Opacity) {
                 cleared.opacity = animated.opacity.take();
             }
@@ -381,6 +432,7 @@ impl Element {
             }
             if keys.is_none_or(|keys| keys.iter().any(|k| matches!(k, Key::Shader(_)))) {
                 cleared.shader = animated.shader.take();
+                animated.shader_slots = 0;
             }
             let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut animated.styles)
                 .into_iter()
@@ -394,6 +446,7 @@ impl Element {
             let clears = match key {
                 Key::Style(p) => cleared.styles.iter().any(|(q, _)| q == p),
                 Key::X | Key::Y => cleared.translate.is_some(),
+                Key::OffsetX | Key::OffsetY => cleared.offset.is_some(),
                 Key::Opacity => cleared.opacity.is_some(),
                 Key::Blur => cleared.blur.is_some(),
                 Key::Brightness | Key::Contrast | Key::Saturate => cleared.color.is_some(),
@@ -412,8 +465,11 @@ impl Element {
         let (base_translate, base_local) = self.base.get();
         if let (Some(scene), Some(id)) = (self.scene(), self.node()) {
             let mut scene = scene.borrow_mut();
-            if cleared.translate.is_some() {
-                let (x, y) = base_translate.unwrap_or_default();
+            if cleared.translate.is_some() || cleared.offset.is_some() {
+                let (x, y) = self
+                    .shown_translate(None)
+                    .or(base_translate)
+                    .unwrap_or_default();
                 scene.set_transform(id, Transform { x, y });
             }
             if cleared.opacity.is_some() || cleared.blur.is_some() || cleared.color.is_some() {
@@ -464,7 +520,7 @@ impl Element {
             && scene.contains(id)
         {
             let animated = self.animated.borrow();
-            if let Some((x, y)) = animated.translate {
+            if let Some((x, y)) = self.shown(&animated, None) {
                 scene.set_transform(id, Transform { x, y });
             }
             if animated.opacity.is_some() || animated.blur.is_some() || animated.color.is_some() {
@@ -493,7 +549,17 @@ impl Element {
                 scene.set_clip_inset(id, Some(zgui::scene::ClipInset::px(t, r, b, l)));
             }
             if let Some(uniforms) = animated.shader {
-                scene.set_shader_uniforms(id, uniforms);
+                let mut shown = scene.shader_uniforms(id);
+                if animated.shader_slots & 1 != 0 {
+                    shown.time = uniforms.time;
+                }
+                for slot in 1..=16 {
+                    if animated.shader_slots & (1 << slot) != 0 {
+                        let (v, i) = ((slot - 1) / 4, (slot - 1) % 4);
+                        shown.params[v][i] = uniforms.params[v][i];
+                    }
+                }
+                scene.set_shader_uniforms(id, shown);
             }
         }
         self.styles_changed.replace(false)
@@ -695,17 +761,43 @@ impl Drop for Registration {
     }
 }
 
-/// `ui.ref()`: the elements a node or nodes with `ref = r` mounted.
-#[derive(Default)]
+/// The UTF-8 byte offset of the `chars`th character of `text` (its end past it).
+fn byte_offset(text: &str, chars: usize) -> usize {
+    text.char_indices()
+        .nth(chars)
+        .map_or(text.len(), |(byte, _)| byte)
+}
+
+/// `ui.ref()`: the elements a node or nodes with `ref = r` mounted. Scripts
+/// reading it (`ref:get()`, `ref.element`, `ref.mounted`) in an effect or
+/// computed follow it: it changes as its elements mount and unmount.
 pub(crate) struct Ref {
     elements: RefCell<Vec<Weak<Element>>>,
+    /// Bumped on each attach and detach.
+    changed: Signal<u64>,
 }
 impl Ref {
-    pub fn attach(&self, element: &Rc<Element>) {
-        let mut elements = self.elements.borrow_mut();
-        elements.retain(|e| e.upgrade().is_some_and(|e| e.is_mounted()));
-        elements.push(Rc::downgrade(element));
+    pub fn new(runtime: &Runtime) -> Rc<Self> {
+        Rc::new(Self {
+            elements: RefCell::default(),
+            changed: runtime.signal(0),
+        })
     }
+    /// `element` mounted with this ref, at `handle`: until its node goes.
+    pub fn attach(self: &Rc<Self>, element: &Rc<Element>, handle: &NodeHandle) {
+        {
+            let mut elements = self.elements.borrow_mut();
+            elements.retain(|e| e.upgrade().is_some_and(|e| e.is_mounted()));
+            elements.push(Rc::downgrade(element));
+        }
+        handle.retain(Detach {
+            r: Rc::downgrade(self),
+            element: Rc::downgrade(element),
+        });
+        self.changed.update(|n| *n += 1);
+    }
+    /// The mounted elements, in document order. Untracked: what the engine
+    /// resolves as targets must not subscribe the effect that animates them.
     pub fn elements(&self) -> Vec<Rc<Element>> {
         let mut live: Vec<_> = self
             .elements
@@ -717,16 +809,70 @@ impl Ref {
         sort_by_document_order(&mut live);
         live
     }
+    /// The first mounted element.
+    pub fn first(&self) -> Option<Rc<Element>> {
+        let (first, more) = {
+            let elements = self.elements.borrow();
+            let mut live = elements
+                .iter()
+                .filter_map(Weak::upgrade)
+                .filter(|e| e.is_mounted());
+            (live.next()?, live.next().is_some())
+        };
+        // Only several need the scene to order them.
+        if more {
+            self.elements().into_iter().next()
+        } else {
+            Some(first)
+        }
+    }
+    /// Subscribes the running effect or computed.
+    pub fn track(&self) {
+        self.changed.with(|_| ());
+    }
+}
+/// Takes an element off its ref as its node is removed, and tells whoever
+/// reads the ref.
+struct Detach {
+    r: Weak<Ref>,
+    element: Weak<Element>,
+}
+impl Drop for Detach {
+    fn drop(&mut self) {
+        let Some(r) = self.r.upgrade() else { return };
+        let ptr = self.element.as_ptr();
+        r.elements
+            .borrow_mut()
+            .retain(|e| e.as_ptr() != ptr && e.strong_count() > 0);
+        r.changed.update(|n| *n += 1);
+    }
 }
 #[derive(Clone)]
 pub(crate) struct RefUd(pub Rc<Ref>);
 impl UserData for RefUd {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
-        fields.add_field_method_get("count", |_, r| Ok(r.0.elements().len()));
-        fields.add_field_method_get("mounted", |_, r| Ok(!r.0.elements().is_empty()));
+        fields.add_field_method_get("count", |_, r| {
+            r.0.track();
+            Ok(r.0.elements().len())
+        });
+        fields.add_field_method_get("mounted", |_, r| {
+            r.0.track();
+            Ok(r.0.first().is_some())
+        });
+        fields.add_field_method_get("element", |_, r| {
+            r.0.track();
+            Ok(r.0.first().map(ElementUd))
+        });
     }
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        // The element while one is mounted, else nil; tracked.
+        methods.add_method("get", |_, r, ()| {
+            r.0.track();
+            Ok(r.0.first().map(ElementUd))
+        });
+        methods.add_method("peek", |_, r, ()| Ok(r.0.first().map(ElementUd)));
         methods.add_method("elements", |lua, r, ()| {
+            r.0.track();
             lua.create_sequence_from(r.0.elements().into_iter().map(ElementUd))
         });
     }
@@ -750,6 +896,35 @@ impl UserData for ElementUd {
         });
     }
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        // An input's selection, in characters (Unicode code points, from
+        // 0, as `utf8.len` counts them): `el:set_selection(a, b)` (`b`
+        // defaults to `a`, a caret) and `local a, b = el:selection()` (nil
+        // for other elements). `el:select(a, b)` takes bytes, and it and
+        // `el:select_all()` apply once the handler's writes settle.
+        methods.add_method(
+            "set_selection",
+            |_, e, (anchor, focus): (i64, Option<i64>)| {
+                let Some(editor) = e.0.handle.get().and_then(NodeHandle::editor) else {
+                    return Ok(false);
+                };
+                let (anchor, focus) = {
+                    let text = editor.editor.borrow();
+                    let byte = |chars: i64| byte_offset(text.text(), chars.max(0) as usize);
+                    (byte(anchor), byte(focus.unwrap_or(anchor)))
+                };
+                editor.set_selection(anchor, focus);
+                Ok(true)
+            },
+        );
+        methods.add_method("selection", |_, e, ()| {
+            let Some(editor) = e.0.handle.get().and_then(NodeHandle::editor) else {
+                return Ok((None, None));
+            };
+            let (anchor, focus) = editor.selection();
+            let text = editor.editor.borrow();
+            let chars = |byte: usize| text.text()[..byte].chars().count();
+            Ok((Some(chars(anchor)), Some(chars(focus))))
+        });
         methods.add_method("has_class", |_, e, class: String| {
             Ok(e.0.classes.iter().any(|c| **c == *class))
         });

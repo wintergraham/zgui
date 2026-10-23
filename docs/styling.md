@@ -4,7 +4,7 @@ zgui's Rust API combines GPUI/QuickGUI-style fluent methods with owned component
 
 ```rust
 use zgui::compose::{button, column, text};
-use zgui::style::{rgb, Styled, Styles};
+use zgui::style::{rgb, StrokeAlign, Styled, Styles};
 
 let card = column()
     .w(320.)
@@ -22,13 +22,21 @@ let card = column()
         .bg(rgb(0x2854a0))
         .hover(|s| s.bg(rgb(0x3266bd)))
         .active(|s| s.bg(rgb(0x1d407e)))
-        .focus(|s| s.border_1().border_color(rgb(0x9abfff)))
+        .focus(|s| s.stroke(1., rgb(0x9abfff), StrokeAlign::Inside))
         .disabled_style(|s| s.opacity(0.45))
         .child(text("Connect"))
         .on_click(|| println!("connect")));
 ```
 
 Mount with `Ui::mount(card)` or use the native window's view rendering entry point. A background, rounded border, or shadow decorates the container itself; it does not add a layout child. Children remain retained when a visual style changes.
+
+## Box model
+
+Sizes are border-box, as CSS's `box-sizing: border-box` and GPUI have them. A view's `w` and `h` include its border; its padding and children lay out inside the border, each side's width counted on its own (`.border_edges(Insets { .. })`); and a view sized by its content is its content, padding and border. The card above, `w(320.).p(16.).border_1()`, lays its children out 286 wide, 17 in from each edge. A transparent border still takes its width, so changing only a border's colour never moves anything; changing its width lays the view out again. Rings that only paint take no room: `.border_over(true)` (an inset stroke drawn over the content), `.outline(..)` and `.stroke(..)` with any alignment. Use one of those for a focus or selection ring that should not move content; controls' default focus rings are inset strokes, or recolour the control's own border when it has one.
+
+An `overlay()` stacks its children in one box, as CSS grid lays out items sharing one area. Each child is sized against the overlay's own box (percentages count from it) and aligned in all of it on its own: `items_*` across, `justify_*` down (`justify_between` acts as start, `justify_around` and `justify_evenly` as centre, as they do for one item). By default children stretch to fill it both ways (`items_stretch().justify_stretch()`), except along an axis a child sizes itself on; `.items_center().justify_center()` centres an icon in a tile. The overlay itself is as large as its largest child.
+
+A `scroll(..)` or `scroll_x(..)` view is 320 by 240 when nothing else sizes it, but those are intrinsic sizes, not constraints: a parent stretching its children (`items_stretch`, an overlay) stretches it across, `grow` grows it from them, and `w`/`h`/`w_full` replace them. Its content fills its cross axis (a vertical scroll's width, a horizontal one's height) unless it sizes itself there. Editors size like CSS form controls in flex: `text_input` and `text_area` are 240 wide by default, an intrinsic width their text never changes (long text scrolls inside, keeping the caret in view); a stretching parent widens them, and they shrink to nothing in a row too narrow for them (`flex_shrink(1.)` by default; `.flex_shrink(0.)` or an explicit `w` holds them).
 
 ## Properties and patches
 
@@ -37,9 +45,9 @@ Mount with `Ui::mount(card)` or use the native window's view rendering entry poi
 | Dimensions | `w`, `h`, `size`, `w_percent`, `h_percent`, `w_full`, `h_full`, `min_w`, `max_w`, `min_h`, `max_h` |
 | Padding | `p`, `px`, `py`, `pt`, `pr`, `pb`, `pl` |
 | Margins | `m`, `mx`, `my`, `mt`, `mr`, `mb`, `ml` |
-| Layout | `flex_row`, `flex_col`, `gap`, `flex_grow`, `flex_shrink`, `grow`, `shrink_0` |
-| Alignment | `items_start`, `items_center`, `items_end`, `items_stretch`, `justify_start`, `justify_center`, `justify_end`, `justify_between`, `justify_around` |
-| Surface | `bg`, `rounded`, `border`, `border_1`, `border_color`, `shadow`, `shadow_none` |
+| Layout | `flex_row`, `flex_col`, `gap`, `flex_grow`, `flex_shrink`, `grow`, `shrink_0`, `absolute`, `relative`, `left`, `top`, `right`, `bottom` |
+| Alignment | `items_start`, `items_center`, `items_end`, `items_stretch`, `justify_start`, `justify_center`, `justify_end`, `justify_between`, `justify_around`, `justify_stretch` |
+| Surface | `bg`, `rounded`, `border`, `border_1`, `border_edges`, `border_color`, `border_over`, `outline`, `stroke`, `shadow`, `shadow_none` |
 | Text | `text_color`, `text_size`, `line_height`, `line_height_normal`, `letter_spacing`, `text_wrap`, `font_family`, `font_weight`, `font_bold`, `italic` |
 | Effects | `opacity`, `blur`, `filter_blur`, `mask`, `mask_offset`, `edge_fade`, `translate`, `scale`, `scale_xy`, `rotate`, `skew`, `transform_origin`, `isolated` |
 | Clipping | `overflow_hidden`, `overflow_visible` |
@@ -211,6 +219,25 @@ Styles resolve in this order: base fluent properties, `reactive_style`, hover, a
 
 `.disabled(true)` and `.disabled_when(|| signal.get())` disable interaction and update accessibility. `.disabled_style(...)` controls appearance; supplying that patch alone does not disable a view. Focus is cleared when a focused subtree becomes disabled. Buttons support pointer and keyboard activation.
 
+A view is hovered while the pointer is over it or anything inside it, as the DOM's `mouseenter` and `mouseleave` decide: `hover` styles hold while the pointer moves between its children, and its `on_event` listener hears one `PointerEnter` when the pointer comes inside and one `PointerLeave` when it is outside it and all its descendants, each at the target phase (they do not bubble). Overlapping siblings follow hit order: where a positioned sibling covers another, only it (and its ancestors) is hovered. Leaving the window, the window going to the back and the pointer moving onto a native view that takes input (a web page, a terminal) all leave whatever was hovered. Tracking costs a walk up from the new hit target when it changes and nothing when it does not.
+
+### Input placeholders
+
+`text_input` and `text_area` take `.placeholder("Search")` (or `.placeholder_when(|| …)`, reactive): text shown while the value is empty, in the editor's own typography and coloured the theme's `muted`, or `.placeholder_color(color)` (`placeholder_color_when` for a reactive one). The editor's text node shows it in place of the empty text, so it adds no node, is laid out as the empty value it stands for and never changes the editor's size; it is never part of the value, and accessibility exposes it as the input's placeholder. `.select_on_focus(true)` selects the whole text whenever the editor takes focus, as a browser's address bar does: the first click selects everything, the next places the caret, and a window coming back to the front keeps the selection it had. The selection is also the editor's to set: `EditorHandle::selection()`, `set_selection(anchor, focus)` and `select_all()` take UTF-8 byte offsets (moved back to a grapheme boundary), as do `NodeHandle`'s (from `View::on_mount`) and `Ui::editor(node)`.
+
+```rust
+use zgui::{compose::prelude::*, widgets::Ui};
+let mut ui = Ui::new(640., 480.);
+let address = ui.signal(String::new());
+ui.mount(
+    text_input("Address", address)
+        .w(320.)
+        .placeholder("Search or enter address")
+        .placeholder_color(rgba(0xffffff66))
+        .select_on_focus(true),
+);
+```
+
 ```rust
 use zgui::{compose::column, style::{rgb, Styled, Styles}, widgets::Ui};
 let mut ui = Ui::new(640., 480.);
@@ -256,19 +283,42 @@ The native GPU renderer shapes text and provides fallback fonts. Font family, we
 
 The software styled-font cache retains at most 128 entries and 8 MiB of text keys/glyph images; oversized runs render without being retained. Its platform font database is created on first styled text and shared with software layer renderers. Headless core-only scenes use approximate metrics until a `Scene::set_font_text_shaper` backend is installed.
 
-Editable views use the same fluent styles. For example, `text_input("Search", query).w(320.).px(12.).font_family(FontFamily::Monospace).focus(|s| s.border(2.).border_color(rgb(0x5ea5ff)))` styles the actual focusable editor root. Its text and caret inherit color, size, family, weight, and italic; root padding and allocated dimensions determine the clipped editing viewport. Typography and dimension changes preserve selection and the bound model. Use `.text_wrap(true)` on `text_area` to wrap at its allocated content width, including inherited or reactive wrapping styles. Rendering, pointer hit testing, selection, caret movement and IME geometry share the same wrapped layout. Resizing reflows visual lines without adding newlines to the model or losing selection. Wrapping defaults to false, preserving horizontal scrolling for long lines; `text_input` always remains a single unwrapped line. Home/End follow visual lines while wrapping; repeated Up/Down retain the preferred horizontal caret position across shorter lines. Edits, pointer placement, Home/End, and changes to wrapping, font metrics or allocated width reset that preferred position.
+Editable views use the same fluent styles. For example, `text_input("Search", query).w(320.).px(12.).font_family(FontFamily::Monospace).focus(|s| s.stroke(2., rgb(0x5ea5ff), StrokeAlign::Inside))` styles the actual focusable editor root. Its text and caret inherit color, size, family, weight, and italic; root padding and allocated dimensions determine the clipped editing viewport. Typography and dimension changes preserve selection and the bound model. Use `.text_wrap(true)` on `text_area` to wrap at its allocated content width, including inherited or reactive wrapping styles. Rendering, pointer hit testing, selection, caret movement and IME geometry share the same wrapped layout. Resizing reflows visual lines without adding newlines to the model or losing selection. Wrapping defaults to false, preserving horizontal scrolling for long lines; `text_input` always remains a single unwrapped line. Home/End follow visual lines while wrapping; repeated Up/Down retain the preferred horizontal caret position across shorter lines. Edits, pointer placement, Home/End, and changes to wrapping, font metrics or allocated width reset that preferred position.
 
 Multiline editors accept wheel scrolling without moving the selection; scrolling clamps to the text extent and bubbles to ancestors at an exhausted edge. Single-line editors leave vertical wheel events to their parent. Font/color changes preserve component ownership; color-only changes repaint without relayout, while font changes also update selection, hit testing and caret metrics.
 
-`.absolute()` removes a child from normal layout flow. It starts at its parent's
-content origin (inside padding), with `.ml(...)` and `.mt(...)` setting offsets.
-It does not consume flex space, add a gap, or enlarge the parent's intrinsic size.
-Its wrapping constraints follow the parent's allocated content dimensions.
-`.relative()` restores ordinary row, column, or overlay participation, including
-when applied by a reactive style patch. Absolute positioning is relative to the
-immediate parent; it does not implicitly create a window-level portal or change
-paint order. Use `.translate(...)` for a compositor-only positional change when
-layout participation should stay the same.
+`.absolute()` removes a child from normal layout flow and positions it against
+its containing block:
+
+- the nearest ancestor marked `.relative()` (CSS `position: relative`), searching
+  up from the parent but not past an `.absolute()` ancestor, which contains its
+  own absolute descendants;
+- with no such ancestor, its parent.
+
+`.left(..)`, `.top(..)`, `.right(..)` and `.bottom(..)` count from the containing
+block's padding box: inside its border, ignoring its padding. Percentages are of
+that box's width (left, right) or height (top, bottom), and setting both insets
+on an axis without a size there stretches it between them. An axis with no inset
+keeps the static place: the parent's content origin (inside its border and
+padding) plus `.ml(..)`/`.mt(..)`. An absolute view does not consume flex space,
+add a gap, or enlarge any ancestor's intrinsic size. It still paints in its
+parent's place in the tree (its paint order and its ancestors' clips) and moves
+with every ancestor's transform: transforms, including scroll offsets, are
+paint-time and never change which block contains it. Switch, show and keyed
+regions are ordinary wrappers here: mark the intended ancestor `.relative()`
+rather than relying on the wrapper being the parent.
+
+```rust
+use zgui::compose::prelude::*;
+let card = column().relative().w(300.).h(200.)
+    .child(column().p(12.).child(div().absolute().right(8.).bottom(8.).size(16., 16.)));
+```
+
+`.relative()` also keeps a view in normal flow (undoing `.absolute()`), including
+when applied by a reactive style patch; it changes nothing about the view's own
+layout. Absolute positioning does not create a window-level portal. Use
+`.translate(...)` for a compositor-only positional change when layout
+participation should stay the same.
 
 
 Focused editors reuse bounded shaped geometry for unchanged displayed text and
@@ -277,3 +327,174 @@ line-height and wrapped-width changes invalidate the reuse entry. See
 [editor layout reuse](performance/editor-shaping/README.md) for admission limits
 and measured call counts. This does not change component ownership or the style
 inheritance rules above.
+
+## Theming
+
+Every zgui app and widget can style itself from a standard set of semantic
+tokens, and any theme gives them values, as any VS Code theme styles any
+extension. Themes are data (JSON files, Luau tables or Rust values) and switch
+live. zgui's own widgets (buttons, inputs, menus, sliders, progress bars,
+scrollbars, modals and popovers) style themselves only from tokens.
+
+```rust
+use zgui::compose::prelude::*;
+use zgui::theme::{LIGHT, tok, token};
+use zgui::widgets::Ui;
+
+let mut ui = Ui::new(400., 300.);
+// An app's own token, declared with a default written in standard tokens.
+ui.theme().declare(token("app.card"), tok::SURFACE_RAISED);
+ui.mount(
+    column()
+        .bg(tok::BACKGROUND)
+        .p(tok::SPACE_4)
+        .gap(tok::SPACE_2)
+        .child(text("Settings").text_size(tok::FONT_SIZE_XL))
+        .child(text("Changes save as you go").text_color(tok::TEXT_SECONDARY))
+        .child(div().h(80.).bg(token("app.card")).rounded(tok::RADIUS_LG).shadow(tok::SHADOW_MD)),
+);
+ui.theme().set(LIGHT).unwrap(); // what uses changed tokens restyles, nothing else
+```
+
+### The standard tokens
+
+| Group | Tokens |
+| --- | --- |
+| Surfaces | `background`, `surface.sunken`, `surface.base`, `surface.raised`, `surface.overlay` |
+| Text | `text.primary`, `text.secondary`, `text.tertiary`, `text.disabled` |
+| Lines | `border`, `border.subtle`, `border.strong` |
+| Accent | `accent`, `accent.hover`, `accent.text` (text on the accent) |
+| Status | `danger`, `warning`, `success`, `info` |
+| States | `selection` (selected text), `selection.item` (a selected row), `focus.ring`, `hover` and `pressed` (translucent washes laid over a surface) |
+| Scrollbars | `scrollbar.thumb`, `scrollbar.thumb.active`, `scrollbar.track` |
+| Glass | `glass.tint` (laid over a backdrop blur), `glass.blur` |
+| Typography | `font.sans`, `font.mono`; `font.size.{xs,sm,md,lg,xl,xxl}` with matching line heights `font.line.*`; `font.weight.{regular,medium,semibold,bold}` |
+| Metrics | `radius.{sm,md,lg,xl,full}`, `space.1` to `space.8` (4 to 64 points), `control.height` |
+| Shadows | `shadow.sm`, `shadow.md`, `shadow.lg` |
+| Motion | `motion.duration.{fast,normal,slow}` (milliseconds), `motion.ease.{standard,enter,exit}` (anime.js easings) |
+
+The roles are the ones VS Code's workbench colours, Radix Themes and Apple's
+semantic colours share: surfaces by elevation, text by emphasis, washes
+rather than fixed hover colours (so they work on any surface), and scales for
+size, radius and space. `tok::*` are typed constants (`ColorToken`,
+`NumberToken`, `FontToken`, `ShadowToken`, `TextToken`), so a colour token
+cannot be passed for a length. zgui's widgets declare tokens of their own in
+standard terms, which a theme may set: `button.bg` (`{surface.raised}`),
+`button.hover` (`over({button.bg}, {hover})`), `button.pressed`, `input.bg`,
+`menu.bg` (`{surface.overlay}`) and `menu.hover`.
+
+Text shows `text.primary`, `font.size.md` and `font.sans` unless a view sets
+its own. The built-in `zgui-dark` theme, the default, keeps zgui's original
+palette and metrics, so apps written before themes look as they did;
+`zgui-light` is its light counterpart.
+
+### Theme files
+
+```json
+{
+	"name": "Solarized Dark",
+	"type": "dark",
+	"extends": "zgui-dark",
+	"tokens": {
+		"background": "#002b36",
+		"surface": { "base": "#073642", "raised": "{surface.base}" },
+		"text.secondary": "alpha({text.primary}, 0.6)",
+		"hover": "#ffffff0d",
+		"shadow.md": "0 4 12 0 alpha({background}, 0.5)",
+		"terminal.pane": "#00000040"
+	}
+}
+```
+
+`type` is `dark`, `light`, `high-contrast` or `high-contrast-light`. A theme
+that leaves a token out takes it from the theme it `extends`, and every chain
+ends in the built-in theme of its type, so a theme can set three tokens and
+be complete. Groups nest (`"surface": { "base": … }` is `surface.base`), and
+comments and trailing commas are allowed.
+
+A value is a literal (`"#rrggbbaa"`, `"rgb(…)"`, `16`, `"Geist"`, a CSS
+`box-shadow`, an easing), a reference (`"{surface.raised}"`) or a small
+derivation of colours: `alpha(c, a)` (its opacity times `a`), `mix(a, b, t)`
+(`t` of the way from `a` to `b`) and `over(base, wash)` (`wash` composited
+over `base`). Expressions are parsed when a theme loads and evaluated once
+per token when it is applied, never while styling. A reference cycle
+resolves to nothing.
+
+`ui.theme()` (or `Themes::of(&runtime)`: every `Ui` and script host on a
+runtime shares it) holds the themes: `register(theme)`, `load(path)` (a zgui
+theme file, or a VS Code colour theme, below), `set(name)`,
+`set_default(name)` (applies unless the app chose one), `current()`
+(tracked), `names()`, `declare(token, default)` and
+`follow_system(Some((dark, light)))`, which the desktop host drives from the
+system's light or dark appearance. The window's clear colour follows
+`background`. Theme files hot-reload: `reload_if_changed()` reads the files
+that changed and restyles in place, and `watch(every)` polls them (a script
+host does this along with its scripts). A file that stops reading keeps its
+last good theme and reports the error.
+
+### App tokens and unknown tokens
+
+An app names its own tokens in its own namespace (`terminal.pane`,
+`notes.wash`) and declares a default for each in terms of the standard ones
+(`"{surface.sunken}"`, `"alpha({accent}, 0.24)"`). Any theme then styles the
+app, and a theme made for it may still set them by name. A token that
+nothing defines (no theme, no declaration) resolves to nothing: transparent,
+0, the default font, no shadow; debug builds print a warning the first time
+each such token is read. Declare tokens before mounting what uses them.
+
+### Scoped overrides
+
+```rust
+use zgui::compose::prelude::*;
+use zgui::theme::LIGHT;
+
+let card = column().bg(tok::SURFACE_RAISED).child(text("A light card in a dark app"));
+let light_card = theme_scope(ThemeOverride::new().theme(LIGHT), card);
+let danger = theme_scope(
+    ThemeOverride::new().with(tok::ACCENT, rgb(0xe5484d)),
+    button().child(text("Delete")),
+);
+```
+
+`theme_scope` gives a subtree another theme, some tokens, or both; otherwise
+the subtree follows the enclosing scope, including when the app switches
+themes, and tokens derived from an overridden one (a focus ring that is
+`{accent}`) follow it. Inherited text takes the scope's body colour.
+`theme_scope_with(|| …, child)` computes the override and keeps it current.
+Overlays a subtree opens (menus, popovers) take its scope, and a component
+reads tokens from `cx.theme()`.
+
+### Styles and costs
+
+`.bg`, `.text_color`, `.border_color`, `.rounded`, `.border`, the padding and
+margin setters, `.gap`, `.text_size`, `.line_height`, `.letter_spacing`,
+`.font_weight`, `.font_family`, `.shadow`, `.opacity`, `.blur`, `.w` and `.h`
+take a value or a token, and `.token(Field::…, id)` binds any of them. A later
+value, or a patch merged over the style, replaces a binding as it would a
+value. A style holds token ids, interned once (`token("app.card")` hashes the
+name when the view is built), and resolving one indexes the scope's array.
+
+Each node subscribes to the tokens it shows and to nothing else: a resting
+button reads its background and radius but not its hover colour, and nodes
+without tokens subscribe to nothing. Applying a theme evaluates each token
+once, compares, and notifies only what reads tokens whose values changed: a
+colour repaints those nodes without layout, and a metric re-lays out those
+nodes. Nothing runs per frame. On the repository's headless workloads
+(retired instructions, against the same workloads before themes) the heavy
+dashboard and `anime_bench` are within 0.5%; a form of 1,500 widgets
+(`widget_bench`) takes 0.4% more instructions to mount and 2.8% more memory
+(the token subscriptions of its buttons and inputs), and switching its theme
+takes 0.67 ms, repainting its 3,000 themed nodes and laying out none.
+
+### VS Code themes
+
+`Themes::load` reads a VS Code colour theme too, following its `include`,
+and maps its workbench colours onto tokens: `editor.background` to
+`background`, `editor.foreground` to `text.primary`, `focusBorder` to
+`focus.ring`, `button.background` to `accent`,
+`list.activeSelectionBackground` to `selection.item`, `input.background` to
+`input.bg`, `menu.background` to `menu.bg`, and so on. What it does not set
+comes from zgui's theme of its type. `Theme::from_vscode` converts one in
+memory and `Theme::to_json` writes the result as a zgui theme file (the
+`vscode_theme` example converts a file). Syntax colours (`tokenColors`) are
+ignored.

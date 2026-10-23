@@ -55,6 +55,7 @@ impl MappedRing {
     }
     /// Copy `bytes` into a CPU-written vertex buffer and return it, ready
     /// for the GPU. The second value reports a new allocation.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn write(&mut self, bytes: &[u8]) -> (wgpu::Buffer, bool) {
         self.write_parts(&[bytes])
     }
@@ -112,7 +113,7 @@ impl MappedRing {
                 let mut range = slot.buffer.slice(..len).get_mapped_range_mut();
                 let mut at = 0;
                 for part in parts {
-                    range[at..at + part.len()].copy_from_slice(part);
+                    range.slice(at..at + part.len()).copy_from_slice(part);
                     at += part.len();
                 }
             }
@@ -431,6 +432,7 @@ impl TextureUploads {
         rects.push([x, y, width, height]);
         rects.push([offset, 0, 0, 0]);
     }
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn is_empty(&self) -> bool {
         self.targets.is_empty()
     }
