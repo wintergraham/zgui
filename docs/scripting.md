@@ -23,7 +23,7 @@ State is Rust-owned and keyed, so a reload keeps it. Each script gets its own sa
 
 The [Luau reference](reference/index.md) has a page per element and API group: signatures, every option with its type and default, an example and the gotchas. [App structure](reference/app-structure.md) shows how to split a large app across modules that share its state.
 
-Examples: `hot_reload` (an app and two plugins), `frame_profiler` (a profiler window with sample data, menus, popovers and tooltips), `stream_luau` / `stream_rust` (the same window in Luau and Rust, compared by `examples/stream/measure.sh`), `anime_showcase` (the animation API), `anime_bench` (per-frame engine cost), `state_bench` (what a state update costs), `notes` (an app that saves with `ui.persist`), and in zgui-desktop `terminal` and `zgui_monitor` (multi-module apps whose panes split, resize and move by dragging; the monitor's host samples processes and publishes them as shared state).
+Examples: `hot_reload` (an app and two plugins), `frame_profiler` (a profiler window with sample data, menus, popovers and tooltips), `stream_luau` / `stream_rust` (the same window in Luau and Rust, compared by `examples/stream/measure.sh`), `anime_showcase` (the animation API), `anime_bench` (per-frame engine cost), `state_bench` (what a state update costs), `notes` (an app that saves with `ui.persist`), `onboarding` (Ask's first-run setup from its design: nine steps, a ported shader splash, live themes), and in zgui-desktop `terminal` and `zgui_monitor` (multi-module apps whose panes split, resize and move by dragging; the monitor's host samples processes and publishes them as shared state).
 
 ## Types
 

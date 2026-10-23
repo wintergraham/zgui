@@ -1,0 +1,9 @@
+{
+  "board": "Ask \u00b7 Onboarding (A0B6S)",
+  "source_inputs_sha256": {
+    "ask.pen": "b4d7037a8d3f56576e51f42c38dd1555b71ee7a619d6b03977baec06b023aac7",
+    "shaders/bayer-dither.glsl": "b26eb45834319ca4ecb0deef6e16b530eccb7c5a72ec7be8b2a8684fb23c5d7d",
+    "shaders/onboarding-field.glsl": "af4f4f9a9114129f11681d279fdf537e14eb566bbcdcc561e2f86729a5236901",
+    "shaders/splash-space.glsl": "542e4e5673a5939b6041dc3921c9b32e3bc630cd961f824ee67e1974fc249965"
+  }
+}
