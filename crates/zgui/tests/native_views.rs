@@ -622,3 +622,43 @@ fn a_host_view_takes_the_pointer_through_pass_through_paint_and_focus() {
     // Its node takes focus, so a host can mirror a click in the view.
     assert!(ui.input.focus(&ui.scene, Some(page)));
 }
+
+#[test]
+fn a_layer_away_from_the_page_stays_on_the_base_plane() {
+    // A button pressed in the sidebar scales: its subtree becomes a layer the
+    // split's walk never reaches (it only looks near the page). The base
+    // plane must still draw it.
+    let mut ui = Ui::new(1000., 600.);
+    let natives = supported();
+    let web = WebView::new(&ui.runtime, WebViewOptions::default());
+    let pressed = ui.signal(1.0_f32);
+    let scale = pressed.clone();
+    let root = row()
+        .w(1000.)
+        .h(600.)
+        .child(
+            column().w(200.).h_full().child(
+                div()
+                    .id("button")
+                    .w(80.)
+                    .h(26.)
+                    .bg(rgb(0x343430))
+                    .reactive_style(move || Styles::default().scale(scale.get()))
+                    .child(text("Work")),
+            ),
+        )
+        .child(web_view(&web).id("page").w(800.).h(600.));
+    let view = ui.mount(provide(natives.clone(), root));
+    ui.prepare_frame();
+    let (first, _) = split(&ui, &natives, &PlaneSplit::default());
+    pressed.set(0.94);
+    ui.prepare_frame();
+    let (split, _) = split(&ui, &natives, &first);
+    let button = view.find("button").unwrap();
+    let scene = ui.scene.borrow();
+    assert!(scene.is_layer(button));
+    let items = scene.layer_items(None);
+    let mut base = items.clone();
+    split.filter(&mut base, Plane::Base);
+    assert!(base.iter().any(|item| item.id == button), "the pressed button's layer left the base plane");
+}
