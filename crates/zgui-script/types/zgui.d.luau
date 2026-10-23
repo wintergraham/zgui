@@ -257,6 +257,11 @@ type Styles = {
 	rounded_tr: number?,
 	rounded_br: number?,
 	rounded_bl: number?,
+	-- Squircle corners: 0 keeps circles, 1 is the smoothest, 0.6 reads as
+	-- iOS's continuous corners (`squircle = true`). Unset, the app's
+	-- default (`ui.corner_smoothing`).
+	corner_smoothing: number?,
+	squircle: boolean?,
 	border: number?,
 	border_sides: Corners?,
 	border_color: Color?,
@@ -369,6 +374,8 @@ type Props = {
 	rounded_tr: P<number>?,
 	rounded_br: P<number>?,
 	rounded_bl: P<number>?,
+	corner_smoothing: P<number>?,
+	squircle: P<boolean>?,
 	border: P<number>?,
 	border_sides: P<Corners>?,
 	border_color: P<Color>?,
@@ -570,6 +577,8 @@ type ElementParams = {
 	bottom: AnimValue?,
 	brightness: AnimValue?,
 	contrast: AnimValue?,
+	cornerSmoothing: AnimValue?,
+	corner_smoothing: AnimValue?,
 	saturate: AnimValue?,
 	shaderTime: AnimValue?,
 	shader_time: AnimValue?,
@@ -835,6 +844,9 @@ declare ui: {
 	spring: (state: State, opts: { stiffness: number?, damping: number?, from: any?, to: any? }?) -> Binding,
 	loop: (opts: { duration: number?, ease: Ease?, yoyo: boolean?, fps: number?, from: any?, to: any? }?) -> Binding,
 	bitmap: (w: number, h: number, alpha: (x: number, y: number) -> number) -> Bitmap,
+	-- The corner smoothing of every node that sets none (0 circles, 0.6
+	-- iOS squircles): call before the first frame.
+	corner_smoothing: (smoothing: number) -> (),
 	-- A WGSL fill: `fn fill(input: FillInput) -> vec4<f32>`, with input.p,
 	-- input.size, input.time, input.scale and input.params (four vec4s).
 	shader: (source: string, opts: { fps: number? }?) -> Shader,

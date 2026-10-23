@@ -146,6 +146,8 @@ pub(crate) struct RareStyles {
     pub(crate) border_style: Option<crate::decoration::BorderStyle>,
     /// `Styled::border_over`.
     pub(crate) border_over: Option<bool>,
+    /// `Styled::corner_smoothing`.
+    pub(crate) corner_smoothing: Option<f32>,
     /// `Styled::outline`, `outline_offset` (width and colour; offset).
     pub(crate) outline: Option<Option<(f32, Color)>>,
     pub(crate) outline_offset: Option<f32>,
@@ -175,6 +177,7 @@ impl RareStyles {
         fade_insets_x: None,
         border_style: None,
         border_over: None,
+        corner_smoothing: None,
         outline: None,
         outline_offset: None,
         shader_uniforms: None,
@@ -215,6 +218,9 @@ impl RareStyles {
         }
         if other.border_over.is_some() {
             self.border_over = other.border_over;
+        }
+        if other.corner_smoothing.is_some() {
+            self.corner_smoothing = other.corner_smoothing;
         }
         if other.outline.is_some() {
             self.outline = other.outline;
@@ -987,6 +993,19 @@ pub trait Styled: Sized {
     fn rounded_corners(mut self, corners: crate::decoration::Corners) -> Self {
         self.styles_mut().corners = Some(Some(corners));
         self
+    }
+    /// How far its rounded corners ease into squircles: 0 keeps circles, 1
+    /// is the smoothest, `decoration::IOS_CORNER_SMOOTHING` (0.6) reads as
+    /// iOS's continuous corners. Its fill, border, outline, shadows, blur
+    /// and the clip its children get share it. Unset, it takes the app's
+    /// default (`decoration::set_default_corner_smoothing`).
+    fn corner_smoothing(mut self, smoothing: f32) -> Self {
+        self.styles_mut().rare_mut().corner_smoothing = Some(smoothing);
+        self
+    }
+    /// Squircle corners: `corner_smoothing(IOS_CORNER_SMOOTHING)`.
+    fn squircle(self) -> Self {
+        self.corner_smoothing(crate::decoration::IOS_CORNER_SMOOTHING)
     }
     fn border_edges(mut self, widths: Insets) -> Self {
         self.styles_mut().border_edges = Some(Some(widths));

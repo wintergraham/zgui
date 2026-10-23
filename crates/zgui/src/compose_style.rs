@@ -568,6 +568,7 @@ pub(crate) fn mount_style_with_intrinsic(
                 if let Some(value) = resolved.border_width { quad.border_width = value; }
                 if let Some(value) = resolved.rare().shadow { quad.shadow = value; }
                 if let Some(value) = resolved.rare().border_over { quad.border_over = value; }
+                if let Some(value) = resolved.rare().corner_smoothing { quad.corner_smoothing = Some(value); }
                 if let Some(value) = resolved.rare().outline {
                     quad.outline = value.map(|(width, color)| crate::scene::Outline { width, color, offset: 0. });
                 }

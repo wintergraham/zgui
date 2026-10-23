@@ -215,6 +215,7 @@ fn rounded_border_shadow_images_and_background_damage() {
             }),
             border_over: false,
             outline: None,
+            corner_smoothing: None,
         }),
         fixed(24., 24.),
     );

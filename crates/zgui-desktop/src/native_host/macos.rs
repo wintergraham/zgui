@@ -346,20 +346,80 @@ fn from_space(frame: CGRect, height: f32, top_down: bool) -> Rect {
     }
 }
 /// A box of `size` with corner radii (top-left, top-right, bottom-right,
-/// bottom-left), at the origin of a space with that orientation.
-fn rounded_path(size: (f32, f32), radii: [f32; 4], top_down: bool) -> CFRetained<CGMutablePath> {
+/// bottom-left) smoothed by `smoothing` (circular arcs at 0, else cubics
+/// shaped as zgui's renderer draws them: `zgui::decoration::corner_shape`),
+/// at the origin of a space with that orientation.
+fn rounded_path(
+    size: (f32, f32),
+    radii: [f32; 4],
+    smoothing: f32,
+    top_down: bool,
+) -> CFRetained<CGMutablePath> {
     let path = CGMutablePath::new();
     let (width, height) = (size.0 as CGFloat, size.1 as CGFloat);
     // In a bottom-up space the top corners are at y = height.
-    let [tl, tr, br, bl] = radii.map(|radius| radius.max(0.) as CGFloat);
     let (top, bottom) = if top_down { (0., height) } else { (height, 0.) };
     let null = std::ptr::null();
+    if smoothing <= 0. {
+        let [tl, tr, br, bl] = radii.map(|radius| radius.max(0.) as CGFloat);
+        unsafe {
+            CGMutablePath::move_to_point(Some(&path), null, tl, top);
+            CGMutablePath::add_arc_to_point(Some(&path), null, width, top, width, bottom, tr);
+            CGMutablePath::add_arc_to_point(Some(&path), null, width, bottom, 0., bottom, br);
+            CGMutablePath::add_arc_to_point(Some(&path), null, 0., bottom, 0., top, bl);
+            CGMutablePath::add_arc_to_point(Some(&path), null, 0., top, width, top, tl);
+        }
+        CGMutablePath::close_subpath(Some(&path));
+        return path;
+    }
+    // Each corner's extent along its edges, and how far short of the corner
+    // its handles stop.
+    let limit = size.0.min(size.1).max(0.) / 2.;
+    let [tl, tr, br, bl] = radii.map(|radius| {
+        let (extent, n) = zgui::decoration::corner_shape(radius, smoothing, limit);
+        let short = extent * (1. - zgui::decoration::corner_handle(n));
+        (extent as CGFloat, short as CGFloat)
+    });
+    // Toward the bottom edge from the top one.
+    let down = if top_down { 1. } else { -1. };
+    let p = Some(&*path);
     unsafe {
-        CGMutablePath::move_to_point(Some(&path), null, tl, top);
-        CGMutablePath::add_arc_to_point(Some(&path), null, width, top, width, bottom, tr);
-        CGMutablePath::add_arc_to_point(Some(&path), null, width, bottom, 0., bottom, br);
-        CGMutablePath::add_arc_to_point(Some(&path), null, 0., bottom, 0., top, bl);
-        CGMutablePath::add_arc_to_point(Some(&path), null, 0., top, width, top, tl);
+        CGMutablePath::move_to_point(p, null, tl.0, top);
+        CGMutablePath::add_line_to_point(p, null, width - tr.0, top);
+        CGMutablePath::add_curve_to_point(
+            p,
+            null,
+            width - tr.1,
+            top,
+            width,
+            top + down * tr.1,
+            width,
+            top + down * tr.0,
+        );
+        CGMutablePath::add_line_to_point(p, null, width, bottom - down * br.0);
+        CGMutablePath::add_curve_to_point(
+            p,
+            null,
+            width,
+            bottom - down * br.1,
+            width - br.1,
+            bottom,
+            width - br.0,
+            bottom,
+        );
+        CGMutablePath::add_line_to_point(p, null, bl.0, bottom);
+        CGMutablePath::add_curve_to_point(
+            p,
+            null,
+            bl.1,
+            bottom,
+            0.,
+            bottom - down * bl.1,
+            0.,
+            bottom - down * bl.0,
+        );
+        CGMutablePath::add_line_to_point(p, null, 0., top + down * tl.0);
+        CGMutablePath::add_curve_to_point(p, null, 0., top + down * tl.1, tl.1, top, tl.0, top);
     }
     CGMutablePath::close_subpath(Some(&path));
     path
@@ -461,11 +521,15 @@ impl Cut {
             self.mask = None;
             return;
         };
-        let (frame, radii) = match shape {
-            Shape::Rect(rect) => (rect, [0.; 4]),
-            Shape::Round(round) => (round.rect, round.radii),
+        let (frame, radii, smoothing) = match shape {
+            Shape::Rect(rect) => (rect, [0.; 4], 0.),
+            Shape::Round(round) => (round.rect, round.radii, round.smoothing),
         };
-        let wants_shape = !radii.iter().all(|r| (r - radii[0]).abs() < 0.01);
+        // A layer's own corner radius draws circles alone (`cornerCurve`'s
+        // continuous corners are Apple's, not the renderer's): uneven or
+        // smoothed corners take a shape.
+        let wants_shape =
+            !radii.iter().all(|r| (r - radii[0]).abs() < 0.01) || (smoothing > 0. && radii[0] > 0.);
         let reusable = self
             .mask
             .as_ref()
@@ -491,6 +555,7 @@ impl Cut {
             shape.setPath(Some(&rounded_path(
                 (frame.width, frame.height),
                 radii,
+                smoothing,
                 down,
             )));
         } else {
@@ -1036,9 +1101,12 @@ impl Surfaces {
                     let _: () = msg_send![&*layer, setFilters: &*filters];
                 }
             }
-            // Its own corners: its layer's radius, or a shape when uneven.
-            let radii = placement.radii;
-            if radii.iter().all(|r| (r - radii[0]).abs() < 0.01) {
+            // Its own corners: its layer's radius, or a shape when uneven
+            // or smoothed.
+            let (radii, smoothing) = (placement.radii, placement.smoothing);
+            if radii.iter().all(|r| (r - radii[0]).abs() < 0.01)
+                && (smoothing <= 0. || radii[0] <= 0.)
+            {
                 unsafe { layer.setMask(None) };
                 backdrop.own = None;
                 layer.setCornerRadius(radii[0] as CGFloat);
@@ -1056,6 +1124,7 @@ impl Surfaces {
                 shape.setPath(Some(&rounded_path(
                     (placement.rect.width, placement.rect.height),
                     radii,
+                    smoothing,
                     down,
                 )));
                 unsafe { layer.setMask(Some(mask)) };

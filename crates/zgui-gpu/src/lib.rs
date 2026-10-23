@@ -142,7 +142,8 @@ struct Region {
     fade_box: [f32; 4],
     fade: [f32; 4],
     /// Colour filters: an affine map of straight RGB, rows R, G, B, on
-    /// where `tint[0]` is 1.
+    /// where `tint[0]` is 1. `tint[1]` and `tint[2]`: the rounded boxes'
+    /// corner smoothing.
     color: [[f32; 4]; 3],
     tint: [f32; 4],
 }
@@ -174,6 +175,8 @@ impl Region {
             ),
             None => ([0., 0., -1., -1.], [0.; 4]),
         };
+        let smoothing =
+            |clip: Option<zgui::scene::RoundRect>| clip.map_or(0., |clip| clip.smoothing);
         let ((round0, radii0), (round1, radii1)) = (round(item.rounded[0]), round(item.rounded[1]));
         let (fade_box, fade) = item.mask.map_or(([0.; 4], [0.; 4]), |(rect, bands)| {
             (
@@ -189,7 +192,12 @@ impl Region {
             fade_box,
             fade,
             color: item.color.unwrap_or_default(),
-            tint: [if item.color.is_some() { 1. } else { 0. }, 0., 0., 0.],
+            tint: [
+                if item.color.is_some() { 1. } else { 0. },
+                smoothing(item.rounded[0]),
+                smoothing(item.rounded[1]),
+                0.,
+            ],
         })
     }
 }
@@ -635,7 +643,7 @@ struct Draw {
     /// How its quads are drawn; set by `push_draw`.
     shading: Shading,
     /// A backdrop filter: its bounds, effects and corner radii.
-    blur: Option<(Rect, zgui::scene::Effects, [f32; 4])>,
+    blur: Option<(Rect, zgui::scene::Effects, BlurCorners)>,
     start: u32,
     end: u32,
     clip: Rect,
@@ -681,6 +689,10 @@ struct VerticalBlur {
 /// of it shows, and that amount for the target's share.
 pub(crate) const BLUR_MIX: &str = "struct Mixed { @location(0) @blend_src(0) color:vec4<f32>, @location(0) @blend_src(1) amount:vec4<f32> }
 @fragment fn fs_mix(v:Vertex)->Mixed{let b=blurs[v.index];let blend=blurred(b,v.p.xy);let a=amount(b,v.p.xy)*blend.weight;return Mixed(blend.color*a,vec4(a));}";
+/// The quad shader with the corner shape it shares (corner.wgsl).
+pub(crate) const DRAW_WGSL: &str = concat!(include_str!("draw.wgsl"), include_str!("corner.wgsl"));
+/// The backdrop blur shader with the corner shape it shares.
+pub(crate) const BLUR_WGSL: &str = concat!(include_str!("blur.wgsl"), include_str!("corner.wgsl"));
 /// A filter's header in `blur.wgsl` (`Blur`).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -716,7 +728,7 @@ struct Filter {
     clip: Rect,
     outputs: Vec<Rect>,
     effects: zgui::scene::Effects,
-    corners: [f32; 4],
+    corners: BlurCorners,
 }
 /// Backdrop blur pipelines (blur.wgsl): average each area down into its
 /// atlas slots, blur them across and down at that size, then draw them back
@@ -745,10 +757,10 @@ impl BlurPipelines {
         let source = if dual {
             format!(
                 "enable dual_source_blending;\n{}\n{BLUR_MIX}",
-                include_str!("blur.wgsl")
+                crate::BLUR_WGSL
             )
         } else {
-            include_str!("blur.wgsl").to_owned()
+            BLUR_WGSL.to_owned()
         };
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("backdrop blur"),
@@ -2628,7 +2640,7 @@ impl GpuRenderer {
                                     style.radius + shadow.spread.max(0.),
                                     0.,
                                     shadow.blur_radius.max(0.001),
-                                    0.,
+                                    1. + style.smoothing(),
                                 ],
                                 border: decoration::shadow_corners(
                                     style,
@@ -2672,7 +2684,7 @@ impl GpuRenderer {
                                     color: rgba(fill, opacity),
                                     fade,
                                     options: [edge_fade, 0., 0., 1.],
-                                    shape: [0., 0., 0., 1.],
+                                    shape: [0., 0., 0., 1. + style.smoothing()],
                                     border: decoration::shadow_corners(
                                         style,
                                         bounds.width,
@@ -2712,7 +2724,7 @@ impl GpuRenderer {
                                     color: [1., 1., 1., opacity],
                                     fade,
                                     options: [edge_fade, 0., 0., 1.],
-                                    shape: [0., 0., 0., 1.],
+                                    shape: [0., 0., 0., 1. + style.smoothing()],
                                     border: decoration::shadow_corners(
                                         style,
                                         bounds.width,
@@ -2775,7 +2787,12 @@ impl GpuRenderer {
                                     color: rgba(style.fill, opacity),
                                     fade,
                                     options: [edge_fade, 0., 0., 0.],
-                                    shape: [style.radius.max(0.), border, 0., 1.],
+                                    shape: [
+                                        style.radius.max(0.),
+                                        border,
+                                        0.,
+                                        1. + style.smoothing(),
+                                    ],
                                     border: rgba(style.border_color, opacity),
                                     mask: NO_MASK,
                                 },
@@ -4481,8 +4498,13 @@ impl GpuRenderer {
                     *levels.last().expect("one level"),
                 ],
                 area,
-                shape: filter.corners.map(|radius| radius * scale),
-                slots: [first, levels.len() as u32, original, 0],
+                shape: filter.corners.0.map(|radius| radius * scale),
+                slots: [
+                    first,
+                    levels.len() as u32,
+                    original,
+                    filter.corners.1.to_bits(),
+                ],
             });
         }
         if blurs.is_empty() {
@@ -5790,7 +5812,7 @@ fn rich_decoration_quad(d: &text::RichDecoration) -> Quad {
 pub(crate) fn fill_source(user: &str) -> String {
     format!(
         "{}\nstruct FillInput {{ p:vec2<f32>, size:vec2<f32>, time:f32, scale:f32, params:array<vec4<f32>,4> }}\n{user}\n{}",
-        include_str!("draw.wgsl"),
+        crate::DRAW_WGSL,
         "@fragment fn zgui_fill(input:Out)->@location(0) vec4<f32> {
  if input.mask.y<.5 {return shade(input);}
  let u=regions[u32(input.mask.y)-1u]; var v=input;
@@ -5888,7 +5910,7 @@ fn background_quad(
         color: [1., 1., 1., opacity],
         fade,
         options: [edge_fade, 2., 0., 1.],
-        shape: [0., 0., 0., 1.],
+        shape: [0., 0., 0., 1. + style.smoothing()],
         border: decoration::shadow_corners(style, bounds.width, bounds.height, 0.),
         mask: NO_MASK,
     })
@@ -5921,7 +5943,12 @@ fn outline_quad(
         color: rgba(outline.color, opacity),
         fade,
         options: [edge_fade, 0., 0., 1.],
-        shape: [width + 4096. * width, -1., width + 4096. * width, 1.],
+        shape: [
+            width + 4096. * width,
+            -1.,
+            width + 4096. * width,
+            1. + style.smoothing(),
+        ],
         border: corners,
         mask: NO_MASK,
     }
@@ -5946,7 +5973,7 @@ fn ring_quad(style: &zgui::scene::QuadStyle, bounds: Rect, opacity: f32, edge_fa
             width(sides.top) + 4096. * width(sides.right),
             -1.,
             width(sides.bottom) + 4096. * width(sides.left),
-            1.,
+            1. + style.smoothing(),
         ],
         border: decoration::shadow_corners(style, bounds.width, bounds.height, 0.),
         mask: NO_MASK,
@@ -6193,13 +6220,17 @@ fn crosses(quad: &Quad, clip: Rect) -> bool {
     !outside && !inside(quad, clip)
 }
 /// A backdrop filter's corner radii (top-left, top-right, bottom-right,
-/// bottom-left): a rounded panel blurs only inside its own curve.
-fn blur_corners(kind: &NodeKind, bounds: Rect) -> [f32; 4] {
+/// bottom-left) and their smoothing.
+type BlurCorners = ([f32; 4], f32);
+/// A backdrop filter's corners: a rounded panel blurs only inside its own
+/// curve.
+fn blur_corners(kind: &NodeKind, bounds: Rect) -> BlurCorners {
     match kind {
-        NodeKind::Panel { quad, .. } | NodeKind::Quad(quad) => {
-            decoration::shadow_corners(quad, bounds.width, bounds.height, 0.)
-        }
-        _ => [0.; 4],
+        NodeKind::Panel { quad, .. } | NodeKind::Quad(quad) => (
+            decoration::shadow_corners(quad, bounds.width, bounds.height, 0.),
+            quad.smoothing(),
+        ),
+        _ => ([0.; 4], 0.),
     }
 }
 fn scissor(r: Rect, scale: f32, width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
@@ -6276,6 +6307,9 @@ fn push_panel(quads: &mut Vec<Quad>, quad: Quad, scale: f32, split: bool) {
     } else {
         quad.shape[0]
     };
+    // A smoothed corner runs further along the edges than its radius, but
+    // no deeper into the box than the circle: the curve's points nearest
+    // both edges are its 45° point, the circle's (`corner_shape`).
     let band = radius.max(quad.shape[1] + 1.).max(0.) + 1.;
     let [x, y, width, height] = quad.rect;
     let (right, bottom) = (x + width, y + height);
@@ -6463,7 +6497,7 @@ fn create_quad_pipelines(
 ) {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("quads"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("draw.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(crate::DRAW_WGSL.into()),
     });
     let group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("quads"),

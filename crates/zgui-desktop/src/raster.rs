@@ -1,5 +1,6 @@
 use fontdue::{Font, FontSettings, Metrics};
 use std::collections::HashMap;
+use zgui::decoration::{corner_distance, corner_shape};
 use zgui::scene::{Color, Effects, NodeKind, Rect, Scene};
 
 type StyledGlyphKey = (String, u32, u32, u32, zgui::text_layout::FontStyle);
@@ -174,6 +175,7 @@ impl Raster {
                                     },
                                     border_width: outline.width,
                                     border_color: tint(outline.color, item.color),
+                                    corner_smoothing: Some(quad.smoothing()),
                                     ..Default::default()
                                 };
                                 self.quad(
@@ -419,7 +421,11 @@ impl Raster {
         let mut saved = Vec::new();
         for round in rounded.iter().flatten() {
             let r = round.rect;
-            let [tl, tr, br, bl] = round.radii;
+            // A smoothed corner runs further along the edges than its radius.
+            let limit = r.width.min(r.height).max(0.) / 2.;
+            let [tl, tr, br, bl] = round
+                .radii
+                .map(|radius| corner_shape(radius, round.smoothing, limit).0);
             for (x, y, radius) in [
                 (r.x, r.y, tl),
                 (r.x + r.width - tr, r.y, tr),
@@ -544,22 +550,28 @@ impl Raster {
                 let (x0, y0, x1, y1) = self.region(visible);
                 for y in y0..y1 {
                     for x in x0..x1 {
-                        let d = rounded_distance(x as f32 + 0.5, y as f32 + 0.5, core, {
-                            let corners = zgui_gpu::decoration::shadow_corners(
-                                &style,
-                                core.width,
-                                core.height,
-                                shadow.spread.max(0.),
-                            );
-                            let right = x as f32 + 0.5 > core.x + core.width * 0.5;
-                            let bottom = y as f32 + 0.5 > core.y + core.height * 0.5;
-                            corners[match (right, bottom) {
-                                (false, false) => 0,
-                                (true, false) => 1,
-                                (true, true) => 2,
-                                (false, true) => 3,
-                            }]
-                        });
+                        let d = rounded_distance(
+                            x as f32 + 0.5,
+                            y as f32 + 0.5,
+                            core,
+                            {
+                                let corners = zgui_gpu::decoration::shadow_corners(
+                                    &style,
+                                    core.width,
+                                    core.height,
+                                    shadow.spread.max(0.),
+                                );
+                                let right = x as f32 + 0.5 > core.x + core.width * 0.5;
+                                let bottom = y as f32 + 0.5 > core.y + core.height * 0.5;
+                                corners[match (right, bottom) {
+                                    (false, false) => 0,
+                                    (true, false) => 1,
+                                    (true, true) => 2,
+                                    (false, true) => 3,
+                                }]
+                            },
+                            style.smoothing(),
+                        );
                         let alpha =
                             zgui_gpu::decoration::shadow_coverage(d, shadow.blur_radius.max(0.));
                         blend(
@@ -631,7 +643,13 @@ impl Raster {
         let (x0, y0, x1, y1) = self.region(visible);
         for y in y0..y1 {
             for x in x0..x1 {
-                let d = rounded_distance(x as f32 + 0.5, y as f32 + 0.5, bounds, style.radius);
+                let d = rounded_distance(
+                    x as f32 + 0.5,
+                    y as f32 + 0.5,
+                    bounds,
+                    style.radius,
+                    style.smoothing(),
+                );
                 let outer = (0.5 - d).clamp(0., 1.);
                 let inner = (0.5 - d - style.border_width.max(0.)).clamp(0., 1.);
                 let amount = effects.opacity * edge_alpha(y as f32, bounds, effects.edge_fade);
@@ -1265,6 +1283,67 @@ mod tests {
         assert_eq!(at(&pixels, 31, 11), 0x10141c);
     }
     #[test]
+    fn squircle_fills_and_clips_follow_the_corner_distance() {
+        // The red share of each pixel of the top-left corner over the
+        // background, against the squircle's coverage of its centre.
+        let check = |pixels: &[u32], what: &str| {
+            for y in 10..50 {
+                for x in 10..50 {
+                    let red = (pixels[y * 100 + x] >> 16) as f32;
+                    let shown = (red - 16.) / 239.;
+                    let q = ((x as f32 + 0.5 - 50.).abs(), (y as f32 + 0.5 - 50.).abs());
+                    let want = (0.5 - corner_distance(q, (40., 40.), 20., 1.)).clamp(0., 1.);
+                    assert!(
+                        (shown - want).abs() < 0.02,
+                        "{what} at ({x}, {y}): {shown} {want}"
+                    );
+                }
+            }
+        };
+        let quad = |fill| zgui::scene::QuadStyle {
+            fill,
+            radius: 20.,
+            corner_smoothing: Some(1.),
+            ..Default::default()
+        };
+        let square = Style {
+            width: Some(80.),
+            height: Some(80.),
+            ..Default::default()
+        };
+        // A fill.
+        let mut s = scene();
+        let panel = s.append(
+            s.root(),
+            NodeKind::Quad(quad(Color(255, 0, 0, 255))),
+            square.clone(),
+        );
+        s.set_transform(panel, Transform { x: 10., y: 10. });
+        let mut raster = Raster::new(100, 100);
+        let (pixels, full) = incremental_and_full(&mut raster, &mut s);
+        assert_eq!(pixels, full);
+        check(&pixels, "fill");
+        // A clip cutting a child that fills it.
+        let mut s = scene();
+        let card = s.append(
+            s.root(),
+            NodeKind::Panel {
+                layout: Layout::Overlay,
+                quad: quad(Color(0, 0, 0, 0)),
+            },
+            Style {
+                clip: true,
+                ..square.clone()
+            },
+        );
+        s.set_transform(card, Transform { x: 10., y: 10. });
+        s.append(card, NodeKind::Rect(Color(255, 0, 0, 255)), square);
+        let mut raster = Raster::new(100, 100);
+        let (pixels, full) = incremental_and_full(&mut raster, &mut s);
+        assert_eq!(pixels, full);
+        check(&pixels, "clip");
+    }
+    #[test]
     fn content_blurs_spread_and_masks_hide_their_layers() {
         let mut s = scene();
         let red = rectangle(&mut s, 30., Color(255, 0, 0, 255));
@@ -1463,15 +1542,24 @@ fn rounded_coverage(round: &zgui::scene::RoundRect, x: f32, y: f32) -> f32 {
         (true, true) => br,
         (false, true) => bl,
     };
-    let (dx, dy) = (qx.abs() - half_w + radius, qy.abs() - half_h + radius);
-    let outside = (dx.max(0.).powi(2) + dy.max(0.).powi(2)).sqrt() + dx.max(dy).min(0.) - radius;
+    let outside = corner_distance(
+        (qx.abs(), qy.abs()),
+        (half_w, half_h),
+        radius,
+        round.smoothing,
+    );
     (0.5 - outside).clamp(0., 1.)
 }
-fn rounded_distance(x: f32, y: f32, bounds: Rect, radius: f32) -> f32 {
-    let r = radius.max(0.).min(bounds.width.min(bounds.height) * 0.5);
-    let qx = (x - bounds.x - bounds.width * 0.5).abs() - bounds.width * 0.5 + r;
-    let qy = (y - bounds.y - bounds.height * 0.5).abs() - bounds.height * 0.5 + r;
-    qx.max(0.).hypot(qy.max(0.)) + qx.max(qy).min(0.) - r
+/// Signed distance from (`x`, `y`) to `bounds` with corners of `radius`
+/// smoothed by `smoothing` (see `zgui::decoration::corner_shape`).
+fn rounded_distance(x: f32, y: f32, bounds: Rect, radius: f32, smoothing: f32) -> f32 {
+    let (half_w, half_h) = (bounds.width * 0.5, bounds.height * 0.5);
+    corner_distance(
+        ((x - bounds.x - half_w).abs(), (y - bounds.y - half_h).abs()),
+        (half_w, half_h),
+        radius,
+        smoothing,
+    )
 }
 
 #[cfg(test)]
@@ -1499,6 +1587,7 @@ mod extended_tests {
                 decoration: None,
                 border_over: false,
                 outline: None,
+                corner_smoothing: None,
             }),
             Style {
                 width: Some(24.),

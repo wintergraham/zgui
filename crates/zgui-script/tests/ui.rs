@@ -362,6 +362,31 @@ fn border_over_reaches_the_scene() {
 }
 
 #[test]
+fn squircle_corners_reach_the_scene() {
+    let mut h = common::Harness::inline(
+        r##"return ui.div {
+            ui.div { id = "own", w = 20, h = 20, rounded = 6, bg = "#fff", corner_smoothing = 0.8 },
+            ui.div { id = "ios", w = 20, h = 20, rounded = 6, bg = "#fff", squircle = true },
+            ui.div { id = "plain", w = 20, h = 20, rounded = 6, bg = "#fff" },
+        }"##,
+    );
+    let smoothing = |h: &mut common::Harness, id: &str| {
+        let node = h.find(id).unwrap();
+        match h.ui.scene.borrow().kind(node) {
+            NodeKind::Panel { quad, .. } => quad.corner_smoothing,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(smoothing(&mut h, "own"), Some(0.8));
+    assert_eq!(
+        smoothing(&mut h, "ios"),
+        Some(zgui::decoration::IOS_CORNER_SMOOTHING)
+    );
+    // Unset: the app's default decides when it draws.
+    assert_eq!(smoothing(&mut h, "plain"), None);
+}
+
+#[test]
 fn bg_image_paints_and_survives_an_animated_bg() {
     let png = concat!(
         env!("CARGO_MANIFEST_DIR"),

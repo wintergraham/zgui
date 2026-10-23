@@ -2,7 +2,7 @@
 use crate::GpuError;
 use zgui::{
     canvas::*,
-    decoration::{Background, BorderStyle, Corners},
+    decoration::{Background, BorderStyle, Corners, corner_handle, corner_shape},
     scene::{Insets, QuadStyle, Rect},
 };
 fn radii(c: Corners, w: f32, h: f32) -> [(f32, f32); 4] {
@@ -29,33 +29,48 @@ fn radii(c: Corners, w: f32, h: f32) -> [(f32, f32); 4] {
     .clamp(0., 1.);
     r.map(|r| (r * factor, r * factor))
 }
-fn rounded(rect: Rect, r: [(f32, f32); 4]) -> Path {
+/// A box at `rect` with corner radii (x, y each: top-left, top-right,
+/// bottom-right, bottom-left), its corners smoothed by `smoothing` (see
+/// `zgui::decoration::corner_shape`): each a cubic through its 45° point,
+/// a quarter circle at 0.
+fn rounded(rect: Rect, r: [(f32, f32); 4], smoothing: f32) -> Path {
     let (x, y, right, bottom) = (rect.x, rect.y, rect.x + rect.width, rect.y + rect.height);
-    let k = 0.552_284_8;
+    let limit = rect.width.min(rect.height).max(0.) / 2.;
+    // Each corner's extent along x and y, and its handle's share of them.
+    let r = r.map(|(rx, ry)| {
+        if smoothing <= 0. {
+            return (rx, ry, 0.552_284_8);
+        }
+        let ((ex, n), (ey, m)) = (
+            corner_shape(rx, smoothing, limit),
+            corner_shape(ry, smoothing, limit),
+        );
+        (ex, ey, corner_handle((n + m) / 2.))
+    });
     let mut p = Path::builder();
     p.move_to(x + r[0].0, y)
         .line_to(right - r[1].0, y)
         .cubic_to(
-            Point::new(right - r[1].0 * (1. - k), y),
-            Point::new(right, y + r[1].1 * (1. - k)),
+            Point::new(right - r[1].0 * (1. - r[1].2), y),
+            Point::new(right, y + r[1].1 * (1. - r[1].2)),
             Point::new(right, y + r[1].1),
         )
         .line_to(right, bottom - r[2].1)
         .cubic_to(
-            Point::new(right, bottom - r[2].1 * (1. - k)),
-            Point::new(right - r[2].0 * (1. - k), bottom),
+            Point::new(right, bottom - r[2].1 * (1. - r[2].2)),
+            Point::new(right - r[2].0 * (1. - r[2].2), bottom),
             Point::new(right - r[2].0, bottom),
         )
         .line_to(x + r[3].0, bottom)
         .cubic_to(
-            Point::new(x + r[3].0 * (1. - k), bottom),
-            Point::new(x, bottom - r[3].1 * (1. - k)),
+            Point::new(x + r[3].0 * (1. - r[3].2), bottom),
+            Point::new(x, bottom - r[3].1 * (1. - r[3].2)),
             Point::new(x, bottom - r[3].1),
         )
         .line_to(x, y + r[0].1)
         .cubic_to(
-            Point::new(x, y + r[0].1 * (1. - k)),
-            Point::new(x + r[0].0 * (1. - k), y),
+            Point::new(x, y + r[0].1 * (1. - r[0].2)),
+            Point::new(x + r[0].0 * (1. - r[0].2), y),
             Point::new(x + r[0].0, y),
         )
         .close();
@@ -80,7 +95,8 @@ pub fn canvas(style: &QuadStyle, width: f32, height: f32) -> Result<Canvas, GpuE
         return Err(GpuError("nonfinite decoration dimensions".into()));
     }
     let radius = radii(corners, width, height);
-    let outer = rounded(Rect::new(0., 0., width, height), radius);
+    let smoothing = style.smoothing();
+    let outer = rounded(Rect::new(0., 0., width, height), radius, smoothing);
     let mut canvas = Canvas::new();
     let background = match &detail.background {
         None => Brush::Solid(style.fill),
@@ -126,6 +142,14 @@ pub fn canvas(style: &QuadStyle, width: f32, height: f32) -> Result<Canvas, GpuE
             (height - top - bottom).max(0.),
         );
         if inner.width > 0. && inner.height > 0. {
+            // Smoothed corners' extents, `radius·(1+smoothing)`, inset by
+            // the border as draw.wgsl's rings are.
+            let (left, top, right, bottom) = (
+                left / (1. + smoothing),
+                top / (1. + smoothing),
+                right / (1. + smoothing),
+                bottom / (1. + smoothing),
+            );
             ring.append(&rounded(
                 inner,
                 [
@@ -137,6 +161,7 @@ pub fn canvas(style: &QuadStyle, width: f32, height: f32) -> Result<Canvas, GpuE
                     ),
                     ((radius[3].0 - left).max(0.), (radius[3].1 - bottom).max(0.)),
                 ],
+                smoothing,
             ));
         }
         let ring = ring.build().unwrap();

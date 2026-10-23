@@ -685,6 +685,7 @@ props! {
     "rounded" => Rounded: Num, "corners" => Corners: Corners,
     "rounded_tl" => RoundedTl: Num, "rounded_tr" => RoundedTr: Num,
     "rounded_br" => RoundedBr: Num, "rounded_bl" => RoundedBl: Num,
+    "corner_smoothing" => CornerSmoothing: Num, "squircle" => Squircle: Bool,
     "border" => Border: Num, "border_sides" => BorderSides: Corners, "border_color" => BorderColor: Color,
     "border_over" => BorderOver: Bool, "border_dash" => BorderDash: Pair,
     "shadow" => Shadow: Shadow, "opacity" => Opacity: Num,
@@ -2121,6 +2122,16 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
                     .clone()
             });
             Ok(ShaderUd(shader))
+        })?,
+    )?;
+    // The corner smoothing of every node that sets none of its own
+    // (`zgui::decoration::set_default_corner_smoothing`): 0.6 makes
+    // squircles of every rounded corner. Before the first frame.
+    ui.set(
+        "corner_smoothing",
+        lua.create_function(|_, smoothing: f32| {
+            zgui::decoration::set_default_corner_smoothing(smoothing);
+            Ok(())
         })?,
     )?;
     ui.set(

@@ -9,7 +9,8 @@ struct Out { @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32>, @
 // A clip region quads share (`mask.x`: its index plus one, 0 for none): up
 // to two rounded boxes (x, y, width, height; a negative width for none)
 // with their radii (top-left, top-right, bottom-right, bottom-left), cut
-// with antialiased corners; and a box (x0, y0, x1, y1) whose content fades
+// with antialiased corners smoothed by `tint.y` and `tint.z` (see
+// `corner_distance`, corner.wgsl); and a box (x0, y0, x1, y1) whose content fades
 // out over bands at its edges (top, right, bottom, left), quadratically, as
 // Zeron fades transcript edges. Logical units of the target, where the
 // pixel is on screen (a transformed quad's `point` is its own).
@@ -18,12 +19,11 @@ struct Out { @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32>, @
 // is written.
 struct Region { round0:vec4<f32>, radii0:vec4<f32>, round1:vec4<f32>, radii1:vec4<f32>, fade_box:vec4<f32>, fade:vec4<f32>, color0:vec4<f32>, color1:vec4<f32>, color2:vec4<f32>, tint:vec4<f32> }
 @group(1) @binding(1) var<storage, read> regions:array<Region>;
-fn rounded(b:vec4<f32>, r:vec4<f32>, p:vec2<f32>)->f32 {
+fn rounded(b:vec4<f32>, r:vec4<f32>, smoothing:f32, p:vec2<f32>)->f32 {
  if b.z<0. {return 1.;}
  let half=b.zw*.5; let q=p-b.xy-half;
  let radius=select(select(r.w,r.z,q.x>0.),select(r.x,r.y,q.x>0.),q.y<0.);
- let d=abs(q)-half+vec2(radius); let sdf=length(max(d,vec2(0.)))+min(max(d.x,d.y),0.)-radius;
- return clamp(.5-sdf*viewport.z,0.,1.);
+ return clamp(.5-corner_distance(abs(q),half,radius,smoothing)*viewport.z,0.,1.);
 }
 // `premultiplied` through region `index`'s colour filters, if any.
 fn tinted(index:f32, premultiplied:vec4<f32>)->vec4<f32> {
@@ -36,7 +36,7 @@ fn tinted(index:f32, premultiplied:vec4<f32>)->vec4<f32> {
 }
 fn region(index:f32, position:vec2<f32>)->f32 {
  let g=regions[u32(index)-1u]; let p=position/viewport.z;
- var k=rounded(g.round0,g.radii0,p)*rounded(g.round1,g.radii1,p);
+ var k=rounded(g.round0,g.radii0,g.tint.y,p)*rounded(g.round1,g.radii1,g.tint.z,p);
  if g.fade.x>0. {let t=clamp((p.y-g.fade_box.y)/g.fade.x,0.,1.); k*=t*t;}
  if g.fade.y>0. {let t=clamp((g.fade_box.z-p.x)/g.fade.y,0.,1.); k*=t*t;}
  if g.fade.z>0. {let t=clamp((g.fade_box.w-p.y)/g.fade.z,0.,1.); k*=t*t;}
@@ -68,21 +68,22 @@ fn shade(input:Out)->vec4<f32> {
      let right=v.point.x>v.fade.x+v.fade.z*0.5; let bottom=v.point.y>v.fade.y+v.fade.w*0.5;
      corner=select(select(v.border.x,v.border.y,right),select(v.border.w,v.border.z,right),bottom);
    }
+   // `shape.w`: 1 plus the corners' smoothing (see corner.wgsl).
+   let smoothing=max(v.shape.w-1.,0.);
    let radius=clamp(corner,0.,min(v.fade.z,v.fade.w)*0.5);
-   let q=abs(v.point-v.fade.xy-v.fade.zw*0.5)-(v.fade.zw*0.5-vec2(radius));
-   let distance=length(max(q,vec2(0.)))+min(max(q.x,q.y),0.)-radius;
+   let distance=corner_distance(abs(v.point-v.fade.xy-v.fade.zw*0.5),v.fade.zw*0.5,radius,smoothing);
    if v.shape.y<0. {
      // A ring (a border alone, `ring_quad`): side widths (top, right,
      // bottom, left) packed two to a lane in 16ths of a pixel; inside, the
-     // box inset by them, its corners as much rounder as they are thinner.
+     // box inset by them, its corners as much rounder as they are thinner
+     // (a smoothed corner's extent, `radius·(1+smoothing)`, inset alike).
      let a=u32(v.shape.x); let b=u32(v.shape.z);
      let sides=vec4(f32(a&4095u),f32(a>>12u),f32(b&4095u),f32(b>>12u))/16.;
      let right=v.point.x>v.fade.x+v.fade.z*0.5; let bottom=v.point.y>v.fade.y+v.fade.w*0.5;
      let across=select(sides.w,sides.y,right); let down=select(sides.x,sides.z,bottom);
      let box=vec4(v.fade.xy+sides.wx,max(v.fade.zw-sides.wx-sides.yz,vec2(0.)));
-     let inner_radius=clamp(radius-(across+down)*0.5,0.,min(box.z,box.w)*0.5);
-     let iq=abs(v.point-box.xy-box.zw*0.5)-(box.zw*0.5-vec2(inner_radius));
-     let inside=length(max(iq,vec2(0.)))+min(max(iq.x,iq.y),0.)-inner_radius;
+     let inner_radius=clamp(radius-(across+down)*0.5/(1.+smoothing),0.,min(box.z,box.w)*0.5);
+     let inside=corner_distance(abs(v.point-box.xy-box.zw*0.5),box.zw*0.5,inner_radius,smoothing);
      let aa=max(fwidth(distance),0.5);
      let hollow=select(0.,clamp(0.5-inside/aa,0.,1.),box.z>0.&&box.w>0.);
      color.a*=max(clamp(0.5-distance/aa,0.,1.)-hollow,0.);

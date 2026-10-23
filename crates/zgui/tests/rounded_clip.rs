@@ -48,6 +48,7 @@ fn rounded_overflow_clips_reach_descendants_innermost_first() {
     let card = RoundRect {
         rect: zgui::scene::Rect::new(0., 0., 200., 100.),
         radii: [16.; 4],
+        smoothing: 0.,
     };
     // The caption is inside the card alone.
     assert_eq!(items_rounded(&ui, "caption", &view), [Some(card), None]);
@@ -56,6 +57,7 @@ fn rounded_overflow_clips_reach_descendants_innermost_first() {
     let thumb = RoundRect {
         rect: zgui::scene::Rect::new(0., 0., 60., 40.),
         radii: [20., 0., 6., 0.],
+        smoothing: 0.,
     };
     assert_eq!(
         items_rounded(&ui, "photo", &view),

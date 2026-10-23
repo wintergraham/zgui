@@ -285,6 +285,8 @@ pub struct BackdropPlacement {
     pub rect: Rect,
     /// Its corner radii (top-left, top-right, bottom-right, bottom-left).
     pub radii: [f32; 4],
+    /// Its corners' smoothing (see `QuadStyle::corner_smoothing`).
+    pub smoothing: f32,
     pub clip: Option<Rect>,
     /// Ancestors' rounded clips, innermost first.
     pub rounded: Vec<RoundRect>,
@@ -387,6 +389,7 @@ fn map_round(matrix: Option<Affine>, round: RoundRect) -> Option<RoundRect> {
     Some(RoundRect {
         rect: map_rect(matrix, round.rect),
         radii: round.radii.map(|radius| radius * scale),
+        smoothing: round.smoothing,
     })
 }
 fn intersect(clip: Option<Rect>, other: Option<Rect>) -> Option<Rect> {
@@ -419,6 +422,13 @@ pub fn corner_radii(kind: &NodeKind, bounds: Rect) -> [f32; 4] {
             0.
         }
     })
+}
+/// A box's corner smoothing, as the renderer draws its corners.
+pub fn corner_smoothing(kind: &NodeKind) -> f32 {
+    match kind {
+        NodeKind::Quad(quad) | NodeKind::Panel { quad, .. } => quad.smoothing(),
+        _ => 0.,
+    }
 }
 /// Whether an item draws anything of its own.
 fn paints(item: &PaintItem<'_>) -> bool {
@@ -552,6 +562,7 @@ impl Walk<'_> {
                         RoundRect {
                             rect: item.bounds,
                             radii,
+                            smoothing: corner_smoothing(item.kind),
                         },
                     )
                 {
@@ -602,6 +613,7 @@ impl Walk<'_> {
                         node: item.id,
                         rect: frame,
                         radii: radii.map(|radius| radius * scale),
+                        smoothing: corner_smoothing(item.kind),
                         clip,
                         rounded: rounded.clone(),
                         sigma: item.effects.blur_radius * magnification(context.matrix),

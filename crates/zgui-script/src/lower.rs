@@ -1955,6 +1955,12 @@ fn apply<S: Styled>(s: S, prop: Prop, lit: &Lit) -> S {
         (TextColor, Lit::Color(c)) => s.text_color(*c),
         (Rounded, Lit::Num(v)) => s.rounded(*v),
         (Corners, Lit::Corners(c)) => s.rounded_corners(*c),
+        // Squircles: 0 keeps circles, 0.6 is iOS's continuous corners.
+        (CornerSmoothing, Lit::Num(v)) => s.corner_smoothing(*v),
+        (Squircle, Lit::Bool(v)) => s.corner_smoothing(match v {
+            true => zgui::decoration::IOS_CORNER_SMOOTHING,
+            false => 0.,
+        }),
         // The border paints over the node's children (a CSS inset outline).
         (BorderOver, Lit::Bool(v)) => s.border_over(*v),
         // `{ top, right, bottom, left }`, as CSS orders border widths.

@@ -457,6 +457,12 @@ pub struct QuadStyle {
     pub border_over: bool,
     /// An outline around the box (CSS `outline` and `outline-offset`).
     pub outline: Option<Outline>,
+    /// How far its rounded corners ease into squircles, 0 (circular) to 1
+    /// (see `decoration::corner_shape`); `None` takes the app's default
+    /// (`decoration::set_default_corner_smoothing`). Its fill, border,
+    /// outline, shadows, backdrop blur and the clip it gives its children
+    /// all share it.
+    pub corner_smoothing: Option<f32>,
 }
 /// An outline (CSS `outline`, `outline-offset`): a ring `width` wide drawn
 /// `offset` outside the box (inside it when negative), its corners the
@@ -490,10 +496,18 @@ impl Default for QuadStyle {
             decoration: None,
             border_over: false,
             outline: None,
+            corner_smoothing: None,
         }
     }
 }
 impl QuadStyle {
+    /// Its corner smoothing: its own, or the app's default.
+    pub fn smoothing(&self) -> f32 {
+        self.corner_smoothing.map_or_else(
+            crate::decoration::default_corner_smoothing,
+            crate::decoration::clamp_smoothing,
+        )
+    }
     /// Its border's widths (top, right, bottom, left): per side from the
     /// decoration, or `border_width` all round.
     pub fn border_sides(&self) -> Insets {
@@ -899,6 +913,8 @@ pub type FadeMask = (Rect, [f32; 4]);
 pub struct RoundRect {
     pub rect: Rect,
     pub radii: [f32; 4],
+    /// Its corners' smoothing (`QuadStyle::corner_smoothing`, resolved).
+    pub smoothing: f32,
 }
 /// The rounded clips around a paint item, innermost first: those of its
 /// nearest ancestors that clip (`overflow: hidden`) with rounded corners
@@ -3988,6 +4004,7 @@ fn rounded_clip(inherited: RoundedClip, node: &Node, bounds: Rect) -> RoundedCli
         Some(RoundRect {
             rect: bounds,
             radii,
+            smoothing: quad.smoothing(),
         }),
         inherited[0],
     ]

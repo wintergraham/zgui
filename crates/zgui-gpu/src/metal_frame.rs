@@ -111,7 +111,7 @@ impl MetalFrame {
             hal_queue.as_raw().retain()
         };
         drop(hal_queue);
-        let draw = Library::new(&raw, include_str!("draw.wgsl"), Kind::Quads)?;
+        let draw = Library::new(&raw, crate::DRAW_WGSL, Kind::Quads)?;
         let copy = Library::new(&raw, include_str!("copy_offset.wgsl"), Kind::Copies)?;
         let pipeline = |library: &Library, vertex: &str, fragment: &str, blend: Blend| {
             library.pipeline(&raw, vertex, fragment, MTLPixelFormat::BGRA8Unorm, blend)
@@ -197,7 +197,7 @@ impl MetalFrame {
             .get_or_init(|| {
                 let source = format!(
                     "enable dual_source_blending;\n{}\n{}",
-                    include_str!("blur.wgsl"),
+                    crate::BLUR_WGSL,
                     crate::BLUR_MIX
                 );
                 let library = Library::new(&self.device, &source, Kind::Blur).ok()?;

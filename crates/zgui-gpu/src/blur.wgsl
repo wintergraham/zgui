@@ -15,7 +15,8 @@
 // edges): content outside a frosted panel does not bleed into its edge, and
 // changes there never make it re-blur. `shape`: corner radii (top-left,
 // top-right, bottom-right, bottom-left); a rounded panel blurs only inside
-// its curve, antialiased over one pixel.
+// its curve, antialiased over one pixel, its corners smoothed by `slots.w`
+// (an f32's bits; see `corner_distance`, corner.wgsl).
 // `effect`: opacity, fade, sigma (px), and the last level's sigma. `slots`:
 // the first level's slot, the number of levels, and the slot holding the
 // area's original pixels (where mixed over a copy).
@@ -98,8 +99,7 @@ fn coverage(b:Blur, p:vec2<f32>)->f32{
  let half=b.bounds.zw*.5;let q=p-b.bounds.xy-half;
  let r=select(select(b.shape.w,b.shape.z,q.x>0.),select(b.shape.x,b.shape.y,q.x>0.),q.y<0.);
  if r<=0.{return 1.;}
- let d=abs(q)-half+vec2(r);let sdf=length(max(d,vec2(0.)))+min(max(d.x,d.y),0.)-r;
- return clamp(.5-sdf,0.,1.);
+ return clamp(.5-corner_distance(abs(q),half,r,bitcast<f32>(b.slots.w)),0.,1.);
 }
 // How much of the blur replaces the original at `p`.
 fn amount(b:Blur, p:vec2<f32>)->f32{return b.effect.x*coverage(b,p);}

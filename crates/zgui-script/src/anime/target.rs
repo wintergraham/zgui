@@ -104,6 +104,7 @@ impl Key {
             "borderBottomRightRadius" | "rounded_br" => Key::Style(Prop::RoundedBr),
             "borderBottomLeftRadius" | "rounded_bl" => Key::Style(Prop::RoundedBl),
             "borderWidth" | "border_width" => Key::Style(Prop::Border),
+            "cornerSmoothing" | "corner_smoothing" => Key::Style(Prop::CornerSmoothing),
             "width" => Key::Style(Prop::W),
             "height" => Key::Style(Prop::H),
             "minWidth" => Key::Style(Prop::MinW),
@@ -345,6 +346,7 @@ fn read_element(e: &Element, key: &Key) -> V {
                         } as f64)
                     }
                     Prop::Border => V::Num(quad.map_or(0., |q| q.border_width) as f64),
+                    Prop::CornerSmoothing => V::Num(quad.map_or(0., |q| q.smoothing()) as f64),
                     Prop::W => V::Num(bounds.width as f64),
                     Prop::H => V::Num(bounds.height as f64),
                     Prop::TextSize => V::Num(match scene.kind(id) {
