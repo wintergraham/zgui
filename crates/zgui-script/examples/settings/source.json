@@ -1,0 +1,18 @@
+{
+  "source_branch": "codex/native-react-validation",
+  "source_inputs_sha256": {
+    "experiments/react/src/controls/Settings.tsx": "7d7f2e5ed6b90d911ce6ed988e4ba4c87c23922d676942e289fa10a9c07c9821",
+    "experiments/react/src/controls/SettingsKit.tsx": "5cd1c5dc4111367eb155fd7b52b4ad676967dd72b219ddfa8d7b778771a0e959",
+    "experiments/react/src/controls/SettingsSections.tsx": "413fda12bf82185092f68c5a1a07883ba1d3cec803c6f3a1840f55b4b5bbcdd8",
+    "experiments/react/src/controls/SettingsModels.tsx": "2df56b3ac80bb5775b63aae574f081dddc7effd2bd9e1933428e1f66b2238a22",
+    "experiments/react/src/controls/SettingsConfirm.tsx": "13a5271afe48c21fa228397d28c95f98ef1416e32986153420e216d5cbeec397",
+    "experiments/react/src/controls/SettingsSearch.tsx": "356f5ce44ee7c4ea07fd0940b4dfcae11173a20dbbdc615ad1fbecea166d6207",
+    "experiments/react/src/controls/Providers.tsx": "92d66fd8807d2fd02bdb5b91b3e3af339dc93b5bc1f07e2307d1ef717227aa9c",
+    "experiments/react/src/design/settings.css": "b9295269eae79529c061a7e93716d53016c0d47a6b63ddbc4dbab705ad79c987",
+    "experiments/react/src/design/providers.css": "ed4302e946a3ff8bbd098b8e1e17f4e7124fd3954512e27b1a827815904023b9",
+    "experiments/react/src/design/dither.js": "47aa49764ad99e13a483c58807b05f9389173b35979c79603221ee545d998ce4",
+    "experiments/react/src/design/icons.ts": "b02d7e6378cb43d07c1823f9b3209dfa223952895e60b3f3082b491dc00907dc",
+    "experiments/react/src/design/provider-logos.ts": "13fc71bd84f2834aa77abaa355313934d2cdc5cec72e88e1283c0b08ab615816",
+    "experiments/react/src/design/licenses.json": "8d228ec6eed0f2c679f7a3a6b31c6ad506ba1fa266a8f986344da95294891002"
+  }
+}

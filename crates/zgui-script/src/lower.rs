@@ -749,6 +749,9 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
     if let Some(focusable) = node.focusable {
         view = view.focusable(focusable);
     }
+    if let Some(enabled) = node.pointer_events {
+        view = view.pointer_events(enabled);
+    }
     if let Some(handler) = &node.events.click {
         let (handler, vm, actions) = (handler.clone(), vm.clone(), low.actions.clone());
         view = view.on_click(move || {

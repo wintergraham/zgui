@@ -86,7 +86,15 @@ fn shade(input:Out)->vec4<f32> {
      let aa=max(fwidth(distance),0.5);
      let hollow=select(0.,clamp(0.5-inside/aa,0.,1.),box.z>0.&&box.w>0.);
      color.a*=max(clamp(0.5-distance/aa,0.,1.)-hollow,0.);
-   } else if v.shape.z>0. {color.a*=exp(-0.5*pow(max(distance,0.)/v.shape.z,2.));}
+   } else if v.shape.z>0. {
+     // A box shadow (`shape.z` its sigma, half the CSS blur): the box
+     // blurred covers 0.5·erfc(d/(sigma·√2)) at signed distance d, half at
+     // its edge (not full: that read as a hard, dark band).
+     let x=distance/(v.shape.z*1.41421356);
+     let x2=x*x;
+     let e=sign(x)*sqrt(1.-exp(-x2*(1.27323954+0.147*x2)/(1.+0.147*x2)));
+     color.a*=0.5-0.5*e;
+   }
    else {let aa=max(fwidth(distance),0.5);let outer=clamp(0.5-distance/aa,0.,1.);let inner=clamp(0.5-(distance+v.shape.y)/aa,0.,1.);let alpha=color.a*inner+v.border.a*(outer-inner);let rgb=select(vec3(0.),(color.rgb*color.a*inner+v.border.rgb*v.border.a*(outer-inner))/max(alpha,0.00001),alpha>0.);color=vec4(rgb,alpha);}
  }
 
