@@ -579,6 +579,40 @@ fn layout_boxes_spring_to_their_content() {
 }
 
 #[test]
+fn layout_boxes_take_a_reflow_at_once() {
+    // Narrowing the box wraps its row onto a second line: the height changed
+    // because the width did, not the content, so it is not animated.
+    let mut h = Harness::inline(
+        r##"local width = ui.state("width", 80)
+        local cells = {}
+        for i = 1, 4 do table.insert(cells, ui.div { w = 20, h = 20, shrink = 0 }) end
+        return ui.column {
+            ui.column { id = "box", w = width, layout = "height", layout_ease = "linear", layout_duration = 100,
+                ui.row { w_full = true, flex_wrap = true, cells } },
+            ui.div { id = "below", w = 10, h = 10 },
+            ui.button { id = "narrow", w = 10, h = 10, on_click = function() width:set(40) end },
+        }"##,
+    );
+    let y = |h: &mut Harness| {
+        let node = h.find("below").unwrap();
+        h.ui.scene.borrow().bounds(node).y
+    };
+    h.ui.prepare_frame();
+    h.settle();
+    h.ui.prepare_frame();
+    assert_eq!(y(&mut h), 20., "one row of cells");
+    h.click("narrow");
+    h.ui.prepare_frame();
+    h.settle();
+    h.frame();
+    h.ui.prepare_frame();
+    assert_eq!(y(&mut h), 40., "the reflowed height applies at once");
+    h.run_ms(50.);
+    h.ui.prepare_frame();
+    assert_eq!(y(&mut h), 40., "and stays");
+}
+
+#[test]
 fn capped_clips_ask_for_frames_only_at_their_rate() {
     let mut h = Harness::inline(
         r##"anime.animate("#d", { x = { 0, 100 }, duration = 1000, loop = true, frameRate = 12 })

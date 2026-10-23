@@ -1780,6 +1780,14 @@ fn layout_box(inner: View, layout: &LayoutAnim, vm: &Rc<Vm>, low: &Rc<Lowering>)
             let element = Target::Element(target.clone());
             let mut from = Vec::new();
             let mut to = Vec::new();
+            let mut snap = Vec::new();
+            // A height-only box whose width changed reflowed: its container
+            // resized (a panel opening, a sidebar dragged), its content did
+            // not change. That takes the new height at once rather than
+            // easing to it, which would slide what follows the box.
+            let reflowed = grow_h
+                && !grow_w
+                && previous.is_some_and(|(width, _)| (width - size.0).abs() > 0.5);
             for (on, prop, side, now, before) in [
                 (
                     grow_h,
@@ -1799,6 +1807,13 @@ fn layout_box(inner: View, layout: &LayoutAnim, vm: &Rc<Vm>, low: &Rc<Lowering>)
                 if !on {
                     continue;
                 }
+                if reflowed && prop == Prop::Mb {
+                    snap.push((element.clone(), Property::Style(prop), V::Num(0.), None));
+                    if clip {
+                        snap.push((element.clone(), side, V::Num(0.), None));
+                    }
+                    continue;
+                }
                 let shown = match before {
                     // Entering grows from nothing; a first size otherwise holds.
                     None if enter => 0.,
@@ -1813,6 +1828,10 @@ fn layout_box(inner: View, layout: &LayoutAnim, vm: &Rc<Vm>, low: &Rc<Lowering>)
                     from.push((element.clone(), side.clone(), V::Num(-margin), None));
                     to.push((element.clone(), side, V::Num(0.)));
                 }
+            }
+            if !snap.is_empty() {
+                engine.remove_targets(std::slice::from_ref(&element));
+                engine.set_now(snap);
             }
             if to.is_empty() {
                 return;
