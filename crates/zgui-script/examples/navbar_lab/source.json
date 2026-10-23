@@ -1,0 +1,26 @@
+{
+  "source_branch": "codex/react-native-mvp",
+  "source_inputs_sha256": {
+    "experiments/react/src/pages/NavbarPage.tsx": "80b5a0a0f64e0bc464f4c45767c0b23acda257b0c821046757cccd19385c5a4e",
+    "experiments/react/src/controls/navbar.js": "1959b67b0ead2c9b4baaf261fba16527171f02dd1149291f8c283b5e5a8080aa",
+    "experiments/react/src/design/navbar.css": "b5ef9382fe0129bdf4d80c72c7fa6d4e7c6c176a649d892ca1fa3de4a8da6201",
+    "experiments/react/src/design/dither.js": "47aa49764ad99e13a483c58807b05f9389173b35979c79603221ee545d998ce4",
+    "experiments/react/src/design/tokens.css": "921c0e8d0c54ab1ce2d65396cbe4a8a0ff7194939369117f20a2f96ad02378f2",
+    "experiments/react/src/design/pages.css": "f9da579a50db86fc57207bc05452c1ca619fd7ef36240262d5e29d8e055cd215",
+    "experiments/react/src/controls/behavior.js": "4cb46c6f8806edd40442a58ac7f97198b8f6ec230c45ecceaf4c5f8a1a9070a1",
+    "experiments/react/src/design/icons.ts": "b02d7e6378cb43d07c1823f9b3209dfa223952895e60b3f3082b491dc00907dc"
+  },
+  "logo_tints": {
+    "theverge.png": "#5200ff",
+    "github-mark.png": null,
+    "wikipedia.png": null,
+    "hackernews.png": "#ff6f0f",
+    "linear.png": null,
+    "figma.png": "#ed4e33",
+    "notion.png": null,
+    "youtube.png": "#ff0336",
+    "google.png": "#4285f4",
+    "rtings.png": "#ef4949",
+    "reddit.png": "#fd4e0f"
+  }
+}

@@ -50,7 +50,17 @@ declare extern type Element with
 	height: number?
 	x: number?
 	y: number?
+	-- Holds keyboard focus.
+	focused: boolean
 	function has_class(self, class: string): boolean
+	-- Keyboard focus once the handler's writes settle (an input it reveals
+	-- can take it); blur releases it.
+	function focus(self): boolean
+	function blur(self): boolean
+	-- An input's selection in bytes of its text, applied after the
+	-- handler's writes (so text set in the same handler is selected).
+	function select(self, anchor: number, focus: number?): boolean
+	function select_all(self): boolean
 end
 declare extern type Path with
 	function move(self, x: number, y: number): Path
@@ -411,6 +421,13 @@ type Props = {
 	class: string?,
 	ref: (Ref | { Ref })?,
 	focusable: boolean?,
+	-- Pressing the node leaves focus where it is (an editor's popup chrome).
+	keep_focus: boolean?,
+	-- CSS pointer-events, inherited: false lets the pointer through to what
+	-- is below; true takes it again under such an ancestor.
+	pointer_events: P<boolean>?,
+	-- The fill behind an input's selected text.
+	selection_color: Color?,
 	disabled: (boolean | State | (() -> boolean) | Styles)?,
 	hover: Styles?,
 	active: Styles?,

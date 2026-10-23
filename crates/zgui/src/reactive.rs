@@ -51,6 +51,8 @@ struct Inner {
     next: Cell<EffectId>,
     batch_depth: Cell<usize>,
     flushing: Cell<bool>,
+    deferred: RefCell<Vec<Box<dyn FnOnce()>>>,
+    holds: Cell<usize>,
 }
 
 /// An explicit runtime avoids global state and supports multiple independent UI roots.
@@ -134,9 +136,56 @@ impl Runtime {
         let _guard = Guard(self);
         f()
     }
-    /// Run queued observers. Reentrant writes join the current flush.
+    /// Run `callback` once the current batch, and the effects it queued,
+    /// have finished: after a handler's writes have reached the views they
+    /// drive (select the text an input was just given). Outside a batch it
+    /// runs now; inside `hold`, when the hold ends.
+    pub fn defer(&self, callback: impl FnOnce() + 'static) {
+        self.inner.deferred.borrow_mut().push(Box::new(callback));
+        self.flush();
+    }
+    /// Run queued observers, then deferred callbacks. Reentrant writes join
+    /// the current flush.
     pub fn flush(&self) {
-        if self.inner.batch_depth.get() != 0 || self.inner.flushing.replace(true) {
+        if self.inner.batch_depth.get() != 0 || self.inner.flushing.get() {
+            return;
+        }
+        self.flush_effects();
+        if self.inner.holds.get() > 0 {
+            return;
+        }
+        // Deferred callbacks see settled views; their own writes flush as
+        // they make them.
+        loop {
+            let next = {
+                let mut deferred = self.inner.deferred.borrow_mut();
+                (!deferred.is_empty()).then(|| deferred.remove(0))
+            };
+            let Some(callback) = next else { break };
+            callback();
+        }
+    }
+    /// Run `f`, keeping deferred callbacks until it returns; effects still
+    /// run as writes happen. An input event is dispatched in one hold, so
+    /// work deferred by its listeners lands after all of them and the
+    /// event's default actions.
+    pub fn hold<R>(&self, f: impl FnOnce() -> R) -> R {
+        self.inner.holds.set(self.inner.holds.get() + 1);
+        struct Guard<'a>(&'a Runtime);
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                let holds = &self.0.inner.holds;
+                holds.set(holds.get() - 1);
+                if holds.get() == 0 && !std::thread::panicking() {
+                    self.0.flush();
+                }
+            }
+        }
+        let _guard = Guard(self);
+        f()
+    }
+    fn flush_effects(&self) {
+        if self.inner.flushing.replace(true) {
             return;
         }
         struct Guard<'a>(&'a Inner);

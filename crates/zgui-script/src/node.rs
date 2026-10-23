@@ -39,7 +39,10 @@ pub(crate) struct Node {
     pub refs: Vec<Rc<Ref>>,
     pub events: Events,
     pub focusable: Option<bool>,
+    pub keep_focus: bool,
+    pub selection_color: Option<zgui::scene::Color>,
     pub disabled: Option<Source>,
+    pub pointer_events: Option<Source>,
     /// `layout = "height"`: the node's size follows its content, animated.
     pub layout: Option<LayoutAnim>,
     /// `mask = { bitmap, w, h, x, y }`: the content shows through the
@@ -242,7 +245,10 @@ impl Node {
             refs: Vec::new(),
             events: Events::default(),
             focusable: None,
+            keep_focus: false,
+            selection_color: None,
             disabled: None,
+            pointer_events: None,
             layout: None,
             mask: None,
             shader: None,
@@ -1141,6 +1147,13 @@ fn fill(lua: &Lua, mut node: Node, table: Option<&Table>) -> mlua::Result<Node> 
                 }
             },
             "focusable" => node.focusable = Some(lua.unpack(value)?),
+            "keep_focus" => node.keep_focus = lua.unpack(value)?,
+            "selection_color" => {
+                let text: String = lua.unpack(value)?;
+                node.selection_color = Some(parse_color(&text).ok_or_else(|| {
+                    mlua::Error::runtime(format!("selection_color: not a color: {text}"))
+                })?);
+            }
             "bg_shader" => {
                 let mlua::Value::UserData(ud) = &value else {
                     return Err(mlua::Error::runtime("`bg_shader` takes a ui.shader"));
@@ -1283,6 +1296,9 @@ fn fill(lua: &Lua, mut node: Node, table: Option<&Table>) -> mlua::Result<Node> 
                         }
                     };
                 }
+            }
+            "pointer_events" => {
+                node.pointer_events = Some(source(lua, Ty::Bool, "pointer_events", value)?);
             }
             "disabled" if !matches!(value, mlua::Value::Table(_)) => {
                 node.disabled = Some(source(lua, Ty::Bool, "disabled", value)?);

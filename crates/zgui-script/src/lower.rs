@@ -746,6 +746,19 @@ fn build(node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>, mut cx: Option<&mut C
             resolve(&disabled, Ty::Bool, None, &vm) == Some(Lit::Bool(true))
         });
     }
+    if node.keep_focus {
+        view = view.keeps_focus(true);
+    }
+    if let Some(on) = &node.pointer_events {
+        let (on, vm) = (resolve_owned(on), vm.clone());
+        view = view.pointer_events_when(move || match resolve(&on, Ty::Bool, None, &vm) {
+            Some(Lit::Bool(on)) => Some(on),
+            _ => None,
+        });
+    }
+    if let Some(color) = node.selection_color {
+        view = view.selection_color(color);
+    }
     if let Some(focusable) = node.focusable {
         view = view.focusable(focusable);
     }
@@ -1238,6 +1251,13 @@ fn with_events(
     let captures = press.is_some() && (moved.is_some() || release.is_some());
     let (vm, actions) = (vm.clone(), low.actions.clone());
     view.on_event(move |event| {
+        // As DOM listeners: at the target and while bubbling. An ancestor is
+        // routed both ways, so taking capture too ran its handlers twice per
+        // event, and before the target's (a bar saw a press before the button
+        // in it did).
+        if event.phase == EventPhase::Capture {
+            return;
+        }
         let lua = &vm.lua;
         let local = |x: f32, y: f32| {
             let origin = handle
@@ -1256,7 +1276,6 @@ fn with_events(
             Ok(t)
         };
         if captures
-            && event.phase == EventPhase::Target
             && matches!(
                 event.event,
                 InputEvent::PointerDown {
@@ -1265,7 +1284,7 @@ fn with_events(
                 }
             )
         {
-            event.capture_pointer();
+            event.capture_pointer_unless_taken();
         }
         match &event.event {
             InputEvent::PointerDown {
@@ -1746,6 +1765,20 @@ fn literal_transform(
     }
     (translate, local)
 }
+/// 0 for shorthands, 1 for axis pairs, 2 for single sides and the rest.
+fn specificity(prop: Prop) -> u8 {
+    match prop {
+        Prop::P
+        | Prop::M
+        | Prop::Gap
+        | Prop::Border
+        | Prop::Overflow
+        | Prop::Size
+        | Prop::Rounded => 0,
+        Prop::Px | Prop::Py | Prop::Mx | Prop::My => 1,
+        _ => 2,
+    }
+}
 fn is_corner(prop: Prop) -> bool {
     matches!(
         prop,
@@ -1771,9 +1804,15 @@ fn is_transform(prop: Prop) -> bool {
 /// Applies literal styles; translation and the local transform collect
 /// their parts first, so each is set once.
 fn apply_all<S: Styled>(mut s: S, lits: &[(Prop, Lit)]) -> S {
-    for (prop, lit) in lits {
-        if !is_transform(*prop) {
-            s = apply(s, *prop, lit);
+    // Shorthands reset their parts (`border` clears `border_sides`, `p` sets
+    // every side), so they go first and the specific forms refine them, as
+    // in CSS. Script tables have no order of their own: applied as listed,
+    // `{ border = 1, border_sides = { 1, 0, 0, 0 } }` drew either.
+    for level in 0..3 {
+        for (prop, lit) in lits {
+            if !is_transform(*prop) && specificity(*prop) == level {
+                s = apply(s, *prop, lit);
+            }
         }
     }
     // Single corners refine the radius or corners set with them.
@@ -1805,7 +1844,7 @@ fn apply_all<S: Styled>(mut s: S, lits: &[(Prop, Lit)]) -> S {
 fn align(v: &str) -> Align {
     match v {
         "center" => Align::Center,
-        "end" => Align::End,
+        "end" | "flex-end" => Align::End,
         "baseline" => Align::Baseline,
         "stretch" => Align::Stretch,
         _ => Align::Start,
@@ -1899,28 +1938,29 @@ fn apply<S: Styled>(s: S, prop: Prop, lit: &Lit) -> S {
         (FlexWrap, Lit::Bool(true)) => s.flex_wrap(),
         (WrapReverse, Lit::Bool(true)) => s.flex_wrap_reverse(),
         (Items, Lit::Str(v)) => match &**v {
-            "start" => s.items_start(),
+            // CSS spellings too: scripts are often ported from stylesheets.
+            "start" | "flex-start" => s.items_start(),
             "center" => s.items_center(),
-            "end" => s.items_end(),
+            "end" | "flex-end" => s.items_end(),
             "baseline" => s.items_baseline(),
             _ => s.items_stretch(),
         },
         (Justify, Lit::Str(v)) => match &**v {
             "center" => s.justify_center(),
-            "end" => s.justify_end(),
-            "between" => s.justify_between(),
-            "around" => s.justify_around(),
-            "evenly" => s.justify_evenly(),
+            "end" | "flex-end" => s.justify_end(),
+            "between" | "space-between" => s.justify_between(),
+            "around" | "space-around" => s.justify_around(),
+            "evenly" | "space-evenly" => s.justify_evenly(),
             _ => s.justify_start(),
         },
         (AlignSelf, Lit::Str(v)) => s.align_self(align(v)),
         (AlignContent, Lit::Str(v)) => s.align_content(match &**v {
             "center" => ContentAlign::Center,
-            "end" => ContentAlign::End,
+            "end" | "flex-end" => ContentAlign::End,
             "stretch" => ContentAlign::Stretch,
-            "between" => ContentAlign::SpaceBetween,
-            "around" => ContentAlign::SpaceAround,
-            "evenly" => ContentAlign::SpaceEvenly,
+            "between" | "space-between" => ContentAlign::SpaceBetween,
+            "around" | "space-around" => ContentAlign::SpaceAround,
+            "evenly" | "space-evenly" => ContentAlign::SpaceEvenly,
             _ => ContentAlign::Start,
         }),
         (Grid, Lit::Bool(true)) => s.grid(),

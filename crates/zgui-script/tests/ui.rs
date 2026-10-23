@@ -494,3 +494,145 @@ fn web_views_load_their_source_and_report_page_events() {
     h.settle();
     assert!(h.text("log").ends_with("eval 42 b;"), "{}", h.text("log"));
 }
+
+fn press(h: &mut Harness, x: f32, y: f32) {
+    use zgui::input::PointerButton::Primary;
+    h.ui.dispatch(InputEvent::PointerDown {
+        x,
+        y,
+        button: Primary,
+    });
+    h.ui.dispatch(InputEvent::PointerUp {
+        x,
+        y,
+        button: Primary,
+    });
+    h.settle();
+}
+
+#[test]
+fn ancestor_handlers_run_once_per_event_after_the_target() {
+    // Capture and bubble both route through an ancestor; scripts see it once,
+    // after the target, as DOM listeners do.
+    let mut h = Harness::inline(
+        r##"local log = ui.state("log", "")
+        return ui.column {
+            ui.row { w = 200, h = 100, on_press = function() log:set(log:peek() .. "row ") end,
+                ui.div { w = 50, h = 50, on_press = function() log:set(log:peek() .. "child ") end } },
+            ui.text { "{log}", id = "log" },
+        }"##,
+    );
+    h.ui.prepare_frame();
+    press(&mut h, 10., 10.);
+    assert_eq!(h.text("log"), "child row ");
+}
+
+#[test]
+fn pointer_events_false_lets_the_pointer_through_a_layer() {
+    // A full-size overlay layer that is not itself interactive must not
+    // swallow clicks meant for what is below it; a child taking the pointer
+    // back (`pointer_events = true`) still gets its own.
+    let mut h = Harness::inline(
+        r##"local log = ui.state("log", "")
+        return ui.overlay { w = 300, h = 200, on_key = function() end,
+            ui.button { id = "below", w = 300, h = 200, on_click = function() log:set(log:peek() .. "below ") end },
+            ui.overlay { absolute = true, left = 0, top = 0, w = 300, h = 200, pointer_events = false,
+                ui.div { w = 300, h = 200 },
+                ui.button { id = "chip", absolute = true, left = 0, top = 0, w = 40, h = 40, pointer_events = true,
+                    on_click = function() log:set(log:peek() .. "chip ") end } },
+            ui.text { "{log}", id = "log", absolute = true, top = 250 },
+        }"##,
+    );
+    h.ui.prepare_frame();
+    press(&mut h, 200., 100.);
+    press(&mut h, 20., 20.);
+    assert_eq!(h.text("log"), "below chip ");
+}
+
+#[test]
+fn elements_focus_and_select_once_the_handler_settles() {
+    // The handler reveals the input, gives it text and selects part of it:
+    // focus and selection land after its writes, on the new text.
+    let mut h = Harness::inline(
+        r##"local open = ui.state("open", false)
+        local value = ui.state("value", "")
+        local input
+        return ui.column {
+            ui.input { id = "field", label = "Address", value = value, w = 200, h = 24,
+                invisible = function() return not open:get() end, selection_color = "#393933",
+                on_mount = function(el) input = el end },
+            ui.button { id = "go", w = 40, h = 40, keep_focus = true, on_click = function()
+                open:set(true)
+                value:set("github.com/ask")
+                input:focus()
+                input:select(2, 14)
+            end },
+        }"##,
+    );
+    h.ui.prepare_frame();
+    h.click("go");
+    h.ui.prepare_frame();
+    let field = h.find("field").unwrap();
+    assert_eq!(h.ui.input.focused(), Some(field));
+    let editor = h.ui.focused_editor().expect("a focused editor");
+    assert_eq!(editor.editor.borrow().text(), "github.com/ask");
+    assert_eq!(editor.editor.borrow().selection().range(), 2..14);
+    // The selection is drawn in the requested colour.
+    let scene = h.ui.scene.borrow();
+    let mut stack = vec![field];
+    let mut painted = false;
+    while let Some(n) = stack.pop() {
+        painted |= matches!(scene.kind(n), NodeKind::Rect(c) if *c == zgui::scene::Color(0x39, 0x39, 0x33, 255));
+        stack.extend(scene.children(n).iter().copied());
+    }
+    assert!(painted, "selection painted #393933");
+}
+
+#[test]
+fn keep_focus_presses_leave_focus_where_it_is() {
+    let mut h = Harness::inline(
+        r##"local value = ui.state("value", "")
+        return ui.column {
+            ui.input { id = "field", label = "Address", value = value, w = 200, h = 24 },
+            ui.div { id = "chrome", w = 100, h = 40, keep_focus = true, on_press = function() end },
+            ui.div { id = "page", w = 100, h = 40, on_press = function() end },
+        }"##,
+    );
+    h.ui.prepare_frame();
+    let field = h.find("field").unwrap();
+    let scene = h.ui.scene.clone();
+    h.ui.input.focus(&scene, Some(field));
+    h.click("chrome");
+    assert_eq!(h.ui.input.focused(), Some(field));
+    h.click("page");
+    assert_eq!(h.ui.input.focused(), None);
+}
+
+#[test]
+fn shorthands_apply_before_the_sides_they_set() {
+    // Script tables have no order: `border` must not undo `border_sides`,
+    // nor `p` undo `px`, whichever the VM lists first.
+    let mut h = Harness::inline(
+        r##"return ui.column {
+            ui.row { id = "foot", w = 200, h = 34, border = 1, border_sides = { 1, 0, 0, 0 }, border_color = "#262521" },
+            ui.row { id = "padded", h = 20, p = 0, px = 8, ui.div { id = "inner", w = 10, h = 10 } },
+            ui.row { id = "spread", w = 200, h = 20, justify = "space-between",
+                ui.div { id = "a", w = 10, h = 10 }, ui.div { id = "b", w = 10, h = 10 } },
+        }"##,
+    );
+    h.ui.prepare_frame();
+    let foot = h.find("foot").unwrap();
+    let sides = match h.ui.scene.borrow().kind(foot) {
+        NodeKind::Panel { quad, .. } => quad.border_sides(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        (sides.top, sides.right, sides.bottom, sides.left),
+        (1., 0., 0., 0.)
+    );
+    let (padded, inner) = (h.find("padded").unwrap(), h.find("inner").unwrap());
+    let scene = h.ui.scene.borrow();
+    assert_eq!(scene.bounds(inner).x - scene.bounds(padded).x, 8.);
+    // CSS spellings of the alignments are accepted.
+    assert_eq!(scene.bounds(h.handle.find("b").unwrap()).x, 190.);
+}

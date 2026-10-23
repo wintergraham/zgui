@@ -67,8 +67,22 @@ pub struct EditorHandle {
     text: NodeId,
     scene: Rc<RefCell<Scene>>,
     geometry: Rc<RefCell<Option<(Rect, Style, u64)>>>,
+    selection_color: Rc<Cell<Color>>,
+    selection_nodes: Rc<RefCell<Vec<NodeId>>>,
 }
 impl EditorHandle {
+    /// The fill behind selected text (the theme's selection by default).
+    pub fn set_selection_color(&self, color: Color) {
+        if self.selection_color.replace(color) == color {
+            return;
+        }
+        let mut scene = self.scene.borrow_mut();
+        for id in self.selection_nodes.borrow().iter() {
+            if scene.contains(*id) {
+                scene.set_kind(*id, NodeKind::Rect(color));
+            }
+        }
+    }
     /// Whether user editing is blocked. Selection, copying and model writes remain available.
     pub fn is_read_only(&self) -> bool {
         self.read_only.get()
@@ -1141,7 +1155,12 @@ impl Ui {
         event: InputEvent,
     ) -> Result<crate::input::DispatchResult, LayoutFeedbackError> {
         self.try_prepare_frame()?;
-        Ok(self.input.dispatch(&self.scene, event))
+        // Deferred work (`Runtime::defer`: a script's focus or selection)
+        // waits for the whole event, so it lands after an editor has applied
+        // its own edit and default actions have run.
+        let (runtime, input, scene) =
+            (self.runtime.clone(), self.input.clone(), self.scene.clone());
+        Ok(runtime.hold(|| input.dispatch(&scene, event)))
     }
     /// Dispatch native-style pointer input with modifiers and click counting.
     /// Ordinary `dispatch` retains unmodified, single-click pointer behavior.
@@ -1161,9 +1180,9 @@ impl Ui {
         modifiers: crate::input::Modifiers,
     ) -> Result<crate::input::DispatchResult, LayoutFeedbackError> {
         self.try_prepare_frame()?;
-        Ok(self
-            .input
-            .dispatch_with_modifiers(&self.scene, event, modifiers))
+        let (runtime, input, scene) =
+            (self.runtime.clone(), self.input.clone(), self.scene.clone());
+        Ok(runtime.hold(|| input.dispatch_with_modifiers(&scene, event, modifiers)))
     }
     fn interaction_valid(&self, job: &EditorInteraction) -> bool {
         job.gesture.mode.get().is_some()
@@ -1432,6 +1451,9 @@ impl Ui {
         let focused = Rc::new(RefCell::new(false));
         let scroll = Rc::new(RefCell::new((0f32, 0f32)));
         let selection_nodes = Rc::new(RefCell::new(Vec::new()));
+        let selection_color = Rc::new(Cell::new(self.theme.selection));
+        let draw_selection_color = selection_color.clone();
+        let handle_selection_nodes = selection_nodes.clone();
         self.semantics.borrow_mut().set(
             root,
             SemanticNode::new(
@@ -1639,7 +1661,7 @@ impl Ui {
             while nodes.len() < rects.len() {
                 nodes.push(s.append(
                     selection_layer,
-                    NodeKind::Rect(theme.selection),
+                    NodeKind::Rect(draw_selection_color.get()),
                     Style::default(),
                 ));
             }
@@ -1709,6 +1731,8 @@ impl Ui {
             text,
             scene: self.scene.clone(),
             geometry,
+            selection_color,
+            selection_nodes: handle_selection_nodes,
         };
         self.storage
             .editors
