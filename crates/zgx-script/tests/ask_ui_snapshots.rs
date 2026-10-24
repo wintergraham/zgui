@@ -145,6 +145,22 @@ impl Shot {
                 self.h.settle();
                 self.frames(1);
             }
+            "bounds" => {
+                // bounds:<node id>: the node's box and its descendants', three deep, for layout checks.
+                self.h.ui.prepare_frame();
+                let id = self.h.find(arg).unwrap_or_else(|| panic!("no node `{arg}`"));
+                let scene = self.h.ui.scene.borrow();
+                fn walk(scene: &zgui::scene::Scene, id: zgui::scene::NodeId, depth: usize) {
+                    let b = scene.bounds(id);
+                    println!("{}{:?} {} {:.1},{:.1} {:.1}x{:.1}", "  ".repeat(depth), id, match scene.kind(id) { zgui::scene::NodeKind::Container(l) => format!("{l:?}"), zgui::scene::NodeKind::Panel { layout, .. } => format!("Panel {layout:?}"), zgui::scene::NodeKind::RichText { .. } | zgui::scene::NodeKind::Text { .. } => "Text".into(), _ => "Leaf".into() }, b.x, b.y, b.width, b.height);
+                    if depth < 7 {
+                        for c in scene.children(id) {
+                            walk(scene, *c, depth + 1);
+                        }
+                    }
+                }
+                walk(&scene, id, 0);
+            }
             other => panic!("unknown step `{other}`"),
         }
         if let Some(e) = self.h.host.error().get() {

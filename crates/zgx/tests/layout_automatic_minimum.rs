@@ -182,3 +182,14 @@ fn taffy_laid_out_rows_keep_an_icons_size() {
     );
     assert_eq!(rects[1].width, 15., "{rects:?}");
 }
+
+#[test]
+fn a_truncated_label_shrinks_past_its_longest_word() {
+    // An ellipsis clips what it cannot show, as CSS's needs
+    // `overflow: hidden`: the label gives way in proportion, as one that
+    // clips does.
+    let word = word_width();
+    let proportional = word - (180. + word - 200.) * word / (180. + word);
+    let rects = squeezed(text(WORD).truncate());
+    assert!((rects[1].width - proportional).abs() < 0.01, "{rects:?}");
+}
