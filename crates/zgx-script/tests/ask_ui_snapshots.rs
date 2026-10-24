@@ -5,7 +5,7 @@
 //!      cargo test --release -p zgui-script --test ask_ui_snapshots -- --nocapture
 //! Steps: `cmd:<command id>`, `click:<node id>`, `hover:<node id>`, `wheel:<node id>:<dy>`, `ms:<n>`, `type:<text>`, `key:<Enter|Escape|Tab|…>`,
 //! `down:<node id>`, `to:<node id>:<dy>` (glides the held pointer to that node's centre plus `dy`), `up`,
-//! `size:<w>x<h>` (before anything else). Each shot starts from a fresh load and writes `<name>.ppm` (2x).
+//! `size:<w>x<h>` (before anything else). Each shot starts from a fresh load and writes `<name>.ppm` (at `ASK_UI_SCALE`, 2x by default).
 mod common;
 use common::Harness;
 use std::path::{Path, PathBuf};
@@ -13,7 +13,10 @@ use zgui::input::{InputEvent, Key, Modifiers, PointerButton};
 use zgui_gpu::GpuRenderer;
 use zgui_script::ScriptHost;
 
-const SCALE: f32 = 2.;
+/// The device scale of the shots: `ASK_UI_SCALE` (1.5 for a 150% Windows display), 2 by default.
+fn scale() -> f32 {
+    std::env::var("ASK_UI_SCALE").ok().and_then(|s| s.parse().ok()).unwrap_or(2.)
+}
 
 struct Shot {
     h: Harness,
@@ -25,8 +28,8 @@ struct Shot {
 impl Shot {
     fn new(script: &Path, w: f32, hgt: f32) -> Self {
         let mut gpu =
-            GpuRenderer::new((w * SCALE) as u32, (hgt * SCALE) as u32).expect("GPU adapter");
-        gpu.set_scale_factor(SCALE);
+            GpuRenderer::new((w * scale()) as u32, (hgt * scale()) as u32).expect("GPU adapter");
+        gpu.set_scale_factor(scale());
         for bytes in [
             &include_bytes!("../../zgui-desktop/examples/support/fonts/GeistVariable.ttf")[..],
             &include_bytes!("../../zgui-desktop/examples/support/fonts/GeistMonoVariable.ttf")[..],
@@ -241,7 +244,7 @@ impl Shot {
             )
             .unwrap();
         let pixels = self.gpu.readback().unwrap();
-        let (w, h) = ((self.w * SCALE) as usize, (self.hgt * SCALE) as usize);
+        let (w, h) = ((self.w * scale()) as usize, (self.hgt * scale()) as usize);
         let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
         for rgba in pixels.chunks(4).take(w * h) {
             out.extend_from_slice(&rgba[..3]);

@@ -2962,6 +2962,21 @@ impl GpuRenderer {
         // translation coverage (and smooth a rotated layer's edges) instead
         // of clamping opaque edge pixels.
         let bounds = content.expand(1. / scale);
+        // Placed by layout alone (no translation on it or above it, no
+        // transform), its texels go on the raster grid: text inside snaps to
+        // the texture's pixels, so an origin between device pixels would draw
+        // every glyph resampled, soft. Translated layers keep their exact
+        // origin, so a cached one moved by a fraction draws as a fresh one would.
+        let translated = std::iter::once(id).chain(scene.ancestors(id)).any(|node| {
+            let t = scene.transform(node);
+            t.x != 0. || t.y != 0.
+        });
+        let bounds = if transformed || translated {
+            bounds
+        } else {
+            let (x, y) = ((bounds.x * scale).floor() / scale, (bounds.y * scale).floor() / scale);
+            Rect::new(x, y, bounds.x + bounds.width - x, bounds.y + bounds.height - y)
+        };
         let x = bounds.x;
         let y = bounds.y;
         let width = (bounds.width * scale).ceil().max(1.) as u32;
