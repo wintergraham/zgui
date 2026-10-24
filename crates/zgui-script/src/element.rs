@@ -1044,8 +1044,16 @@ impl UserData for ElementUd {
             let Some(editor) = e.0.handle.get().and_then(NodeHandle::editor) else {
                 return Ok(false);
             };
-            let end = editor.editor.borrow().text().len();
-            select_and_keep(lua, editor, 0, end);
+            // All of the text it holds then: a value written in the same
+            // handler may reach the field after this.
+            editor.select_all();
+            let asked = bump(&SELECT_ASKED);
+            again(lua, move || {
+                let end = editor.editor.borrow().text().len();
+                if SELECT_ASKED.with(|n| n.get()) == asked && editor.selection() != (0, end) {
+                    editor.select_all();
+                }
+            });
             Ok(true)
         });
         methods.add_method(
