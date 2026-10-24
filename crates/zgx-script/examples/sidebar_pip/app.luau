@@ -481,7 +481,7 @@ local function resolving_favicon(id, size, start)
 	local ink = K.rgba("#D3C3A0", 1)
 	local T = LOAD_MS
 	return ui.div {
-		w = size, h = size, relative = true, shrink = 0,
+		w = size, h = size, shrink = 0,
 		on_mount = function()
 			local tl = anime.createTimeline { autoplay = false }
 			tl:add(blob, { shaderTime = { 0, T / 1000 }, shaderParam4 = { 0, 1 }, duration = T, ease = "linear" }, 0)
@@ -592,7 +592,7 @@ local function tab_row(id)
 		return hovered:get() == key
 	end
 	return button({
-		id = "tab_" .. id, w_full = true, h = 28, px = 7, gap = 8, relative = true,
+		id = "tab_" .. id, w_full = true, h = 28, px = 7, gap = 8,
 		rounded = function() return on() and 8 or 6 end,
 		bg = function()
 			if on() then
@@ -743,7 +743,7 @@ local function pin(id, props)
 		return open_pins:get()[id] == true
 	end
 	local node = {
-		id = "pin_" .. id, h = 34, rounded = 9, justify = "center", relative = true, focusable = true,
+		id = "pin_" .. id, h = 34, rounded = 9, justify = "center", focusable = true,
 		border_over = true,
 		bg = function() return not active() and hovered:get() == key and C.pin_hover or C.clear end,
 		border = 1,
@@ -816,8 +816,8 @@ local function switcher_button(i)
 		return space_hover:get() == i and not on()
 	end
 	return button({
-		id = "space_" .. s.id, h = 26, rounded = 7, gap = 6, justify = "center", relative = true,
-		layout = "width", layout_duration = 0.28,
+		id = "space_" .. s.id, h = 26, rounded = 7, gap = 6, justify = "center",
+		layout = "width", layout_duration = 280,
 		pl = function() return on() and 8 or 7.5 end,
 		pr = function() return on() and 10 or 7.5 end,
 		bg = function()
@@ -1036,7 +1036,7 @@ local function rail_tile(id)
 	end
 	local key = "tab:" .. id
 	return button({
-		id = "rail_" .. id, w = 30, h = 30, rounded = 7, justify = "center", relative = true,
+		id = "rail_" .. id, w = 30, h = 30, rounded = 7, justify = "center",
 		bg = function()
 			if on() then
 				return C.tab_on
@@ -1183,7 +1183,7 @@ local function page_view(id)
 			K.icon_button("reload", "rotate-cw", 13, C.muted, function() load(id) end),
 			ui.row {
 				id = "address", grow = 1, h = 28, ml = 6, px = 10, gap = 7, rounded = 8, bg = C.window, items = "center",
-				border = 1, border_color = C.line, relative = true, overflow = "hidden",
+				border = 1, border_color = C.line, overflow = "hidden",
 				loading_wash(id, 8),
 				icon("lock", 11, C.muted),
 				mono(p[3], 11, C.secondary, { truncate = true, shrink = 1, min_w = 0 }),
@@ -1350,7 +1350,7 @@ local function live_page(a)
 		w_full = true, h = 124, px = 6, shrink = 0,
 		ui.column {
 			w_full = true, h_full = true, px = 10, py = 8, gap = 6, rounded = 6, bg = C.mini, border = 1, border_color = C.line,
-			overflow = "hidden", relative = true,
+			overflow = "hidden",
 			ui.row { w_full = true, gap = 6, items = "center", ui.div { w = 10, h = 10, rounded = 3, bg = a.accent }, ui.div { w = 46, h = 4, rounded = 2, bg = "#3A3933" } },
 			ui.div { w = 110, h = 6, rounded = 2, bg = "#5A5850" },
 			ui.row { w_full = true, gap = 5, field(1), field(2), field(3) },
@@ -1526,7 +1526,7 @@ local function pip()
 			K.icon_button("pip_collapse", "chevrons-up", 12, C.tertiary, function() expanded:set(false) end),
 		}),
 		ui.div {
-			w_full = true, relative = true,
+			w_full = true,
 			pt = function() return stacked() and 14 or 0 end,
 			-- The stack's peeks: the cards behind the front one.
 			ui.div {
@@ -1632,7 +1632,7 @@ return ui.overlay {
 			grow = 1, shrink = 1, min_w = 0, h_full = true, pt = 8, pb = 8, pr = 8,
 			ui.div {
 				id = "content", w_full = true, h_full = true, rounded = 10, bg = C.panel, border = 1, border_color = C.swatch_line,
-				overflow = "hidden", relative = true,
+				overflow = "hidden",
 				ui.presence(content_key, content_view, {
 					w_full = true, h_full = true,
 					enter = { opacity = { 0, 1 }, duration = 160 },

@@ -1048,7 +1048,7 @@ local function panel(s)
 		id = "quick_ask", w = 640, p = 8, gap = 6,
 		bg = C.glass, rounded = 26, border = 1, border_color = C.glass_line, backdrop_blur = 40,
 		shadow = { { y = 24, blur = 60, color = "#00000066" }, { y = 2, blur = 6, color = "#00000033" } },
-		layout = "height", layout_duration = 0.32,
+		layout = "height", layout_duration = 320,
 		-- Clicks on the glass stay on it rather than closing it.
 		on_press = function() end,
 		on_drag_over = function(payload)
