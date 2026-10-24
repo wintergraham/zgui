@@ -5256,6 +5256,17 @@ impl NodeHandle {
         }
         false
     }
+    /// Whether keyboard focus is on the node or inside it.
+    pub fn has_focus_within(&self) -> bool {
+        let Some(ui) = self.ui.upgrade() else {
+            return false;
+        };
+        ui.input.focused().is_some_and(|focused| {
+            let scene = ui.scene.borrow();
+            focused == self.node
+                || (scene.contains(focused) && scene.ancestors(focused).any(|n| n == self.node))
+        })
+    }
     /// Whether keyboard focus is on the node itself.
     pub fn is_focused(&self) -> bool {
         self.ui

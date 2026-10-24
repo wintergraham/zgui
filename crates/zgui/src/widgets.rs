@@ -2172,8 +2172,13 @@ impl Ui {
         );
         self.storage.dispatching.set(true);
         self.tell_document(&event);
-        let result = self.route(event, after, |ui, event| {
-            ui.input.dispatch(&ui.scene, event)
+        // What handlers defer (a script's focus or selection) waits for the
+        // whole event: the field's own edit and the default actions.
+        let runtime = self.runtime.clone();
+        let result = runtime.hold(|| {
+            self.route(event, after, |ui, event| {
+                ui.input.dispatch(&ui.scene, event)
+            })
         });
         self.storage.dispatching.set(false);
         Ok(result)
@@ -2209,9 +2214,12 @@ impl Ui {
         );
         self.storage.dispatching.set(true);
         self.tell_document(&event);
-        let result = self.route(event, after, |ui, event| {
-            ui.input
-                .dispatch_with_modifiers(&ui.scene, event, modifiers)
+        let runtime = self.runtime.clone();
+        let result = runtime.hold(|| {
+            self.route(event, after, |ui, event| {
+                ui.input
+                    .dispatch_with_modifiers(&ui.scene, event, modifiers)
+            })
         });
         self.storage.dispatching.set(false);
         Ok(result)

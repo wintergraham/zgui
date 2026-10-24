@@ -705,10 +705,11 @@ return function(lab)
             local host = model.displayParts(P.url)
             return ui.row { gap = 8, items = "center",
                 P.favicon and ui.image { src = P.favicon, w = 13, h = 13, rounded = 3 } or icon("globe", 13, C.text),
-                T.text { host ~= "" and host or "Ask", text_size = 12, weight = 500, color = C.text } }
+                T.text { host ~= "" and host or "Ask", text_size = 12, weight = 500, color = C.text, wrap = false, shrink = 0 } }
         end)
         local function pillOp() return smooth(0.4, 1, morph:get()) end
-        local pill = ui.row { id = "nb_pill", h = 30, px = 10, rounded = 10, items = "center",
+        -- Measured at its natural width (pillW sizes the bar from it), so it never shrinks to the bar.
+        local pill = ui.row { id = "nb_pill", h = 30, px = 10, rounded = 10, items = "center", shrink = 0,
             on_resize = function(size) if size.w > 0 then pillW:set(size.w) end end,
             scale = function() return 0.94 + 0.06 * pillOp() end,
             blur = function() local o = pillOp(); return (o > 0 and o < 1) and 2 * (1 - o) or 0 end,

@@ -71,6 +71,10 @@ struct Inner {
     stopped: Cell<usize>,
     batch_depth: Cell<usize>,
     flushing: Cell<bool>,
+    /// Work waiting for the event in hand to finish (`Runtime::defer`), and
+    /// how many `hold`s are open.
+    deferred: RefCell<Vec<Box<dyn FnOnce()>>>,
+    holds: Cell<usize>,
     /// One value per type that belongs to this runtime (`Runtime::extension`).
     extensions: RefCell<Vec<(TypeId, Rc<dyn Any>)>>,
 }
@@ -267,6 +271,48 @@ impl Runtime {
                 if !std::thread::panicking() {
                     self.0.flush();
                 }
+            }
+        }
+        let _guard = Guard(self);
+        f()
+    }
+    /// Run `callback` once the event in hand has been handled whole (the
+    /// `hold` it is dispatched in has ended): after a field has applied its
+    /// own edit and the default actions have run, so a script's focus or
+    /// selection made in a handler is not undone by them. Outside a hold it
+    /// runs now.
+    pub fn defer(&self, callback: impl FnOnce() + 'static) {
+        if self.inner.holds.get() == 0 {
+            callback();
+        } else {
+            self.inner.deferred.borrow_mut().push(Box::new(callback));
+        }
+    }
+    /// Run `f`, keeping what it defers (`defer`) until it returns. An input
+    /// event is dispatched in one hold. Effects still run as writes happen.
+    pub fn hold<R>(&self, f: impl FnOnce() -> R) -> R {
+        self.inner.holds.set(self.inner.holds.get() + 1);
+        struct Guard<'a>(&'a Runtime);
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                let inner = &self.0.inner;
+                if inner.holds.get() > 1 || std::thread::panicking() {
+                    inner.holds.set(inner.holds.get() - 1);
+                    return;
+                }
+                // In order, the hold still open: what a callback defers
+                // queues behind the rest.
+                loop {
+                    let next: Vec<_> = std::mem::take(&mut *inner.deferred.borrow_mut());
+                    if next.is_empty() {
+                        break;
+                    }
+                    for callback in next {
+                        self.0.settle();
+                        callback();
+                    }
+                }
+                inner.holds.set(0);
             }
         }
         let _guard = Guard(self);
@@ -701,6 +747,26 @@ impl ServiceScope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn deferred_work_waits_for_the_hold_and_runs_in_order() {
+        let runtime = Runtime::new();
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        // Outside a hold it runs at once.
+        let l = log.clone();
+        runtime.defer(move || l.borrow_mut().push("now"));
+        let (l1, l2, r) = (log.clone(), log.clone(), runtime.clone());
+        runtime.hold(|| {
+            runtime.defer(move || {
+                l1.borrow_mut().push("first");
+                // What deferred work defers runs after the rest.
+                let l3 = l1.clone();
+                r.defer(move || l3.borrow_mut().push("third"));
+            });
+            runtime.defer(move || l2.borrow_mut().push("second"));
+            log.borrow_mut().push("in the hold");
+        });
+        assert_eq!(*log.borrow(), ["now", "in the hold", "first", "second", "third"]);
+    }
     #[test]
     fn a_signal_version_counts_the_writes_that_changed_it() {
         let runtime = Runtime::new();
