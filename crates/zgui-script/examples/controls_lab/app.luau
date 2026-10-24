@@ -16,7 +16,7 @@ local function ms(n) return reduced:peek() and 1 or n * slow:peek() end
 local function spring() return reduced:peek() and "linear" or anime.createSpring { stiffness = 520, damping = 30 } end
 local function tween(source, opts)
     opts = opts or {}
-    opts.duration = (opts.duration or 160) / 1000
+    opts.duration = opts.duration or 160
     return ui.tween(ui.computed(source), opts)
 end
 local function springBinding(source, opts)
