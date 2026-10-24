@@ -89,4 +89,23 @@ impl GpuRenderer {
         renderer.set_scale_factor(scale);
         Ok(renderer)
     }
+    /// Present without waiting for a refresh: a plane presenting after the
+    /// window's, whose swap chain waits already (a second wait would halve
+    /// the frame rate). The compositor shows its latest frame.
+    pub fn present_unthrottled(&mut self) {
+        let (Some(surface), Some(config)) = (&self.surface, &mut self.config) else {
+            return;
+        };
+        let modes = surface
+            .get_capabilities(&self.context.inner.adapter)
+            .present_modes;
+        if let Some(mode) = [wgpu::PresentMode::Mailbox, wgpu::PresentMode::Immediate]
+            .into_iter()
+            .find(|mode| modes.contains(mode))
+        {
+            config.present_mode = mode;
+            config.desired_maximum_frame_latency = 1;
+            surface.configure(&self.device, config);
+        }
+    }
 }

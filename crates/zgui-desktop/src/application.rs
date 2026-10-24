@@ -2985,6 +2985,7 @@ impl Host {
                 // A click stops a coasting scroll, as in a browser.
                 if state == ElementState::Pressed {
                     self.touch.stop();
+                    self.native.pointer_down();
                 }
                 #[cfg(target_os = "linux")]
                 if let Some(direction) = self.resize_edge

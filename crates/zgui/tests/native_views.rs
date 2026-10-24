@@ -228,6 +228,33 @@ fn only_paint_after_and_over_a_native_view_goes_on_the_overlay() {
 }
 
 #[test]
+fn overlay_boxes_are_each_nodes_own_rounded_box() {
+    let mut ui = Ui::new(1000., 600.);
+    let natives = supported();
+    let web = WebView::new(&ui.runtime, WebViewOptions::default());
+    let view = ui.mount(provide(natives.clone(), browser(&web, true)));
+    ui.prepare_frame();
+    let (split, _) = split(&ui, &natives, &PlaneSplit::default());
+    let popover = view.find("popover").unwrap();
+    let (_, round, clip) = split
+        .overlay_boxes()
+        .iter()
+        .find(|(node, ..)| *node == popover)
+        .unwrap();
+    assert_eq!(round.rect, Rect::new(150., 120., 200., 150.));
+    assert_eq!(round.radii, [12.; 4]);
+    assert!(clip.is_none_or(|clip| clip.intersects(round.rect)));
+    // Only overlay paint has one.
+    let sidebar = view.find("sidebar").unwrap();
+    assert!(
+        split
+            .overlay_boxes()
+            .iter()
+            .all(|(node, ..)| *node != sidebar)
+    );
+}
+
+#[test]
 fn glass_over_a_native_view_gets_a_platform_backdrop_shaped_to_the_node() {
     let mut ui = Ui::new(1000., 600.);
     let natives = supported();
