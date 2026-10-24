@@ -103,6 +103,20 @@ fn pixels(rect: Rect, scale: f32, origin: (i32, i32)) -> (i32, i32, i32, i32) {
         p(rect.y + rect.height) - origin.1,
     )
 }
+/// Device pixels wholly inside `rect` (window points) relative to `origin`:
+/// a native view's visible part. At a half-pixel edge (150%), rounding would
+/// take the pixel zgui paints half over, and the page under it would show
+/// through that antialiased edge as a 1-pixel seam.
+fn inner_pixels(rect: Rect, scale: f32, origin: (i32, i32)) -> (i32, i32, i32, i32) {
+    // A hair of tolerance: an edge on a pixel boundary, off only by f32 error, keeps that pixel.
+    let (ceil, floor) = (|v: f32| (v * scale - 0.01).ceil() as i32, |v: f32| (v * scale + 0.01).floor() as i32);
+    (
+        ceil(rect.x) - origin.0,
+        ceil(rect.y) - origin.1,
+        floor(rect.x + rect.width) - origin.0,
+        floor(rect.y + rect.height) - origin.1,
+    )
+}
 /// A rounded box's region: the box less each corner's pixels wholly outside
 /// its arc (aliased, as Windows regions are).
 fn round_region(round: &RoundRect, scale: f32, origin: (i32, i32)) -> HRGN {
@@ -422,7 +436,7 @@ impl Surfaces {
         let origin = (left, top);
         unsafe {
             // The visible part, rounded by each rounded clip, less cut-outs.
-            let (l, t, r, b) = pixels(visible, scale, origin);
+            let (l, t, r, b) = inner_pixels(visible, scale, origin);
             let region = rect_region(l, t, r, b);
             if !region.is_invalid() {
                 for round in &placement.rounded {
