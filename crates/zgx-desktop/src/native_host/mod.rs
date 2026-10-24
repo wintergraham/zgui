@@ -9,6 +9,8 @@
 //! or DirectComposition commit (Windows, with the `webview2` feature), so
 //! they never drift a frame apart. A window without native views does none
 //! of it.
+#[cfg(all(windows, not(feature = "webview2")))]
+mod child;
 #[cfg(all(windows, feature = "webview2"))]
 mod dcomp;
 #[cfg(all(target_os = "macos", feature = "ghostty"))]
@@ -59,16 +61,18 @@ pub(crate) struct NativeHost {
     composition: Option<Rc<dcomp::Composition>>,
     #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
     surfaces: Option<platform::Surfaces>,
-    #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+    #[cfg(all(windows, not(feature = "webview2")))]
+    surfaces: Option<child::Surfaces>,
+    #[cfg(any(target_os = "macos", windows))]
     overlay: Option<zgx_gpu::GpuRenderer>,
     /// The overlay renderer drew this frame (present it).
-    #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+    #[cfg(any(target_os = "macos", windows))]
     overlay_drawn: bool,
     /// The scale the overlay renderer and its layer were made for.
-    #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+    #[cfg(any(target_os = "macos", windows))]
     overlay_scale: f32,
     /// The overlay layer shows its plane (it had paint at the last present).
-    #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+    #[cfg(any(target_os = "macos", windows))]
     overlay_live: bool,
     /// Native geometry changed and has not been applied yet.
     #[cfg_attr(
@@ -102,7 +106,7 @@ impl NativeHost {
                 backends.contains("dx12") || backends.contains("d3d12")
             });
         #[cfg(not(all(windows, feature = "webview2")))]
-        let supported = cfg!(target_os = "macos");
+        let supported = cfg!(any(target_os = "macos", windows));
         natives.set_supported(supported);
         Self {
             natives,
@@ -110,15 +114,15 @@ impl NativeHost {
             split: Rc::new(PlaneSplit::default()),
             #[cfg(all(windows, feature = "webview2"))]
             composition: None,
-            #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+            #[cfg(any(target_os = "macos", windows))]
             surfaces: None,
-            #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+            #[cfg(any(target_os = "macos", windows))]
             overlay: None,
-            #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+            #[cfg(any(target_os = "macos", windows))]
             overlay_drawn: false,
-            #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+            #[cfg(any(target_os = "macos", windows))]
             overlay_scale: 0.,
-            #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+            #[cfg(any(target_os = "macos", windows))]
             overlay_live: false,
             pending: false,
             scene: Rc::downgrade(&ui.scene),
@@ -216,9 +220,18 @@ impl NativeHost {
         }
         None
     }
+    /// A press zgui takes: on Windows' child windows, keyboard focus leaves a
+    /// native view for the window (AppKit and the composition hosts move it
+    /// themselves).
+    pub fn pointer_down(&mut self) {
+        #[cfg(all(windows, not(feature = "webview2")))]
+        if let Some(surfaces) = &mut self.surfaces {
+            surfaces.pointer_down();
+        }
+    }
     /// The native views went away with the window (suspend/recreate).
     pub fn suspend(&mut self) {
-        #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+        #[cfg(any(target_os = "macos", windows))]
         {
             self.overlay = None;
             self.surfaces = None;
@@ -424,7 +437,147 @@ impl NativeHost {
     }
 }
 
-#[cfg(not(any(target_os = "macos", all(windows, feature = "webview2"))))]
+/// Windows without the `webview2` feature: native views are child windows of
+/// the zgui window (`child.rs`).
+#[cfg(all(windows, not(feature = "webview2")))]
+impl NativeHost {
+    /// After the scene's flush: split this frame's paint around native views
+    /// and give each plane's renderer its part (see the generic host's).
+    /// Without the overlay plane's composition, the window's renderer draws
+    /// everything, under the child windows.
+    pub fn plan(
+        &mut self,
+        scene: &Scene,
+        window: &winit::window::Window,
+        renderer: &mut zgui_gpu::GpuRenderer,
+        scale: f32,
+    ) -> Result<Vec<Rect>, zgui_gpu::GpuError> {
+        if !self.active() || !self.natives.supported() {
+            return Ok(Vec::new());
+        }
+        if self.surfaces.is_none() {
+            match child::Surfaces::new(window) {
+                Ok(surfaces) => self.surfaces = Some(surfaces),
+                Err(error) => {
+                    eprintln!("zgui: native views unavailable: {error}");
+                    self.natives.set_supported(false);
+                    return Ok(Vec::new());
+                }
+            }
+        }
+        let (split, damage) = PlaneSplit::compute(scene, &self.natives.nodes(), &self.split);
+        let split = Rc::new(split);
+        let surfaces = self.surfaces.as_mut().expect("made above");
+        if surfaces.differs(&split, &self.split) {
+            self.pending = true;
+        }
+        if surfaces.cut_outs(scene, &self.input, &split) {
+            self.pending = true;
+        }
+        if self.overlay.is_some() && self.overlay_scale != scale {
+            self.overlay = None;
+            self.overlay_live = false;
+        }
+        if split.has_overlay() && self.overlay.is_none() {
+            self.overlay_scale = scale;
+            self.overlay = surfaces
+                .overlay_renderer(&renderer.context(), scale)
+                .transpose()?;
+        }
+        if split.is_empty() || !surfaces.has_overlay_plane() {
+            renderer.clear_plane();
+        } else {
+            renderer.set_plane(split.clone(), zgui::native_view::Plane::Base);
+        }
+        if let Some(overlay) = &mut self.overlay {
+            overlay.set_plane(split.clone(), zgui::native_view::Plane::Overlay);
+            if let Some(needed) = split.overlay_bounds() {
+                let viewport = scene.bounds(scene.root());
+                let rect = plane_rect(overlay.plane_rect(), needed, viewport);
+                overlay.set_plane_rect(rect);
+                if !self.overlay_live {
+                    overlay.repaint_all();
+                }
+            }
+        }
+        self.split = split.clone();
+        self.natives.set_split(split);
+        Ok(damage)
+    }
+    /// Render the overlay plane's part of this frame's `damage`.
+    pub fn render(&mut self, scene: &Scene, damage: &[Rect]) -> Result<(), zgui_gpu::GpuError> {
+        self.overlay_drawn = false;
+        if let Some(overlay) = &mut self.overlay
+            && self.split.has_overlay()
+        {
+            overlay.render(scene, damage)?;
+            self.overlay_drawn = true;
+        }
+        Ok(())
+    }
+    /// Child windows move as they are told: there is no transaction to open.
+    pub fn begin(&self) -> Option<child::Transaction> {
+        None
+    }
+    /// Show the overlay plane's frame at its box.
+    pub fn present_overlay(&mut self) -> Result<(), zgui_gpu::GpuError> {
+        let Some(surfaces) = &mut self.surfaces else {
+            return Ok(());
+        };
+        let live = self.split.has_overlay();
+        if let Some(overlay) = &mut self.overlay
+            && live
+            && self.overlay_drawn
+        {
+            overlay.present()?;
+        }
+        let rect = self
+            .overlay
+            .as_ref()
+            .and_then(|overlay| live.then(|| overlay.plane_rect()).flatten());
+        surfaces.show_overlay(rect);
+        surfaces.commit();
+        if self.overlay_live
+            && !live
+            && let Some(overlay) = &mut self.overlay
+        {
+            // Hidden while nothing paints on it: one surface is enough.
+            overlay.trim();
+        }
+        self.overlay_live = live;
+        self.overlay_drawn = false;
+        Ok(())
+    }
+    /// Move native views to this frame's placements.
+    pub fn apply(&mut self) {
+        if let Some(surfaces) = &mut self.surfaces {
+            surfaces.apply(&self.natives, &self.split);
+        }
+        self.pending = false;
+    }
+    /// Apply geometry that changed in a frame without zgui pixels to show.
+    pub fn flush(&mut self) {
+        if self.pending {
+            self.apply();
+        }
+    }
+    /// Keep zgui's focus and the child windows' keyboard focus agreeing.
+    pub fn sync_focus(&mut self, ui: &Ui) {
+        if let Some(surfaces) = &mut self.surfaces {
+            surfaces.sync_focus(ui, &self.natives);
+        }
+    }
+    /// Release what an idle window does not need.
+    pub fn trim(&mut self) {
+        if !self.split.has_overlay()
+            && let Some(overlay) = &mut self.overlay
+        {
+            overlay.trim();
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 impl NativeHost {
     pub fn plan(
         &mut self,
@@ -454,7 +607,7 @@ impl NativeHost {
 /// current one while it holds `needed` without being much larger, else
 /// `needed` with a margin to grow and move into (an animating popover
 /// keeps its surfaces), within the window.
-#[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+#[cfg(any(target_os = "macos", windows))]
 fn plane_rect(current: Option<Rect>, needed: Rect, viewport: Rect) -> Rect {
     let needed = needed
         .intersection(viewport)
@@ -472,7 +625,7 @@ fn plane_rect(current: Option<Rect>, needed: Rect, viewport: Rect) -> Rect {
         .unwrap_or(needed)
 }
 
-#[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+#[cfg(any(target_os = "macos", windows))]
 fn contains(outer: Rect, inner: Rect) -> bool {
     outer.x <= inner.x + 0.01
         && outer.y <= inner.y + 0.01

@@ -472,6 +472,8 @@ pub struct PlaneSplit {
     native_nodes: HashSet<NodeId>,
     /// Nodes whose own paint is on the overlay, with where it lands.
     overlay: HashMap<NodeId, Rect>,
+    /// Those nodes' own boxes (no shadow or blur spread) with their corners, and their clips.
+    overlay_boxes: Vec<(NodeId, RoundRect, Option<Rect>)>,
     /// Isolated (layer) subtrees holding overlay paint, and base paint.
     overlay_layers: HashSet<NodeId>,
     base_layers: HashSet<NodeId>,
@@ -762,6 +764,12 @@ impl Walk<'_> {
                     });
                 }
                 self.split.overlay.insert(item.id, painted);
+                if clip.is_none_or(|clip| frame.intersection(clip).is_some()) {
+                    let scale = axis_scales(context.matrix).map_or(0., |(sx, sy)| sx.min(sy));
+                    let radii = corner_radii(item.kind, item.bounds).map(|radius| radius * scale);
+                    let own = RoundRect { rect: frame, radii };
+                    self.split.overlay_boxes.push((item.id, own, clip));
+                }
                 self.split.overlay_bounds = Some(match self.split.overlay_bounds {
                     Some(bounds) => bounds.union(painted),
                     None => painted,
@@ -951,6 +959,14 @@ impl PlaneSplit {
     /// The overlay paint's covering box in window coordinates.
     pub fn overlay_bounds(&self) -> Option<Rect> {
         self.overlay_bounds
+    }
+    /// Each node painting on the overlay plane, with its own box and corners
+    /// (window coordinates; shadows and blur spread excluded; square when
+    /// skewed) and its ancestors' clip. Hosts whose native views take input
+    /// before the window's (Windows' child windows) cut the ones that take
+    /// the pointer out of them.
+    pub fn overlay_boxes(&self) -> &[(NodeId, RoundRect, Option<Rect>)] {
+        &self.overlay_boxes
     }
     /// Layers whose division changed since the previous split.
     pub fn changed_layers(&self) -> &[NodeId] {
