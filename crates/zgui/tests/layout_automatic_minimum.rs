@@ -99,3 +99,14 @@ fn a_wrapping_row_needs_only_its_widest_child() {
     assert!(rects[1].width < 180., "{rects:?}");
     assert!(rects[1].width >= 60., "{rects:?}");
 }
+
+#[test]
+fn a_truncated_label_shrinks_past_its_longest_word() {
+    // An ellipsis clips what it cannot show, as CSS's needs
+    // `overflow: hidden`: the label gives way in proportion, as one that
+    // clips does.
+    let word = word_width();
+    let proportional = word - (180. + word - 200.) * word / (180. + word);
+    let rects = squeezed(text(WORD).truncate());
+    assert!((rects[1].width - proportional).abs() < 0.01, "{rects:?}");
+}
