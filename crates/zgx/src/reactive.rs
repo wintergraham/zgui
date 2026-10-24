@@ -870,7 +870,10 @@ mod tests {
             runtime.defer(move || l2.borrow_mut().push("second"));
             log.borrow_mut().push("in the hold");
         });
-        assert_eq!(*log.borrow(), ["now", "in the hold", "first", "second", "third"]);
+        assert_eq!(
+            *log.borrow(),
+            ["now", "in the hold", "first", "second", "third"]
+        );
         // In a batch (a menu command's handler) it waits for the batch's
         // writes to reach what they drive.
         let open = runtime.signal(false);

@@ -303,6 +303,9 @@ pub struct EventContext {
     prevented: bool,
     focus: Option<NodeId>,
     capture: Option<Option<NodeId>>,
+    /// A node to capture the pointer for once it moves, unless what it was
+    /// pressed on starts a drag or takes it (`capture_pointer_on_move`).
+    capture_on_move: Option<NodeId>,
     pointer_modifiers: Modifiers,
     click_count: u8,
     drag_threshold: f32,
@@ -332,6 +335,7 @@ impl EventContext {
             prevented: false,
             focus: None,
             capture: None,
+            capture_on_move: None,
             pointer_modifiers: Modifiers::default(),
             click_count: 0,
             drag_threshold: DRAG_THRESHOLD,
@@ -462,6 +466,16 @@ impl EventContext {
     /// when none exists.
     pub fn capture_pointer(&mut self) {
         self.capture = Some(Some(self.current_target));
+    }
+    /// Capture to this listener's node from the pointer's first move, if
+    /// nothing nearer what was pressed captures it, starts a drag or takes
+    /// the pointer by then: an ancestor that follows a press (a draggable
+    /// bar) keeps the pointer pressed through a child with listeners of
+    /// its own, while a drag handle in it still starts its drag.
+    pub fn capture_pointer_on_move(&mut self) {
+        if self.capture.is_none() && self.capture_on_move.is_none() {
+            self.capture_on_move = Some(self.current_target);
+        }
     }
     /// Release a pointer capture.
     pub fn release_pointer(&mut self) {
@@ -626,6 +640,8 @@ struct State {
     next: u64,
     focused: Option<NodeId>,
     captured: Option<NodeId>,
+    /// `EventContext::capture_pointer_on_move`'s node, until the press moves.
+    capture_on_move: Option<NodeId>,
     capture_button: Option<PointerButton>,
     /// The hovered node (the pointer's hit target) and its ancestors, up to
     /// the active modal root: each has had its enter, none its leave yet.
@@ -1927,6 +1943,52 @@ impl InputDispatcher {
             focus_changed: old != self.focused(),
         }
     }
+    /// `EventContext::capture_pointer_on_move`: a press leaves the node
+    /// waiting; its first move, if nothing captured or started a drag in
+    /// it, captures to the node and reaches it too. A release or a capture
+    /// made otherwise ends the wait.
+    fn capture_on_move(
+        &self,
+        scene: &Rc<RefCell<Scene>>,
+        event: &InputEvent,
+        ctx: &EventContext,
+        modifiers: Modifiers,
+    ) {
+        match event {
+            InputEvent::PointerDown {
+                button: PointerButton::Primary,
+                ..
+            } => {
+                let waiting = ctx
+                    .capture_on_move
+                    .filter(|_| ctx.capture.is_none())
+                    .filter(|id| self.enabled(&scene.borrow(), *id));
+                self.state.borrow_mut().capture_on_move = waiting;
+            }
+            InputEvent::PointerMove { .. } => {
+                let waiting = self.state.borrow_mut().capture_on_move.take();
+                let Some(node) = waiting else { return };
+                let free = self.state.borrow().captured.is_none() && !self.is_dragging();
+                if free && scene.borrow().contains(node) && self.enabled(&scene.borrow(), node) {
+                    self.set_capture(Some(node), event);
+                    // It heard this move already if the move bubbled through it.
+                    let heard = {
+                        let scene = scene.borrow();
+                        ctx.target == node
+                            || (scene.contains(ctx.target)
+                                && scene.ancestors(ctx.target).any(|id| id == node))
+                    };
+                    if !heard {
+                        self.route_pointer(scene, node, event.clone(), modifiers, 0, false);
+                    }
+                }
+            }
+            InputEvent::PointerUp { .. } | InputEvent::PointerCancel => {
+                self.state.borrow_mut().capture_on_move = None;
+            }
+            _ => {}
+        }
+    }
     /// Make a node inert, or live again (`NodeInput::inert`).
     pub fn set_inert(&self, node: NodeId, inert: bool) {
         let mut state = self.state.borrow_mut();
@@ -2293,6 +2355,7 @@ impl InputDispatcher {
                 let capture = capture.filter(|id| self.enabled(&scene.borrow(), *id));
                 self.set_capture(capture, &ctx.event);
             }
+            self.capture_on_move(scene, &event, &ctx, modifiers.unwrap_or_default());
             if let Some(focus) = ctx.focus {
                 self.focus(scene, Some(focus));
             }

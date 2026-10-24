@@ -332,6 +332,61 @@ fn a_press_that_follows_the_pointer_keeps_it() {
 }
 
 #[test]
+fn a_press_through_a_child_with_its_own_handlers_still_keeps_the_pointer() {
+    // A draggable bar under its own controls: pressed on a control, the bar
+    // follows the pointer from its first move, and the control still clicks
+    // when the press does not move.
+    let mut h = Harness::inline(
+        r##"local x = ui.state("x", 0)
+        local clicks = ui.state("clicks", 0)
+        local dragging = false
+        return ui.row {
+            ui.row { id = "bar", w = 300, h = 40,
+                on_press = function() dragging = true end,
+                on_pointer_move = function(e) if dragging then x:set(math.floor(e.x)) end end,
+                on_release = function() dragging = false end,
+                ui.button { id = "control", w = 40, h = 40, on_click = function() clicks:set(clicks:get() + 1) end },
+            },
+            ui.div { w = 200, h = 40 },
+            ui.text { "{x}/{clicks}", id = "x" },
+        }"##,
+    );
+    h.ui.prepare_frame();
+    let control = h.find("control").unwrap();
+    let b = h.ui.scene.borrow().bounds(control);
+    let (cx, cy) = (b.x + 20., b.y + 20.);
+    let press = |h: &mut Harness| {
+        h.ui.dispatch(InputEvent::PointerDown {
+            x: cx,
+            y: cy,
+            button: PointerButton::Primary,
+        })
+    };
+    press(&mut h);
+    h.ui.dispatch(InputEvent::PointerUp {
+        x: cx,
+        y: cy,
+        button: PointerButton::Primary,
+    });
+    h.settle();
+    assert_eq!(
+        h.text("x"),
+        "0/1",
+        "a press that does not move clicks the control"
+    );
+    press(&mut h);
+    // Past the bar: it still hears the pointer.
+    h.ui.dispatch(InputEvent::PointerMove { x: 420., y: cy });
+    h.ui.dispatch(InputEvent::PointerUp {
+        x: 420.,
+        y: cy,
+        button: PointerButton::Primary,
+    });
+    h.settle();
+    assert_eq!(h.text("x"), "420/1");
+}
+
+#[test]
 fn any_container_without_an_id_takes_drops_and_drags() {
     for area in ["ui.div", "ui.overlay", "ui.column", "ui.row"] {
         let code = format!(

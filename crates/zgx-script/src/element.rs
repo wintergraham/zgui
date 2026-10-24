@@ -986,7 +986,8 @@ fn select_and_keep(lua: &mlua::Lua, editor: zgx::widgets::EditorHandle, anchor: 
                 .iter()
                 .all(|&b| b <= text.len() && text.is_char_boundary(b))
         };
-        if SELECT_ASKED.with(|n| n.get()) == asked && fits && editor.selection() != (anchor, focus) {
+        if SELECT_ASKED.with(|n| n.get()) == asked && fits && editor.selection() != (anchor, focus)
+        {
             editor.set_selection(anchor, focus);
         }
     });

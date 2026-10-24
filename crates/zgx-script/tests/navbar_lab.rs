@@ -54,7 +54,7 @@ fn key(h: &mut Harness, key: Key) {
 }
 fn typing(h: &mut Harness, text: &str) {
     for c in text.chars() {
-        key(h, Key::Character(c.to_string().into()));
+        key(h, Key::Character(c.to_string()));
         h.ui.dispatch(InputEvent::Text(c.to_string()));
         h.settle();
         frames(h, 1);

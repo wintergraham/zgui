@@ -67,7 +67,9 @@ impl NativeContent {
         match (self, other) {
             (Self::Web(a), Self::Web(b)) => a.ptr_eq(b),
             (Self::Terminal(a), Self::Terminal(b)) => a.ptr_eq(b),
-            (Self::Platform(a), Self::Platform(b)) => std::ptr::addr_eq(Rc::as_ptr(a), Rc::as_ptr(b)),
+            (Self::Platform(a), Self::Platform(b)) => {
+                std::ptr::addr_eq(Rc::as_ptr(a), Rc::as_ptr(b))
+            }
             _ => false,
         }
     }

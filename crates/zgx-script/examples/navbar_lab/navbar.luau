@@ -772,7 +772,9 @@ return function(lab)
         end
 
         nav = ui.overlay { id = "nb_nav", absolute = true, overflow = "hidden", backdrop_blur = 24, pointer_events = true,
-            bg = "#1C1C1AEB", border = 1,
+            -- A ring over the surface: the bar's rows and the pill keep its whole width (a border taking room would
+            -- narrow the pill's row below the pill it measures as the bar closes on it).
+            bg = "#1C1C1AEB", border = 1, border_over = true,
             border_color = function() return dragActive:get() and "#3A3934" or C.strong end,
             shadow = function()
                 return dragActive:get() and { y = 16, blur = 32, color = "#00000080" } or { y = 10, blur = 28, color = "#00000073" }

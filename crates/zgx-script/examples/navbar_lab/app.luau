@@ -121,7 +121,7 @@ return ui.overlay { id = "navbar_lab", w_full = true, h_full = true, bg = C.wind
                         linkButton("nb_top", "Scroll to top", navbar.scrollTop),
                         T.text { navbar.readout, id = "nb_state", font = "Geist Mono", text_size = 10.5, color = C.muted,
                             ml = "auto", truncate = true, min_w = 0, shrink = 1 } },
-                    ui.overlay { id = "nb_win_frame", w_full = true, h = 680, p = 1, rounded = 12, border = 1, border_color = C.default,
+                    ui.overlay { id = "nb_win_frame", w_full = true, h = 680, rounded = 12, border = 1, border_color = C.default,
                         bg = "#141413", navbar.window },
                 },
             },
