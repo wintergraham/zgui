@@ -941,6 +941,56 @@ pub(crate) struct ElementUd(pub Rc<Element>);
 /// input just edited synced out to, before an input's selection is read or
 /// set: a handler setting the text, then selecting in it, selects in the
 /// new text (`Runtime::settle`).
+/// `again` once the input event in hand has been handled whole
+/// (`Runtime::defer`): a handler's focus or selection is made at once, so
+/// the handler reads it back, and made again if the event's own default
+/// action (a field applying its edit, Tab moving focus) undid it.
+fn again(lua: &mlua::Lua, again: impl FnOnce() + 'static) {
+    if let Ok(env) = crate::node::env(lua) {
+        let runtime = env.runtime.clone();
+        drop(env);
+        runtime.defer(again);
+    }
+}
+thread_local! {
+    /// Bumped by every focus or blur a script asks for: a later one wins
+    /// over an earlier one's re-application.
+    static FOCUS_ASKED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+thread_local! {
+    /// Bumped by every selection or edit a script asks of a field: a later
+    /// one wins over an earlier selection's re-application.
+    static SELECT_ASKED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+fn bump(counter: &'static std::thread::LocalKey<std::cell::Cell<u64>>) -> u64 {
+    counter.with(|n| {
+        n.set(n.get() + 1);
+        n.get()
+    })
+}
+/// Selects `anchor..focus` in `editor` now, and again after the event if
+/// nothing the script asked since changed it and the field's own edit (or
+/// its text arriving from state) moved it: an inline completion keeps its
+/// suffix selected as typing goes on.
+fn select_and_keep(lua: &mlua::Lua, editor: zgx::widgets::EditorHandle, anchor: usize, focus: usize) {
+    {
+        let editor = editor.clone();
+        off_clock(lua, move |_| editor.set_selection(anchor, focus));
+    }
+    let asked = bump(&SELECT_ASKED);
+    again(lua, move || {
+        let fits = {
+            let text = editor.editor.borrow();
+            let text = text.text();
+            [anchor, focus]
+                .iter()
+                .all(|&b| b <= text.len() && text.is_char_boundary(b))
+        };
+        if SELECT_ASKED.with(|n| n.get()) == asked && fits && editor.selection() != (anchor, focus) {
+            editor.set_selection(anchor, focus);
+        }
+    });
+}
 fn settle(lua: &mlua::Lua) {
     off_clock(lua, |runtime| runtime.settle());
 }
@@ -976,7 +1026,17 @@ impl UserData for ElementUd {
         // reveals can take it.
         methods.add_method("focus", |lua, e, ()| {
             settle(lua);
-            Ok(e.0.handle.get().is_some_and(NodeHandle::focus))
+            let Some(handle) = e.0.handle.get().cloned() else {
+                return Ok(false);
+            };
+            let asked = bump(&FOCUS_ASKED);
+            let took = handle.focus();
+            again(lua, move || {
+                if FOCUS_ASKED.with(|n| n.get()) == asked && !handle.has_focus_within() {
+                    handle.focus();
+                }
+            });
+            Ok(took)
         });
         // A list's row in view: `el:scroll_to_row(i, { align = "center" })`,
         // `i` from 1, `align` start, center, end or nearest (the default).
@@ -1019,6 +1079,11 @@ impl UserData for ElementUd {
         methods.add_method("select_all", |lua, e, ()| {
             settle(lua);
             let handle = e.0.handle.get();
+            if let Some(editor) = handle.and_then(NodeHandle::editor) {
+                let end = editor.editor.borrow().text().len();
+                select_and_keep(lua, editor, 0, end);
+                return Ok(true);
+            }
             Ok(off_clock(lua, |_| handle.is_some_and(NodeHandle::select_all)).unwrap_or(false))
         });
         methods.add_method(
@@ -1034,7 +1099,7 @@ impl UserData for ElementUd {
                     let byte = |chars: i64| byte_offset(&whole, chars.max(0) as usize);
                     (byte(anchor), byte(focus.unwrap_or(anchor)))
                 };
-                off_clock(lua, |_| editor.set_selection(anchor, focus));
+                select_and_keep(lua, editor, anchor, focus);
                 Ok(true)
             },
         );
@@ -1060,8 +1125,7 @@ impl UserData for ElementUd {
                     return Ok(false);
                 };
                 let byte = |b: i64| b.max(0) as usize;
-                let (anchor, focus) = (byte(anchor), byte(focus.unwrap_or(anchor)));
-                off_clock(lua, |_| editor.set_selection(anchor, focus));
+                select_and_keep(lua, editor, byte(anchor), byte(focus.unwrap_or(anchor)));
                 Ok(true)
             },
         );
@@ -1077,6 +1141,7 @@ impl UserData for ElementUd {
         // undo): a search's Replace, a snippet.
         methods.add_method("replace_selection", |lua, e, text: String| {
             settle(lua);
+            bump(&SELECT_ASKED);
             let Some(editor) = e.0.handle.get().and_then(NodeHandle::editor) else {
                 return Ok(false);
             };
@@ -1089,6 +1154,7 @@ impl UserData for ElementUd {
             Ok(e.0.classes.iter().any(|c| **c == *class))
         });
         methods.add_method("blur", |_, e, ()| {
+            FOCUS_ASKED.with(|n| n.set(n.get() + 1));
             if let Some(handle) = e.0.handle.get() {
                 handle.blur();
             }
