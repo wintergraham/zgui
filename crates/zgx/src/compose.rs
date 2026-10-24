@@ -358,8 +358,8 @@ pub(crate) struct Rare {
     pub(crate) context_menu_below: Option<bool>,
     /// Whether the pointer stops at the view (`pointer_events`), followed.
     pointer_events: Option<Box<dyn FnMut() -> bool>>,
-    /// CSS's inherited `pointer-events` (`pointer_events_inherited`), followed.
-    pointer_events_inherited: Option<Box<dyn FnMut() -> Option<bool>>>,
+    /// Whether the view and all it holds are absent for input (`inert`), followed.
+    inert: Option<Box<dyn FnMut() -> bool>>,
     /// Pressing the view leaves focus where it is (`keeps_focus`).
     keeps_focus: bool,
     scrollbar: Option<bool>,
@@ -446,8 +446,8 @@ impl Rare {
         if self.pointer_events.is_some() {
             inner.pointer_events = self.pointer_events;
         }
-        if self.pointer_events_inherited.is_some() {
-            inner.pointer_events_inherited = self.pointer_events_inherited;
+        if self.inert.is_some() {
+            inner.inert = self.inert;
         }
         inner.keeps_focus |= self.keeps_focus;
         if self.read_only.is_some() {
@@ -871,16 +871,17 @@ impl View {
         self.rare_mut().pointer_events = Some(Box::new(enabled));
         self
     }
-    /// CSS's `pointer-events` as it inherits: `Some(false)` lets the pointer
-    /// through this view and everything in it, listeners included, to what
-    /// is below (a closed menu's rows); `Some(true)` takes it again under
-    /// such an ancestor; `None` inherits. `pointer_events` instead stops at
-    /// the first view with listeners.
-    pub fn pointer_events_inherited_when(
-        mut self,
-        on: impl FnMut() -> Option<bool> + 'static,
-    ) -> Self {
-        self.rare_mut().pointer_events_inherited = Some(Box::new(on));
+    /// HTML's `inert`: the view and everything in it, listeners included,
+    /// are absent for input. The pointer reaches what is below it and
+    /// nothing in it takes focus, as for a closed panel left mounted while
+    /// it fades out. (`pointer_events(false)` still lets listeners inside
+    /// take the pointer.)
+    pub fn inert(self, inert: bool) -> Self {
+        self.inert_when(move || inert)
+    }
+    /// `inert`, following the reactive values it reads.
+    pub fn inert_when(mut self, inert: impl FnMut() -> bool + 'static) -> Self {
+        self.rare_mut().inert = Some(Box::new(inert));
         self
     }
     /// Pressing this view leaves keyboard focus where it is (an editor's
@@ -3159,7 +3160,7 @@ struct Opened {
     conditional: Vec<RegionBuilder>,
     row_text: Option<crate::selection::RowText>,
     pointer_events: Option<Box<dyn FnMut() -> bool>>,
-    pointer_events_inherited: Option<Box<dyn FnMut() -> Option<bool>>>,
+    inert: Option<Box<dyn FnMut() -> bool>>,
     keeps_focus: bool,
     accessible_label: Option<String>,
     accessibility: Option<Box<Accessibility>>,
@@ -4234,9 +4235,7 @@ fn open_element(
             .unwrap_or_default(),
         row_text: rare.as_deref_mut().and_then(|r| r.row_text.take()),
         pointer_events: rare.as_deref_mut().and_then(|r| r.pointer_events.take()),
-        pointer_events_inherited: rare
-            .as_deref_mut()
-            .and_then(|r| r.pointer_events_inherited.take()),
+        inert: rare.as_deref_mut().and_then(|r| r.inert.take()),
         keeps_focus: rare.as_deref().is_some_and(|r| r.keeps_focus),
         accessible_label: rare.as_deref_mut().and_then(|r| r.accessible_label.take()),
         accessibility: rare.and_then(|r| r.accessibility.take()),
@@ -4265,7 +4264,7 @@ fn close_element(ui: &mut Ui, opened: Opened) -> NodeId {
         conditional,
         mut row_text,
         pointer_events,
-        pointer_events_inherited,
+        inert,
         keeps_focus,
         accessible_label,
         accessibility,
@@ -4327,9 +4326,9 @@ fn close_element(ui: &mut Ui, opened: Opened) -> NodeId {
     if focusable_set || keeps_focus || ui.input.options(root).is_some() {
         ui.input.set_options(root, options);
     }
-    if let Some(mut on) = pointer_events_inherited {
+    if let Some(mut inert) = inert {
         let input = ui.input.clone();
-        ui.bind(root, move || input.set_pointer_events(root, on()));
+        ui.bind(root, move || input.set_inert(root, inert()));
     }
     if let Some(mut enabled) = pointer_events {
         let weak = ui.downgrade();

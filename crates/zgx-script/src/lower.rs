@@ -2050,34 +2050,34 @@ fn styled(
             };
         }
     }
-    // CSS's `pointer-events`, inherited: `false` lets the pointer through
-    // the node and all it holds (a closed menu's rows), `true` takes it back
-    // under such an ancestor.
     match &node.pointer_events {
-        Some(Source::Lit(Lit::Bool(enabled))) => {
-            let enabled = *enabled;
-            view = view.pointer_events_inherited_when(move || Some(enabled));
-        }
+        Some(Source::Lit(Lit::Bool(enabled))) => view = view.pointer_events(*enabled),
         Some(source) => {
             // Followed: a state or a function (`"none"`, `"auto"` or a boolean).
             let (source, vm) = (resolve_owned(source), vm.clone());
-            view = view.pointer_events_inherited_when(move || {
+            view = view.pointer_events_when(move || {
                 let value = match &source {
                     Owned::State(s) => s.with(|v| v.clone()),
                     Owned::Computed(f) => match vm.call::<Value>(f, ()) {
                         Ok(value) => value,
                         Err(error) => {
                             vm.report(error);
-                            return None;
+                            return true;
                         }
                     },
-                    Owned::Lit(Lit::Bool(enabled)) => return Some(*enabled),
-                    _ => return None,
+                    Owned::Lit(Lit::Bool(enabled)) => return *enabled,
+                    _ => return true,
                 };
-                crate::node::pointer_events(&value)
+                crate::node::pointer_events(&value).unwrap_or(true)
             });
         }
         None => {}
+    }
+    if let Some(inert) = &node.inert {
+        let (inert, vm) = (resolve_owned(inert), vm.clone());
+        view = view.inert_when(move || {
+            resolve(&inert, Ty::Bool, None, &vm) == Some(Lit::Bool(true))
+        });
     }
     if node.keep_focus {
         view = view.keeps_focus(true);
@@ -2571,10 +2571,6 @@ fn layout_box(inner: View, layout: &LayoutAnim, vm: &Rc<Vm>, low: &Rc<Lowering>)
                 engine.remove_targets(std::slice::from_ref(&element));
                 engine.set_now(snap);
             }
-            if !snap.is_empty() {
-                engine.remove_targets(std::slice::from_ref(&element));
-                engine.set_now(snap);
-            }
             if to.is_empty() {
                 return;
             }
@@ -2935,10 +2931,8 @@ fn with_events(
             t.set("cmd", held.primary_shortcut())?;
             Ok(t)
         };
-        // At the target, or bubbling when nothing nearer the target took the
-        // pointer: a drag handle keeps the press that began on a label in it.
         if captures
-            && event.phase != EventPhase::Capture
+            && event.phase == EventPhase::Target
             && matches!(
                 event.event,
                 InputEvent::PointerDown {
@@ -2947,7 +2941,7 @@ fn with_events(
                 }
             )
         {
-            event.capture_pointer_unless_taken();
+            event.capture_pointer();
         }
         // A child's events reach this node going down and coming back up:
         // the handlers hear them once, as they bubble.

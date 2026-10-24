@@ -224,6 +224,8 @@ Any property can be a value, a state, a function (rerun when what it reads chang
 - `window_drag = true` makes the node a window drag region (CSS's `-webkit-app-region: drag`): a press on it, or on anything inside it that takes no input itself, moves the window, and a double click zooms or minimizes it as the system's title bar setting says. Buttons, inputs and other focusable or pointer-following nodes inside keep their clicks. With `WindowOptions { titlebar: Titlebar::Inset, glass: Some(Glass::default()), .. }` in the host, a `window_drag` strip under the traffic lights is a whole frosted title bar.
 - `id`, `class = "a b"`, `ref = ui.ref()` make a node reachable by selectors and animations.
 - `pointer_events = "none"` (CSS `pointer-events: none`) lets the pointer through the node, and through descendants without handlers of their own, to what is under it: a full-window layer that holds popovers and tooltips, a hover card over a chart.
+- `inert = true` (HTML's `inert`) takes the node and everything in it, handlers included, out of input: the pointer reaches what is under it and nothing in it takes focus. A closed panel left mounted while it fades out: `inert = function() return not open:get() end`.
+- `keep_focus = true`: pressing the node leaves keyboard focus where it is, as a web page's `mousedown` with `preventDefault` does (a suggestion row under a search field keeps the caret in the field).
 
 Lua tables have no key order, so a property that refines another applies after it whatever order the keys come in: `p = 0, px = 8` pads the sides, `border = 1, border_sides = { 1, 0, 0, 0 }` draws only the top, and `rounded` gives way to `corners` and `rounded_tl`.
 

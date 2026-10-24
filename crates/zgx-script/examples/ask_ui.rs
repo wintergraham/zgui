@@ -3,10 +3,6 @@
 //! requires) changes, with its `ui.command`s as menu items. How the Luau UI
 //! is iterated on before the Ask app hosts it.
 //! Run: cargo run --release -p zgui-script --example ask_ui -- path/to/ui/gallery.luau
-#[cfg(target_os = "macos")]
-#[path = "../../zgui-desktop/examples/support/glass.rs"]
-mod glass;
-
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use zgui::input::{Key, Modifiers};
 use zgui_desktop::{AppMenu, AppMenuEntry, Application, FontData, MenuAccelerator, WindowOptions};
@@ -34,21 +30,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         width: WIDTH,
         height: HEIGHT,
         transparent: true,
-        decorations: cfg!(target_os = "macos"),
+        titlebar: zgui_desktop::Titlebar::Inset,
         min_size: Some((760., 560.)),
         ..Default::default()
     })
     .run(move |cx| {
-        #[cfg(target_os = "macos")]
-        {
-            let window = cx.window.clone();
-            cx.tasks.spawn(async move {
-                zgui::timer::sleep(Duration::from_millis(1)).await;
-                if glass::inset_titlebar(TITLE) {
-                    window.set_inner_size(WIDTH, HEIGHT);
-                }
-            });
-        }
         let host = ScriptHost::new(&cx.ui.runtime, script.clone());
         let window = cx.window.clone();
         host.action("drag_window", move |_| window.drag_window());

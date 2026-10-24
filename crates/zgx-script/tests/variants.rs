@@ -309,3 +309,24 @@ fn computed_colours_apply_as_literal_ones_do() {
     assert_eq!(h.fill("number"), Color(0x11, 0x22, 0x33, 255));
     assert_eq!(h.fill("token"), h.fill("literal-token"));
 }
+
+#[test]
+fn the_design_lint_skips_the_kinds_an_app_leaves_alone() {
+    // An app whose spacing follows its designs to the point checks only
+    // colours and the rest.
+    let h = Harness::inline(
+        r##"ui.theme.strict("warn", { skip = { "spacing" } })
+        return ui.column {
+            ui.div { p = 7, gap = 9, w = 10, h = 10 },
+            ui.div { bg = "#232e40", w = 10, h = 10 },
+        }"##,
+    );
+    assert!(h.error().is_none(), "{:?}", h.error());
+    assert!(h.warned("hard-codes a spacing").is_empty());
+    assert!(!h.warned("hard-codes a colour").is_empty());
+    let mut bad = Harness::inline(
+        r##"local ok, why = pcall(ui.theme.strict, "warn", { skip = { "spaces" } })
+        return ui.text { id = "why", tostring(why) }"##,
+    );
+    assert!(bad.text("why").contains("`spaces`"), "{}", bad.text("why"));
+}

@@ -7,6 +7,8 @@
 mod catalog_example;
 #[path = "../code_editor_example.rs"]
 mod code_editor_example;
+#[path = "../controls_lab.rs"]
+mod controls_lab;
 #[path = "../dashboard_example.rs"]
 mod dashboard_example;
 #[path = "../example_scripts.rs"]
@@ -19,6 +21,12 @@ mod frame_profiler;
 mod mail_example;
 #[path = "../monitor_example.rs"]
 mod monitor_example;
+#[path = "../navbar_lab.rs"]
+mod navbar_lab;
+#[path = "../quick_ask.rs"]
+mod quick_ask;
+#[path = "../sidebar_pip.rs"]
+mod sidebar_pip;
 #[path = "../sketch_example.rs"]
 mod sketch_example;
 #[path = "../team_example.rs"]

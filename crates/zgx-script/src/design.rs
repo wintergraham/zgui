@@ -64,7 +64,7 @@ pub(crate) fn is_raw(value: &mlua::Value) -> bool {
 
 /// What a property's literal hard-codes, if a token is meant for it.
 #[derive(Clone, Copy, PartialEq)]
-enum Kind {
+pub(crate) enum Kind {
     Colour,
     Space,
     Radius,
@@ -74,6 +74,23 @@ enum Kind {
     Shadow,
 }
 impl Kind {
+    /// Its bit in `Warnings::design_skip`.
+    fn bit(self) -> u8 {
+        1 << self as u8
+    }
+    /// The kinds a `skip` name covers: "colour", "spacing", "radius",
+    /// "type" (sizes and weights), "font" or "shadow".
+    pub(crate) fn mask(name: &str) -> Option<u8> {
+        Some(match name {
+            "colour" | "color" => Self::Colour.bit(),
+            "spacing" => Self::Space.bit(),
+            "radius" => Self::Radius.bit(),
+            "type" => Self::TextSize.bit() | Self::Weight.bit(),
+            "font" => Self::Font.bit(),
+            "shadow" => Self::Shadow.bit(),
+            _ => return None,
+        })
+    }
     fn of(prop: Prop) -> Option<Self> {
         use Prop::*;
         Some(match prop {
@@ -136,6 +153,14 @@ pub(crate) fn mode(lua: &Lua) -> DesignLint {
     lua.app_data_ref::<crate::node::Env>()
         .map_or(DesignLint::Off, |env| env.warnings.borrow().design)
 }
+/// What `prop = lit` hard-codes, when it is a kind the lint checks.
+fn checked(lua: &Lua, prop: Prop, lit: &Lit) -> Option<Kind> {
+    let kind = hard_coded(prop, lit)?;
+    let skip = lua
+        .app_data_ref::<crate::node::Env>()
+        .map_or(0, |env| env.warnings.borrow().design_skip);
+    (skip & kind.bit() == 0).then_some(kind)
+}
 
 /// Checks a literal style as a script gives it (`name = lit`), at the
 /// script's call site.
@@ -144,7 +169,7 @@ pub(crate) fn check(lua: &Lua, prop: Prop, name: &str, lit: &Lit) -> mlua::Resul
     if mode == DesignLint::Off {
         return Ok(());
     }
-    let Some(kind) = hard_coded(prop, lit) else {
+    let Some(kind) = checked(lua, prop, lit) else {
         return Ok(());
     };
     let runtime = match lua.app_data_ref::<crate::node::Env>() {
@@ -174,7 +199,7 @@ pub(crate) fn check_returned(
     if mode == DesignLint::Off {
         return Ok(());
     }
-    let Some(kind) = hard_coded(prop, lit) else {
+    let Some(kind) = checked(lua, prop, lit) else {
         return Ok(());
     };
     let Some(env) = lua.app_data_ref::<crate::node::Env>() else {

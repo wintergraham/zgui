@@ -190,7 +190,21 @@ pub(crate) fn install(lua: &Lua, ui: &Table, dir: Option<PathBuf>) -> mlua::Resu
     )?;
     theme.set(
         "strict",
-        lua.create_function(|lua, mode: Value| {
+        lua.create_function(|lua, (mode, options): (Value, Option<mlua::Table>)| {
+            // `{ skip = { "spacing", … } }`: kinds of value left alone.
+            let mut skip = 0;
+            if let Some(options) = options {
+                for name in options
+                    .get::<Option<Vec<String>>>("skip")?
+                    .unwrap_or_default()
+                {
+                    skip |= crate::design::Kind::mask(&name).ok_or_else(|| {
+                        fail(format!(
+                            "ui.theme.strict's `skip` names \"colour\", \"spacing\", \"radius\", \"type\", \"font\" or \"shadow\", not `{name}`"
+                        ))
+                    })?;
+                }
+            }
             let mode = match &mode {
                 Value::Bool(on) => Some(if *on {
                     crate::DesignLint::Warn
@@ -208,6 +222,7 @@ pub(crate) fn install(lua: &Lua, ui: &Table, dir: Option<PathBuf>) -> mlua::Resu
             if !warnings.design_forced {
                 warnings.design = mode;
             }
+            warnings.design_skip = skip;
             Ok(())
         })?,
     )?;

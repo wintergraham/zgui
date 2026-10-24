@@ -1344,12 +1344,15 @@ export type NodeProps = {
 	focus_group: ("vertical" | "horizontal" | "both")?,
 	-- A press on it (or on what inside takes no input) moves the window; a
 	-- double click zooms it. Buttons and inputs inside keep their clicks.
-	-- CSS pointer-events: "none" (or false) lets the pointer through the
-	-- node and everything in it, handlers included, to what is under it
-	-- (presses, hover, the wheel, drops, a native view); a descendant's
-	-- "auto" (or true) takes it back, as CSS inherits it. A state or
-	-- function follows.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Reactive<boolean>?,
 	window_drag: boolean?,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -2118,7 +2121,9 @@ export type ThemeApi = {
 	-- The design lint: styles that hard-code a colour, spacing, radius,
 	-- type size, weight, font or shadow warn ("warn", true) or fail
 	-- ("error"), naming the token to use. `ZGX_DESIGN_LINT` overrides it.
-	strict: (mode: "warn" | "error" | "off" | boolean) -> (),
+	-- `skip` leaves kinds of value alone (an app whose spacing follows its
+	-- designs to the point): "colour", "spacing", "radius", "type", "font", "shadow".
+	strict: (mode: "warn" | "error" | "off" | boolean, options: { skip: { "colour" | "spacing" | "radius" | "type" | "font" | "shadow" }? }?) -> (),
 }
 
 declare ui: {

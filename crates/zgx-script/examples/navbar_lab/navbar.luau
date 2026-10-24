@@ -930,7 +930,7 @@ return function(lab)
                     completionState = { prefix = value, full = full }
                     nb.input = full
                     inputValue:set(full)
-                    if inputEl then inputEl:select(#value, #full) end
+                    if inputEl then inputEl:set_selection_bytes(#value, #full) end
                     prevValue = full
                     return
                 end
@@ -1362,7 +1362,7 @@ return function(lab)
         if focusComposer and open and m == "ask" and promptEl then
                 focusComposer = false
                 promptEl:focus()
-                promptEl:select(#promptValue:peek())
+                promptEl:set_selection_bytes(#promptValue:peek())
             end
         end)
         local toolButton = function(children)

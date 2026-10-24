@@ -616,6 +616,8 @@ declare extern type Element with
 	height: number?
 	x: number?
 	y: number?
+	-- Whether keyboard focus is on the element itself.
+	focused: boolean
 	-- Keyboard focus to the element or its first focusable descendant
 	-- (shown ones only); whether it took.
 	function focus(self): boolean
@@ -1338,6 +1340,10 @@ export type NodeProps = {
 	variants: (Variants | ((choice: any) -> Variants))?,
 	ref: (Ref | { Ref })?,
 	focusable: boolean?,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: boolean?,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -1374,6 +1380,11 @@ export type NodeProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Reactive<boolean>?,
 	window_drag: boolean?,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -1630,6 +1641,10 @@ export type Props = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -1666,6 +1681,11 @@ export type Props = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -1896,6 +1916,7 @@ export type Props_class = string?
 export type Props_variants = (Variants | ((choice: any) -> Variants))?
 export type Props_ref = (Ref | { Ref })?
 export type Props_focusable = boolean?
+export type Props_keep_focus = boolean?
 export type Props_role = AriaRole?
 export type Props_heading = number?
 export type Props_selected = (boolean | Readable<boolean> | (() -> boolean))?
@@ -1907,6 +1928,7 @@ export type Props_error = (string | Readable<string?> | (() -> string?))?
 export type Props_aria_hidden = boolean?
 export type Props_focus_group = ("vertical" | "horizontal" | "both")?
 export type Props_pointer_events = (PointerEvents | Readable<PointerEvents> | (() -> PointerEvents))?
+export type Props_inert = Reactive<boolean>?
 export type Props_window_drag = boolean?
 export type Props_selectable = boolean?
 export type Props_selection_color = Reactive<Color>?
@@ -2105,6 +2127,10 @@ export type ContainerProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -2141,6 +2167,11 @@ export type ContainerProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -2393,6 +2424,10 @@ export type ScrollProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -2429,6 +2464,11 @@ export type ScrollProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -2688,6 +2728,10 @@ export type TextProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -2724,6 +2768,11 @@ export type TextProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -3023,6 +3072,10 @@ export type RichProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -3059,6 +3112,11 @@ export type RichProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -3308,6 +3366,10 @@ export type ImageProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -3344,6 +3406,11 @@ export type ImageProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -3603,6 +3670,10 @@ export type SvgProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -3639,6 +3710,11 @@ export type SvgProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -3890,6 +3966,10 @@ export type CanvasProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -3926,6 +4006,11 @@ export type CanvasProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -4207,6 +4292,10 @@ export type CheckboxProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -4243,6 +4332,11 @@ export type CheckboxProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -4500,6 +4594,10 @@ export type InputProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -4536,6 +4634,11 @@ export type InputProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -4849,6 +4952,10 @@ export type ProgressProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -4885,6 +4992,11 @@ export type ProgressProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -5135,6 +5247,10 @@ export type SliderProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -5171,6 +5287,11 @@ export type SliderProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -5434,6 +5555,10 @@ export type SegmentedProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -5470,6 +5595,11 @@ export type SegmentedProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -5729,6 +5859,10 @@ export type StepperProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -5765,6 +5899,11 @@ export type StepperProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -6025,6 +6164,10 @@ export type DisclosureProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -6061,6 +6204,11 @@ export type DisclosureProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -6316,6 +6464,10 @@ export type AccordionProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -6352,6 +6504,11 @@ export type AccordionProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -6599,6 +6756,10 @@ export type SectionProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -6635,6 +6796,11 @@ export type SectionProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -6889,6 +7055,10 @@ export type SeparatorProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -6925,6 +7095,11 @@ export type SeparatorProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -7180,6 +7355,10 @@ export type TabsProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -7216,6 +7395,11 @@ export type TabsProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -7479,6 +7663,10 @@ export type TreeProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -7515,6 +7703,11 @@ export type TreeProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -7788,6 +7981,10 @@ export type DataGridProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -7824,6 +8021,11 @@ export type DataGridProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -8093,6 +8295,10 @@ export type CalendarProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -8129,6 +8335,11 @@ export type CalendarProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -8390,6 +8601,10 @@ export type DatePickerProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -8426,6 +8641,11 @@ export type DatePickerProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -8685,6 +8905,10 @@ export type TimeFieldProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -8721,6 +8945,11 @@ export type TimeFieldProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -8979,6 +9208,10 @@ export type ComboboxProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -9015,6 +9248,11 @@ export type ComboboxProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -9282,6 +9520,10 @@ export type CommandPaletteProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -9318,6 +9560,11 @@ export type CommandPaletteProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -9573,6 +9820,10 @@ export type SelectProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -9609,6 +9860,11 @@ export type SelectProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -9867,6 +10123,10 @@ export type SplitProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -9903,6 +10163,11 @@ export type SplitProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -10169,6 +10434,10 @@ export type ListProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -10205,6 +10474,11 @@ export type ListProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -10506,6 +10780,10 @@ export type LayerProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -10542,6 +10820,11 @@ export type LayerProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -10793,6 +11076,10 @@ export type ModalProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -10829,6 +11116,11 @@ export type ModalProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -11095,6 +11387,10 @@ export type PopoverProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -11131,6 +11427,11 @@ export type PopoverProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -11402,6 +11703,10 @@ export type MenuItemProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -11434,6 +11739,11 @@ export type MenuItemProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -11692,6 +12002,10 @@ export type SubmenuProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -11728,6 +12042,11 @@ export type SubmenuProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -11833,6 +12152,300 @@ export type SubmenuProps = {
 	-- when the pointer moves onto it.
 	trigger: Node?,
 }
+-- `ui.native { key = "page" }`: the native view the host provides under
+-- `key` (`ScriptHost::native`); state or a function swaps it in place.
+export type NativeProps = {
+	-- Size and position.
+	w: Props_w,
+	h: Props_h,
+	size: Props_size,
+	min_w: Props_min_w,
+	max_w: Props_max_w,
+	min_h: Props_min_h,
+	max_h: Props_max_h,
+	w_full: Props_w_full,
+	h_full: Props_h_full,
+	aspect: Props_aspect,
+	absolute: Props_absolute,
+	relative: Props_relative,
+	top: Props_top,
+	left: Props_left,
+	inset_start: Props_inset_start,
+	inset_end: Props_inset_end,
+	right: Props_right,
+	bottom: Props_bottom,
+	-- Spacing.
+	p: Props_p,
+	px: Props_px,
+	py: Props_py,
+	pt: Props_pt,
+	pr: Props_pr,
+	pb: Props_pb,
+	pl: Props_pl,
+	ps: Props_ps,
+	pe: Props_pe,
+	m: Props_m,
+	mx: Props_mx,
+	my: Props_my,
+	mt: Props_mt,
+	mr: Props_mr,
+	mb: Props_mb,
+	ml: Props_ml,
+	ms: Props_ms,
+	me: Props_me,
+	gap: Props_gap,
+	gap_x: Props_gap_x,
+	gap_y: Props_gap_y,
+	-- Flex and grid.
+	direction: Props_direction,
+	dir: Props_dir,
+	grow: Props_grow,
+	shrink: Props_shrink,
+	basis: Props_basis,
+	flex_wrap: Props_flex_wrap,
+	wrap_reverse: Props_wrap_reverse,
+	items: Props_items,
+	justify: Props_justify,
+	self: Props_self,
+	content: Props_content,
+	grid: Props_grid,
+	cols: Props_cols,
+	rows: Props_rows,
+	col_start: Props_col_start,
+	row_start: Props_row_start,
+	col_span: Props_col_span,
+	row_span: Props_row_span,
+	col_span_full: Props_col_span_full,
+	row_span_full: Props_row_span_full,
+	overflow: Props_overflow,
+	overflow_x: Props_overflow_x,
+	overflow_y: Props_overflow_y,
+	hidden: Props_hidden,
+	invisible: Props_invisible,
+	-- Paint.
+	bg: Props_bg,
+	gradient: Props_gradient,
+	color: Props_color,
+	bg_image: Props_bg_image,
+	bg_fit: Props_bg_fit,
+	rounded: Props_rounded,
+	corners: Props_corners,
+	rounded_tl: Props_rounded_tl,
+	rounded_tr: Props_rounded_tr,
+	rounded_br: Props_rounded_br,
+	rounded_bl: Props_rounded_bl,
+	border: Props_border,
+	border_sides: Props_border_sides,
+	border_color: Props_border_color,
+	border_over: Props_border_over,
+	-- A function may return nil: a solid border.
+	border_dash: Props_border_dash,
+	outline: Props_outline,
+	outline_color: Props_outline_color,
+	outline_offset: Props_outline_offset,
+	shadow: Props_shadow,
+	inset_shadow: Props_inset_shadow,
+	opacity: Props_opacity,
+	brightness: Props_brightness,
+	contrast: Props_contrast,
+	saturate: Props_saturate,
+	blur: Props_blur,
+	backdrop_blur: Props_backdrop_blur,
+	fade: Props_fade,
+	fade_x: Props_fade_x,
+	fade_sides: Props_fade_sides,
+	fade_overflow: Props_fade_overflow,
+	snap: Props_snap,
+	clip_inset: Props_clip_inset,
+	layer: Props_layer,
+	fit: Props_fit,
+	tint: Props_tint,
+	cursor: Props_cursor,
+	-- Text.
+	text_size: Props_text_size,
+	weight: Props_weight,
+	bold: Props_bold,
+	italic: Props_italic,
+	align: Props_align,
+	font: Props_font,
+	wrap: Props_wrap,
+	truncate: Props_truncate,
+	lines: Props_lines,
+	line_height: Props_line_height,
+	letter_spacing: Props_letter_spacing,
+	-- Tabular figures: every digit the same width.
+	tabular: Props_tabular,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Props_underline,
+	underline_offset: Props_underline_offset,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Props_x,
+	y: Props_y,
+	scale: Props_scale,
+	scale_x: Props_scale_x,
+	scale_y: Props_scale_y,
+	rotate: Props_rotate,
+	skew: Props_skew,
+	skew_x: Props_skew_x,
+	skew_y: Props_skew_y,
+	origin: Props_origin,
+	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Props_theme,
+	-- Identity, for selectors, refs and animations.
+	id: Props_id,
+	-- Space-separated class names.
+	class: Props_class,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: Props_variants,
+	ref: Props_ref,
+	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
+	-- What assistive technology takes it for (ARIA's `role`), instead of
+	-- what it is: a clickable row as an "option", a row of buttons as a
+	-- "toolbar". It keeps what it does.
+	role: Props_role,
+	-- A section title of this level, 1 to 6 (`h1`…`h6`): screen readers
+	-- list headings and move between them.
+	heading: Props_heading,
+	-- Whether this option, tab or item is the chosen one (`aria-selected`).
+	selected: Props_selected,
+	-- Whether a switch, checkbox or radio of the app's own is on
+	-- (`aria-checked`), and whether what a control opens shows
+	-- (`aria-expanded`): a custom disclosure's.
+	checked: Props_checked,
+	expanded: Props_expanded,
+	-- Announce changes to the text in it (`aria-live`): a count, a "Sent"
+	-- note, a message arriving.
+	live: Props_live,
+	-- Read after its name, as a hint (`aria-description`).
+	description: Props_description,
+	-- Left out of the accessibility tree with what it holds (`aria-hidden`):
+	-- decoration, or what is said elsewhere.
+	aria_hidden: Props_aria_hidden,
+	-- One Tab stop for the focusable things inside; the arrows along this
+	-- axis (and Home, End) move among them, as ARIA's composite widgets
+	-- behave. `role = "listbox"` is vertical, "toolbar" and "tablist"
+	-- horizontal, without asking.
+	focus_group: Props_focus_group,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
+	window_drag: Props_window_drag,
+	-- The pointer selects the text in it and everything it holds, as on a
+	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
+	-- ⌘A / Ctrl+A, ⌘C / Ctrl+C. `false` keeps a part out. Off unless set.
+	selectable: Props_selectable,
+	-- A selectable node's highlight and selected-text colours (CSS
+	-- `::selection`), over the theme's `$selection` and `$selection.text`
+	-- tokens; a state or function follows.
+	selection_color: Props_selection_color,
+	selected_text_color: Props_selected_text_color,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: Props_tooltip,
+	tooltip_placement: Props_tooltip_placement,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: Props_tooltip_interactive,
+	-- Milliseconds the pointer rests before it shows (300; once one
+	-- shows, the next shows at once). Keyboard focus shows it too.
+	tooltip_delay: Props_tooltip_delay,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: Props_disabled,
+	hover: Props_hover,
+	active: Props_active,
+	focus: Props_focus,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: Props_layout,
+	layout_id: Props_layout_id,
+	layout_ease: Props_layout_ease,
+	-- Milliseconds.
+	layout_duration: Props_layout_duration,
+	layout_enter: Props_layout_enter,
+	layout_clip: Props_layout_clip,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: Props_mask,
+	bg_shader: Props_bg_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: Props_shader_params,
+	-- Events.
+	on_click: Props_on_click,
+	-- Primary pointer down and up.
+	on_press: Props_on_press,
+	on_release: Props_on_release,
+	on_hover: Props_on_hover,
+	on_pointer_move: Props_on_pointer_move,
+	-- Return true to consume the key.
+	on_key: Props_on_key,
+	on_key_up: Props_on_key_up,
+	on_focus: Props_on_focus,
+	on_blur: Props_on_blur,
+	-- Return true to take the gesture from the scroll views around it.
+	on_wheel: Props_on_wheel,
+	on_pinch: Props_on_pinch,
+	on_mount: Props_on_mount,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: Props_on_resize,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: Props_on_visible,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: Props_on_drag,
+	drag_preview: Props_drag_preview,
+	on_drag_end: Props_on_drag_end,
+	-- What the drag carries to other apps as it leaves the window (macOS):
+	-- Finder takes files, Mail text, a browser links.
+	drag_export: Props_drag_export,
+	-- Released outside every window of the app (macOS): a tab torn off its
+	-- window. `grab_x`/`grab_y` are where the source was held.
+	on_drag_outside: Props_on_drag_outside,
+	-- The drag moves its window instead, with no preview (macOS): a
+	-- window's only tab. Dropped on another window's destination it drops
+	-- there; elsewhere the window stays where it was let go.
+	drag_moves_window: Props_drag_moves_window,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: Props_drop_when,
+	on_drag_over: Props_on_drag_over,
+	on_drag_leave: Props_on_drag_leave,
+	on_drop: Props_on_drop,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: Props_context_menu,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Props_context_menu_style,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: Props_context_menu_below,
+	[number]: never,
+	key: Reactive<string>,
+}
+
 export type WebViewProps = {
 	-- Size and position.
 	w: Props_w,
@@ -11982,6 +12595,10 @@ export type WebViewProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -12018,6 +12635,11 @@ export type WebViewProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -12290,6 +12912,10 @@ export type TerminalProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -12326,6 +12952,11 @@ export type TerminalProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -12576,6 +13207,10 @@ export type SlotProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -12612,6 +13247,11 @@ export type SlotProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -12867,6 +13507,10 @@ export type EachOptions = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -12903,6 +13547,11 @@ export type EachOptions = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -13161,6 +13810,10 @@ export type PresenceOptions = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -13197,6 +13850,11 @@ export type PresenceOptions = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -13353,7 +14011,9 @@ export type ThemeApi = {
 	-- The design lint: styles that hard-code a colour, spacing, radius,
 	-- type size, weight, font or shadow warn ("warn", true) or fail
 	-- ("error"), naming the token to use. `ZGX_DESIGN_LINT` overrides it.
-	strict: (mode: "warn" | "error" | "off" | boolean) -> (),
+	-- `skip` leaves kinds of value alone (an app whose spacing follows its
+	-- designs to the point): "colour", "spacing", "radius", "type", "font", "shadow".
+	strict: (mode: "warn" | "error" | "off" | boolean, options: { skip: { "colour" | "spacing" | "radius" | "type" | "font" | "shadow" }? }?) -> (),
 }
 
 declare ui: {
@@ -13391,6 +14051,7 @@ declare ui: {
 	svg: (props: SvgProps) -> Node,
 	canvas: (props: CanvasProps) -> Node,
 	webview: (props: WebViewProps) -> Node,
+	native: (props: NativeProps) -> Node,
 	-- `ui.web(opts)`: a page for this run. `ui.web(id, opts)`: the host's
 	-- page for `id`, made with `opts` the first time, kept across reloads.
 	web: ((opts: WebOptions?) -> Web) & ((id: string, opts: WebOptions?) -> Web),

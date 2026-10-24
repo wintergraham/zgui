@@ -51,10 +51,13 @@ pub(crate) struct Node {
     pub focusable: Option<bool>,
     /// `keep_focus = true`: pressing the node leaves focus where it is.
     pub keep_focus: bool,
-    /// `pointer_events = "none"`: the pointer passes through the node and
-    /// all it holds, as CSS's inherits. A literal, a state or a function
-    /// (true or `"auto"` stops it again, false or `"none"` lets it through).
+    /// `pointer_events = "none"`: the pointer passes through. A literal, a
+    /// state or a function (true or `"auto"` stops it, false or `"none"`
+    /// lets it through).
     pub pointer_events: Option<Source>,
+    /// `inert = true`: the node and all it holds are absent for input (a
+    /// literal, a state or a function).
+    pub inert: Option<Source>,
     pub disabled: Option<Source>,
     /// `layout = "height"`: the node's size follows its content, animated.
     pub layout: Option<LayoutAnim>,
@@ -417,6 +420,7 @@ impl Node {
             focusable: None,
             keep_focus: false,
             pointer_events: None,
+            inert: None,
             disabled: None,
             layout: None,
             layout_id: None,
@@ -2214,6 +2218,7 @@ fn fill_from(
             },
             "focusable" => node.focusable = Some(lua.unpack(value)?),
             "keep_focus" => node.keep_focus = lua.unpack(value)?,
+            "inert" => node.inert = Some(source(lua, Ty::Bool, "inert", value)?),
             "window_drag" => node.window_drag = lua.unpack(value)?,
             "selectable" => node.selectable = lua.unpack(value)?,
             "selection_color" | "selected_text_color" => {
