@@ -83,6 +83,8 @@ current theme: `bg = "$surface.raised"`. If no token fits, declare one for the a
 | `ui.theme.strict("error")` | each is an error: the script fails to load (shown over the window), or a function property's value is not applied |
 | `ui.theme.strict("off")` (or `false`) | no check; the default |
 
+`ui.theme.strict(mode, { skip = { "spacing" } })` leaves kinds of value alone: `"colour"`, `"spacing"`, `"radius"`, `"type"` (sizes and weights), `"font"` or `"shadow"`. An app whose spacing follows its designs to the point, rather than a scale, still has its colours, radii and type checked.
+
 `ZGUI_DESIGN_LINT=off|warn|error` overrides the script (for a CI run, or an agent's), and a Rust host may call `ScriptHost::design_lint`. The mode is the host's: call `ui.theme.strict` first thing in `app.luau`, before modules build anything.
 
 | Checked | Not checked |

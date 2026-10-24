@@ -424,6 +424,9 @@ pub(crate) struct Warnings {
     pub(crate) design: DesignLint,
     /// `ZGUI_DESIGN_LINT` chose it: scripts do not change it.
     pub(crate) design_forced: bool,
+    /// Kinds of design value the lint leaves alone (`design::Kind` bits):
+    /// `ui.theme.strict(mode, { skip = { "spacing" } })`.
+    pub(crate) design_skip: u8,
 }
 pub(crate) type SharedWarnings = Rc<RefCell<Warnings>>;
 /// Where script warnings go: stderr and the host's list

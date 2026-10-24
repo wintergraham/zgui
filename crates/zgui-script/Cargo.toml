@@ -93,3 +93,12 @@ path = "tests/soak.rs"
 [[test]]
 name = "bundle"
 path = "tests/bundle.rs"
+
+# GPU snapshot runners for Ask's UI, driven by environment variables.
+[[test]]
+name = "ask_ui_snapshots"
+path = "tests/ask_ui_snapshots.rs"
+
+[[test]]
+name = "navbar_snapshots"
+path = "tests/navbar_snapshots.rs"

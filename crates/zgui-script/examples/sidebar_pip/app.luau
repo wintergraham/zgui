@@ -58,8 +58,9 @@ local function agent_info(id)
 	end
 	return D.agents[1]
 end
+-- State values are read-only snapshots: `update` hands `f` a mutable copy.
 local function edit(s, f)
-	s:set(f(s:peek()))
+	s:update(f)
 end
 local function set_flag(id, key, value)
 	edit(flags, function(all)

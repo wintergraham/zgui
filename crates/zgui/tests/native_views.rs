@@ -601,7 +601,7 @@ fn a_host_view_takes_the_pointer_through_pass_through_paint_and_focus() {
                     .w(800.)
                     .h(600.)
                     .bg(rgba(0x0000_0040))
-                    .pointer_events_inherited_when(move || Some(!layer.get())),
+                    .inert_when(move || layer.get()),
             ),
     ));
     ui.prepare_frame();
@@ -614,7 +614,7 @@ fn a_host_view_takes_the_pointer_through_pass_through_paint_and_focus() {
         let scene = ui.scene.borrow();
         split.route(&scene, &ui.input, 400., 300.)
     };
-    // `pointer_events = false` paint over it lets the pointer through.
+    // Inert paint over it lets the pointer through.
     assert_eq!(at(&ui), PointerRoute::Native(page));
     through.set(false);
     ui.prepare_frame();

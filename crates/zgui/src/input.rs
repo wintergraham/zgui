@@ -456,14 +456,6 @@ impl EventContext {
     pub fn capture_pointer(&mut self) {
         self.capture = Some(Some(self.current_target));
     }
-    /// Capture to this listener's node unless a listener nearer the target
-    /// already did: a press handler on an ancestor keeps the pointer it
-    /// pressed through (a draggable bar under its own row of controls).
-    pub fn capture_pointer_unless_taken(&mut self) {
-        if self.capture.is_none() {
-            self.capture_pointer();
-        }
-    }
     /// Release a pointer capture.
     pub fn release_pointer(&mut self) {
         self.capture = Some(None);
@@ -503,23 +495,22 @@ pub struct NodeInput {
     /// `mousedown` with `preventDefault` does on the web: chrome inside an
     /// editor's popup that must not take the caret away.
     pub keeps_focus: bool,
-    /// CSS `pointer-events`, inherited: `Some(false)` lets the pointer
-    /// through the node and everything it holds, listeners included, to
-    /// whatever is below, unless a descendant sets `Some(true)` again;
-    /// `None` inherits. (`pass_through` stops at the first listener.)
-    pub pointer_events: Option<bool>,
+    /// HTML's `inert`: the node and everything it holds, listeners
+    /// included, are absent for input. The pointer reaches what is below
+    /// (where `pass_through` stops at the first listener) and nothing in it
+    /// takes focus: a closed panel left mounted to fade out.
+    pub inert: bool,
 }
 type Callback = Rc<RefCell<dyn FnMut(&mut EventContext)>>;
-/// Whether inherited `pointer_events` lets the pointer target `node`.
+/// Whether the pointer can target `node`: neither it nor an ancestor is inert.
 fn receives_pointer(
     options: &crate::scene::NodeMap<NodeInput>,
     scene: &Scene,
     node: NodeId,
 ) -> bool {
-    std::iter::once(node)
+    !std::iter::once(node)
         .chain(scene.ancestors(node))
-        .find_map(|id| options.get(&id).and_then(|o| o.pointer_events))
-        .unwrap_or(true)
+        .any(|id| options.get(&id).is_some_and(|o| o.inert))
 }
 struct Entry {
     token: u64,
@@ -1469,7 +1460,7 @@ impl InputDispatcher {
             }
         }
         loop {
-            if s.options.get(&node).is_some_and(|o| o.disabled) {
+            if s.options.get(&node).is_some_and(|o| o.disabled || o.inert) {
                 return false;
             }
             match scene.parent(node) {
@@ -1884,16 +1875,14 @@ impl InputDispatcher {
             focus_changed: old != self.focused(),
         }
     }
-    /// Set (or clear, `None`) a node's inherited `pointer_events`.
-    pub fn set_pointer_events(&self, node: NodeId, value: Option<bool>) {
+    /// Make a node inert, or live again (`NodeInput::inert`).
+    pub fn set_inert(&self, node: NodeId, inert: bool) {
         let mut state = self.state.borrow_mut();
         let options = state.options.entry(node).or_default();
-        if options.pointer_events != value {
-            options.pointer_events = value;
-        }
+        options.inert = inert;
     }
-    /// Whether the pointer can target `node` by inherited `pointer_events`:
-    /// its own or its nearest ancestor's, true when none says.
+    /// Whether the pointer can target `node`: neither it nor an ancestor is
+    /// inert.
     pub(crate) fn receives_pointer(&self, scene: &Scene, node: NodeId) -> bool {
         let state = self.state.borrow();
         receives_pointer(&state.options, scene, node)
