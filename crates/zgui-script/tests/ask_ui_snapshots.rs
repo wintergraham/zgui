@@ -24,7 +24,8 @@ struct Shot {
 }
 impl Shot {
     fn new(script: &Path, w: f32, hgt: f32) -> Self {
-        let mut gpu = GpuRenderer::new((w * SCALE) as u32, (hgt * SCALE) as u32).expect("GPU adapter");
+        let mut gpu =
+            GpuRenderer::new((w * SCALE) as u32, (hgt * SCALE) as u32).expect("GPU adapter");
         gpu.set_scale_factor(SCALE);
         for bytes in [
             &include_bytes!("../../zgui-desktop/examples/support/fonts/GeistVariable.ttf")[..],
@@ -41,7 +42,13 @@ impl Shot {
         h.ui.scene.borrow_mut().resize(w, hgt);
         h.ui.prepare_frame();
         h.settle();
-        let shot = Self { h, gpu, w, hgt, at: (0., 0.) };
+        let shot = Self {
+            h,
+            gpu,
+            w,
+            hgt,
+            at: (0., 0.),
+        };
         shot.frames(30);
         shot
     }
@@ -68,8 +75,16 @@ impl Shot {
                 self.h.ui.dispatch(InputEvent::PointerMove { x, y });
                 self.h.settle();
                 self.frames(1);
-                self.h.ui.dispatch(InputEvent::PointerDown { x, y, button: PointerButton::Primary });
-                self.h.ui.dispatch(InputEvent::PointerUp { x, y, button: PointerButton::Primary });
+                self.h.ui.dispatch(InputEvent::PointerDown {
+                    x,
+                    y,
+                    button: PointerButton::Primary,
+                });
+                self.h.ui.dispatch(InputEvent::PointerUp {
+                    x,
+                    y,
+                    button: PointerButton::Primary,
+                });
                 self.h.settle();
                 self.frames(1);
             }
@@ -84,7 +99,12 @@ impl Shot {
                 let (id, dy) = arg.rsplit_once(':').unwrap();
                 let (x, y) = self.center(id);
                 self.h.ui.dispatch(InputEvent::PointerMove { x, y });
-                self.h.ui.dispatch(InputEvent::Scroll { x, y, delta_x: 0., delta_y: dy.parse().unwrap() });
+                self.h.ui.dispatch(InputEvent::Scroll {
+                    x,
+                    y,
+                    delta_x: 0.,
+                    delta_y: dy.parse().unwrap(),
+                });
                 self.h.settle();
                 self.frames(1);
             }
@@ -92,7 +112,11 @@ impl Shot {
                 let (x, y) = self.center(arg);
                 self.at = (x, y);
                 self.h.ui.dispatch(InputEvent::PointerMove { x, y });
-                self.h.ui.dispatch(InputEvent::PointerDown { x, y, button: PointerButton::Primary });
+                self.h.ui.dispatch(InputEvent::PointerDown {
+                    x,
+                    y,
+                    button: PointerButton::Primary,
+                });
                 self.h.settle();
                 self.frames(1);
             }
@@ -104,7 +128,10 @@ impl Shot {
                 let (x0, y0) = self.at;
                 for i in 1..=8 {
                     let t = i as f32 / 8.;
-                    self.h.ui.dispatch(InputEvent::PointerMove { x: x0 + (x - x0) * t, y: y0 + (y - y0) * t });
+                    self.h.ui.dispatch(InputEvent::PointerMove {
+                        x: x0 + (x - x0) * t,
+                        y: y0 + (y - y0) * t,
+                    });
                     self.h.settle();
                     self.frames(1);
                 }
@@ -112,7 +139,11 @@ impl Shot {
             }
             "up" => {
                 let (x, y) = self.at;
-                self.h.ui.dispatch(InputEvent::PointerUp { x, y, button: PointerButton::Primary });
+                self.h.ui.dispatch(InputEvent::PointerUp {
+                    x,
+                    y,
+                    button: PointerButton::Primary,
+                });
                 self.h.settle();
                 self.frames(1);
             }
@@ -123,9 +154,16 @@ impl Shot {
             "type" => {
                 for c in arg.chars() {
                     let key = Key::Character(c.to_string());
-                    self.h.ui.dispatch(InputEvent::KeyDown { key: key.clone(), modifiers: Modifiers::default(), repeat: false });
+                    self.h.ui.dispatch(InputEvent::KeyDown {
+                        key: key.clone(),
+                        modifiers: Modifiers::default(),
+                        repeat: false,
+                    });
                     self.h.ui.dispatch(InputEvent::Text(c.to_string()));
-                    self.h.ui.dispatch(InputEvent::KeyUp { key, modifiers: Modifiers::default() });
+                    self.h.ui.dispatch(InputEvent::KeyUp {
+                        key,
+                        modifiers: Modifiers::default(),
+                    });
                     self.h.settle();
                     self.frames(1);
                 }
@@ -140,19 +178,45 @@ impl Shot {
                     "Backspace" => Key::Backspace,
                     other => Key::Character(other.to_string()),
                 };
-                self.h.ui.dispatch(InputEvent::KeyDown { key: key.clone(), modifiers: Modifiers::default(), repeat: false });
-                self.h.ui.dispatch(InputEvent::KeyUp { key, modifiers: Modifiers::default() });
+                self.h.ui.dispatch(InputEvent::KeyDown {
+                    key: key.clone(),
+                    modifiers: Modifiers::default(),
+                    repeat: false,
+                });
+                self.h.ui.dispatch(InputEvent::KeyUp {
+                    key,
+                    modifiers: Modifiers::default(),
+                });
                 self.h.settle();
                 self.frames(1);
             }
             "bounds" => {
                 // bounds:<node id>: the node's box and its descendants', three deep, for layout checks.
                 self.h.ui.prepare_frame();
-                let id = self.h.find(arg).unwrap_or_else(|| panic!("no node `{arg}`"));
+                let id = self
+                    .h
+                    .find(arg)
+                    .unwrap_or_else(|| panic!("no node `{arg}`"));
                 let scene = self.h.ui.scene.borrow();
                 fn walk(scene: &zgui::scene::Scene, id: zgui::scene::NodeId, depth: usize) {
                     let b = scene.bounds(id);
-                    println!("{}{:?} {} {:.1},{:.1} {:.1}x{:.1}", "  ".repeat(depth), id, match scene.kind(id) { zgui::scene::NodeKind::Container(l) => format!("{l:?}"), zgui::scene::NodeKind::Panel { layout, .. } => format!("Panel {layout:?}"), zgui::scene::NodeKind::RichText { .. } | zgui::scene::NodeKind::Text { .. } => "Text".into(), _ => "Leaf".into() }, b.x, b.y, b.width, b.height);
+                    println!(
+                        "{}{:?} {} {:.1},{:.1} {:.1}x{:.1}",
+                        "  ".repeat(depth),
+                        id,
+                        match scene.kind(id) {
+                            zgui::scene::NodeKind::Container(l) => format!("{l:?}"),
+                            zgui::scene::NodeKind::Panel { layout, .. } =>
+                                format!("Panel {layout:?}"),
+                            zgui::scene::NodeKind::RichText { .. }
+                            | zgui::scene::NodeKind::Text { .. } => "Text".into(),
+                            _ => "Leaf".into(),
+                        },
+                        b.x,
+                        b.y,
+                        b.width,
+                        b.height
+                    );
                     if depth < 7 {
                         for c in scene.children(id) {
                             walk(scene, *c, depth + 1);
@@ -171,7 +235,10 @@ impl Shot {
         self.h.ui.prepare_frame();
         let _ = self.h.ui.scene.borrow_mut().flush();
         self.gpu
-            .render(&self.h.ui.scene.borrow(), &[zgui::scene::Rect::new(0., 0., self.w, self.hgt)])
+            .render(
+                &self.h.ui.scene.borrow(),
+                &[zgui::scene::Rect::new(0., 0., self.w, self.hgt)],
+            )
             .unwrap();
         let pixels = self.gpu.readback().unwrap();
         let (w, h) = ((self.w * SCALE) as usize, (self.hgt * SCALE) as usize);

@@ -34,8 +34,11 @@ fn snapshot(h: &Harness, suffix: &str) {
     h.ui.refresh_text_geometry();
     h.frame();
     h.ui.prepare_frame();
-    gpu.render(&h.ui.scene.borrow(), &[zgui::scene::Rect::new(0., 0., W, H)])
-        .unwrap();
+    gpu.render(
+        &h.ui.scene.borrow(),
+        &[zgui::scene::Rect::new(0., 0., W, H)],
+    )
+    .unwrap();
     let pixels = gpu.readback().unwrap();
     let mut out = format!("P6\n{} {}\n255\n", W as u32, H as u32).into_bytes();
     for rgba in pixels.chunks(4) {
@@ -79,8 +82,19 @@ fn opens_on_the_board_master() {
     let mut h = sidebar();
     frames(&h, 20);
     for id in [
-        "space_name", "search", "pin_gmail", "pin_chatgpt", "chat_c_network", "tab_stripe", "tab_data",
-        "group_g_daily", "group_g_reading", "tab_dither", "space_work", "space_research", "pip_front",
+        "space_name",
+        "search",
+        "pin_gmail",
+        "pin_chatgpt",
+        "chat_c_network",
+        "tab_stripe",
+        "tab_data",
+        "group_g_daily",
+        "group_g_reading",
+        "tab_dither",
+        "space_work",
+        "space_research",
+        "pip_front",
         "pip_others",
     ] {
         assert!(h.find(id).is_some(), "the master shows `{id}`");
@@ -100,7 +114,10 @@ fn tabs_groups_and_pins_respond() {
     frames(&h, 30);
     h.click("tab_rl_hn");
     frames(&h, 10);
-    assert!(h.text("page_title").contains("Show HN"), "the page follows the selection");
+    assert!(
+        h.text("page_title").contains("Show HN"),
+        "the page follows the selection"
+    );
     // Close it from its own close button: the row's click must not reselect it.
     hover(&mut h, "tab_rl_hn");
     h.click("close_rl_hn");
@@ -119,10 +136,16 @@ fn tabs_groups_and_pins_respond() {
     hover(&mut h, "tab_spotify_tab");
     h.click("mute_spotify_tab");
     frames(&h, 10);
-    assert!(h.text("page_title").contains("Stripe"), "muting does not select the tab");
+    assert!(
+        h.text("page_title").contains("Stripe"),
+        "muting does not select the tab"
+    );
     h.click("tab_hn");
     frames(&h, 10);
-    assert!(h.text("page_title").contains("Hacker News"), "the next row click still selects");
+    assert!(
+        h.text("page_title").contains("Hacker News"),
+        "the next row click still selects"
+    );
     // Close a whole group.
     h.click("close_group_g_daily");
     frames(&h, 10);
@@ -140,18 +163,35 @@ fn spaces_search_and_rail() {
     frames(&h, 30);
     assert!(h.find("tab_r_bayer").is_some(), "the research space's tabs");
     assert!(h.find("tab_stripe").is_none());
-    key(&mut h, Key::Character("1".into()), Modifiers { control: true, ..Default::default() });
+    key(
+        &mut h,
+        Key::Character("1".into()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
     frames(&h, 30);
     assert!(h.find("tab_stripe").is_some(), "⌃1 is back to work");
     // Type an address.
-    key(&mut h, Key::Character("k".into()), Modifiers { meta: true, ..Default::default() });
+    key(
+        &mut h,
+        Key::Character("k".into()),
+        Modifiers {
+            meta: true,
+            ..Default::default()
+        },
+    );
     for c in "github.com/zgui".chars() {
         h.ui.dispatch(InputEvent::Text(c.to_string()));
     }
     h.settle();
     key(&mut h, Key::Enter, Modifiers::default());
     frames(&h, 30);
-    assert!(h.text("page").contains("github.com"), "the typed address opens");
+    assert!(
+        h.text("page").contains("github.com"),
+        "the typed address opens"
+    );
     snapshot(&h, "4-typed");
     // Collapse to the rail.
     h.click("toggle_sidebar");
@@ -190,11 +230,17 @@ fn pip_stacks_expands_and_finishes() {
     h.click("pip_action");
     frames(&h, 30);
     assert!(h.find("pip_stack_header").is_none() && h.find("pip_others").is_none());
-    assert!(h.find("pip_open").is_some(), "a lone agent is the master card");
+    assert!(
+        h.find("pip_open").is_some(),
+        "a lone agent is the master card"
+    );
     snapshot(&h, "7-master");
     h.click("pip_open");
     frames(&h, 20);
-    assert!(h.find("tab_agent_passport").is_some(), "its tab opens in the sidebar");
+    assert!(
+        h.find("tab_agent_passport").is_some(),
+        "its tab opens in the sidebar"
+    );
 }
 
 #[test]

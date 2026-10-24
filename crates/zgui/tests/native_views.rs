@@ -660,5 +660,8 @@ fn a_layer_away_from_the_page_stays_on_the_base_plane() {
     let items = scene.layer_items(None);
     let mut base = items.clone();
     split.filter(&mut base, Plane::Base);
-    assert!(base.iter().any(|item| item.id == button), "the pressed button's layer left the base plane");
+    assert!(
+        base.iter().any(|item| item.id == button),
+        "the pressed button's layer left the base plane"
+    );
 }

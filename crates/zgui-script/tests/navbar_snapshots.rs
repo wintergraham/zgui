@@ -100,7 +100,7 @@ impl Shot {
     }
     fn typing(&mut self, text: &str) {
         for c in text.chars() {
-            self.key(Key::Character(c.to_string().into()), false);
+            self.key(Key::Character(c.to_string()), false);
             self.h.ui.dispatch(InputEvent::Text(c.to_string()));
             self.h.settle();
             self.frames(1);

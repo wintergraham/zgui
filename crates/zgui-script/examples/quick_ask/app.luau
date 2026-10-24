@@ -1155,29 +1155,30 @@ local function stage(i)
 			shadow = { y = 20, blur = 50, color = "#00000066" },
 			apps.view(s.id, ctx),
 		},
-		ui.presence(function() return open:get() or nil end, function()
-			-- A click outside closes it; over Finder the files stay live under
-			-- the dim, to be picked and dragged onto the panel.
-			local finder = s.id == "finder"
-			return ui.div {
-				w_full = true, h_full = true, bg = "#00000040",
-				-- The wrapper lets the pointer through; the dim takes it back to
-				-- close the panel, except over Finder.
-				pointer_events = finder and "none" or "auto",
-				on_click = not finder and function() close_panel(false) end or nil,
-			}
-		end, {
-			-- Drag hit testing doesn't skip pointer-through nodes: the
-			-- wrapper is hidden while there is nothing in it.
+		-- The layer the dim fills lets the pointer through (and hides while there is nothing in it, as drag hit testing
+		-- doesn't skip pointer-through nodes); a presence's own box takes no input options, so it is a div of its own.
+		ui.div {
 			absolute = true, top = 0, left = 0, right = 0, bottom = 0, pointer_events = "none",
 			hidden = function() return not open:get() end,
-			enter = { opacity = { 0, 1 }, duration = 180 }, exit = { opacity = 0, duration = 160 },
-		}),
+			ui.presence(function() return open:get() or nil end, function()
+				-- A click outside closes it; over Finder the files stay live under
+				-- the dim, to be picked and dragged onto the panel.
+				local finder = s.id == "finder"
+				return ui.div {
+					w_full = true, h_full = true, bg = "#00000040",
+					-- The wrapper lets the pointer through; the dim takes it back to
+					-- close the panel, except over Finder.
+					pointer_events = finder and "none" or "auto",
+					on_click = not finder and function() close_panel(false) end or nil,
+				}
+			end, { enter = { opacity = { 0, 1 }, duration = 180 }, exit = { opacity = 0, duration = 160 } }),
+		},
 		menu_bar(s),
 		ui.presence(function() return open:get() or nil end, function()
 			-- Centred without a full-width wrapper, which would take the
 			-- clicks and drops beside it.
-			return ui.div { absolute = true, top = s.panel_top or 66, left = "50%", x = -320, panel(s) }
+			-- A margin, not a translate: the panel's box is where it shows, so hit testing and its bounds agree.
+			return ui.div { absolute = true, top = s.panel_top or 66, left = "50%", ml = -320, panel(s) }
 		end, {
 			-- No scale: it would promote the frosted panel to a cached layer,
 			-- repainting the blur into a texture on every step.
@@ -1185,20 +1186,25 @@ local function stage(i)
 			exit = { opacity = 0, y = -6, duration = 140, ease = "inQuad" },
 			initial = true,
 		}),
-		ui.presence(toast, function(t)
-			return ui.row {
-				absolute = true, bottom = 28, left = 0, right = 0, justify = "center", pointer_events = "none",
-				ui.row {
-					h = 36, px = 14, gap = 8, rounded = 18, items = "center",
-					bg = "#1F1F1DEB", border = 1, border_color = C.glass_line, backdrop_blur = 20,
-					shadow = { y = 10, blur = 30, color = "#00000066" },
-					icon("check", 13, C.done), text(t.text, 12.5, C.text),
-				},
-			}
-		end, {
-			enter = { opacity = { 0, 1 }, y = { 10, 0 }, duration = 220, ease = "outQuart" },
-			exit = { opacity = 0, y = 6, duration = 160 },
-		}),
+		-- The toast's layer fills the desktop (an overlay stacks its children over the whole box) and lets the
+		-- pointer through to the panel under it.
+		ui.div {
+			absolute = true, top = 0, left = 0, right = 0, bottom = 0, pointer_events = "none",
+			ui.presence(toast, function(t)
+				return ui.row {
+					absolute = true, bottom = 28, left = 0, right = 0, justify = "center", pointer_events = "none",
+					ui.row {
+						h = 36, px = 14, gap = 8, rounded = 18, items = "center",
+						bg = "#1F1F1DEB", border = 1, border_color = C.glass_line, backdrop_blur = 20,
+						shadow = { y = 10, blur = 30, color = "#00000066" },
+						icon("check", 13, C.done), text(t.text, 12.5, C.text),
+					},
+				}
+			end, {
+				enter = { opacity = { 0, 1 }, y = { 10, 0 }, duration = 220, ease = "outQuart" },
+				exit = { opacity = 0, y = 6, duration = 160 },
+			}),
+		},
 		ui.show(function() return not open:get() end, ui.row {
 			absolute = true, top = 40, right = 16, gap = 6, items = "center", px = 10, h = 28, rounded = 14,
 			bg = "#00000059", pointer_events = "none",
@@ -1304,10 +1310,13 @@ return ui.overlay {
 			ui.presence(scene, stage, { w_full = true, h_full = true }),
 		},
 	},
-	ui.presence(function() return keymap:get() or nil end, keymap_view, {
+	ui.div {
 		absolute = true, top = 0, left = 0, right = 0, bottom = 0, pointer_events = "none",
 		hidden = function() return not keymap:get() end,
-		enter = { opacity = { 0, 1 }, duration = 160 },
-		exit = { opacity = 0, duration = 120 },
-	}),
+		ui.presence(function() return keymap:get() or nil end, keymap_view, {
+			w_full = true, h_full = true,
+			enter = { opacity = { 0, 1 }, duration = 160 },
+			exit = { opacity = 0, duration = 120 },
+		}),
+	},
 }

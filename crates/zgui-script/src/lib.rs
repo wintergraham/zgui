@@ -1215,7 +1215,11 @@ impl ScriptHost {
     /// in window points. Providing other content for a key swaps the view in
     /// place; it is kept across reloads until `remove_native`.
     pub fn native(&self, key: impl Into<String>, content: zgui::native_view::NativeContent) {
-        self.0.natives.views.borrow_mut().insert(key.into(), content);
+        self.0
+            .natives
+            .views
+            .borrow_mut()
+            .insert(key.into(), content);
         self.0.natives.revision.update(|r| *r += 1);
     }
     /// Stops providing `key`'s view (its nodes show a placeholder); what it was.

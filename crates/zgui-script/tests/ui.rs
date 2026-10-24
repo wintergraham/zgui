@@ -2409,7 +2409,8 @@ fn native_views_come_from_the_host_by_key_and_survive_reloads() {
     assert!(h.natives.is_empty());
     assert_eq!(h.text("page"), "Native view · other (not provided)");
     let other: Rc<dyn Any> = Rc::new("other view");
-    h.host.native("other", NativeContent::Platform(other.clone()));
+    h.host
+        .native("other", NativeContent::Platform(other.clone()));
     h.frame();
     assert!(shown(&mut h).is_some_and(|v| same(&v, &other)));
     assert!(h.host.remove_native("other").is_some());

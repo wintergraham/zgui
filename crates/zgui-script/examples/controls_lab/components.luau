@@ -179,7 +179,10 @@ return function(k)
         local out = {}
         for _, item in paletteData do
             if (onlyCommands and item[3] == 5 or not onlyCommands and (scope:get() == 1 or item[3] == scope:get()))
-                and (q == "" or string.find(string.lower(item[1] .. " " .. item[2]), q, 1, true)) then table.insert(out, item) end
+                and (q == "" or string.find(string.lower(item[1] .. " " .. item[2]), q, 1, true)) then
+                -- Its position is part of the row: `each` follows rows by their item, and a row's id is its place.
+                table.insert(out, { item[1], item[2], item[3], item[4], #out + 1 })
+            end
         end
         return out
     end)

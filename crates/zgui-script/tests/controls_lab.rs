@@ -231,8 +231,12 @@ fn responsive_layout_slider_keyboard_and_reduced_motion() {
         "narrow window stacks the cards: {a:?} {b:?}"
     );
     for id in ["slow_motion", "lab_reduce"] {
-        let node=h.find(id).unwrap();let bounds=h.ui.scene.borrow().bounds(node);
-        assert!(bounds.x>=88. && bounds.x+bounds.width<=620.,"compact header clips {id}: {bounds:?}");
+        let node = h.find(id).unwrap();
+        let bounds = h.ui.scene.borrow().bounds(node);
+        assert!(
+            bounds.x >= 88. && bounds.x + bounds.width <= 620.,
+            "compact header clips {id}: {bounds:?}"
+        );
     }
     h.click("reduce");
     frames(&h, 100);

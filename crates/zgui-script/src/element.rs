@@ -972,7 +972,12 @@ fn bump(counter: &'static std::thread::LocalKey<std::cell::Cell<u64>>) -> u64 {
 /// nothing the script asked since changed it and the field's own edit (or
 /// its text arriving from state) moved it: an inline completion keeps its
 /// suffix selected as typing goes on.
-fn select_and_keep(lua: &mlua::Lua, editor: zgui::widgets::EditorHandle, anchor: usize, focus: usize) {
+fn select_and_keep(
+    lua: &mlua::Lua,
+    editor: zgui::widgets::EditorHandle,
+    anchor: usize,
+    focus: usize,
+) {
     editor.set_selection(anchor, focus);
     let asked = bump(&SELECT_ASKED);
     again(lua, move || {
@@ -983,7 +988,8 @@ fn select_and_keep(lua: &mlua::Lua, editor: zgui::widgets::EditorHandle, anchor:
                 .iter()
                 .all(|&b| b <= text.len() && text.is_char_boundary(b))
         };
-        if SELECT_ASKED.with(|n| n.get()) == asked && fits && editor.selection() != (anchor, focus) {
+        if SELECT_ASKED.with(|n| n.get()) == asked && fits && editor.selection() != (anchor, focus)
+        {
             editor.set_selection(anchor, focus);
         }
     });

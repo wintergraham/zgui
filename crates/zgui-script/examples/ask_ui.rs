@@ -97,5 +97,5 @@ fn accelerator(text: &str) -> Option<MenuAccelerator> {
             _ => return None,
         }
     }
-    (key.chars().count() == 1).then(|| MenuAccelerator::new(Key::Character(key.into()), modifiers))
+    (key.chars().count() == 1).then(|| MenuAccelerator::new(Key::Character(key), modifiers))
 }

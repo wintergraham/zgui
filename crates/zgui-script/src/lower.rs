@@ -2015,9 +2015,8 @@ fn styled(
     }
     if let Some(inert) = &node.inert {
         let (inert, vm) = (resolve_owned(inert), vm.clone());
-        view = view.inert_when(move || {
-            resolve(&inert, Ty::Bool, None, &vm) == Some(Lit::Bool(true))
-        });
+        view =
+            view.inert_when(move || resolve(&inert, Ty::Bool, None, &vm) == Some(Lit::Bool(true)));
     }
     if node.keep_focus {
         view = view.keeps_focus(true);
@@ -2864,8 +2863,11 @@ fn with_events(
             t.set("cmd", held.primary_shortcut())?;
             Ok(t)
         };
+        // At the target it keeps the pointer at once; pressed through a
+        // child with listeners of its own, from the first move unless the
+        // child starts a drag (a draggable bar under its own controls).
         if captures
-            && event.phase == EventPhase::Target
+            && event.phase != EventPhase::Capture
             && matches!(
                 event.event,
                 InputEvent::PointerDown {
@@ -2874,7 +2876,11 @@ fn with_events(
                 }
             )
         {
-            event.capture_pointer();
+            if event.phase == EventPhase::Target {
+                event.capture_pointer();
+            } else {
+                event.capture_pointer_on_move();
+            }
         }
         // A child's events reach this node going down and coming back up:
         // the handlers hear them once, as they bubble.
