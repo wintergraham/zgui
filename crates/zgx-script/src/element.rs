@@ -1080,8 +1080,19 @@ impl UserData for ElementUd {
             settle(lua);
             let handle = e.0.handle.get();
             if let Some(editor) = handle.and_then(NodeHandle::editor) {
-                let end = editor.editor.borrow().text().len();
-                select_and_keep(lua, editor, 0, end);
+                // All of the text it holds then: a value written in the same
+                // handler may reach the field after this.
+                {
+                    let editor = editor.clone();
+                    off_clock(lua, move |_| editor.select_all());
+                }
+                let asked = bump(&SELECT_ASKED);
+                again(lua, move || {
+                    let end = editor.editor.borrow().text().len();
+                    if SELECT_ASKED.with(|n| n.get()) == asked && editor.selection() != (0, end) {
+                        editor.select_all();
+                    }
+                });
                 return Ok(true);
             }
             Ok(off_clock(lua, |_| handle.is_some_and(NodeHandle::select_all)).unwrap_or(false))

@@ -329,10 +329,39 @@ impl Runtime {
     /// selection made in a handler is not undone by them. Outside a hold it
     /// runs now.
     pub fn defer(&self, callback: impl FnOnce() + 'static) {
-        if self.inner.holds.get() == 0 {
+        let inner = &self.inner;
+        if inner.holds.get() == 0 && inner.batch_depth.get() == 0 && !inner.flushing.get() {
             callback();
         } else {
-            self.inner.deferred.borrow_mut().push(Box::new(callback));
+            // In a batch or a flush (a menu command's handler), it waits for
+            // what is being written to reach the views it drives.
+            inner.deferred.borrow_mut().push(Box::new(callback));
+        }
+    }
+    /// Run what was deferred, in order, once nothing holds it back.
+    fn run_deferred(&self) {
+        let inner = &self.inner;
+        if inner.holds.get() > 0 || inner.batch_depth.get() > 0 || inner.flushing.get() {
+            return;
+        }
+        // Held open while it runs, so what a callback defers queues behind.
+        inner.holds.set(1);
+        struct Release<'a>(&'a Inner);
+        impl Drop for Release<'_> {
+            fn drop(&mut self) {
+                self.0.holds.set(0);
+            }
+        }
+        let _release = Release(inner);
+        loop {
+            let next: Vec<_> = std::mem::take(&mut *inner.deferred.borrow_mut());
+            if next.is_empty() {
+                break;
+            }
+            for callback in next {
+                self.settle();
+                callback();
+            }
         }
     }
     /// Run `f`, keeping what it defers (`defer`) until it returns. An input
@@ -343,23 +372,10 @@ impl Runtime {
         impl Drop for Guard<'_> {
             fn drop(&mut self) {
                 let inner = &self.0.inner;
-                if inner.holds.get() > 1 || std::thread::panicking() {
-                    inner.holds.set(inner.holds.get() - 1);
-                    return;
+                inner.holds.set(inner.holds.get() - 1);
+                if !std::thread::panicking() {
+                    self.0.run_deferred();
                 }
-                // In order, the hold still open: what a callback defers
-                // queues behind the rest.
-                loop {
-                    let next: Vec<_> = std::mem::take(&mut *inner.deferred.borrow_mut());
-                    if next.is_empty() {
-                        break;
-                    }
-                    for callback in next {
-                        self.0.settle();
-                        callback();
-                    }
-                }
-                inner.holds.set(0);
             }
         }
         let _guard = Guard(self);
@@ -377,10 +393,18 @@ impl Runtime {
             }
         }
         let _restore = Restore(&self.inner, self.inner.batch_depth.replace(0));
-        self.flush();
+        // Effects only: deferred work still waits for the batch.
+        self.flush_effects();
     }
-    /// Run queued observers. Reentrant writes join the current flush.
+    /// Run queued observers, then what was deferred outside a hold.
+    /// Reentrant writes join the current flush.
     pub fn flush(&self) {
+        self.flush_effects();
+        if !self.inner.deferred.borrow().is_empty() {
+            self.run_deferred();
+        }
+    }
+    fn flush_effects(&self) {
         if self.inner.batch_depth.get() != 0 || self.inner.flushing.replace(true) {
             return;
         }
@@ -847,6 +871,21 @@ mod tests {
             log.borrow_mut().push("in the hold");
         });
         assert_eq!(*log.borrow(), ["now", "in the hold", "first", "second", "third"]);
+        // In a batch (a menu command's handler) it waits for the batch's
+        // writes to reach what they drive.
+        let open = runtime.signal(false);
+        let seen = std::rc::Rc::new(std::cell::Cell::new(false));
+        let shown = runtime.signal(false);
+        let (o, sh) = (open.clone(), shown.clone());
+        let _effect = runtime.effect(move || {
+            sh.set(o.get());
+        });
+        let (sh, s2) = (shown.clone(), seen.clone());
+        runtime.batch(|| {
+            open.set(true);
+            runtime.defer(move || s2.set(sh.with_untracked(|v| *v)));
+        });
+        assert!(seen.get(), "the deferred work saw the effect's write");
     }
     #[test]
     fn a_signal_version_counts_the_writes_that_changed_it() {
