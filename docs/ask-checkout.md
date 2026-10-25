@@ -1,6 +1,6 @@
 # The zgx checkout used by Ask
 
-Ask's Luau shell uses the `ask/zeronsh` branch of [wintergraham/zgx](https://github.com/wintergraham/zgx/tree/ask/zeronsh): [zeronsh/zgx](https://github.com/zeronsh/zgx) `main` as of 2026-10-24 with Ask's pieces on top. Update it by rebasing those commits onto a newer `zeronsh/main`.
+Ask's Luau shell uses the `ask/zgx` branch of [wintergraham/zgui](https://github.com/wintergraham/zgui/tree/ask/zgx): [zeronsh/zgx](https://github.com/zeronsh/zgx) `main` as of 2026-10-25 (`a92e5a47`, after the 0.1.0 rename from zgui) with Ask's pieces on top. Update it by rebasing those commits onto a newer zgx `main`; a commit still written with zgui names takes `scripts/rename-to-zgx.sh` after the rebase. The fork keeps its old repository name; `ask/zeronsh` is the same work on the pre-rename base (zgui `7d559add`).
 
 What Ask adds to upstream:
 
@@ -15,7 +15,7 @@ What Ask adds to upstream:
 Fetch it on Linux or macOS without a local t3 checkout:
 
 ```sh
-git clone --branch ask/zeronsh https://github.com/wintergraham/zgx.git
+git clone --branch ask/zgx https://github.com/wintergraham/zgui.git zgx
 cd zgx
 ```
 
@@ -33,7 +33,8 @@ The source and uncommitted changes from each t3 worktree were copied into these 
 
 | Branch | Work |
 | --- | --- |
-| `ask/zeronsh` | Engine currently used by Ask's Luau shell |
+| `ask/zgx` | Engine currently used by Ask's Luau shell |
+| `ask/zeronsh` | Engine Ask used until 2026-10-25, on zgui before the zgx rename |
 | `ask/browser-mvp` | Engine Ask used until 2026-10-24, on the 2026-10-21 base |
 | `codex/ask-t3-exact` | Exact source snapshot before this checkout documentation |
 | `ask/browser-mvp-up` | Earlier Ask branch with upstream integration |
