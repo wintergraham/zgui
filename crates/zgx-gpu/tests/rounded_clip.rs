@@ -212,3 +212,49 @@ fn rotated_and_blurred_layers_clip_in_their_own_space() {
         assert_eq!(pixel(&p, 147, 147), CLEAR);
     }
 }
+
+#[test]
+fn a_bordered_clip_cuts_at_its_padding_box_leaving_the_border_whole() {
+    let _gpu_fixture = gpu_fixture();
+    for (direct, mut gpu) in renderers() {
+        let mut scene = scene();
+        let root = scene.root();
+        // A 100 px card at (50, 50), radius 12, a 1 px blue border taking
+        // room, and red filling all it holds (98 px from (51, 51)).
+        let quad = QuadStyle {
+            radius: 12.,
+            border_width: 1.,
+            border_color: BLUE,
+            ..Default::default()
+        };
+        let id = scene.append(
+            root,
+            NodeKind::Panel {
+                layout: Layout::Overlay,
+                quad,
+            },
+            Style {
+                clip: true,
+                ..fixed(100., 100.)
+            },
+        );
+        scene.set_transform(id, Transform { x: 50., y: 50. });
+        scene.append(id, NodeKind::Rect(RED), fixed(98., 98.));
+        let (_, p) = render(&mut gpu, &mut scene);
+        // (51.5, 57.5) is 11.4 px from the corner's centre (62, 62): on
+        // the border's arc (11 to 12), past the padding box's 11 px curve,
+        // so blue as CSS draws it; the clip at the border box (radius 12)
+        // let the red cover it.
+        let [r, _, b, _] = pixel(&p, 51, 57);
+        assert!(
+            b > 150 && r < 100,
+            "direct {direct}: {:?}",
+            pixel(&p, 51, 57)
+        );
+        // The straight edges and the middle are as before.
+        assert_eq!(pixel(&p, 50, 100), [0, 0, 255, 255], "direct {direct}");
+        assert_eq!(pixel(&p, 51, 100), [255, 0, 0, 255], "direct {direct}");
+        assert_eq!(pixel(&p, 100, 100), [255, 0, 0, 255], "direct {direct}");
+        assert_eq!(pixel(&p, 52, 52), CLEAR, "direct {direct}");
+    }
+}

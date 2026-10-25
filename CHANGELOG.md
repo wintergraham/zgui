@@ -6,6 +6,9 @@ zgx is on crates.io from 0.1.0 (`zgx = "0.1"`); this lists what changed for apps
 
 ### Changed
 
+**A rounded box that clips cuts its children at its padding box**, inside its border with each corner's radius less the border, as CSS's `overflow: hidden` does: clipped at its outer edge with its full radius, a child filling a bordered card painted over the border where it curves.
+- *Migrate:* a child meant to reach the box's outer edge, under its border, takes `border_over` on the box: the border then takes no room and paints over the child.
+
 **Rich text shrinks no further than its longest word**, as plain text and CSS's `min-width: auto` do: a `rich_text` (`ui.rich`) squeezed in a row narrowed to a single glyph's width before, one glyph a line.
 - *Migrate:* where a paragraph should break inside its words to fit a narrow row, state `.min_w(0.)` (`min_w = 0`).
 

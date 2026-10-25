@@ -7003,13 +7003,29 @@ fn rounded_clip(inherited: RoundedClip, node: &Node, bounds: Rect) -> RoundedCli
     if radii.iter().all(|radius| *radius <= 0.) {
         return inherited;
     }
-    [
-        Some(RoundRect {
-            rect: bounds,
-            radii,
-        }),
-        inherited[0],
-    ]
+    // CSS clips overflow at the padding box: inside a border that takes
+    // room, its corners rounded by the radius less the border. Clipped at
+    // the border box, a child filling the padding box covers the border's
+    // corner arcs. A clip inset rounds the inset box instead (its caller).
+    let border = if node.clip_inset.is_none() {
+        quad.layout_border()
+    } else {
+        Insets::default()
+    };
+    let inner = |radius: f32, a: f32, b: f32| (radius - a.max(b)).max(0.);
+    let rect = Rect::new(
+        bounds.x + border.left,
+        bounds.y + border.top,
+        (bounds.width - border.left - border.right).max(0.),
+        (bounds.height - border.top - border.bottom).max(0.),
+    );
+    let radii = [
+        inner(radii[0], border.top, border.left),
+        inner(radii[1], border.top, border.right),
+        inner(radii[2], border.bottom, border.right),
+        inner(radii[3], border.bottom, border.left),
+    ];
+    [Some(RoundRect { rect, radii }), inherited[0]]
 }
 fn clip_axes(style: &Style) -> (bool, bool) {
     let options = style.layout_options.as_deref();
