@@ -2,8 +2,8 @@
 mod common;
 use common::Harness;
 use std::path::Path;
-use zgui::input::{InputEvent, Key, Modifiers};
-use zgui_script::ScriptHost;
+use zgx::input::{InputEvent, Key, Modifiers};
+use zgx_script::ScriptHost;
 
 fn quick_ask() -> Harness {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/quick_ask/app.luau");
@@ -22,12 +22,12 @@ fn snapshot(h: &Harness, suffix: &str) {
         return;
     };
     let path = format!("{}{suffix}.ppm", path.to_string_lossy());
-    let mut gpu = zgui_gpu::GpuRenderer::new(1280, 860).expect("a GPU");
+    let mut gpu = zgx_gpu::GpuRenderer::new(1280, 860).expect("a GPU");
     for bytes in [
-        &include_bytes!("../../zgui-desktop/examples/support/fonts/GeistVariable.ttf")[..],
-        &include_bytes!("../../zgui-desktop/examples/support/fonts/GeistMonoVariable.ttf")[..],
+        &include_bytes!("../../zgx-desktop/examples/support/fonts/GeistVariable.ttf")[..],
+        &include_bytes!("../../zgx-desktop/examples/support/fonts/GeistMonoVariable.ttf")[..],
     ] {
-        zgui_gpu::text::FontData::new(bytes)
+        zgx_gpu::text::FontData::new(bytes)
             .unwrap()
             .install(&mut gpu.text_system().borrow_mut());
     }
@@ -37,7 +37,7 @@ fn snapshot(h: &Harness, suffix: &str) {
     h.ui.prepare_frame();
     gpu.render(
         &h.ui.scene.borrow(),
-        &[zgui::scene::Rect::new(0., 0., 1280., 860.)],
+        &[zgx::scene::Rect::new(0., 0., 1280., 860.)],
     )
     .unwrap();
     let pixels = gpu.readback().unwrap();
@@ -188,7 +188,7 @@ fn finder_files_drop_onto_the_panel() {
     h.ui.dispatch(InputEvent::PointerDown {
         x: x0,
         y: y0,
-        button: zgui::input::PointerButton::Primary,
+        button: zgx::input::PointerButton::Primary,
     });
     for i in 1..=12 {
         let t = i as f32 / 12.;
@@ -203,7 +203,7 @@ fn finder_files_drop_onto_the_panel() {
     h.ui.dispatch(InputEvent::PointerUp {
         x: x1,
         y: y1,
-        button: zgui::input::PointerButton::Primary,
+        button: zgx::input::PointerButton::Primary,
     });
     frames(&h, 60 * 2);
     snapshot(&h, "8-dropped");
@@ -216,19 +216,19 @@ fn finder_files_drop_onto_the_panel() {
 /// Frame costs per interaction: script and layout, then encoding and GPU
 /// work (render plus a readback, which waits for the GPU and adds a few ms;
 /// QUICK_ASK_NO_READBACK=1 times encoding alone).
-/// `cargo test --release -p zgui-script --test quick_ask profile -- --ignored --nocapture`
+/// `cargo test --release -p zgx-script --test quick_ask profile -- --ignored --nocapture`
 #[test]
 #[ignore]
 fn profile_interactions() {
     use std::time::Instant;
-    use zgui::input::PointerButton::Primary;
+    use zgx::input::PointerButton::Primary;
     let mut h = quick_ask();
-    let mut gpu = zgui_gpu::GpuRenderer::new(1280, 860).expect("a GPU");
+    let mut gpu = zgx_gpu::GpuRenderer::new(1280, 860).expect("a GPU");
     for bytes in [
-        &include_bytes!("../../zgui-desktop/examples/support/fonts/GeistVariable.ttf")[..],
-        &include_bytes!("../../zgui-desktop/examples/support/fonts/GeistMonoVariable.ttf")[..],
+        &include_bytes!("../../zgx-desktop/examples/support/fonts/GeistVariable.ttf")[..],
+        &include_bytes!("../../zgx-desktop/examples/support/fonts/GeistMonoVariable.ttf")[..],
     ] {
-        zgui_gpu::text::FontData::new(bytes)
+        zgx_gpu::text::FontData::new(bytes)
             .unwrap()
             .install(&mut gpu.text_system().borrow_mut());
     }

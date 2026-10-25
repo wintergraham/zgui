@@ -2,11 +2,11 @@
 //! argument in a glass window, reloading it whenever it (or what it
 //! requires) changes, with its `ui.command`s as menu items. How the Luau UI
 //! is iterated on before the Ask app hosts it.
-//! Run: cargo run --release -p zgui-script --example ask_ui -- path/to/ui/gallery.luau
+//! Run: cargo run --release -p zgx-script --example ask_ui -- path/to/ui/gallery.luau
 use std::{path::PathBuf, sync::Arc, time::Duration};
-use zgui::input::{Key, Modifiers};
-use zgui_desktop::{AppMenu, AppMenuEntry, Application, FontData, MenuAccelerator, WindowOptions};
-use zgui_script::{Command, ScriptHost};
+use zgx::input::{Key, Modifiers};
+use zgx_desktop::{AppMenu, AppMenuEntry, Application, FontData, MenuAccelerator, WindowOptions};
+use zgx_script::{Command, ScriptHost};
 
 const TITLE: &str = "Ask · UI";
 const WIDTH: f64 = 1280.;
@@ -20,8 +20,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let script = std::fs::canonicalize(&script).unwrap_or(script);
     let mut app = Application::new();
     for bytes in [
-        &include_bytes!("../../zgui-desktop/examples/support/fonts/GeistVariable.ttf")[..],
-        include_bytes!("../../zgui-desktop/examples/support/fonts/GeistMonoVariable.ttf"),
+        &include_bytes!("../../zgx-desktop/examples/support/fonts/GeistVariable.ttf")[..],
+        include_bytes!("../../zgx-desktop/examples/support/fonts/GeistMonoVariable.ttf"),
     ] {
         app = app.font(FontData::new(Arc::<[u8]>::from(bytes))?);
     }
@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         width: WIDTH,
         height: HEIGHT,
         transparent: true,
-        titlebar: zgui_desktop::Titlebar::Inset,
+        titlebar: zgx_desktop::Titlebar::Inset,
         min_size: Some((760., 560.)),
         ..Default::default()
     })

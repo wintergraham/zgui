@@ -666,9 +666,9 @@ pub(crate) struct Surfaces {
     overlay_shown: Option<(Option<Rect>, bool, f32)>,
     /// The page that held keyboard focus at the last check.
     focus: Option<NodeId>,
-    /// zgui's keyboard focus at the last check: a change since is zgui's own
+    /// zgx's keyboard focus at the last check: a change since is zgx's own
     /// (Tab, a script's `focus()`), which a host's platform view follows.
-    zgui_focus: Option<NodeId>,
+    zgx_focus: Option<NodeId>,
     shared: Rc<RefCell<Shared>>,
 }
 /// A native view's cuts and what they hold, as diagnostics read them.
@@ -840,7 +840,7 @@ impl Surfaces {
             overlay_host,
             overlay_shown: None,
             focus: None,
-            zgui_focus: None,
+            zgx_focus: None,
             shared,
         })
     }
@@ -1277,7 +1277,7 @@ impl Surfaces {
     }
     /// Agree zgx's focus with AppKit's first responder (see `NativeHost::sync_focus`).
     pub fn sync_focus(&mut self, ui: &Ui, natives: &NativeViews) {
-        self.follow_zgui_focus(ui, natives);
+        self.follow_zgx_focus(ui, natives);
         let responder = self
             .parent
             .window()
@@ -1319,18 +1319,18 @@ impl Surfaces {
             }
             _ => {}
         }
-        self.zgui_focus = ui.input.focused();
+        self.zgx_focus = ui.input.focused();
     }
     /// A host's own view (`NativeContent::Platform`) has no controller to
-    /// take focus as a page's does: when zgui moved focus onto its node, it
-    /// becomes first responder, and when zgui moved focus off it while it
+    /// take focus as a page's does: when zgx moved focus onto its node, it
+    /// becomes first responder, and when zgx moved focus off it while it
     /// held AppKit's, the window's content view takes it back.
-    fn follow_zgui_focus(&mut self, ui: &Ui, natives: &NativeViews) {
+    fn follow_zgx_focus(&mut self, ui: &Ui, natives: &NativeViews) {
         let now = ui.input.focused();
-        if now == self.zgui_focus {
+        if now == self.zgx_focus {
             return;
         }
-        self.zgui_focus = now;
+        self.zgx_focus = now;
         let Some(window) = self.parent.window() else {
             return;
         };

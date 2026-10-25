@@ -1,10 +1,10 @@
-Ask Controls, native zgui
+Ask Controls, native zgx
 =========================
 
-Run from the zgui checkout:
+Run from the zgx checkout:
 
 ```sh
-rtk cargo run --release -p zgui-script --example controls_lab
+rtk cargo run --release -p zgx-script --example controls_lab
 ```
 
 Source is the live Ask `codex/native-react-validation` checkout at
@@ -34,8 +34,8 @@ retains its root across interactions and requests no animation frames at rest.
 Focused verification:
 
 ```sh
-rtk cargo test --release -p zgui-script --test controls_lab
-rtk cargo build --release -p zgui-script --example controls_lab
+rtk cargo test --release -p zgx-script --test controls_lab
+rtk cargo build --release -p zgx-script --example controls_lab
 ```
 
 The software layout capture and the visible macOS GPU window were inspected.

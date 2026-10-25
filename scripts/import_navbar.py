@@ -14,7 +14,7 @@ parser.add_argument("source", type=Path, help="read-only Ask checkout (codex/rea
 args = parser.parse_args()
 source = args.source.resolve()
 react = source / "experiments/react"
-target = Path(__file__).resolve().parents[1] / "crates/zgui-script/examples/navbar_lab"
+target = Path(__file__).resolve().parents[1] / "crates/zgx-script/examples/navbar_lab"
 assets = target / "assets"
 assets.mkdir(parents=True, exist_ok=True)
 

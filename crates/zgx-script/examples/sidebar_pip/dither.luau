@@ -1,4 +1,4 @@
--- The board's GLSL fills, ported to zgui's WGSL fill functions. Cells are
+-- The board's GLSL fills, ported to zgx's WGSL fill functions. Cells are
 -- counted in device pixels from the box's top left, as the originals count
 -- them from gl_FragCoord with `u_width` keeping the size per point.
 local common = [=[

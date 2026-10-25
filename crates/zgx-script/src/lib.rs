@@ -127,7 +127,7 @@ pub(crate) type Functions = Rc<RefCell<HashMap<String, Rc<dyn Fn(Value) -> Value
 /// Native views the host provides by key (`ScriptHost::native`), placed by
 /// `ui.native { key = … }`. They outlive reloads.
 pub(crate) struct Natives {
-    views: RefCell<HashMap<String, zgui::native_view::NativeContent>>,
+    views: RefCell<HashMap<String, zgx::native_view::NativeContent>>,
     /// Bumped on every change: `ui.native` nodes look their key up again.
     revision: Signal<u64>,
 }
@@ -139,7 +139,7 @@ impl Natives {
         }
     }
     /// `key`'s content, tracking changes to what is provided.
-    pub(crate) fn get(&self, key: &str) -> Option<zgui::native_view::NativeContent> {
+    pub(crate) fn get(&self, key: &str) -> Option<zgx::native_view::NativeContent> {
         self.revision.get();
         self.views.borrow().get(key).cloned()
     }
@@ -1259,12 +1259,12 @@ impl ScriptHost {
     }
     /// Provides a native view under `key`, for scripts to place with
     /// `ui.native { key = key, … }`: laid out, clipped, rounded and faded as
-    /// any node, with zgui content drawn over it on the overlay plane. On
+    /// any node, with zgx content drawn over it on the overlay plane. On
     /// macOS the desktop host mounts `NativeContent::Platform(Rc::new(view))`
     /// for a `Retained<NSView>`, and sets the view's frame to the node's box
     /// in window points. Providing other content for a key swaps the view in
     /// place; it is kept across reloads until `remove_native`.
-    pub fn native(&self, key: impl Into<String>, content: zgui::native_view::NativeContent) {
+    pub fn native(&self, key: impl Into<String>, content: zgx::native_view::NativeContent) {
         self.0
             .natives
             .views
@@ -1273,7 +1273,7 @@ impl ScriptHost {
         self.0.natives.revision.update(|r| *r += 1);
     }
     /// Stops providing `key`'s view (its nodes show a placeholder); what it was.
-    pub fn remove_native(&self, key: &str) -> Option<zgui::native_view::NativeContent> {
+    pub fn remove_native(&self, key: &str) -> Option<zgx::native_view::NativeContent> {
         let removed = self.0.natives.views.borrow_mut().remove(key);
         if removed.is_some() {
             self.0.natives.revision.update(|r| *r += 1);

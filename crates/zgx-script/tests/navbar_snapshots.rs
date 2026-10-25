@@ -1,12 +1,12 @@
 //! GPU snapshots of the Navbar lab's states, for comparison with the Ask motion lab.
-//! Run: NAVBAR_LAB_SNAPSHOTS=/tmp/out cargo test --release -p zgui-script --test navbar_snapshots -- --nocapture
+//! Run: NAVBAR_LAB_SNAPSHOTS=/tmp/out cargo test --release -p zgx-script --test navbar_snapshots -- --nocapture
 //! Optional NAVBAR_LAB_ONLY=open,ask limits the states.
 mod common;
 use common::Harness;
 use std::path::{Path, PathBuf};
-use zgui::input::{InputEvent, Key, Modifiers, PointerButton};
-use zgui_gpu::GpuRenderer;
-use zgui_script::ScriptHost;
+use zgx::input::{InputEvent, Key, Modifiers, PointerButton};
+use zgx_gpu::GpuRenderer;
+use zgx_script::ScriptHost;
 
 const W: f32 = 1180.;
 const H: f32 = 1000.;
@@ -25,7 +25,7 @@ impl Shot {
             &include_bytes!("../examples/controls_lab/assets/Geist.ttf")[..],
             &include_bytes!("../examples/controls_lab/assets/GeistMono.ttf")[..],
         ] {
-            zgui_gpu::text::FontData::new(bytes)
+            zgx_gpu::text::FontData::new(bytes)
                 .unwrap()
                 .install(&mut gpu.text_system().borrow_mut());
         }
@@ -131,7 +131,7 @@ impl Shot {
         self.gpu
             .render(
                 &self.h.ui.scene.borrow(),
-                &[zgui::scene::Rect::new(0., 0., W, H)],
+                &[zgx::scene::Rect::new(0., 0., W, H)],
             )
             .unwrap();
         let pixels = self.gpu.readback().unwrap();

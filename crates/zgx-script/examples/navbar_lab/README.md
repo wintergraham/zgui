@@ -1,10 +1,10 @@
-Ask Navbar, native zgui
+Ask Navbar, native zgx
 =======================
 
-Run from the zgui checkout:
+Run from the zgx checkout:
 
 ```sh
-rtk cargo run --release -p zgui-script --example navbar_lab
+rtk cargo run --release -p zgx-script --example navbar_lab
 ```
 
 Source is Ask's motion library page `experiments/react/src/pages/NavbarPage.tsx`, driven by
@@ -44,8 +44,8 @@ wherever focus is.
 Focused verification:
 
 ```sh
-rtk cargo test --release -p zgui-script --test navbar_lab
-NAVBAR_LAB_SNAPSHOTS=/tmp/navbar rtk cargo test --release -p zgui-script --test navbar_snapshots -- --nocapture
+rtk cargo test --release -p zgx-script --test navbar_lab
+NAVBAR_LAB_SNAPSHOTS=/tmp/navbar rtk cargo test --release -p zgx-script --test navbar_snapshots -- --nocapture
 ```
 
 The snapshot test renders 19 states through the GPU renderer with the window's font shaper and writes the
@@ -60,7 +60,7 @@ Known differences:
   makes the 0-height document wrapper their containing block. Here they are centred in the page, as their
   `inset: 0` intends (and as they show on first load).
 - `backdrop-filter` blurs are drawn (headless Chrome captures skip them, so the pill reads sharper there).
-- CSS `line-height: normal` and border widths take layout space in the source; zgui's normal is 1.4em and its
+- CSS `line-height: normal` and border widths take layout space in the source; zgx's normal is 1.4em and its
   borders paint without taking space, so the port sets Chrome's normal line height for Geist and pads by the
   border width where the source's content sits inside one.
 - CSS transitions on hover colours follow the lab's Slow factor at the time they start.

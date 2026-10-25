@@ -2,16 +2,16 @@
 //! checking screens without a window.
 //! Run: ASK_UI_SCRIPT=<ask>/ui/gallery.luau ASK_UI_SNAPSHOTS=/tmp/out \
 //!      ASK_UI_SHOTS='history=cmd:route_history,ms:600;menu=cmd:route_history,click:hist_more_3,ms:400' \
-//!      cargo test --release -p zgui-script --test ask_ui_snapshots -- --nocapture
+//!      cargo test --release -p zgx-script --test ask_ui_snapshots -- --nocapture
 //! Steps: `cmd:<command id>`, `click:<node id>`, `hover:<node id>`, `wheel:<node id>:<dy>`, `ms:<n>`, `type:<text>`, `key:<Enter|Escape|Tab|…>`,
 //! `down:<node id>`, `to:<node id>:<dy>` (glides the held pointer to that node's centre plus `dy`), `up`,
 //! `size:<w>x<h>` (before anything else). Each shot starts from a fresh load and writes `<name>.ppm` (at `ASK_UI_SCALE`, 2x by default).
 mod common;
 use common::Harness;
 use std::path::{Path, PathBuf};
-use zgui::input::{InputEvent, Key, Modifiers, PointerButton};
-use zgui_gpu::GpuRenderer;
-use zgui_script::ScriptHost;
+use zgx::input::{InputEvent, Key, Modifiers, PointerButton};
+use zgx_gpu::GpuRenderer;
+use zgx_script::ScriptHost;
 
 /// The device scale of the shots: `ASK_UI_SCALE` (1.5 for a 150% Windows display), 2 by default.
 fn scale() -> f32 {
@@ -31,10 +31,10 @@ impl Shot {
             GpuRenderer::new((w * scale()) as u32, (hgt * scale()) as u32).expect("GPU adapter");
         gpu.set_scale_factor(scale());
         for bytes in [
-            &include_bytes!("../../zgui-desktop/examples/support/fonts/GeistVariable.ttf")[..],
-            &include_bytes!("../../zgui-desktop/examples/support/fonts/GeistMonoVariable.ttf")[..],
+            &include_bytes!("../../zgx-desktop/examples/support/fonts/GeistVariable.ttf")[..],
+            &include_bytes!("../../zgx-desktop/examples/support/fonts/GeistMonoVariable.ttf")[..],
         ] {
-            zgui_gpu::text::FontData::new(bytes)
+            zgx_gpu::text::FontData::new(bytes)
                 .unwrap()
                 .install(&mut gpu.text_system().borrow_mut());
         }
@@ -201,18 +201,18 @@ impl Shot {
                     .find(arg)
                     .unwrap_or_else(|| panic!("no node `{arg}`"));
                 let scene = self.h.ui.scene.borrow();
-                fn walk(scene: &zgui::scene::Scene, id: zgui::scene::NodeId, depth: usize) {
+                fn walk(scene: &zgx::scene::Scene, id: zgx::scene::NodeId, depth: usize) {
                     let b = scene.bounds(id);
                     println!(
                         "{}{:?} {} {:.1},{:.1} {:.1}x{:.1}",
                         "  ".repeat(depth),
                         id,
                         match scene.kind(id) {
-                            zgui::scene::NodeKind::Container(l) => format!("{l:?}"),
-                            zgui::scene::NodeKind::Panel { layout, .. } =>
+                            zgx::scene::NodeKind::Container(l) => format!("{l:?}"),
+                            zgx::scene::NodeKind::Panel { layout, .. } =>
                                 format!("Panel {layout:?}"),
-                            zgui::scene::NodeKind::RichText { .. }
-                            | zgui::scene::NodeKind::Text { .. } => "Text".into(),
+                            zgx::scene::NodeKind::RichText { .. }
+                            | zgx::scene::NodeKind::Text { .. } => "Text".into(),
                             _ => "Leaf".into(),
                         },
                         b.x,
@@ -240,7 +240,7 @@ impl Shot {
         self.gpu
             .render(
                 &self.h.ui.scene.borrow(),
-                &[zgui::scene::Rect::new(0., 0., self.w, self.hgt)],
+                &[zgx::scene::Rect::new(0., 0., self.w, self.hgt)],
             )
             .unwrap();
         let pixels = self.gpu.readback().unwrap();

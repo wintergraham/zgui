@@ -220,7 +220,7 @@ impl NativeHost {
         }
         None
     }
-    /// A press zgui takes: on Windows' child windows, keyboard focus leaves a
+    /// A press zgx takes: on Windows' child windows, keyboard focus leaves a
     /// native view for the window (AppKit and the composition hosts move it
     /// themselves).
     pub fn pointer_down(&mut self) {
@@ -438,7 +438,7 @@ impl NativeHost {
 }
 
 /// Windows without the `webview2` feature: native views are child windows of
-/// the zgui window (`child.rs`).
+/// the zgx window (`child.rs`).
 #[cfg(all(windows, not(feature = "webview2")))]
 impl NativeHost {
     /// After the scene's flush: split this frame's paint around native views
@@ -449,9 +449,9 @@ impl NativeHost {
         &mut self,
         scene: &Scene,
         window: &winit::window::Window,
-        renderer: &mut zgui_gpu::GpuRenderer,
+        renderer: &mut zgx_gpu::GpuRenderer,
         scale: f32,
-    ) -> Result<Vec<Rect>, zgui_gpu::GpuError> {
+    ) -> Result<Vec<Rect>, zgx_gpu::GpuError> {
         if !self.active() || !self.natives.supported() {
             return Ok(Vec::new());
         }
@@ -459,7 +459,7 @@ impl NativeHost {
             match child::Surfaces::new(window) {
                 Ok(surfaces) => self.surfaces = Some(surfaces),
                 Err(error) => {
-                    eprintln!("zgui: native views unavailable: {error}");
+                    eprintln!("zgx: native views unavailable: {error}");
                     self.natives.set_supported(false);
                     return Ok(Vec::new());
                 }
@@ -487,10 +487,10 @@ impl NativeHost {
         if split.is_empty() || !surfaces.has_overlay_plane() {
             renderer.clear_plane();
         } else {
-            renderer.set_plane(split.clone(), zgui::native_view::Plane::Base);
+            renderer.set_plane(split.clone(), zgx::native_view::Plane::Base);
         }
         if let Some(overlay) = &mut self.overlay {
-            overlay.set_plane(split.clone(), zgui::native_view::Plane::Overlay);
+            overlay.set_plane(split.clone(), zgx::native_view::Plane::Overlay);
             if let Some(needed) = split.overlay_bounds() {
                 let viewport = scene.bounds(scene.root());
                 let rect = plane_rect(overlay.plane_rect(), needed, viewport);
@@ -505,7 +505,7 @@ impl NativeHost {
         Ok(damage)
     }
     /// Render the overlay plane's part of this frame's `damage`.
-    pub fn render(&mut self, scene: &Scene, damage: &[Rect]) -> Result<(), zgui_gpu::GpuError> {
+    pub fn render(&mut self, scene: &Scene, damage: &[Rect]) -> Result<(), zgx_gpu::GpuError> {
         self.overlay_drawn = false;
         if let Some(overlay) = &mut self.overlay
             && self.split.has_overlay()
@@ -520,7 +520,7 @@ impl NativeHost {
         None
     }
     /// Show the overlay plane's frame at its box.
-    pub fn present_overlay(&mut self) -> Result<(), zgui_gpu::GpuError> {
+    pub fn present_overlay(&mut self) -> Result<(), zgx_gpu::GpuError> {
         let Some(surfaces) = &mut self.surfaces else {
             return Ok(());
         };
@@ -555,13 +555,13 @@ impl NativeHost {
         }
         self.pending = false;
     }
-    /// Apply geometry that changed in a frame without zgui pixels to show.
+    /// Apply geometry that changed in a frame without zgx pixels to show.
     pub fn flush(&mut self) {
         if self.pending {
             self.apply();
         }
     }
-    /// Keep zgui's focus and the child windows' keyboard focus agreeing.
+    /// Keep zgx's focus and the child windows' keyboard focus agreeing.
     pub fn sync_focus(&mut self, ui: &Ui) {
         if let Some(surfaces) = &mut self.surfaces {
             surfaces.sync_focus(ui, &self.natives);

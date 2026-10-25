@@ -1,8 +1,8 @@
 mod common;
 use common::Harness;
 use std::path::Path;
-use zgui::input::{InputEvent, Key, Modifiers, PointerButton};
-use zgui_script::ScriptHost;
+use zgx::input::{InputEvent, Key, Modifiers, PointerButton};
+use zgx_script::ScriptHost;
 
 fn navbar() -> Harness {
     let h = Harness::new(|runtime| {
@@ -86,7 +86,7 @@ fn texts(h: &mut Harness, id: &str) -> String {
     let mut out = Vec::new();
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
-        if let zgui::scene::NodeKind::Text { text, .. } = scene.kind(n) {
+        if let zgx::scene::NodeKind::Text { text, .. } = scene.kind(n) {
             out.push(text.to_string());
         }
         stack.extend(scene.children(n).iter().rev());

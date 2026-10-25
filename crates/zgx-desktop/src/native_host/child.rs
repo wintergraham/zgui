@@ -1,5 +1,5 @@
 //! Native views on Windows without the `webview2` feature: each is a child
-//! window of the zgui window (the host's `HWND`, `NativeContent::Platform`),
+//! window of the zgx window (the host's `HWND`, `NativeContent::Platform`),
 //! placed, clipped and rounded with a window region. Child windows show over
 //! the window's own composition (the base plane); the overlay plane presents
 //! into a visual of a second, topmost target, which Windows composites above
@@ -7,7 +7,7 @@
 //!
 //! Child windows take the pointer before their parent, so the boxes of
 //! overlay paint that takes the pointer are cut out of their regions: there
-//! zgui gets the input, as the macOS host's hit testing routes it.
+//! zgx gets the input, as the macOS host's hit testing routes it.
 use std::ffi::c_void;
 use windows::Win32::{
     Foundation::HWND,
@@ -28,7 +28,7 @@ use windows::Win32::{
         },
     },
 };
-use zgui::{
+use zgx::{
     input::InputDispatcher,
     native_view::{NativeContent, NativePlacement, NativeViews, PlaneSplit},
     scene::{NodeId, Rect, RoundRect, Scene},
@@ -68,8 +68,8 @@ pub(crate) struct Surfaces {
     holes: Vec<Hole>,
     /// The view whose window held keyboard focus at the last check.
     focus: Option<NodeId>,
-    /// zgui's keyboard focus at the last check.
-    zgui_focus: Option<NodeId>,
+    /// zgx's keyboard focus at the last check.
+    zgx_focus: Option<NodeId>,
 }
 
 fn rect_region(left: i32, top: i32, right: i32, bottom: i32) -> HRGN {
@@ -105,7 +105,7 @@ fn pixels(rect: Rect, scale: f32, origin: (i32, i32)) -> (i32, i32, i32, i32) {
 }
 /// Device pixels wholly inside `rect` (window points) relative to `origin`:
 /// a native view's visible part. At a half-pixel edge (150%), rounding would
-/// take the pixel zgui paints half over, and the page under it would show
+/// take the pixel zgx paints half over, and the page under it would show
 /// through that antialiased edge as a 1-pixel seam.
 fn inner_pixels(rect: Rect, scale: f32, origin: (i32, i32)) -> (i32, i32, i32, i32) {
     // A hair of tolerance: an edge on a pixel boundary, off only by f32 error, keeps that pixel.
@@ -170,7 +170,7 @@ impl Surfaces {
         let composition = match Self::composition(parent) {
             Ok(composition) => Some(composition),
             Err(error) => {
-                eprintln!("zgui: no overlay plane over native views: {error}");
+                eprintln!("zgx: no overlay plane over native views: {error}");
                 None
             }
         };
@@ -180,7 +180,7 @@ impl Surfaces {
             clips: Vec::new(),
             holes: Vec::new(),
             focus: None,
-            zgui_focus: None,
+            zgx_focus: None,
         })
     }
     fn composition(parent: HWND) -> windows::core::Result<Composition> {
@@ -212,11 +212,11 @@ impl Surfaces {
     /// visual (shown by `show_overlay`); none without the composition.
     pub fn overlay_renderer(
         &mut self,
-        context: &zgui_gpu::GpuContext,
+        context: &zgx_gpu::GpuContext,
         scale: f32,
-    ) -> Option<Result<zgui_gpu::GpuRenderer, zgui_gpu::GpuError>> {
+    ) -> Option<Result<zgx_gpu::GpuRenderer, zgx_gpu::GpuError>> {
         let composition = self.composition.as_ref()?;
-        let renderer = zgui_gpu::GpuRenderer::for_overlay_visual(
+        let renderer = zgx_gpu::GpuRenderer::for_overlay_visual(
             composition.overlay.clone(),
             composition.device.clone(),
             context,
@@ -310,7 +310,7 @@ impl Surfaces {
         let mut reorder = false;
         for (node, content) in &views {
             let NativeContent::Platform(view) = content else {
-                // Pages and terminals of zgui's own are macOS-only.
+                // Pages and terminals of zgx's own are macOS-only.
                 continue;
             };
             let Some(&hwnd) = view.downcast_ref::<*mut c_void>() else {
@@ -492,7 +492,7 @@ impl Surfaces {
             (focus == clip.hwnd || unsafe { IsChild(clip.hwnd, focus) }.as_bool()).then_some(*node)
         })
     }
-    /// A press zgui takes: keyboard focus leaves a native view for the window.
+    /// A press zgx takes: keyboard focus leaves a native view for the window.
     pub fn pointer_down(&mut self) {
         if self.focused_view().is_some() {
             unsafe {
@@ -500,9 +500,9 @@ impl Surfaces {
             }
         }
     }
-    /// Agree zgui's focus with the window that has Windows' keyboard focus.
+    /// Agree zgx's focus with the window that has Windows' keyboard focus.
     pub fn sync_focus(&mut self, ui: &Ui, natives: &NativeViews) {
-        self.follow_zgui_focus(ui, natives);
+        self.follow_zgx_focus(ui, natives);
         let focused = self.focused_view();
         if focused == self.focus {
             return;
@@ -513,22 +513,22 @@ impl Surfaces {
             Some(node) if ui.input.focused() != Some(node) && natives.contains(node) => {
                 ui.input.focus(&ui.scene, Some(node));
             }
-            // Focus left it (a click on zgui content, another window).
+            // Focus left it (a click on zgx content, another window).
             None if previous.is_some() && ui.input.focused() == previous => {
                 ui.input.focus(&ui.scene, None);
             }
             _ => {}
         }
-        self.zgui_focus = ui.input.focused();
+        self.zgx_focus = ui.input.focused();
     }
-    /// zgui moved focus onto a native view's node: its window takes keyboard
-    /// focus; off one that held it: the zgui window takes it back.
-    fn follow_zgui_focus(&mut self, ui: &Ui, natives: &NativeViews) {
+    /// zgx moved focus onto a native view's node: its window takes keyboard
+    /// focus; off one that held it: the zgx window takes it back.
+    fn follow_zgx_focus(&mut self, ui: &Ui, natives: &NativeViews) {
         let now = ui.input.focused();
-        if now == self.zgui_focus {
+        if now == self.zgx_focus {
             return;
         }
-        self.zgui_focus = now;
+        self.zgx_focus = now;
         let window = |node: NodeId| {
             natives
                 .contains(node)

@@ -2,8 +2,8 @@
 mod common;
 use common::Harness;
 use std::path::Path;
-use zgui::input::{InputEvent, Key, Modifiers};
-use zgui_script::ScriptHost;
+use zgx::input::{InputEvent, Key, Modifiers};
+use zgx_script::ScriptHost;
 
 const W: f32 = 1180.;
 const H: f32 = 840.;
@@ -21,12 +21,12 @@ fn snapshot(h: &Harness, suffix: &str) {
         return;
     };
     let path = format!("{}{suffix}.ppm", path.to_string_lossy());
-    let mut gpu = zgui_gpu::GpuRenderer::new(W as u32, H as u32).expect("a GPU");
+    let mut gpu = zgx_gpu::GpuRenderer::new(W as u32, H as u32).expect("a GPU");
     for bytes in [
-        &include_bytes!("../../zgui-desktop/examples/support/fonts/GeistVariable.ttf")[..],
-        &include_bytes!("../../zgui-desktop/examples/support/fonts/GeistMonoVariable.ttf")[..],
+        &include_bytes!("../../zgx-desktop/examples/support/fonts/GeistVariable.ttf")[..],
+        &include_bytes!("../../zgx-desktop/examples/support/fonts/GeistMonoVariable.ttf")[..],
     ] {
-        zgui_gpu::text::FontData::new(bytes)
+        zgx_gpu::text::FontData::new(bytes)
             .unwrap()
             .install(&mut gpu.text_system().borrow_mut());
     }
@@ -36,7 +36,7 @@ fn snapshot(h: &Harness, suffix: &str) {
     h.ui.prepare_frame();
     gpu.render(
         &h.ui.scene.borrow(),
-        &[zgui::scene::Rect::new(0., 0., W, H)],
+        &[zgx::scene::Rect::new(0., 0., W, H)],
     )
     .unwrap();
     let pixels = gpu.readback().unwrap();
@@ -182,7 +182,7 @@ fn spaces_search_and_rail() {
             ..Default::default()
         },
     );
-    for c in "github.com/zgui".chars() {
+    for c in "github.com/zgx".chars() {
         h.ui.dispatch(InputEvent::Text(c.to_string()));
     }
     h.settle();

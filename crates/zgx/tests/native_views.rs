@@ -603,7 +603,7 @@ fn closing_a_page_drops_its_platform_page_while_handles_remain() {
 
 #[test]
 fn a_host_view_takes_the_pointer_through_pass_through_paint_and_focus() {
-    use zgui::native_view::NativeContent;
+    use zgx::native_view::NativeContent;
     let mut ui = Ui::new(800., 600.);
     let natives = supported();
     let through = ui.signal(true);
@@ -614,7 +614,7 @@ fn a_host_view_takes_the_pointer_through_pass_through_paint_and_focus() {
             .w(800.)
             .h(600.)
             .child(
-                zgui::web_view::native_view(NativeContent::Platform(Rc::new(())))
+                zgx::web_view::native_view(NativeContent::Platform(Rc::new(())))
                     .id("page")
                     .w(800.)
                     .h(600.),

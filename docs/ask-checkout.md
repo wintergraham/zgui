@@ -1,6 +1,6 @@
-# The zgui checkout used by Ask
+# The zgx checkout used by Ask
 
-Ask's Luau shell uses the `ask/zeronsh` branch of [wintergraham/zgui](https://github.com/wintergraham/zgui/tree/ask/zeronsh): [zeronsh/zgui](https://github.com/zeronsh/zgui) `main` as of 2026-10-24 with Ask's pieces on top. Update it by rebasing those commits onto a newer `zeronsh/main`.
+Ask's Luau shell uses the `ask/zeronsh` branch of [wintergraham/zgx](https://github.com/wintergraham/zgx/tree/ask/zeronsh): [zeronsh/zgx](https://github.com/zeronsh/zgx) `main` as of 2026-10-24 with Ask's pieces on top. Update it by rebasing those commits onto a newer `zeronsh/main`.
 
 What Ask adds to upstream:
 
@@ -15,14 +15,14 @@ What Ask adds to upstream:
 Fetch it on Linux or macOS without a local t3 checkout:
 
 ```sh
-git clone --branch ask/zeronsh https://github.com/wintergraham/zgui.git
-cd zgui
+git clone --branch ask/zeronsh https://github.com/wintergraham/zgx.git
+cd zgx
 ```
 
 For Ask itself, initialize its pinned dependency:
 
 ```sh
-git submodule update --init --recursive zgui
+git submodule update --init --recursive zgx
 ```
 
 Ask's submodule commit is the authoritative dependency version. Use the [README](../README.md) for Linux system libraries and framework build commands. Fetching the source does not require a display server. Desktop examples need a graphical session, and GPU tests need a supported adapter.
@@ -43,6 +43,6 @@ The source and uncommitted changes from each t3 worktree were copied into these 
 | `worktree-ask-onboarding` | Onboarding demo |
 | `feat/frame-profiler` | Latest published profiler branch |
 | `fix/native-layers-input-pacing` | Latest published layer and pacing fixes |
-| `codex/upstream-main` | Upstream zeronsh/zgui main fetched on 2026-10-23 |
+| `codex/upstream-main` | Upstream zeronsh/zgx main fetched on 2026-10-23 |
 
 The existing public `main` and its earlier work remain available.

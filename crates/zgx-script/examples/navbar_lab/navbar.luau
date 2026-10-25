@@ -1,4 +1,4 @@
--- Floating navbar lab (navbar.js navbarLab), as native zgui nodes. The dummy browser and omnibox model are
+-- Floating navbar lab (navbar.js navbarLab), as native zgx nodes. The dummy browser and omnibox model are
 -- plain Luau tables; small revision states tell the views which part changed. Motion values are states
 -- animated by the anime engine, so nothing runs at rest.
 local T = require("./theme")

@@ -12290,7 +12290,7 @@ export type NativeProps = {
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
 	origin: Props_origin,
-	-- The subtree's theme: a theme's name (`"zgui-light"`), or tokens to
+	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
 	-- Identity, for selectors, refs and animations.

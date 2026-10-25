@@ -1,13 +1,13 @@
 //! Ask's Quick ask, from ask.pen's "Ask from anywhere" board, as one working
 //! element over four mock apps: summon it, pick context, type, run rows, read
 //! a canned answer, paste it back, drop Finder files onto it.
-//! Run: cargo run --release -p zgui-script --example quick_ask
+//! Run: cargo run --release -p zgx-script --example quick_ask
 //! Edit `examples/quick_ask/app.luau` and save to reload it.
 use std::{path::Path, sync::Arc, time::Duration};
-use zgui_desktop::{Application, FontData, WindowOptions};
-use zgui_script::ScriptHost;
+use zgx_desktop::{Application, FontData, WindowOptions};
+use zgx_script::ScriptHost;
 
-const TITLE: &str = "zgui · quick ask";
+const TITLE: &str = "zgx · quick ask";
 const WIDTH: f64 = 1280.;
 const HEIGHT: f64 = 860.;
 
@@ -15,8 +15,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/quick_ask");
     let mut app = Application::new();
     for bytes in [
-        &include_bytes!("../../zgui-desktop/examples/support/fonts/GeistVariable.ttf")[..],
-        include_bytes!("../../zgui-desktop/examples/support/fonts/GeistMonoVariable.ttf"),
+        &include_bytes!("../../zgx-desktop/examples/support/fonts/GeistVariable.ttf")[..],
+        include_bytes!("../../zgx-desktop/examples/support/fonts/GeistMonoVariable.ttf"),
     ] {
         app = app.font(FontData::new(Arc::<[u8]>::from(bytes))?);
     }
@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         width: WIDTH,
         height: HEIGHT,
         transparent: true,
-        titlebar: zgui_desktop::Titlebar::Inset,
+        titlebar: zgx_desktop::Titlebar::Inset,
         min_size: Some((1100., 720.)),
         ..Default::default()
     })

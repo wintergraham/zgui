@@ -64,7 +64,7 @@ function T.filled(name, size, color)
     return ui.svg { code = code, w = size or 14, h = size or 14, tint = color or T.C.secondary }
 end
 
--- A button without zgui's default hover fill and focus ring: the source's buttons (navbar.css `.nb-win button`)
+-- A button without zgx's default hover fill and focus ring: the source's buttons (navbar.css `.nb-win button`)
 -- have neither unless styled, and browsers ring only keyboard focus.
 function T.button(props)
     props.hover = props.hover or {}
@@ -73,7 +73,7 @@ function T.button(props)
 end
 
 -- CSS `line-height: normal` for Geist as Chrome lays it out: the font's ascent (1.005em) and descent (.295em),
--- each rounded to whole pixels. zgui's own normal is 1.4em, a little taller.
+-- each rounded to whole pixels. zgx's own normal is 1.4em, a little taller.
 function T.normal(size)
     return math.floor(size * 1.005 + 0.5) + math.floor(size * 0.295 + 0.5)
 end

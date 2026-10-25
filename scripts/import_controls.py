@@ -10,7 +10,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("source", type=Path, help="read-only Ask checkout, codex/native-react-validation")
 args = parser.parse_args()
 source = args.source.resolve()
-target = Path(__file__).resolve().parents[1] / "crates/zgui-script/examples/controls_lab"
+target = Path(__file__).resolve().parents[1] / "crates/zgx-script/examples/controls_lab"
 assets = target / "assets"
 assets.mkdir(parents=True, exist_ok=True)
 for name in ["Geist.ttf", "GeistMono.ttf", "Geist-OFL.txt", "GeistMono-OFL.txt", "Lucide-LICENSE"]:

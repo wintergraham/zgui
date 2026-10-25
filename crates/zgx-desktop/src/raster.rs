@@ -1999,7 +1999,7 @@ fn selected_ink(
 
 /// A Gaussian-blurred rounded box's coverage at (`x`, `y`): Evan Wallace's
 /// closed form, exact across x through erf, four samples down y. The GPU
-/// shader (`zgui_box_shadow`) computes the same.
+/// shader (`zgx_box_shadow`) computes the same.
 fn box_shadow(core: Rect, x: f32, y: f32, sigma: f32, corner: f32) -> f32 {
     fn erf(x: f32) -> f32 {
         let (s, a) = (x.signum(), x.abs());

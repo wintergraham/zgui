@@ -1,10 +1,10 @@
-//! Ask Motion Lab's Navbar page, rendered by native zgui nodes.
-//! Run: cargo run --release -p zgui-script --example navbar_lab
+//! Ask Motion Lab's Navbar page, rendered by native zgx nodes.
+//! Run: cargo run --release -p zgx-script --example navbar_lab
 use std::{path::Path, time::Duration};
-use zgui::input::{Key, Modifiers};
-use zgui_desktop::{AppMenu, AppMenuEntry, Application, MenuAccelerator, WindowOptions};
-use zgui_gpu::text::FontData;
-use zgui_script::{Command, ScriptHost};
+use zgx::input::{Key, Modifiers};
+use zgx_desktop::{AppMenu, AppMenuEntry, Application, MenuAccelerator, WindowOptions};
+use zgx_gpu::text::FontData;
+use zgx_script::{Command, ScriptHost};
 
 const TITLE: &str = "Ask · Navbar";
 
@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             width: 1180.,
             height: 1000.,
             transparent: true,
-            titlebar: zgui_desktop::Titlebar::Inset,
+            titlebar: zgx_desktop::Titlebar::Inset,
             min_size: Some((720., 600.)),
             ..Default::default()
         })

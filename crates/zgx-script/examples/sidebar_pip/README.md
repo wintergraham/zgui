@@ -1,10 +1,10 @@
-zgui · Sidebar & PiP, native zgui
+zgx · Sidebar & PiP, native zgx
 =================================
 
-Run from the zgui checkout:
+Run from the zgx checkout:
 
 ```sh
-cargo run --release -p zgui-script --example sidebar_pip
+cargo run --release -p zgx-script --example sidebar_pip
 ```
 
 Imported from `ask-designs/designs/ask.pen`, board "Sidebar · Navigation &
@@ -48,5 +48,5 @@ Headless checks, with GPU snapshots when `SIDEBAR_PIP_SNAPSHOT` names a file
 prefix:
 
 ```sh
-cargo test --release -p zgui-script --test sidebar_pip
+cargo test --release -p zgx-script --test sidebar_pip
 ```

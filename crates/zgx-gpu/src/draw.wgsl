@@ -56,26 +56,26 @@ fn region(index:f32, position:vec2<f32>)->f32 {
  var o:Out; o.position=vec4(position.x/viewport.x*2.-1.,1.-position.y/viewport.y*2.,0.,1.);o.uv=v.uv.xy+corner*v.uv.zw;o.color=v.color;o.point=p;o.fade=v.fade;o.options=v.options;o.shape=v.shape;o.border=v.border;o.mask=v.mask;return o;
 }
 // A Gaussian-blurred rounded box's coverage at `p` (Evan Wallace's closed
-// form: exact across x via erf, four samples down y). `zgui_erf2` is the
+// form: exact across x via erf, four samples down y). `zgx_erf2` is the
 // Abramowitz-Stegun approximation, good to 5e-4.
-fn zgui_erf2(x:vec2<f32>)->vec2<f32> {
+fn zgx_erf2(x:vec2<f32>)->vec2<f32> {
  let s=sign(x); let a=abs(x);
  var y=1.+(0.278393+(0.230389+0.078108*(a*a))*a)*a; y=y*y;
  return s-s/(y*y);
 }
-fn zgui_box_shadow_x(x:f32,y:f32,sigma:f32,corner:f32,half:vec2<f32>)->f32 {
+fn zgx_box_shadow_x(x:f32,y:f32,sigma:f32,corner:f32,half:vec2<f32>)->f32 {
  let delta=min(half.y-corner-abs(y),0.);
  let curved=half.x-corner+sqrt(max(0.,corner*corner-delta*delta));
- let i=0.5+0.5*zgui_erf2((x+vec2(-curved,curved))*(0.70710678/sigma));
+ let i=0.5+0.5*zgx_erf2((x+vec2(-curved,curved))*(0.70710678/sigma));
  return i.y-i.x;
 }
-fn zgui_box_shadow(lower:vec2<f32>,upper:vec2<f32>,point:vec2<f32>,sigma:f32,corner:f32)->f32 {
+fn zgx_box_shadow(lower:vec2<f32>,upper:vec2<f32>,point:vec2<f32>,sigma:f32,corner:f32)->f32 {
  let center=(lower+upper)*0.5; let half=(upper-lower)*0.5; let p=point-center;
  let low=p.y-half.y; let high=p.y+half.y;
  let start=clamp(-3.*sigma,low,high); let end=clamp(3.*sigma,low,high);
  let step=(end-start)*0.25; var y=start+step*0.5; var value=0.;
  for (var i=0;i<4;i++) {
-   value+=zgui_box_shadow_x(p.x,p.y-y,sigma,corner,half)*exp(-y*y/(2.*sigma*sigma))*(0.39894228/sigma)*step;
+   value+=zgx_box_shadow_x(p.x,p.y-y,sigma,corner,half)*exp(-y*y/(2.*sigma*sigma))*(0.39894228/sigma)*step;
    y+=step;
  }
  return clamp(value,0.,1.);
@@ -118,7 +118,7 @@ fn shade(input:Out)->vec4<f32> {
      // A CSS box-shadow: the rounded box blurred by a Gaussian (sigma, half
      // the blur radius), painted only outside the element's own box (`uv`:
      // the shadow's offset, `shape.w`: its spread).
-     var a=zgui_box_shadow(v.fade.xy,v.fade.xy+v.fade.zw,v.point,v.shape.z,radius);
+     var a=zgx_box_shadow(v.fade.xy,v.fade.xy+v.fade.zw,v.point,v.shape.z,radius);
      let spread=v.shape.w;
      let own=vec4(v.fade.xy-v.uv+vec2(spread),max(v.fade.zw-vec2(2.*spread),vec2(0.)));
      let own_radius=max(radius-spread,0.);

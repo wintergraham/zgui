@@ -1,11 +1,11 @@
 mod common;
 use common::Harness;
 use std::path::Path;
-use zgui::{
+use zgx::{
     input::{InputEvent, Key, Modifiers},
     scene::{Color, NodeKind},
 };
-use zgui_script::ScriptHost;
+use zgx_script::ScriptHost;
 
 fn controls() -> Harness {
     let h = Harness::new(|runtime| {
@@ -63,16 +63,16 @@ fn mounts_controls_page() {
     if let Some(path) = std::env::var_os("CONTROLS_LAB_SNAPSHOT") {
         h.ui.scene.borrow_mut().resize(1180., 900.);
         h.ui.prepare_frame();
-        let mut raster = zgui_desktop::raster::Raster::new(1180, 900);
+        let mut raster = zgx_desktop::raster::Raster::new(1180, 900);
         for bytes in [
             &include_bytes!("../examples/controls_lab/assets/Geist.ttf")[..],
             &include_bytes!("../examples/controls_lab/assets/GeistMono.ttf")[..],
         ] {
-            raster.register_font(&zgui_gpu::text::FontData::new(bytes).unwrap());
+            raster.register_font(&zgx_gpu::text::FontData::new(bytes).unwrap());
         }
         raster.render(
             &h.ui.scene.borrow(),
-            &[zgui::scene::Rect::new(0., 0., 1180., 900.)],
+            &[zgx::scene::Rect::new(0., 0., 1180., 900.)],
         );
         raster.write_ppm(Path::new(&path)).unwrap();
     }
