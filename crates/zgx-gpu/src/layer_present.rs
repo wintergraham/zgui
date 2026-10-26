@@ -733,6 +733,15 @@ impl Layer {
                 &self.tiles[self.tiles.len() - 1].1
             }
         };
+        // Exactly the plain layer's box, one surface pixel a screen pixel.
+        // Autoresizing rounds to whole points: a tile made while the host
+        // was empty and grown to 1168.5 points wide ends up 1169, its
+        // surface stretched a pixel wider than the others' as they take
+        // turns showing.
+        let bounds = self.plain.bounds();
+        if tile.frame() != bounds {
+            tile.setFrame(bounds);
+        }
         hide_tiles(&self.plain, Some(tile));
     }
     /// Drops the tiles of surfaces other than `surfaces` (the renderer's, as
