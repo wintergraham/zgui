@@ -16,7 +16,9 @@
 //!   (`#messages row 3`), and `[2]` picks the second of several matches.
 //!
 //! A target matching more than one node is an error naming them: an
-//! action never picks one silently.
+//! action never picks one silently. Nodes hidden from layout (`hidden`, or
+//! inside something hidden) match too, but where exactly one match shows,
+//! the target names it: a person can reach only that one.
 use std::fmt::Write as _;
 use zgx::{
     compose::ViewHandle,
@@ -226,6 +228,9 @@ fn describe(ui: &Ui, node: NodeId) -> String {
     }
     let b = scene.bounds(node);
     let _ = write!(out, " {}", rect(b));
+    if !scene.layout_visible(node) {
+        out.push_str(" hidden");
+    }
     out
 }
 
@@ -348,6 +353,17 @@ pub fn find(ui: &Ui, handle: &ViewHandle, target: &str) -> Result<NodeId, String
     match found.as_slice() {
         [one] => Ok(*one),
         many => {
+            // Only one of them shows: that is the one a person means.
+            let shown: Vec<NodeId> = {
+                let scene = ui.scene.borrow();
+                many.iter()
+                    .copied()
+                    .filter(|n| scene.layout_visible(*n))
+                    .collect()
+            };
+            if let [one] = shown[..] {
+                return Ok(one);
+            }
             let mut message = format!("`{target}` matches {} nodes:", many.len());
             for node in many.iter().take(10) {
                 let _ = write!(message, "\n  {}", describe(ui, *node));

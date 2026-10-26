@@ -399,3 +399,245 @@ fn search_answers_the_count_the_current_match_and_the_first_few() {
     let said = error(&ask(&app, &session, r#"{"cmd":"search"}"#));
     assert!(said.contains("query"), "{said}");
 }
+
+/// Play `request` (a replay) through `session`, clicking meanwhile so each
+/// frame does something (idle ones are not kept): its answer.
+fn replay(app: &mut TestApp, session: &Session, request: &Value) -> Value {
+    let answer = match session.answer(&request.to_json()) {
+        Reply::Now(answer) => answer,
+        Reply::Later(later) => {
+            let out = std::rc::Rc::new(std::cell::RefCell::new(None));
+            let into = out.clone();
+            app.executor.borrow_mut().spawn(async move {
+                *into.borrow_mut() = Some(later.await);
+            });
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while out.borrow().is_none() {
+                assert!(Instant::now() < deadline, "the replay never answered");
+                app.click("add");
+                app.frame();
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            out.borrow_mut().take().unwrap()
+        }
+    };
+    Value::from_json(&answer).unwrap()
+}
+
+/// A host's wheel tape: it answers `stop` with `recorded` and keeps what it
+/// was asked to play.
+fn tape_host(
+    app: &TestApp,
+    recorded: &'static str,
+) -> std::rc::Rc<std::cell::RefCell<Vec<String>>> {
+    let played = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let into = played.clone();
+    app.ui.on_wheel_tape(move |request| match request {
+        zgx::widgets::WheelTape::Record => Ok("recording".into()),
+        zgx::widgets::WheelTape::Stop => Ok(recorded.into()),
+        zgx::widgets::WheelTape::Play { tape, .. } => {
+            into.borrow_mut().push(tape);
+            Ok("playing".into())
+        }
+    });
+    played
+}
+
+#[test]
+fn frames_read_since_a_mark_with_the_runs_asked_for_the_gpu_and_the_engines_notes() {
+    let (mut app, session) = app();
+    text(&ask(&app, &session, r##"{"cmd":"click","target":"#add"}"##));
+    let marked = ask(&app, &session, r#"{"cmd":"mark","name":"here"}"#);
+    let after = marked
+        .field("data")
+        .and_then(|d| d.field("frame"))
+        .and_then(Value::as_f64)
+        .unwrap();
+    // A frame the engine says something of, and the GPU's own time for it.
+    zgx::profile::note(|| "a scroll repainted its view: a test said so".into());
+    zgx::profile::gpu_time(Duration::from_micros(1500));
+    app.click("add");
+    app.frame();
+    let since = ask(&app, &session, r#"{"cmd":"frames","since":"here"}"#);
+    let frames = text(&since);
+    assert!(frames.contains("): count"), "{frames}");
+    assert!(
+        frames.contains("why: a scroll repainted its view: a test said so"),
+        "{frames}"
+    );
+    assert!(frames.contains("gpu: 1500 µs"), "{frames}");
+    let listed = since.field("data").unwrap().list();
+    assert!(!listed.is_empty());
+    for frame in listed.iter() {
+        assert!(frame.field("frame").and_then(Value::as_f64).unwrap() > after);
+    }
+    assert!(listed.iter().any(
+        |f| f.field("gpu_micros").and_then(Value::as_f64) == Some(1500.)
+            && f.field("notes").is_some_and(|n| !n.list().is_empty())
+    ));
+    // As many runs as asked: none, or all of them.
+    let none = text(&ask(
+        &app,
+        &session,
+        r#"{"cmd":"frames","since":"here","runs":0}"#,
+    ));
+    assert!(none.contains("more (`runs N` or `all`)"), "{none}");
+    let all = ask(
+        &app,
+        &session,
+        r#"{"cmd":"frames","since":"here","all":true}"#,
+    );
+    assert!(!text(&all).contains("more (`runs N`"));
+    assert!(all.field("data").unwrap().list().iter().any(|f| {
+        f.field("run_list")
+            .is_some_and(|l| l.list().iter().any(|r| r.field("cause").is_some()))
+    }));
+    // An unknown mark says how to set one.
+    let unknown = error(&ask(&app, &session, r#"{"cmd":"frames","since":"nope"}"#));
+    assert!(unknown.contains("mark nope"), "{unknown}");
+    // How many are kept: fewer, then the default again.
+    let kept = ask(&app, &session, r#"{"cmd":"frames","n":100,"keep":2}"#);
+    assert!(kept.field("data").unwrap().list().len() <= 2);
+    text(&ask(&app, &session, r#"{"cmd":"frames","keep":480}"#));
+    assert_eq!(zgx::trace::kept(), 480);
+}
+
+#[test]
+fn switches_are_listed_and_switched_by_name() {
+    let (app, session) = app();
+    let listed = text(&ask(&app, &session, r#"{"cmd":"switch"}"#));
+    for name in ["scroll_copy on", "refresh_grid on", "partial_repaint on"] {
+        assert!(listed.contains(name), "{listed}");
+    }
+    let off = text(&ask(
+        &app,
+        &session,
+        r#"{"cmd":"switch","name":"partial_repaint","on":"off"}"#,
+    ));
+    assert!(off.starts_with("partial_repaint off"), "{off}");
+    assert!(!zgx::switches::PARTIAL_REPAINT.on());
+    text(&ask(
+        &app,
+        &session,
+        r#"{"cmd":"switch","name":"partial_repaint","on":true}"#,
+    ));
+    assert!(zgx::switches::PARTIAL_REPAINT.on());
+    let unknown = error(&ask(&app, &session, r#"{"cmd":"switch","name":"warp"}"#));
+    assert!(unknown.contains("no switch `warp`"), "{unknown}");
+}
+
+#[test]
+fn a_window_not_presenting_is_said_and_refuses_a_replay() {
+    let (mut app, session) = app();
+    tape_host(&app, "");
+    app.ui.set_presented(false);
+    let frames = text(&ask(&app, &session, r#"{"cmd":"frames"}"#));
+    assert!(
+        frames.starts_with("the window isn't presenting"),
+        "{frames}"
+    );
+    let request = Value::record([
+        ("cmd", Value::from("replay")),
+        ("target", Value::from("#add")),
+        (
+            "tape",
+            Value::from("# zgx wheel tape 1\n0.000 pixel 0 -4 started\n"),
+        ),
+    ]);
+    let refused = error(&ask(&app, &session, &request.to_json()));
+    assert!(
+        refused.contains("isn't presenting") && refused.contains("show the window"),
+        "{refused}"
+    );
+    // Shown again: the next frame says it stopped and presents again.
+    app.ui.set_presented(true);
+    app.click("add");
+    app.frame();
+    let frames = text(&ask(&app, &session, r#"{"cmd":"frames"}"#));
+    assert!(!frames.starts_with("the window isn't"), "{frames}");
+    assert!(
+        frames.contains("why: the window stopped presenting")
+            && frames.contains("why: the window presents again"),
+        "{frames}"
+    );
+}
+
+#[test]
+fn a_replay_repeats_with_its_spread_and_spreads_a_coalesced_tape() {
+    let (mut app, session) = app();
+    // Recorded every other refresh at 120 Hz: the window fell behind.
+    let mut recorded = String::from("# zgx wheel tape 1\n0.000 pixel 0 -2 started\n");
+    for i in 1..=10 {
+        recorded.push_str(&format!("{:.3} pixel 0 -8 moved\n", i as f64 * 16.667));
+    }
+    recorded.push_str("180.000 pixel 0 0 ended\n");
+    let recorded: &'static str = Box::leak(recorded.into_boxed_str());
+    let played = tape_host(&app, recorded);
+    app.ui.set_refresh_interval(Duration::from_nanos(8_333_333));
+    text(&ask(&app, &session, r#"{"cmd":"record"}"#));
+    let stopped = ask(&app, &session, r#"{"cmd":"record","stop":true}"#);
+    let said = text(&stopped);
+    assert!(
+        said.contains("coalesced") && said.contains("replay --every 8.33"),
+        "{said}"
+    );
+    assert_eq!(
+        stopped.field("data").unwrap().field("coalesced"),
+        Some(&Value::Bool(true))
+    );
+    // Spread over every 8 ms, each recorded event's motion in halves.
+    let request = Value::record([
+        ("cmd", Value::from("replay")),
+        ("target", Value::from("#add")),
+        ("tape", Value::from(recorded)),
+        ("every", Value::Num(8.3335)),
+        ("repeat", Value::Num(2.)),
+    ]);
+    let answer = replay(&mut app, &session, &request);
+    let said = text(&answer);
+    assert!(
+        said.contains(", 2 times:") && said.contains("run 2: ") && said.contains("2 runs: every"),
+        "{said}"
+    );
+    assert_eq!(
+        answer
+            .field("data")
+            .and_then(|d| d.field("runs"))
+            .map(|r| r.list().len()),
+        Some(2)
+    );
+    let played = played.borrow();
+    assert_eq!(played.len(), 2, "played twice");
+    let moves: Vec<&str> = played[0].lines().filter(|l| l.ends_with("moved")).collect();
+    assert_eq!(moves.len(), 20, "{}", played[0]);
+    assert!(moves.iter().all(|l| l.contains(" 0 -4 ")), "{}", played[0]);
+    assert!(played[0].contains("0.000 pixel 0 -2 started"));
+    assert!(played[0].contains("180.000 pixel 0 0 ended"));
+}
+
+#[test]
+fn a_target_matching_hidden_nodes_too_names_the_one_that_shows() {
+    let app = TestApp::new(|runtime| {
+        ScriptHost::inline(
+            runtime,
+            "app",
+            r##"
+local pressed = ui.state("pressed", 0)
+return ui.column {
+    ui.button { id = "shown", w = 60, h = 24, on_click = ui.add(pressed, 1), "Go" },
+    ui.column { hidden = true, ui.button { id = "kept", w = 60, h = 24, "Go" } },
+}
+"##,
+        )
+    });
+    let session = Session::new(&app.ui, app.handle.clone(), &app.host, None);
+    text(&ask(&app, &session, r#"{"cmd":"click","target":"\"Go\""}"#));
+    assert_eq!(
+        text(&ask(&app, &session, r#"{"cmd":"state","name":"pressed"}"#)),
+        "pressed = 1"
+    );
+    // Both still match; the hidden one says so.
+    let found = text(&ask(&app, &session, r#"{"cmd":"find","target":"\"Go\""}"#));
+    assert_eq!(found.lines().count(), 2, "{found}");
+    assert_eq!(found.matches(" hidden").count(), 1, "{found}");
+}

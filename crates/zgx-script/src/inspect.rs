@@ -46,6 +46,8 @@ struct Parts {
     handle: ViewHandle,
     host: ScriptHost,
     inspector: Option<Inspector>,
+    /// Marks (`mark`): each name's last frame then, to read frames after.
+    marks: std::cell::RefCell<std::collections::HashMap<String, u64>>,
 }
 
 fn ok(text: String, data: Value) -> String {
@@ -99,6 +101,10 @@ fn save_png(image: &zgx::image::ImageData) -> Result<std::path::PathBuf, String>
     Ok(path)
 }
 
+/// The window is hidden, minimized or covered: what devtools say of it.
+const NOT_PRESENTING: &str = "the window isn't presenting (hidden, minimized or covered): it \
+     draws no frames, and input waits for it until it shows";
+
 /// How frames since `from` (`trace::now_ms`) were paced: how many, the
 /// time between them, and the work in each.
 fn pacing(from: f64) -> (String, Value) {
@@ -108,7 +114,11 @@ fn pacing(from: f64) -> (String, Value) {
         .collect();
     if frames.len() < 2 {
         return (
-            format!("{} frames: nothing to pace", frames.len()),
+            format!(
+                "{} frames: nothing to pace (did the tape move anything there? a target that \
+                 doesn't scroll draws nothing new)",
+                frames.len()
+            ),
             Value::record([("frames", Value::Num(frames.len() as f64))]),
         );
     }
@@ -160,6 +170,175 @@ fn pacing(from: f64) -> (String, Value) {
     (text, data)
 }
 
+/// `tape` with each run of moving pixel events (`moved`) spread over events
+/// `every` milliseconds apart, the motion between two recorded events divided
+/// evenly over the time between them. A gesture recorded while the window
+/// fell behind arrives coalesced, an event every other refresh or worse;
+/// spread so, it plays as a platform sends one to a window keeping up.
+/// Wheel `lines`, and the phases' own events, stay as they are.
+pub fn resample(tape: &str, every: f64) -> Result<String, String> {
+    if !(every.is_finite() && every >= 1.) {
+        return Err("`every` takes milliseconds, at least 1".into());
+    }
+    let mut out: Vec<String> = Vec::new();
+    // The run of moving events since the last other one, and that one's time.
+    let mut run: Vec<(f64, f64, f64)> = Vec::new();
+    let mut anchor = 0.;
+    let number = |w: &str, line: &str| {
+        w.parse::<f64>()
+            .ok()
+            .filter(|v| v.is_finite())
+            .ok_or_else(|| format!("tape line `{line}` is not `ms pixel|lines dx dy phase`"))
+    };
+    let even_out = |run: &mut Vec<(f64, f64, f64)>, anchor: f64, out: &mut Vec<String>| {
+        let Some(&(end, _, _)) = run.last() else {
+            return;
+        };
+        // Motion so far at `t`, each event's spread over the time before it.
+        let at = |t: f64| {
+            let (mut x, mut y, mut from) = (0., 0., anchor);
+            for &(ms, dx, dy) in run.iter() {
+                if t >= ms {
+                    (x, y, from) = (x + dx, y + dy, ms);
+                    continue;
+                }
+                let part = if ms > from {
+                    (t - from) / (ms - from)
+                } else {
+                    1.
+                };
+                return (x + dx * part, y + dy * part);
+            }
+            (x, y)
+        };
+        let (mut x, mut y) = (0., 0.);
+        let mut t = anchor + every;
+        let mut times = Vec::new();
+        while t < end - 1e-6 {
+            times.push(t);
+            t += every;
+        }
+        times.push(end);
+        for t in times {
+            let (nx, ny) = at(t);
+            let round = |v: f64| (v * 1000.).round() / 1000.;
+            out.push(format!(
+                "{t:.3} pixel {} {} moved",
+                round(nx - x),
+                round(ny - y)
+            ));
+            (x, y) = (nx, ny);
+        }
+        run.clear();
+    };
+    for line in tape.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            out.push(line.to_string());
+            continue;
+        }
+        let words: Vec<&str> = trimmed.split_whitespace().collect();
+        let [ms, kind, dx, dy, phase] = words[..] else {
+            return Err(format!(
+                "tape line `{trimmed}` is not `ms pixel|lines dx dy phase`"
+            ));
+        };
+        let ms = number(ms, trimmed)?;
+        if kind == "pixel" && phase == "moved" {
+            run.push((ms, number(dx, trimmed)?, number(dy, trimmed)?));
+            continue;
+        }
+        even_out(&mut run, anchor, &mut out);
+        out.push(trimmed.to_string());
+        anchor = ms;
+    }
+    even_out(&mut run, anchor, &mut out);
+    let mut text = out.join("\n");
+    text.push('\n');
+    Ok(text)
+}
+
+/// The median time between `tape`'s moving events in a row, in milliseconds,
+/// where there are enough to say (eight gaps).
+fn event_gap(tape: &str) -> Option<f64> {
+    let mut gaps = Vec::new();
+    let mut last: Option<f64> = None;
+    for line in tape.lines() {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let (Some(ms), Some(phase)) = (
+            words.first().and_then(|w| w.parse::<f64>().ok()),
+            words.get(4),
+        ) else {
+            continue;
+        };
+        if *phase == "moved" {
+            if let Some(last) = last {
+                gaps.push(ms - last);
+            }
+            last = Some(ms);
+        } else {
+            last = None;
+        }
+    }
+    if gaps.len() < 8 {
+        return None;
+    }
+    gaps.sort_by(f64::total_cmp);
+    Some(gaps[gaps.len() / 2])
+}
+
+/// Several replays' pacing (`replay` with `repeat`): each run's line, then
+/// the spread of each measure across them, least, median and most. One run
+/// measures little: a window's frames differ that much from one to the next.
+fn spread_of(runs: &[(String, Value)]) -> (String, Value) {
+    let mut text: Vec<String> = runs
+        .iter()
+        .enumerate()
+        .map(|(i, (t, _))| format!("run {}: {t}", i + 1))
+        .collect();
+    let mut fields = vec![(
+        "runs",
+        Value::List(
+            runs.iter()
+                .map(|(_, d)| d.clone())
+                .collect::<Vec<_>>()
+                .into(),
+        ),
+    )];
+    let mut summary = Vec::new();
+    for (key, label, unit) in [
+        ("interval_ms", "every", " ms"),
+        ("late", "late", ""),
+        ("work_median_ms", "work median", " ms"),
+        ("longest_gap_ms", "longest gap", " ms"),
+    ] {
+        let mut values: Vec<f64> = runs
+            .iter()
+            .filter_map(|(_, d)| d.field(key).and_then(Value::as_f64))
+            .collect();
+        if values.is_empty() {
+            continue;
+        }
+        values.sort_by(f64::total_cmp);
+        let (least, median, most) = (
+            values[0],
+            values[values.len() / 2],
+            values[values.len() - 1],
+        );
+        summary.push(format!("{label} {least}–{most}{unit} (median {median})"));
+        fields.push((
+            key,
+            Value::record([
+                ("least", Value::Num(least)),
+                ("median", Value::Num(median)),
+                ("most", Value::Num(most)),
+            ]),
+        ));
+    }
+    text.push(format!("{} runs: {}", runs.len(), summary.join(", ")));
+    (text.join("\n"), Value::record(fields))
+}
+
 const HELP: &str = "commands (one JSON object a line, `cmd` and its fields):
   tree    [target] [depth] [budget=200] [all]   the interface, a node a line
   node    target                                 one node: kind, source, role, name, value, box
@@ -172,11 +351,15 @@ const HELP: &str = "commands (one JSON object a line, `cmd` and its fields):
   scroll  target dy                              scroll the viewport under it
   snapshot target [width=4096]                   its pixels as the window last drew them: a PNG, user-only
   record  [stop]                                 record the window's wheel input; stop answers the tape
-  replay  target tape                            play a tape back through the window's input path: its pacing
+  replay  target tape [repeat=1] [every]         play a tape back through the window's input path: its
+                                                 pacing (repeat: runs and their spread; every: ms apart)
   command id                                     run a ui.command
   errors                                         script error, type errors, lint, layout warnings
   lint                                           zgx lint over the app's scripts, file:line
-  frames  [n=10]                                 the last frames that did anything: their phases, what ran and why
+  frames  [n=10] [runs=5] [all] [since] [keep]   the last frames that did anything: their phases, GPU
+                                                 time, notes, what ran and why (since: a mark or frame)
+  mark    [name=mark]                            mark now: `frames since=name` reads what follows
+  switch  [name] [on]                            list fast paths, or switch one on or off, to compare
   search  [query] [next] [prev] [all] [n=5] [close]  find in page: the count, the current match, the first n
   zoom    [to: in|out|reset|1.5|150%]            the window's zoom (Cmd/Ctrl +, -, 0) and its viewport in points
   wait    target [text] [gone] [timeout_ms=3000] until it shows (the text), or is gone
@@ -208,6 +391,7 @@ impl Session {
             handle,
             host: host.clone(),
             inspector,
+            marks: Default::default(),
         }))
     }
 
@@ -315,14 +499,21 @@ impl Session {
                                 fields.iter().find(|(f, _)| f == k).map(|(_, v)| v.clone())
                             };
                             format!(
-                                "{} {} {}",
+                                "{} {} {}{}",
                                 get("node").unwrap_or_default(),
                                 get("role").or(get("kind")).unwrap_or_default(),
                                 get("name")
                                     .or(get("text"))
                                     .map(|t| format!("{t:?} "))
                                     .unwrap_or_default()
-                                    + &get("box").unwrap_or_default()
+                                    + &get("box").unwrap_or_default(),
+                                // Out of layout: a target naming it and a
+                                // shown node names the shown one.
+                                if ui.scene.borrow().layout_visible(*n) {
+                                    ""
+                                } else {
+                                    " hidden"
+                                }
                             )
                         })
                         .collect::<Vec<_>>(),
@@ -537,7 +728,91 @@ impl Session {
                     ]),
                 ))
             })(),
-            "frames" => Ok(self.frames(number("n").map_or(10, |n| n as usize))),
+            "frames" => (|| {
+                if let Some(keep) = number("keep") {
+                    zgx::trace::set_kept(keep.max(1.) as usize);
+                }
+                // After a frame number, or the frame a mark was set after.
+                let since = match field("since") {
+                    None => None,
+                    Some(at) => Some(match at.as_f64() {
+                        Some(frame) => frame.max(0.) as u64,
+                        None => {
+                            let name = at.to_string();
+                            *self.0.marks.borrow().get(&name).ok_or_else(|| {
+                                format!("no mark named `{name}` (`mark {name}` sets one)")
+                            })?
+                        }
+                    }),
+                };
+                let runs = if field("all").is_some_and(|v| v.truthy()) {
+                    usize::MAX
+                } else {
+                    number("runs").map_or(5, |r| r.max(0.) as usize)
+                };
+                let n = number("n").map_or(if since.is_some() { usize::MAX } else { 10 }, |n| {
+                    n.max(0.) as usize
+                });
+                let (text, data) = self.frames(n, runs, since);
+                // Hidden or covered, the window draws nothing: say so first.
+                let text = if ui.is_presented() {
+                    text
+                } else {
+                    format!("{NOT_PRESENTING}\n{text}")
+                };
+                Ok::<_, String>((text, data))
+            })(),
+            "mark" => {
+                let name = text("name").unwrap_or_else(|| "mark".into());
+                let after = zgx::trace::frame_index();
+                self.0.marks.borrow_mut().insert(name.clone(), after);
+                Ok((
+                    format!(
+                        "mark `{name}` after frame {after}: `frames since={name}` reads what follows"
+                    ),
+                    Value::record([
+                        ("name", Value::from(name.as_str())),
+                        ("frame", Value::Num(after as f64)),
+                    ]),
+                ))
+            }
+            "switch" => (|| {
+                let set = match field("on") {
+                    None => None,
+                    Some(Value::Bool(on)) => Some(on),
+                    Some(other) => Some(match other.to_string().as_str() {
+                        "on" | "true" | "1" => true,
+                        "off" | "false" | "0" => false,
+                        said => return Err(format!("`on` is on or off, not `{said}`")),
+                    }),
+                };
+                let switches: Vec<&zgx::switches::Switch> = match text("name") {
+                    Some(name) => {
+                        let switch = zgx::switches::find(&name)
+                            .ok_or_else(|| format!("no switch `{name}` (`switch` lists them)"))?;
+                        if let Some(on) = set {
+                            switch.set(on);
+                        }
+                        vec![switch]
+                    }
+                    None if set.is_some() => return Err("switch on or off takes a `name`".into()),
+                    None => zgx::switches::ALL.to_vec(),
+                };
+                let text = switches
+                    .iter()
+                    .map(|s| {
+                        format!(
+                            "{} {}: {}",
+                            s.name,
+                            if s.on() { "on" } else { "off" },
+                            s.about
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let data = Value::record(switches.iter().map(|s| (s.name, Value::Bool(s.on()))));
+                Ok((text, data))
+            })(),
             "wait" => {
                 let session = self.clone();
                 let request = request.clone();
@@ -548,10 +823,29 @@ impl Session {
                 if stop {
                     ui.wheel_tape(zgx::widgets::WheelTape::Stop).map(|tape| {
                         let events = tape.lines().filter(|l| !l.starts_with('#')).count();
-                        (
-                            format!("recorded {events} wheel events"),
-                            Value::record([("tape", Value::from(tape.as_str()))]),
-                        )
+                        // Events further apart than the display's refreshes:
+                        // the window fell behind and the platform coalesced
+                        // them, and a replay would repeat that timing.
+                        let refresh = ui.refresh_interval().as_secs_f64() * 1e3;
+                        let gap = event_gap(&tape);
+                        let coalesced = gap.filter(|gap| *gap > refresh * 1.4);
+                        let mut text = format!("recorded {events} wheel events");
+                        if let Some(gap) = coalesced {
+                            text.push_str(&format!(
+                                "\nits events came every {gap:.1} ms, the display refreshes every \
+                                 {refresh:.1} ms: the window likely fell behind while recording and \
+                                 the platform coalesced them. Replayed, the tape repeats that timing; \
+                                 `replay --every {refresh:.2}` spreads its motion over every refresh"
+                            ));
+                        }
+                        let mut fields = vec![
+                            ("tape", Value::from(tape.as_str())),
+                            ("coalesced", Value::Bool(coalesced.is_some())),
+                        ];
+                        if let Some(gap) = gap {
+                            fields.push(("event_gap_ms", Value::Num((gap * 100.).round() / 100.)));
+                        }
+                        (text, Value::record(fields))
                     })
                 } else {
                     ui.wheel_tape(zgx::widgets::WheelTape::Record).map(|_| {
@@ -564,9 +858,22 @@ impl Session {
                 }
             }
             "replay" => {
+                // Hidden or covered, the window draws nothing: the tape's
+                // events would wait for it, and there would be no frames.
+                if !ui.is_presented() {
+                    return Reply::Now(failed(format!(
+                        "{NOT_PRESENTING}: a replay would have no frames to measure; show the \
+                         window, in front and uncovered, and replay again"
+                    )));
+                }
                 let played = (|| {
                     let node = target(&ui)?;
                     let tape = text("tape").ok_or("replay takes a `tape` (its text)")?;
+                    let tape = match number("every") {
+                        Some(every) => resample(&tape, every)?,
+                        None => tape,
+                    };
+                    let repeat = number("repeat").map_or(1, |r| r.clamp(1., 20.) as usize);
                     // How long it plays: its last event's time.
                     let length = tape
                         .lines()
@@ -578,17 +885,51 @@ impl Session {
                     let b = ui.scene.borrow().bounds(node);
                     let at = (b.x + b.width / 2., b.y + b.height / 2.);
                     let from = zgx::trace::now_ms();
-                    let said = ui.wheel_tape(zgx::widgets::WheelTape::Play { tape, at })?;
-                    Ok::<_, String>((said, from, length))
+                    let said = ui.wheel_tape(zgx::widgets::WheelTape::Play {
+                        tape: tape.clone(),
+                        at,
+                    })?;
+                    Ok::<_, String>((said, from, length, tape, at, repeat))
                 })();
+                let session = self.clone();
                 return match played {
                     Err(error) => Reply::Now(failed(error)),
-                    Ok((said, from, length)) => Reply::Later(Box::pin(async move {
-                        // Its frames, and the momentum and edges' after it.
-                        zgx::timer::sleep(Duration::from_millis(length as u64 + 400)).await;
-                        let (text, data) = pacing(from);
-                        ok(format!("{said}: {text}"), data)
-                    })),
+                    Ok((said, mut from, length, tape, at, repeat)) => {
+                        Reply::Later(Box::pin(async move {
+                            let mut runs = Vec::new();
+                            for run in 0..repeat {
+                                if run > 0 {
+                                    let Some(ui) = session.0.ui.upgrade() else {
+                                        return failed("the window has closed");
+                                    };
+                                    from = zgx::trace::now_ms();
+                                    let play = zgx::widgets::WheelTape::Play {
+                                        tape: tape.clone(),
+                                        at,
+                                    };
+                                    if let Err(error) = ui.wheel_tape(play) {
+                                        return failed(error);
+                                    }
+                                }
+                                // Its frames, and the momentum and edges' after it.
+                                zgx::timer::sleep(Duration::from_millis(length as u64 + 400)).await;
+                                let (mut text, data) = pacing(from);
+                                if session.0.ui.upgrade().is_some_and(|ui| !ui.is_presented()) {
+                                    text.push_str(
+                                        " (the window stopped presenting meanwhile: frames went \
+                                         undrawn)",
+                                    );
+                                }
+                                runs.push((text, data));
+                            }
+                            if let [(text, data)] = &runs[..] {
+                                ok(format!("{said}: {text}"), data.clone())
+                            } else {
+                                let (text, data) = spread_of(&runs);
+                                ok(format!("{said}, {repeat} times:\n{text}"), data)
+                            }
+                        }))
+                    }
                 };
             }
             "sleep" => {
@@ -608,8 +949,6 @@ impl Session {
         })
     }
 
-    /// The last `n` frames that did anything: per frame, the states
-    /// written and the effects they ran, each with its time.
     /// Find in page's answer: how many matches, which is current, and the
     /// first `n` (all with `all`), each where it is, its text around it and
     /// its box if it shows.
@@ -698,7 +1037,11 @@ impl Session {
         ]);
         (lines.join("\n"), data)
     }
-    fn frames(&self, n: usize) -> (String, Value) {
+    /// The last `n` frames that did anything (after frame `since`, if
+    /// given): per frame, the states written and the effects they ran, each
+    /// with its time (the costliest `runs` of them), its phases, the GPU's
+    /// own time and what the engine noted of it.
+    fn frames(&self, n: usize, runs_shown: usize, since: Option<u64>) -> (String, Value) {
         let names: std::collections::HashMap<usize, String> = self
             .0
             .host
@@ -762,7 +1105,12 @@ impl Session {
         };
         let mut text = Vec::new();
         let mut data = Vec::new();
-        for frame in zgx::trace::frames(n) {
+        let mut frames = zgx::trace::frames(usize::MAX);
+        if let Some(since) = since {
+            frames.retain(|f| f.index > since);
+        }
+        let frames = &frames[frames.len().saturating_sub(n)..];
+        for frame in frames {
             let total: f32 = frame.runs.iter().map(|r| r.micros).sum();
             // Named states by name; the rest (a component's, the engine's)
             // counted.
@@ -826,23 +1174,42 @@ impl Session {
             if !split.is_empty() {
                 line.push_str(&format!("\n  phases: {}", split.join(", ")));
             }
-            // The costliest runs first, a few: what to look at.
+            // The GPU's own time: `present` also counts waiting for the
+            // window server and the display.
+            if let Some(gpu) = frame.gpu_micros {
+                line.push_str(&format!(
+                    "\n  gpu: {gpu:.0} µs (its own time, within present)"
+                ));
+            }
+            // What the engine noted: a fast path not taken and why, a wait.
+            for note in &frame.notes {
+                line.push_str(&format!("\n  why: {note}"));
+            }
+            // The costliest runs first, a few (`runs`, or `all`): what to
+            // look at.
             let mut runs = frame.runs.clone();
             runs.sort_by(|a, b| b.micros.total_cmp(&a.micros));
-            for run in runs.iter().take(5) {
+            let what = |run: &zgx::trace::Run| {
+                run.name
+                    .as_deref()
+                    .map_or_else(|| format!("effect {}", run.effect), named)
+            };
+            let shown = &runs[..runs.len().min(runs_shown)];
+            for run in shown {
                 line.push_str(&format!(
                     "\n  {:.0} µs {}{}",
                     run.micros,
-                    run.name
-                        .as_deref()
-                        .map_or_else(|| format!("effect {}", run.effect), named),
+                    what(run),
                     run.cause
                         .map(|c| format!(" ← {}", name_of(c)))
                         .unwrap_or_default()
                 ));
             }
-            if runs.len() > 5 {
-                line.push_str(&format!("\n  … {} more", runs.len() - 5));
+            if runs.len() > shown.len() {
+                line.push_str(&format!(
+                    "\n  … {} more (`runs N` or `all`)",
+                    runs.len() - shown.len()
+                ));
             }
             text.push(line);
             data.push(Value::record([
@@ -862,6 +1229,42 @@ impl Session {
                     ),
                 ),
                 ("runs", Value::Num(frame.runs.len() as f64)),
+                (
+                    "run_list",
+                    Value::List(
+                        shown
+                            .iter()
+                            .map(|run| {
+                                let mut fields = vec![
+                                    ("micros", Value::Num(run.micros.round() as f64)),
+                                    ("what", Value::from(what(run).as_str())),
+                                ];
+                                if let Some(cause) = run.cause {
+                                    fields.push(("cause", Value::from(name_of(cause).as_str())));
+                                }
+                                Value::record(fields)
+                            })
+                            .collect::<Vec<_>>()
+                            .into(),
+                    ),
+                ),
+                (
+                    "notes",
+                    Value::List(
+                        frame
+                            .notes
+                            .iter()
+                            .map(|n| Value::from(&**n))
+                            .collect::<Vec<_>>()
+                            .into(),
+                    ),
+                ),
+                (
+                    "gpu_micros",
+                    frame
+                        .gpu_micros
+                        .map_or(Value::Nil, |g| Value::Num(g.round() as f64)),
+                ),
                 ("micros", Value::Num(total.round() as f64)),
                 ("frame_micros", Value::Num(frame_micros.round() as f64)),
                 ("wait_micros", Value::Num(waited.round() as f64)),

@@ -184,11 +184,14 @@ ZGX_INSPECT_SOCKET=1): with one running, --app is not needed.
   state [name] [--full]                  set <name> <json>
   click <target>       type <target> <text>      key <keys>
   scroll <target> <dy> command <id>
-  errors               lint               frames [n]
+  errors               lint
+  frames [n] [--runs N] [--all] [--since MARK|FRAME] [--keep N]
+  mark [name]          switch [name] [on|off]
   wait <target> [--text T] [--gone] [--timeout MS]
   snapshot <target> [--width PX] [--out file.png]
   record               record stop [--out gesture.tape]
-  replay <target> <gesture.tape>         its pacing, through the window's input
+  replay <target> <gesture.tape> [--repeat N] [--every MS]
+                       its pacing, through the window's input
   search [query] [--next] [--prev] [--all] [--close]
                        find in page: count, current, the first matches
   zoom [in|out|reset|150%]               the window's zoom and its viewport
@@ -233,7 +236,8 @@ fn inspect(args: Vec<String>) -> ExitCode {
                     return ExitCode::from(2);
                 }
             },
-            "--depth" | "--budget" | "--text" | "--timeout" | "--width" => {
+            "--depth" | "--budget" | "--text" | "--timeout" | "--width" | "--runs" | "--since"
+            | "--keep" | "--repeat" | "--every" => {
                 flags.push((arg[2..].to_string(), args.next()));
             }
             _ => words.push(arg),
@@ -301,6 +305,11 @@ fn inspect(args: Vec<String>) -> ExitCode {
         "frames" => put("n", arg(1)),
         "search" => put("query", arg(1)),
         "zoom" => put("to", arg(1)),
+        "mark" => put("name", arg(1)),
+        "switch" => {
+            put("name", arg(1));
+            put("on", arg(2));
+        }
         "set" => {
             put("name", arg(1));
             match arg(2).map(|v| Value::from_json(&v).unwrap_or_else(|| Value::from(v.as_str()))) {
@@ -332,7 +341,7 @@ fn inspect(args: Vec<String>) -> ExitCode {
     let fields: Vec<(String, Value)> = fields
         .into_iter()
         .map(|(k, v)| match (&*k, &v) {
-            ("dy" | "ms" | "n" | "width", Value::Str(s)) => {
+            ("dy" | "ms" | "n" | "width" | "runs" | "keep" | "repeat" | "every", Value::Str(s)) => {
                 (k, s.parse::<f64>().map(Value::Num).unwrap_or(v))
             }
             _ => (k, v),
@@ -514,8 +523,26 @@ const TOOLS: &[Tool] = &[
     (
         "zgx_frames",
         "frames",
-        &[("n", "number", false)],
-        "The last frames that did anything: each phase's time (update, layout, text, paint, present…), the states written, the runs they caused and their costs.",
+        &[
+            ("n", "number", false),
+            ("runs", "number", false),
+            ("all", "boolean", false),
+            ("since", "string", false),
+            ("keep", "number", false),
+        ],
+        "The last frames that did anything: each phase's time (update, layout, text, paint, present…), the GPU's own time, the states written, the runs they caused and their costs (the costliest `runs`, default 5, or `all`), and the engine's notes on why (a scroll repainted rather than copied, a wait for a later refresh). `since` a mark (zgx_mark) or a frame number reads what followed; `keep` sets how many frames are kept (default 480). Warns first when the window isn't presenting.",
+    ),
+    (
+        "zgx_mark",
+        "mark",
+        &[("name", "string", false)],
+        "Mark now, so zgx_frames with since=name reads only the frames after.",
+    ),
+    (
+        "zgx_switch",
+        "switch",
+        &[("name", "string", false), ("on", "boolean", false)],
+        "List the engine's switchable fast paths (scroll_copy, refresh_grid, partial_repaint), or switch one on or off: compare it with what it stands in for in one running app.",
     ),
     (
         "zgx_wait",
@@ -543,8 +570,13 @@ const TOOLS: &[Tool] = &[
     (
         "zgx_replay",
         "replay",
-        &[("target", "string", true), ("tape_file", "string", true)],
-        "Play a recorded wheel tape (a file) back at a node, through the window's own input path: answers the frames' pacing and work.",
+        &[
+            ("target", "string", true),
+            ("tape_file", "string", true),
+            ("repeat", "number", false),
+            ("every", "number", false),
+        ],
+        "Play a recorded wheel tape (a file) back at a node, through the window's own input path: answers the frames' pacing and work. `repeat` plays it several times and gives the spread; `every` (ms) spreads its motion over events that far apart, for a tape recorded while the window fell behind. Refused while the window isn't presenting (hidden or covered).",
     ),
     (
         "zgx_sleep",
