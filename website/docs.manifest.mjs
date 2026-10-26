@@ -152,6 +152,8 @@ export const sets = [
         description: 'click, type, key, scroll, command, set, wait and sleep.' },
       { slug: 'gestures', src: 'docs/agents/inspect.md', title: 'Record and replay gestures', sections: ['Gestures'], unwrap: true,
         description: 'Record a trackpad gesture once, replay it through the window’s own input path, and read how its frames landed.' },
+      { slug: 'switches', src: 'docs/agents/inspect.md', title: 'Switches', sections: ['Switches'], unwrap: true,
+        description: 'Switch the engine’s fast paths off and on in the running app, to compare both ways in one window.' },
       { slug: 'mcp', src: 'docs/agents/inspect.md', title: 'MCP server', sections: ['As MCP tools'], unwrap: true,
         description: 'zgx inspect mcp serves every command as an MCP tool on stdio.' },
       { slug: 'slow-interactions', src: 'docs/agents/inspect.md', title: 'Diagnose a slow interaction', sections: ['Diagnose'], unwrap: true,
