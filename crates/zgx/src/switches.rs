@@ -5,7 +5,8 @@
 //! change did.
 //!
 //! Each is on unless switched off, and is read where its path is chosen: one
-//! relaxed load.
+//! relaxed load with devtools built in (the `trace` feature, which `zgx
+//! inspect` needs to switch one), none without, where every switch is on.
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A fast path that can be switched off.
@@ -25,12 +26,13 @@ impl Switch {
             on: AtomicBool::new(true),
         }
     }
-    /// Whether the fast path runs.
+    /// Whether the fast path runs: always, built without the `trace`
+    /// feature.
     #[inline]
     pub fn on(&self) -> bool {
-        self.on.load(Ordering::Relaxed)
+        !cfg!(feature = "trace") || self.on.load(Ordering::Relaxed)
     }
-    /// Run it, or not.
+    /// Run it, or not (built with the `trace` feature: without, it runs).
     pub fn set(&self, on: bool) {
         self.on.store(on, Ordering::Relaxed);
     }
@@ -71,7 +73,7 @@ mod tests {
         let s = find("partial_repaint").expect("named");
         assert!(s.on());
         s.set(false);
-        assert!(!PARTIAL_REPAINT.on());
+        assert_eq!(PARTIAL_REPAINT.on(), !cfg!(feature = "trace"));
         s.set(true);
         assert!(find("nope").is_none());
     }
