@@ -614,6 +614,9 @@ pub(crate) struct Events {
     /// `context_menu_below = true`: the menu opens under the node (a tab's),
     /// not at the pointer.
     pub context_menu_below: bool,
+    /// Whether any input handler is set (`any_input`): set with them, so
+    /// every node reads one flag rather than a dozen handlers.
+    pub input: bool,
 }
 impl Kind {
     /// Regions that become a box of any number of children, laid out as
@@ -656,19 +659,10 @@ impl Events {
         context_menu: None,
         context_menu_style: None,
         context_menu_below: false,
+        input: false,
     };
     pub fn any_input(&self) -> bool {
-        self.press.is_some()
-            || self.release.is_some()
-            || self.aux_click.is_some()
-            || self.hover.is_some()
-            || self.pointer_move.is_some()
-            || self.key.is_some()
-            || self.key_up.is_some()
-            || self.focus.is_some()
-            || self.blur.is_some()
-            || self.wheel.is_some()
-            || self.pinch.is_some()
+        self.input
     }
     pub fn any_drag(&self) -> bool {
         self.drag.is_some()
@@ -2208,6 +2202,8 @@ fn set_handler(
         _ => return Ok(Some(value)),
     };
     *slot = Some(handler(value)?);
+    // Every slot but `on_click`'s is an input handler.
+    events.input |= key != "on_click";
     Ok(None)
 }
 

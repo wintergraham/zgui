@@ -1075,6 +1075,14 @@ fn a_middle_click_reaches_the_innermost_on_aux_click() {
         h.text("seen"),
         "inner middle middle;outer middle;inner 4 middle;click;"
     );
+    // That press released away is spent: a later one begun elsewhere and
+    // released over the node is no click of it, nor of the node around it.
+    press(&mut h, inner, away, PointerButton::Middle);
+    press(&mut h, away, inner, PointerButton::Middle);
+    assert_eq!(
+        h.text("seen"),
+        "inner middle middle;outer middle;inner 4 middle;click;"
+    );
 }
 
 #[test]
