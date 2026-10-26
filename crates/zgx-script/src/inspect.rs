@@ -737,9 +737,12 @@ impl Session {
                     None => None,
                     Some(at) => Some(match at.as_f64() {
                         Some(frame) => frame.max(0.) as u64,
+                        // A mark, or a frame's number as the command line
+                        // gives it (`--since 12`, text).
                         None => {
                             let name = at.to_string();
-                            *self.0.marks.borrow().get(&name).ok_or_else(|| {
+                            let marked = self.0.marks.borrow().get(&name).copied();
+                            marked.or_else(|| name.parse().ok()).ok_or_else(|| {
                                 format!("no mark named `{name}` (`mark {name}` sets one)")
                             })?
                         }

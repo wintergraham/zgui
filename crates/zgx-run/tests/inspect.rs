@@ -492,6 +492,18 @@ fn frames_read_since_a_mark_with_the_runs_asked_for_the_gpu_and_the_engines_note
         f.field("run_list")
             .is_some_and(|l| l.list().iter().any(|r| r.field("cause").is_some()))
     }));
+    // A frame's number reads the same, given as the command line gives it.
+    let numbered = ask(
+        &app,
+        &session,
+        &format!(r#"{{"cmd":"frames","since":"{after}"}}"#),
+    );
+    assert_eq!(
+        numbered.field("data").unwrap().list().len(),
+        listed.len(),
+        "{}",
+        text(&numbered)
+    );
     // An unknown mark says how to set one.
     let unknown = error(&ask(&app, &session, r#"{"cmd":"frames","since":"nope"}"#));
     assert!(unknown.contains("mark nope"), "{unknown}");
