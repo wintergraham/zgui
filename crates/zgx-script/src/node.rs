@@ -545,6 +545,10 @@ pub(crate) struct Events {
     /// dragging the window.
     pub press: Option<Handler>,
     pub release: Option<Handler>,
+    /// `fn({ button, x, y, local_x, local_y, … })`: a middle (or other
+    /// extra) button pressed and released on the node, as the DOM's
+    /// `auxclick`; the innermost node with one takes it.
+    pub aux_click: Option<Handler>,
     /// `fn(inside)` on pointer enter and leave.
     pub hover: Option<Handler>,
     /// `fn({ x, y, local_x, local_y })`.
@@ -624,6 +628,7 @@ impl Events {
         click: None,
         press: None,
         release: None,
+        aux_click: None,
         hover: None,
         pointer_move: None,
         key: None,
@@ -655,6 +660,7 @@ impl Events {
     pub fn any_input(&self) -> bool {
         self.press.is_some()
             || self.release.is_some()
+            || self.aux_click.is_some()
             || self.hover.is_some()
             || self.pointer_move.is_some()
             || self.key.is_some()
@@ -2141,6 +2147,7 @@ fn set_handler(
         "on_click" => &mut events.click,
         "on_press" => &mut events.press,
         "on_release" => &mut events.release,
+        "on_aux_click" => &mut events.aux_click,
         "on_hover" => &mut events.hover,
         "on_pointer_move" => &mut events.pointer_move,
         "on_key" => &mut events.key,

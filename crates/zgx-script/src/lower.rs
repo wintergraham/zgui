@@ -2933,12 +2933,20 @@ fn with_events(
     handle: Rc<OnceCell<NodeHandle>>,
 ) -> View {
     let events = node.events();
-    let (press, release, hover, moved) = (
+    let (press, release, aux_click, hover, moved) = (
         events.press.clone(),
         events.release.clone(),
+        events.aux_click.clone(),
         events.hover.clone(),
         events.pointer_move.clone(),
     );
+    // The extra button pressed on it, until it comes up: an aux click is a
+    // press and a release of one button on the node, as a click is. Over a
+    // child, the release takes the press going down (`armed`) and clicks
+    // coming back up, so a press a child's handler took (stopping it there)
+    // is spent and never clicks a later release that began elsewhere.
+    let aux_pressed = Rc::new(std::cell::Cell::new(None::<PointerButton>));
+    let aux_armed = Rc::new(std::cell::Cell::new(false));
     let (key, key_up, focus, blur, wheel, pinch) = (
         events.key.clone(),
         events.key_up.clone(),
@@ -2987,6 +2995,40 @@ fn with_events(
         {
             event.capture_pointer();
         }
+        if aux_click.is_some()
+            && let InputEvent::PointerUp {
+                button: button @ (PointerButton::Middle | PointerButton::Other(_)),
+                ..
+            } = &event.event
+        {
+            let pressed = match event.phase {
+                EventPhase::Capture => {
+                    aux_armed.set(aux_pressed.take() == Some(*button));
+                    false
+                }
+                EventPhase::Target => {
+                    aux_armed.set(false);
+                    aux_pressed.take() == Some(*button)
+                }
+                _ => aux_armed.take(),
+            };
+            if let (true, Some(h), InputEvent::PointerUp { x, y, button }) =
+                (pressed, &aux_click, &event.event)
+                && let Ok(p) = point(*x, *y)
+            {
+                let name = match button {
+                    PointerButton::Other(n) => mlua::Value::Integer(i64::from(*n)),
+                    _ => lua
+                        .create_string("middle")
+                        .map_or(mlua::Value::Nil, mlua::Value::String),
+                };
+                let _ = p.set("button", name);
+                // The innermost node with one takes it, as `on_click`.
+                event.stop_propagation();
+                run(h, &vm, &actions, p);
+            }
+            return;
+        }
         // A child's events reach this node going down and coming back up:
         // the handlers hear them once, as they bubble.
         if event.phase == EventPhase::Capture {
@@ -3013,6 +3055,10 @@ fn with_events(
                     run(h, &vm, &actions, p);
                 }
             }
+            InputEvent::PointerDown {
+                button: button @ (PointerButton::Middle | PointerButton::Other(_)),
+                ..
+            } if aux_click.is_some() => aux_pressed.set(Some(*button)),
             InputEvent::PointerMove { x, y } => {
                 if let (Some(h), Ok(p)) = (&moved, point(*x, *y)) {
                     run(h, &vm, &actions, p);

@@ -1009,6 +1009,9 @@ export type KeyEvent = {
 -- Points scrolled (`dy` positive: content moves up), where the pointer is,
 -- and the keys held: ⌘ or Ctrl with the wheel zooms, by convention.
 export type WheelEvent = Merge<PointerEvent, { dx: number, dy: number }>
+-- A middle (or other extra) button's click, as the DOM's `auxclick`:
+-- `button` is "middle", or the platform's number for another button.
+export type AuxClickEvent = Merge<PointerEvent, { button: "middle" | number }>
 -- A trackpad pinch: the fingers' spread changed by `scale` (0.05: 5%
 -- larger, zoom in; negative, out), at the pointer.
 export type PinchEvent = Merge<PointerEvent, { scale: number }>
@@ -1466,6 +1469,9 @@ export type NodeProps = {
 	-- Primary pointer down and up.
 	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
 	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: (((e: AuxClickEvent) -> ...unknown) | Action)?,
 	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
 	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
 	-- Return true to consume the key.
