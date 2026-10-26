@@ -1027,6 +1027,21 @@ export type WheelEvent = {
 	dx: number,
 	dy: number,
 }
+-- A middle (or other extra) button's click, as the DOM's `auxclick`:
+-- `button` is "middle", or the platform's number for another button.
+export type AuxClickEvent = {
+	x: number,
+	y: number,
+	local_x: number,
+	local_y: number,
+	clicks: number?,
+	shift: boolean,
+	ctrl: boolean,
+	alt: boolean,
+	meta: boolean,
+	cmd: boolean,
+	button: "middle" | number,
+}
 -- A trackpad pinch: the fingers' spread changed by `scale` (0.05: 5%
 -- larger, zoom in; negative, out), at the pointer.
 export type PinchEvent = {
@@ -1505,6 +1520,9 @@ export type NodeProps = {
 	-- Primary pointer down and up.
 	on_press: (((e: PointerEvent) -> ...unknown) | Action)?,
 	on_release: (((e: PointerEvent) -> ...unknown) | Action)?,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: (((e: AuxClickEvent) -> ...unknown) | Action)?,
 	on_hover: (((inside: boolean) -> ...unknown) | Action)?,
 	on_pointer_move: (((e: PointerEvent) -> ...unknown) | Action)?,
 	-- Return true to consume the key.
@@ -1824,6 +1842,9 @@ export type Props = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -2058,6 +2079,7 @@ export type Props_shader_params = { read [number]: Color | { number } }?
 export type Props_on_click = (ClickHandler | Handler | Action)?
 export type Props_on_press = (((e: PointerEvent) -> ...unknown) | Action)?
 export type Props_on_release = (((e: PointerEvent) -> ...unknown) | Action)?
+export type Props_on_aux_click = (((e: AuxClickEvent) -> ...unknown) | Action)?
 export type Props_on_hover = (((inside: boolean) -> ...unknown) | Action)?
 export type Props_on_pointer_move = (((e: PointerEvent) -> ...unknown) | Action)?
 export type Props_on_key = (((e: KeyEvent) -> ...boolean?) | Action)?
@@ -2335,6 +2357,9 @@ export type ContainerProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -2654,6 +2679,9 @@ export type ScrollProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -2980,6 +3008,9 @@ export type TextProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -3205,6 +3236,10 @@ export type MarkdownViewProps = {
 	variants: Props_variants,
 	ref: Props_ref,
 	focusable: Props_focusable,
+	-- Pressing it (or what inside takes no focus) leaves keyboard focus
+	-- where it is, as a web page's `mousedown` with `preventDefault`: a
+	-- suggestion row under a search field keeps the caret in the field.
+	keep_focus: Props_keep_focus,
 	-- What assistive technology takes it for (ARIA's `role`), instead of
 	-- what it is: a clickable row as an "option", a row of buttons as a
 	-- "toolbar". It keeps what it does.
@@ -3241,6 +3276,11 @@ export type MarkdownViewProps = {
 	-- is under the node (presses, hover, the wheel, drops, a native view);
 	-- descendants with handlers still take it. A state or function follows.
 	pointer_events: Props_pointer_events,
+	-- HTML's inert: the node and everything in it, handlers included, are
+	-- absent for input. The pointer reaches what is under it and nothing in
+	-- it takes focus: a closed panel left mounted while it fades out. A state
+	-- or function follows.
+	inert: Props_inert,
 	window_drag: Props_window_drag,
 	-- The pointer selects the text in it and everything it holds, as on a
 	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
@@ -3289,6 +3329,9 @@ export type MarkdownViewProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -3655,6 +3698,9 @@ export type RichProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -3967,6 +4013,9 @@ export type ImageProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -4289,6 +4338,9 @@ export type SvgProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -4603,6 +4655,9 @@ export type CanvasProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -4947,6 +5002,9 @@ export type CheckboxProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -5267,6 +5325,9 @@ export type InputProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -5643,6 +5704,9 @@ export type ProgressProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -5956,6 +6020,9 @@ export type SliderProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -6282,6 +6349,9 @@ export type SegmentedProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -6604,6 +6674,9 @@ export type StepperProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -6927,6 +7000,9 @@ export type DisclosureProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -7249,6 +7325,9 @@ export type AccordionProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -7559,6 +7638,9 @@ export type SectionProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -7880,6 +7962,9 @@ export type SeparatorProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -8198,6 +8283,9 @@ export type TabsProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -8524,6 +8612,9 @@ export type TreeProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -8860,6 +8951,9 @@ export type DataGridProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -9192,6 +9286,9 @@ export type CalendarProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -9516,6 +9613,9 @@ export type DatePickerProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -9838,6 +9938,9 @@ export type TimeFieldProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -10159,6 +10262,9 @@ export type ComboboxProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -10489,6 +10595,9 @@ export type CommandPaletteProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -10807,6 +10916,9 @@ export type SelectProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -11128,6 +11240,9 @@ export type SplitProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -11461,6 +11576,9 @@ export type ListProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -11833,6 +11951,9 @@ export type LayerProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -12151,6 +12272,9 @@ export type ModalProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -12484,6 +12608,9 @@ export type PopoverProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -12818,6 +12945,9 @@ export type MenuItemProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -13139,6 +13269,9 @@ export type SubmenuProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -13316,9 +13449,12 @@ export type NativeProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -13352,6 +13488,10 @@ export type NativeProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -13385,6 +13525,9 @@ export type NativeProps = {
 	live: Props_live,
 	-- Read after its name, as a hint (`aria-description`).
 	description: Props_description,
+	-- What is wrong with its value (`aria-invalid`), followed: nil while it
+	-- is fine. Assistive technology hears it with the field.
+	error: Props_error,
 	-- Left out of the accessibility tree with what it holds (`aria-hidden`):
 	-- decoration, or what is said elsewhere.
 	aria_hidden: Props_aria_hidden,
@@ -13452,6 +13595,9 @@ export type NativeProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -13475,6 +13621,13 @@ export type NativeProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -13491,6 +13644,10 @@ export type NativeProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -13754,6 +13911,9 @@ export type WebViewProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -14089,6 +14249,9 @@ export type TerminalProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -14402,6 +14565,9 @@ export type SlotProps = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -14720,6 +14886,9 @@ export type EachOptions = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.
@@ -15041,6 +15210,9 @@ export type PresenceOptions = {
 	-- Primary pointer down and up.
 	on_press: Props_on_press,
 	on_release: Props_on_release,
+	-- The middle (or another extra) button pressed and released on it: a
+	-- browser tab closes on it, a link opens in the background.
+	on_aux_click: Props_on_aux_click,
 	on_hover: Props_on_hover,
 	on_pointer_move: Props_on_pointer_move,
 	-- Return true to consume the key.

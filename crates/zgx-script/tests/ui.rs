@@ -1005,6 +1005,79 @@ fn a_span_with_an_href_is_a_link_and_its_click_carries_the_keys_held() {
 }
 
 #[test]
+fn a_middle_click_reaches_the_innermost_on_aux_click() {
+    use zgx::input::PointerButton;
+    let mut h = Harness::inline(
+        r##"local seen = ui.state("seen", "")
+        local function note(s) seen:set(seen:peek() .. s .. ";") end
+        return ui.column {
+            ui.row { id = "outer", w = 200, h = 60,
+                on_aux_click = function(e) note("outer " .. tostring(e.button)) end,
+                ui.div { id = "inner", w = 100, h = 40, on_click = function() note("click") end,
+                    on_aux_click = function(e)
+                        note("inner " .. tostring(e.button) .. (if e.local_x == 50 then " middle" else " off"))
+                    end },
+                ui.div { id = "plain", w = 50, h = 40 } },
+            ui.div { id = "away", w = 50, h = 40 },
+            ui.text { "{seen}", id = "seen" } }"##,
+    );
+    h.frames(1);
+    let at = |h: &mut Harness, id: &str| {
+        let b = h.bounds(id);
+        (b.x + b.width / 2., b.y + b.height / 2.)
+    };
+    let press = |h: &mut Harness, down: (f32, f32), up: (f32, f32), button: PointerButton| {
+        h.ui.dispatch(InputEvent::PointerMove {
+            x: down.0,
+            y: down.1,
+        });
+        h.ui.dispatch(InputEvent::PointerDown {
+            x: down.0,
+            y: down.1,
+            button,
+        });
+        h.ui.dispatch(InputEvent::PointerMove { x: up.0, y: up.1 });
+        h.ui.dispatch(InputEvent::PointerUp {
+            x: up.0,
+            y: up.1,
+            button,
+        });
+        h.frames(1);
+    };
+    let inner = at(&mut h, "inner");
+    press(&mut h, inner, inner, PointerButton::Middle);
+    assert_eq!(
+        h.text("seen"),
+        "inner middle middle;",
+        "the innermost takes it, told the button and where"
+    );
+    let (plain, away) = (at(&mut h, "plain"), at(&mut h, "away"));
+    // The outer node heard that press too, but the inner one took its click:
+    // a press elsewhere released over the outer node is no click of its.
+    press(&mut h, away, plain, PointerButton::Middle);
+    assert_eq!(h.text("seen"), "inner middle middle;");
+    press(&mut h, plain, plain, PointerButton::Middle);
+    assert_eq!(
+        h.text("seen"),
+        "inner middle middle;outer middle;",
+        "a node without one passes it up"
+    );
+    press(&mut h, inner, inner, PointerButton::Other(4));
+    assert_eq!(
+        h.text("seen"),
+        "inner middle middle;outer middle;inner 4 middle;",
+        "other buttons by number"
+    );
+    // Released somewhere else, it is no click; nor is the primary button's.
+    press(&mut h, inner, away, PointerButton::Middle);
+    press(&mut h, inner, inner, PointerButton::Primary);
+    assert_eq!(
+        h.text("seen"),
+        "inner middle middle;outer middle;inner 4 middle;click;"
+    );
+}
+
+#[test]
 fn cleanups_run_when_a_component_unmounts() {
     let mut h = Harness::inline(
         r##"local shown = ui.state("shown", true)

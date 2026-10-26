@@ -4,6 +4,10 @@ zgx is on crates.io from 0.1.0 (`zgx = "0.1"`); this lists what changed for apps
 
 ## Unreleased
 
+### Added
+
+- Luau `on_aux_click`: the middle button (or another extra one) pressed and released on a node, as the DOM's `auxclick`, with `{ button, x, y, local_x, local_y, … }` (`button` is `"middle"` or the platform's number). The innermost node with one takes it, as with `on_click`: a tab strip closes a tab on it, a link list opens one in the background.
+
 ### Fixed
 
 - A `display: none` node's children report a 0x0 box (`Scene::bounds`, `on_resize`, `zgx inspect`), as the node itself did and as CSS gives them: they reported their content's size at no width. They are no longer measured again each time their parent lays out.
