@@ -191,6 +191,46 @@ pub fn frame() {
     }
 }
 
+/// Whether devtools trace frames now (`zgx inspect frames`): what [`note`]
+/// and [`gpu_time`] give is kept. Built without the `trace` feature, never.
+#[inline]
+pub fn tracing() -> bool {
+    #[cfg(feature = "trace")]
+    {
+        crate::trace::enabled()
+    }
+    #[cfg(not(feature = "trace"))]
+    {
+        false
+    }
+}
+
+/// Why the frame being drawn does what it does, for devtools' trace of it: a
+/// fast path not taken and what stopped it, a wait and what for. `why` runs
+/// only while devtools trace ([`tracing`]); otherwise this is one relaxed
+/// load.
+#[inline]
+pub fn note(why: impl FnOnce() -> String) {
+    #[cfg(feature = "trace")]
+    if crate::trace::enabled() {
+        crate::trace::note(why());
+    }
+    #[cfg(not(feature = "trace"))]
+    let _ = why;
+}
+
+/// How long the GPU itself ran the frame being drawn, for devtools' trace of
+/// it (`present` also counts waiting for the window server and the display).
+#[inline]
+pub fn gpu_time(time: std::time::Duration) {
+    #[cfg(feature = "trace")]
+    if crate::trace::enabled() {
+        crate::trace::gpu(time);
+    }
+    #[cfg(not(feature = "trace"))]
+    let _ = time;
+}
+
 /// A point in starting up: with `ZGX_PROFILE` set, prints the process's
 /// instructions retired and time since it started (macOS; elsewhere the
 /// thread's, and time since the first mark), as

@@ -2018,6 +2018,17 @@ impl Ui {
     /// Inform retained media that its native window can currently present.
     /// Headless hosts default to presented; hidden/suspended hosts should set false.
     pub fn set_presented(&self, presented: bool) {
+        if presented != self.is_presented() {
+            crate::profile::note(|| {
+                if presented {
+                    "the window presents again".into()
+                } else {
+                    "the window stopped presenting (hidden, minimized or covered): it draws no \
+                     frames, and input waits for it"
+                        .into()
+                }
+            });
+        }
         self.storage.presented.set(presented);
     }
     /// Draw scrollbars as macOS's overlay ones (and GTK's) are: hidden until
@@ -2150,8 +2161,9 @@ impl Ui {
     pub(crate) fn observe_presentation(&self) -> Signal<bool> {
         self.storage.presented.clone()
     }
-    /// Whether the window can present now (`Ui::set_presented`), untracked.
-    pub(crate) fn is_presented(&self) -> bool {
+    /// Whether the window can present now (`Ui::set_presented`), untracked:
+    /// a hidden, minimized or covered window draws no frames.
+    pub fn is_presented(&self) -> bool {
         self.storage
             .presented
             .with_untracked(|presented| *presented)
@@ -2287,7 +2299,8 @@ impl Ui {
             self.storage.refresh_interval.set(interval);
         }
     }
-    pub(crate) fn refresh_interval(&self) -> std::time::Duration {
+    /// The display's refresh period (`Ui::set_refresh_interval`).
+    pub fn refresh_interval(&self) -> std::time::Duration {
         self.storage.refresh_interval.get()
     }
     /// How the host records and plays back wheel input for devtools (`zgx

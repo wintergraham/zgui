@@ -9,19 +9,39 @@ use std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
     rc::Rc,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::Instant,
 };
 
 static ON: AtomicBool = AtomicBool::new(false);
 
-/// Frames kept, the newest last: four seconds at 120 Hz (a fling's).
-const KEPT: usize = 480;
+/// Frames kept, the newest last: four seconds at 120 Hz (a fling's), until
+/// [`set_kept`] says otherwise.
+static KEPT: AtomicUsize = AtomicUsize::new(DEFAULT_KEPT);
+/// Frames kept unless said otherwise.
+pub const DEFAULT_KEPT: usize = 480;
+/// The most frames kept: about three minutes at 120 Hz.
+pub const MOST_KEPT: usize = 20_000;
 
 /// Whether runs are being traced.
 #[inline(always)]
 pub fn enabled() -> bool {
     ON.load(Ordering::Relaxed)
+}
+/// Keep the last `frames` frames (at least one, at most [`MOST_KEPT`]): a
+/// few flings outrun the default. Older ones go at once.
+pub fn set_kept(frames: usize) {
+    let frames = frames.clamp(1, MOST_KEPT);
+    KEPT.store(frames, Ordering::Relaxed);
+    LOG.with_borrow_mut(|log| {
+        while log.frames.len() > frames {
+            log.frames.pop_front();
+        }
+    });
+}
+/// How many frames are kept ([`set_kept`]).
+pub fn kept() -> usize {
+    KEPT.load(Ordering::Relaxed)
 }
 /// Start or stop tracing (on this thread's runtimes), phases measured with
 /// it (`zgx::profile::set_recording`). Off, what was recorded is dropped.
@@ -63,6 +83,13 @@ pub struct Frame {
     /// When it ended (was shown), in milliseconds since tracing began
     /// ([`now_ms`]'s clock): the time between frames is their pacing.
     pub ended_ms: f64,
+    /// Why it did what it did, where the engine said ([`note`]): a scroll
+    /// repainted rather than copied, a wait for a later refresh, input that
+    /// waited for the window to present again.
+    pub notes: Vec<Rc<str>>,
+    /// How long the GPU itself ran the frame, in microseconds, where the
+    /// renderer measures it ([`gpu`]; macOS's direct Metal frames).
+    pub gpu_micros: Option<f32>,
 }
 
 #[derive(Default)]
@@ -113,6 +140,22 @@ pub(crate) fn ran(effect: u64, started: Instant) {
         });
     });
 }
+/// Why the frame being traced did something (`zgx::profile::note`, which
+/// builds the text only while tracing). A note given twice in a frame is kept
+/// once.
+pub fn note(why: String) {
+    LOG.with_borrow_mut(|log| {
+        if !log.current.notes.iter().any(|n| **n == *why) {
+            log.current.notes.push(why.into());
+        }
+    });
+}
+/// The GPU's own time for the frame being traced (`zgx::profile::gpu_time`).
+pub fn gpu(time: std::time::Duration) {
+    LOG.with_borrow_mut(|log| {
+        log.current.gpu_micros = Some(time.as_secs_f32() * 1e6);
+    });
+}
 /// The frame being traced is done (`zgx::profile::frame`, as a renderer
 /// presents it), its phases' split given: kept if anything happened in it.
 pub fn end_frame(phases: Vec<(&'static str, u64, f32)>) {
@@ -121,7 +164,11 @@ pub fn end_frame(phases: Vec<(&'static str, u64, f32)>) {
     }
     LOG.with_borrow_mut(|log| {
         log.index += 1;
-        if log.current.writes.is_empty() && log.current.runs.is_empty() && phases.is_empty() {
+        if log.current.writes.is_empty()
+            && log.current.runs.is_empty()
+            && log.current.notes.is_empty()
+            && phases.is_empty()
+        {
             return;
         }
         let mut frame = std::mem::take(&mut log.current);
@@ -130,7 +177,7 @@ pub fn end_frame(phases: Vec<(&'static str, u64, f32)>) {
         let began = *log.began.get_or_insert_with(Instant::now);
         frame.ended_ms = began.elapsed().as_secs_f64() * 1e3;
         log.frames.push_back(frame);
-        while log.frames.len() > KEPT {
+        while log.frames.len() > kept() {
             log.frames.pop_front();
         }
     });
@@ -145,6 +192,11 @@ pub fn now_ms() -> f64 {
             .as_secs_f64()
             * 1e3
     })
+}
+/// The number of the last frame traced (each frame's `index` counts from
+/// here): a mark to read frames after.
+pub fn frame_index() -> u64 {
+    LOG.with_borrow(|log| log.index)
 }
 /// The last `n` frames that did anything, oldest first.
 pub fn frames(n: usize) -> Vec<Frame> {

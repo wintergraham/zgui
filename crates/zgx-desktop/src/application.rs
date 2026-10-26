@@ -1014,31 +1014,59 @@ impl Latch {
         let ready = now
             .checked_sub(std::mem::take(&mut self.held))
             .unwrap_or(now);
-        let (mut at, early) = self.choose(ready, origin, period);
+        let (mut at, early, kept) = self.choose(ready, origin, period);
+        let chosen = at;
         while at < now {
             at += period;
         }
         self.early = early;
+        // Why it waits, for devtools (`zgx inspect frames`).
+        if kept {
+            zgx::profile::note(|| {
+                format!(
+                    "waited a refresh more to keep the last frame's cadence, until {} frames \
+                     in a row are ready {:.1} ms before their refresh ({early} so far)",
+                    Self::RETURN,
+                    Self::KEEP.as_secs_f64() * 1e3
+                )
+            });
+        }
+        if at > chosen {
+            zgx::profile::note(|| {
+                format!(
+                    "missed its refresh: ready {:.2} ms after the point it was to hand over at",
+                    now.saturating_duration_since(chosen).as_secs_f64() * 1e3
+                )
+            });
+        }
         // Held into a later refresh than planned: hold none for a while.
         if self
             .planned
             .take()
             .is_some_and(|planned| at > planned + period / 2)
         {
+            zgx::profile::note(|| {
+                format!(
+                    "rendered too late for the refresh it was held for: frames render at once \
+                     for the next {}",
+                    Self::REST
+                )
+            });
             self.offset = std::time::Duration::ZERO;
             self.resting = Self::REST;
         }
         self.last = Some((ready, at));
         at
     }
-    /// The point a frame ready at `ready` presents at, and the count of
-    /// frames comfortably early on a later cadence that it leaves.
+    /// The point a frame ready at `ready` presents at, the count of frames
+    /// comfortably early on a later cadence that it leaves, and whether that
+    /// cadence put it a refresh later than it could have shown.
     fn choose(
         &self,
         ready: std::time::Instant,
         origin: std::time::Instant,
         period: std::time::Duration,
-    ) -> (std::time::Instant, u8) {
+    ) -> (std::time::Instant, u8, bool) {
         // The phase of `ready` on the grid, either side of `origin`.
         let period_ns = period.as_nanos().max(1);
         let since = match ready.checked_duration_since(origin) {
@@ -1067,9 +1095,9 @@ impl Latch {
             0
         };
         if late && early < Self::RETURN {
-            (first + period, early)
+            (first + period, early, true)
         } else {
-            (first, 0)
+            (first, 0, false)
         }
     }
     /// When a frame that could start rendering at `now` does. It waits for
@@ -1093,7 +1121,7 @@ impl Latch {
         period: std::time::Duration,
     ) -> std::time::Instant {
         let ready = now + self.work;
-        let (point, _) = self.choose(ready, origin, period);
+        let (point, _, _) = self.choose(ready, origin, period);
         self.room = point
             .saturating_duration_since(ready)
             .saturating_sub(Self::KEEP);
@@ -1861,7 +1889,11 @@ impl Host {
         self.accessibility_geometry_dirty |= !report.damage.is_empty();
         let full = [scene.bounds(scene.root())];
         let forced = self.force;
-        let damage = if self.force {
+        // Painting only what changed can be switched off, to compare
+        // (`zgx inspect switch partial_repaint off`): a frame that changes
+        // anything then paints the whole window.
+        let whole = !zgx::switches::PARTIAL_REPAINT.on() && !report.damage.is_empty();
+        let damage = if self.force || whole {
             &full[..]
         } else {
             &report.damage
@@ -1966,6 +1998,11 @@ impl Host {
                             link.refresh_phase(crate::frame_source::VSYNC_RESYNC * 3)
                         && let Some(wait) = align_wait(period.saturating_sub(phase), period)
                     {
+                        zgx::profile::note(|| {
+                            "ready early: waited to hand over with the display link's other \
+                             frames, so two don't land on one refresh"
+                                .into()
+                        });
                         // One wakeup, not `sleep_until`'s two: running late
                         // only moves it nearer the point, still before it.
                         std::thread::sleep(wait);
@@ -1984,10 +2021,11 @@ impl Host {
                     *self.shown.borrow_mut() = renderer
                         .shown_frame()
                         .map(|frame| (frame, self.scale_factor));
-                    if let Some(gpu) = renderer.take_gpu_time()
-                        && grid.is_some()
-                    {
-                        self.latch.ran(gpu);
+                    if let Some(gpu) = renderer.take_gpu_time() {
+                        zgx::profile::gpu_time(gpu);
+                        if grid.is_some() {
+                            self.latch.ran(gpu);
+                        }
                     }
                 }
                 if status == zgx_gpu::PresentationStatus::Presented {
@@ -4011,6 +4049,11 @@ impl Host {
             // Each refresh applies the motion due by then; with no refreshes
             // coming (hidden, minimized), everything applies at once.
             let delta = if !self.frames_presented() {
+                zgx::profile::note(|| {
+                    "scroll input applied at once: the window isn't presenting (hidden, \
+                     minimized or covered), so no refreshes pace it"
+                        .into()
+                });
                 self.scroll.flush()
             } else if self.frame_arrived {
                 self.scroll.sample(std::time::Instant::now())
@@ -4187,6 +4230,12 @@ impl Host {
     #[cfg(target_os = "macos")]
     fn refresh_grid(&mut self) -> Option<(std::time::Instant, std::time::Duration)> {
         let now = std::time::Instant::now();
+        // Switched off (`zgx inspect switch refresh_grid off`), steady frames
+        // hand over as soon as they are drawn.
+        if !zgx::switches::REFRESH_GRID.on() {
+            self.latch = Latch::default();
+            return None;
+        }
         if self
             .resized_at
             .is_some_and(|at| now.duration_since(at) < RESIZE_SETTLE)
@@ -6357,6 +6406,32 @@ mod tests {
         let ready = origin + period * 40 + ms(7.);
         let at = latch.decide(ready, origin, period);
         assert!(at >= ready && at - ready < period);
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_frame_held_to_a_later_cadence_says_so() {
+        use std::time::{Duration, Instant};
+        let period = Duration::from_nanos(8_333_333);
+        let ms = |v: f64| Duration::from_secs_f64(v / 1e3);
+        let origin = Instant::now();
+        let point = (period - Latch::LEAD).as_secs_f64() * 1e3;
+        let mut latch = Latch::default();
+        // A 60 Hz stream ready just after its point sets a later cadence.
+        latch.decide(origin + period * 10 + ms(point + 0.1), origin, period);
+        // The next, ready just before its point, could show a refresh
+        // sooner: the cadence keeps it, and says so (`decide`'s note).
+        let ready = origin + period * 12 + ms(point - 0.1);
+        let (_, _, kept) = latch.choose(ready, origin, period);
+        assert!(kept);
+        latch.decide(ready, origin, period);
+        // Comfortably early, frame after frame, it gives way: none kept.
+        let mut kept = true;
+        for i in 0..=Latch::RETURN as u32 {
+            let ready = origin + period * (14 + 2 * i) + ms(point - 3.);
+            kept = latch.choose(ready, origin, period).2;
+            latch.decide(ready, origin, period);
+        }
+        assert!(!kept);
     }
     #[cfg(target_os = "macos")]
     #[test]

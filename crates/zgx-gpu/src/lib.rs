@@ -513,21 +513,58 @@ fn texel_at(texture: &wgpu::Texture, x: u32, y: u32) -> wgpu::TexelCopyTextureIn
         aspect: wgpu::TextureAspect::All,
     }
 }
-/// Whether moving `scroll`'s pixels reproduces the frame: its content is one
-/// contiguous run of paint items free of masks, layers and filters; beneath
-/// it the clip shows a single opaque rectangle (or the window background);
-/// above it nothing paints in the clip outside this frame's damage.
-fn copy_is_exact(
+/// What keeps a scroll move from being a copy of the pixels drawn
+/// (`copy_blocker`), for devtools' note on the frame (`zgx inspect frames`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum CopyBlocker {
+    /// Nothing of the content paints in the clip.
+    NoContent,
+    /// Something not of the content paints between its items.
+    Between(NodeId),
+    /// A content item is masked, isolated (a layer) or blurred.
+    Effect(NodeId),
+    /// A node paints over the content and does not repaint this frame.
+    Over(NodeId),
+    /// What lies under the content shows through and does not repaint.
+    Under(NodeId),
+}
+impl CopyBlocker {
+    /// The note, its nodes as `zgx inspect tree` numbers them.
+    fn describe(self, scene: &Scene) -> String {
+        let node =
+            |id: NodeId| format!("@{} ({})", id.number(), zgx::inspect::kind_name(scene, id));
+        match self {
+            Self::NoContent => "none of its content paints in its view".into(),
+            Self::Between(id) => format!("{} paints between its content's items", node(id)),
+            Self::Effect(id) => format!("{} in it is masked, a layer or blurred", node(id)),
+            Self::Over(id) => format!(
+                "{} draws over it, so moving its pixels would move that too (keep what draws \
+                 over a scroll view outside its box)",
+                node(id)
+            ),
+            Self::Under(id) => format!(
+                "{} shows under it (give the scroll view an opaque fill of its own)",
+                node(id)
+            ),
+        }
+    }
+}
+/// Whether moving `scroll`'s pixels reproduces the frame (`None`), and what
+/// keeps it from it otherwise: its content is one contiguous run of paint
+/// items free of masks, layers and filters; beneath it the clip shows a
+/// single opaque rectangle (or the window background); above it nothing
+/// paints in the clip outside this frame's damage.
+fn copy_blocker(
     scene: &Scene,
     scroll: &zgx::scene::ScrollMove,
     damage: &[Rect],
     scale: f32,
-) -> bool {
+) -> Option<CopyBlocker> {
     let clip = scroll.clip;
     let items = scene.layer_items_within(None, Some(&[clip]));
     let content = |item: &zgx::scene::PaintItem<'_>| scene.is_within(item.id, scroll.node);
     let Some(first) = items.iter().position(content) else {
-        return false;
+        return Some(CopyBlocker::NoContent);
     };
     let last = items.iter().rposition(content).expect("found above");
     let paints = |item: &zgx::scene::PaintItem<'_>| -> Option<Rect> {
@@ -550,17 +587,18 @@ fn copy_is_exact(
         })
     };
     for item in &items[first..=last] {
-        if !content(item) || item.mask().is_some() || item.isolated || item.effects.blur_radius > 0.
-        {
-            return false;
+        if !content(item) {
+            return Some(CopyBlocker::Between(item.id));
+        }
+        if item.mask().is_some() || item.isolated || item.effects.blur_radius > 0. {
+            return Some(CopyBlocker::Effect(item.id));
         }
     }
-    if items[last + 1..]
+    if let Some(over) = items[last + 1..]
         .iter()
-        .filter_map(paints)
-        .any(|rect| !repainted(rect))
+        .find(|item| paints(item).is_some_and(|rect| !repainted(rect)))
     {
-        return false;
+        return Some(CopyBlocker::Over(over.id));
     }
     // Content opaque across the whole clip (a list's rows) hides whatever
     // lies under it, before the move and after.
@@ -575,7 +613,7 @@ fn copy_is_exact(
         items[first..=last].iter().filter(opaque).filter_map(paints),
         scale,
     ) {
-        return true;
+        return None;
     }
     for item in items[..first].iter().rev() {
         let Some(rect) = paints(item) else {
@@ -593,13 +631,13 @@ fn copy_is_exact(
             && !item.isolated
             && rect == clip
         {
-            return true;
+            return None;
         }
         if !repainted(rect) {
-            return false;
+            return Some(CopyBlocker::Under(item.id));
         }
     }
-    true
+    None
 }
 /// Whether rectangles spanning `clip` side to side (or top to bottom) cover
 /// it, meeting on whole device pixels: no seam lets anything beneath show.
@@ -6835,16 +6873,54 @@ impl GpuRenderer {
                     )
                 })
             })();
-            match pixels {
-                Some(copy)
-                    if copyable
-                        && !self.fresh
-                        && self.rendered_serial == Some(serial - 1)
-                        && copy_is_exact(scene, scroll, damage, self.scale) =>
-                {
-                    copies.push(copy)
+            // Why it repaints, for devtools (`zgx inspect frames`).
+            let refused: Result<_, fn(&Scene) -> String> = match pixels {
+                _ if !zgx::switches::SCROLL_COPY.on() => {
+                    Err(|_| "switched off (zgx inspect switch scroll_copy on)".into())
                 }
-                _ => repaint.push(scroll.clip),
+                None => Err(|_| "its view or its move falls between device pixels".into()),
+                Some(_) if !copyable => Err(|_| {
+                    "the window presents through the system's surface, whose first copy holds \
+                     100 MB of graphics memory (macOS)"
+                        .into()
+                }),
+                Some(_) if self.fresh => {
+                    Err(|_| "the window's pixels are new (a first frame, a resize)".into())
+                }
+                Some(_) if self.rendered_serial != Some(serial - 1) => {
+                    Err(|_| "the frame before it was not drawn".into())
+                }
+                Some(copy) => Ok(copy),
+            };
+            match refused {
+                Ok(copy) => match copy_blocker(scene, scroll, damage, self.scale) {
+                    None => {
+                        zgx::profile::note(|| {
+                            format!("scroll @{} copied its pixels", scroll.node.number())
+                        });
+                        copies.push(copy);
+                    }
+                    Some(blocker) => {
+                        zgx::profile::note(|| {
+                            format!(
+                                "scroll @{} repainted its view: {}",
+                                scroll.node.number(),
+                                blocker.describe(scene)
+                            )
+                        });
+                        repaint.push(scroll.clip);
+                    }
+                },
+                Err(why) => {
+                    zgx::profile::note(|| {
+                        format!(
+                            "scroll @{} repainted its view: {}",
+                            scroll.node.number(),
+                            why(scene)
+                        )
+                    });
+                    repaint.push(scroll.clip);
+                }
             }
         }
         (copies, repaint)
@@ -11016,5 +11092,75 @@ mod keep_room_tests {
             keep_room(&mut small, &mut small_peak);
         }
         assert_eq!(small.capacity(), 400);
+    }
+}
+
+#[cfg(test)]
+mod copy_blocker_tests {
+    use super::*;
+    use zgx::{
+        compose::prelude::{rgba, *},
+        widgets::Ui,
+    };
+
+    /// A node painting over a scroll view keeps its scroll from being a copy
+    /// of the pixels drawn, and devtools' note names it; with nothing over
+    /// it, the same scroll copies.
+    #[test]
+    fn a_node_over_a_scroll_view_is_named_as_what_keeps_it_from_copying() {
+        for covered in [false, true] {
+            let mut ui = Ui::new(160., 120.);
+            let offset = ui.signal(0_f32);
+            let rows = virtual_list(
+                offset.clone(),
+                24.,
+                2,
+                || 1000,
+                |i| i,
+                |_, key, _| {
+                    div().size(144., 24.).bg(if key % 2 == 0 {
+                        rgb(0x223344)
+                    } else {
+                        rgb(0x334455)
+                    })
+                },
+            )
+            .w(160.)
+            .h(100.)
+            .p(8.)
+            .bg(rgb(0x101820));
+            let mut root = overlay().w(160.).h(120.).bg(rgb(0x000000)).child(rows);
+            if covered {
+                root = root.child(
+                    div()
+                        .absolute()
+                        .left(40.)
+                        .top(40.)
+                        .size(30., 30.)
+                        .bg(rgba(0xffffff80)),
+                );
+            }
+            ui.mount(root);
+            ui.prepare_frame();
+            ui.scene.borrow_mut().flush();
+            offset.set(14.);
+            ui.prepare_frame();
+            let damage = ui.scene.borrow_mut().flush().damage;
+            let scene = ui.scene.borrow();
+            let scroll = scene.scroll_moves().last().expect("it moved").clone();
+            let blocker = copy_blocker(&scene, &scroll, &damage, 1.);
+            if covered {
+                let Some(blocker @ CopyBlocker::Over(_)) = blocker else {
+                    panic!("the square over the list keeps it from copying: {blocker:?}");
+                };
+                let said = blocker.describe(&scene);
+                assert!(
+                    said.contains("draws over it") && said.starts_with('@'),
+                    "{said}"
+                );
+            } else {
+                assert_eq!(blocker, None);
+            }
+        }
     }
 }
