@@ -131,6 +131,15 @@ local area_element: Element? = nil
 function M.set_area(element: Element)
 	area_element = element
 end
+-- Each pane's card (pane.luau), for a picture of it (a dragged tab's).
+local pane_elements: { [string]: Element } = {}
+function M.set_pane_element(id: string, element: Element)
+	pane_elements[id] = element
+end
+function M.pane_element(id: string): Element?
+	local el = pane_elements[id]
+	return if el and el.mounted then el else nil
+end
 -- Where an element shows now, in the window (nothing while unmounted).
 local function shown(el: Element?): layout.Rect
 	if not el then

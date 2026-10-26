@@ -8,6 +8,9 @@ use accesskit_consumer::{NodeId, Tree};
 use hashbrown::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, atomic::AtomicBool};
+use windows::Win32::UI::Accessibility::{
+    UIA_AutomationFocusChangedEventId, UIA_EVENT_ID, UIA_PROPERTY_ID,
+};
 use windows::core::ComObject;
 
 use crate::{node::PlatformNode, util::*, window_handle::WindowHandle};
@@ -36,6 +39,11 @@ pub(crate) struct Context {
     pub(crate) action_handler: Arc<dyn ActionHandlerNoMut + Send + Sync>,
     pub(crate) is_placeholder: AtomicBool,
     platform_nodes: Mutex<HashMap<NodeId, ComObject<PlatformNode>>>,
+    /// zgx patch: what UI Automation clients listen for, as UIA tells the
+    /// fragment root (`IRawElementProviderAdviseEvents`): each event id, and
+    /// for property-changed handlers each property id, with its count of
+    /// handlers.
+    subscriptions: Mutex<HashMap<i32, usize>>,
 }
 
 impl Debug for Context {
@@ -62,7 +70,37 @@ impl Context {
             action_handler,
             is_placeholder: AtomicBool::new(is_placeholder),
             platform_nodes: Mutex::new(HashMap::new()),
+            subscriptions: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// A client added (or removed) a handler for these event and property ids.
+    pub(crate) fn advise(&self, ids: &[i32], added: bool) {
+        let mut subscriptions = self.subscriptions.lock().unwrap();
+        for id in ids {
+            let count = subscriptions.entry(*id).or_default();
+            *count = if added { *count + 1 } else { count.saturating_sub(1) };
+        }
+    }
+
+    /// Whether raising `event_id` (with `property_id`, for a property
+    /// change) reaches anyone: always while a screen reader runs (it may
+    /// take events through the MSAA bridge, where no handler is advised),
+    /// and for focus, which legacy WinEvent clients follow; otherwise only
+    /// what a client listens for. Raising what no one listens for made UIA
+    /// call back into the provider about ten times an event: a dashboard's
+    /// live labels raised two thousand text and name changes a second.
+    /// `screen_reader` is `screen_reader()`'s answer, read once an update:
+    /// a system call each event cost as much as raising them.
+    pub(crate) fn wanted(
+        &self,
+        event_id: UIA_EVENT_ID,
+        property_id: Option<UIA_PROPERTY_ID>,
+        screen_reader: bool,
+    ) -> bool {
+        event_id == UIA_AutomationFocusChangedEventId
+            || screen_reader
+            || listened(&self.subscriptions.lock().unwrap(), event_id, property_id)
     }
 
     pub(crate) fn read_tree(&self) -> RwLockReadGuard<'_, Tree> {
@@ -94,5 +132,58 @@ impl Context {
     pub(crate) fn remove_platform_node(&self, id: NodeId) {
         let mut platform_nodes = self.platform_nodes.lock().unwrap();
         platform_nodes.remove(&id);
+    }
+}
+
+/// Whether a screen reader runs (`SPI_GETSCREENREADER`).
+pub(crate) fn screen_reader() -> bool {
+    let mut on = windows::core::BOOL(0);
+    // SAFETY: SPI_GETSCREENREADER writes one BOOL to the pointer given.
+    let read = unsafe {
+        windows::Win32::UI::WindowsAndMessaging::SystemParametersInfoW(
+            windows::Win32::UI::WindowsAndMessaging::SPI_GETSCREENREADER,
+            0,
+            Some((&mut on as *mut windows::core::BOOL).cast()),
+            windows::Win32::UI::WindowsAndMessaging::SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    };
+    // Unknown: as if one runs, so nothing is held back.
+    read.is_err() || on.as_bool()
+}
+
+/// Whether a client in `subscriptions` listens for `event_id`, and for a
+/// property change, for `property_id` too.
+fn listened(
+    subscriptions: &HashMap<i32, usize>,
+    event_id: UIA_EVENT_ID,
+    property_id: Option<UIA_PROPERTY_ID>,
+) -> bool {
+    let has = |id: i32| subscriptions.get(&id).is_some_and(|count| *count > 0);
+    has(event_id.0) && property_id.is_none_or(|property| has(property.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::UI::Accessibility::{
+        UIA_AutomationPropertyChangedEventId, UIA_NamePropertyId, UIA_Text_TextChangedEventId,
+        UIA_ValueValuePropertyId,
+    };
+
+    #[test]
+    fn only_events_a_client_listens_for_are_raised() {
+        let mut subscriptions = HashMap::new();
+        let property = UIA_AutomationPropertyChangedEventId;
+        assert!(!listened(&subscriptions, UIA_Text_TextChangedEventId, None));
+        assert!(!listened(&subscriptions, property, Some(UIA_NamePropertyId)));
+        // A handler for value changes: those, not name changes.
+        subscriptions.insert(property.0, 1);
+        subscriptions.insert(UIA_ValueValuePropertyId.0, 1);
+        assert!(listened(&subscriptions, property, Some(UIA_ValueValuePropertyId)));
+        assert!(!listened(&subscriptions, property, Some(UIA_NamePropertyId)));
+        assert!(!listened(&subscriptions, UIA_Text_TextChangedEventId, None));
+        // Removed: none again.
+        subscriptions.insert(UIA_ValueValuePropertyId.0, 0);
+        assert!(!listened(&subscriptions, property, Some(UIA_ValueValuePropertyId)));
     }
 }

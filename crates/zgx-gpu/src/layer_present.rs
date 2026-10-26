@@ -1,6 +1,7 @@
-//! macOS presentation through IOSurfaces of the renderer's own, shown by a
-//! plain layer or, at the display's full rate, queued by an
-//! `AVSampleBufferDisplayLayer`, instead of `CAMetalLayer` drawables.
+//! macOS presentation through IOSurfaces of the renderer's own, shown as a
+//! plain layer's tiles instead of `CAMetalLayer` drawables (or, with
+//! `ZGX_PRESENT_VIDEO`, at the display's full rate, queued by an
+//! `AVSampleBufferDisplayLayer`).
 //!
 //! A drawable's contents are not kept between frames, so presenting one means
 //! filling all of it: copying the whole retained frame every frame. A surface
@@ -8,19 +9,15 @@
 //! surface itself: each frame repaints what changed since that surface was
 //! last shown, and showing it copies nothing.
 //!
-//! Shown as a plain layer's contents, a surface replaces the one before; the
-//! window server, compositing on a schedule of its own, then now and then
-//! takes two in one refresh and shows nothing new in the next when frames
-//! come at the display's full rate (measured: one frame in fifty, the
-//! 99th-percentile frame interval about 21 ms where 13 is possible). A
-//! sample buffer display layer queues what it is given, one image a refresh,
-//! as `CAMetalLayer` does with its drawables, but without a drawable's
-//! per-frame bookkeeping: each surface is wrapped once in a sample buffer
-//! that is enqueued again whenever the surface holds the next frame. Slower
-//! frames (an app's own 60 Hz updates, typing) are the plain layer's
-//! contents: handed over at a set point before a refresh (the host's
-//! `refresh_grid`), they show on it reliably, which the video layer's own thread
-//! does not quite manage, and cost less (see `Layer`).
+//! Each surface is a tile of the plain layer, its contents set once; a frame
+//! shows its surface's tile and hides the one before (see `Layer`). Handed
+//! over at a set point before a refresh (the host's `refresh_grid` and its
+//! alignment at full rate), tiles show one frame a refresh at the display's
+//! full rate as reliably as a queue does, with no thread of their own. The
+//! video layer, which queues each surface wrapped once in a sample buffer,
+//! remains for a release behind `ZGX_PRESENT_VIDEO`, to compare with: its
+//! CoreMedia thread wakes about 55 times a second while it lives, and its
+//! queue holds a third surface.
 use crate::{FORMAT, GpuError};
 use objc2::{Encoding, Message, RefEncode, msg_send, rc::Retained, runtime::AnyObject};
 use objc2_core_foundation::{
@@ -716,6 +713,14 @@ impl Layer {
     /// Shows `buffer`'s tile on the plain layer, made (its contents set) the
     /// first time the surface shows; in the caller's transaction.
     fn show_tile(&mut self, buffer: &Buffer) {
+        // The plain layer exactly the host's box too: autoresizing rounds it
+        // as it does a tile (a host that starts empty and grows to 1168.5 by
+        // 400.25 points leaves it 1169 by 401), and every tile would show
+        // its surface stretched to that.
+        let host = self.host.bounds();
+        if self.plain.frame() != host {
+            self.plain.setFrame(host);
+        }
         let id = buffer.surface.id();
         let tile = match self.tiles.iter().position(|(tile, _)| *tile == id) {
             Some(at) => &self.tiles[at].1,
@@ -733,6 +738,17 @@ impl Layer {
                 &self.tiles[self.tiles.len() - 1].1
             }
         };
+        // Exactly the plain layer's box, one surface pixel a screen pixel.
+        // Autoresizing rounds to whole points: a tile made while the host
+        // was empty and grown to 1168.5 points wide ends up 1169, its
+        // surface stretched a pixel wider than the others' as they take
+        // turns showing. Every tile, so one hidden now shows exact too.
+        let bounds = self.plain.bounds();
+        for (_, each) in &self.tiles {
+            if each.frame() != bounds {
+                each.setFrame(bounds);
+            }
+        }
         hide_tiles(&self.plain, Some(tile));
     }
     /// Drops the tiles of surfaces other than `surfaces` (the renderer's, as

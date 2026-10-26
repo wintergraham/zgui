@@ -145,4 +145,10 @@ pub struct Decoration {
     /// shrunk by the spread, cut to its corners (a 1-point top highlight is
     /// `inset 0 1px`). Drawn sharp: their blur is not applied.
     pub inset_shadows: Option<Arc<[BoxShadow]>>,
+    /// Where it clips (`overflow: hidden`), its descendants fade out over
+    /// this many points inside its rounded edge, rather than being cut at
+    /// it: a soft oval reveal, its clip inset animated. Computed per pixel
+    /// in the shader quads already run for rounded clips: no layer, no
+    /// mask. 0 cuts.
+    pub clip_feather: f32,
 }

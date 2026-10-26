@@ -9,11 +9,11 @@ pub(crate) struct Desktop {
 }
 
 impl Desktop {
-    fn takes_images(&self) -> bool {
+    fn images(&self) -> Option<crate::clipboard::Images> {
         self.clipboard
             .borrow()
             .as_ref()
-            .is_some_and(|clipboard| clipboard.takes_images())
+            .map(|clipboard| clipboard.images())
     }
 }
 
@@ -48,6 +48,16 @@ impl Platform for Desktop {
             .as_mut()
             .is_some_and(|clipboard| clipboard.set_text(text).is_ok())
     }
+    #[cfg(target_os = "macos")]
+    fn looks_up(&self) -> bool {
+        true
+    }
+    #[cfg(target_os = "macos")]
+    fn look_up(&self, text: &str, baseline: (f32, f32), size: f32) -> bool {
+        self.dialogs
+            .window()
+            .is_some_and(|window| crate::look_up::show(&window, text, baseline, size))
+    }
     fn open_url(&self, url: &str) -> bool {
         // The launcher runs detached: nothing waits on the browser.
         crate::url::valid_url(url) && open::that_detached(url).is_ok()
@@ -75,23 +85,23 @@ impl Platform for Desktop {
             .is_some_and(|clipboard| clipboard.set_rich_text(text, html).is_ok())
     }
     fn clipboard_image(&self) -> Pending<Option<zgx::image::ImageData>> {
-        let takes = self.takes_images();
+        let images = self.images();
         Box::pin(async move {
-            if !takes {
-                return None;
-            }
-            off_thread(|| crate::clipboard::read_image().ok())
+            let images = images?;
+            off_thread(move || crate::clipboard::read_image(&images).ok())
                 .await
                 .flatten()
         })
     }
     fn set_clipboard_image(&self, image: Arc<zgx::image::ImageData>) -> Pending<bool> {
-        let takes = self.takes_images();
+        let images = self.images();
         Box::pin(async move {
-            takes
-                && off_thread(move || crate::clipboard::write_image(&image).is_ok())
-                    .await
-                    .unwrap_or(false)
+            let Some(images) = images else {
+                return false;
+            };
+            off_thread(move || crate::clipboard::write_image(&images, &image).is_ok())
+                .await
+                .unwrap_or(false)
         })
     }
     fn open_files(&self, picker: FilePicker) -> Pending<Result<Vec<PathBuf>, String>> {

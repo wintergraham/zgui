@@ -15,14 +15,16 @@ struct Out { @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32>, @
 // pixel is on screen (a transformed quad's `point` is its own).
 // `color0..2` (`tint.x` on): its colour filters as rows of an affine map
 // of straight RGB (brightness, contrast, saturate), applied as the colour
-// is written.
+// is written. `tint.y`, `tint.z`: the rounded boxes' feathers, how far
+// inside their edges their content fades out from (0: cut at the edge).
 struct Region { round0:vec4<f32>, radii0:vec4<f32>, round1:vec4<f32>, radii1:vec4<f32>, fade_box:vec4<f32>, fade:vec4<f32>, color0:vec4<f32>, color1:vec4<f32>, color2:vec4<f32>, tint:vec4<f32> }
 @group(1) @binding(1) var<storage, read> regions:array<Region>;
-fn rounded(b:vec4<f32>, r:vec4<f32>, p:vec2<f32>)->f32 {
+fn rounded(b:vec4<f32>, r:vec4<f32>, feather:f32, p:vec2<f32>)->f32 {
  if b.z<0. {return 1.;}
  let half=b.zw*.5; let q=p-b.xy-half;
  let radius=select(select(r.w,r.z,q.x>0.),select(r.x,r.y,q.x>0.),q.y<0.);
  let d=abs(q)-half+vec2(radius); let sdf=length(max(d,vec2(0.)))+min(max(d.x,d.y),0.)-radius;
+ if feather>0. {let t=clamp(-sdf/feather,0.,1.); return t*t*(3.-2.*t);}
  return clamp(.5-sdf*viewport.z,0.,1.);
 }
 // `premultiplied` through region `index`'s colour filters, if any.
@@ -36,7 +38,7 @@ fn tinted(index:f32, premultiplied:vec4<f32>)->vec4<f32> {
 }
 fn region(index:f32, position:vec2<f32>)->f32 {
  let g=regions[u32(index)-1u]; let p=position/viewport.z;
- var k=rounded(g.round0,g.radii0,p)*rounded(g.round1,g.radii1,p);
+ var k=rounded(g.round0,g.radii0,g.tint.y,p)*rounded(g.round1,g.radii1,g.tint.z,p);
  if g.fade.x>0. {let t=clamp((p.y-g.fade_box.y)/g.fade.x,0.,1.); k*=t*t;}
  if g.fade.y>0. {let t=clamp((g.fade_box.z-p.x)/g.fade.y,0.,1.); k*=t*t;}
  if g.fade.z>0. {let t=clamp((g.fade_box.w-p.y)/g.fade.z,0.,1.); k*=t*t;}
@@ -80,7 +82,10 @@ fn zgx_box_shadow(lower:vec2<f32>,upper:vec2<f32>,point:vec2<f32>,sigma:f32,corn
  }
  return clamp(value,0.,1.);
 }
-fn shade(input:Out)->vec4<f32> {
+fn shade(input:Out)->vec4<f32> { return shade_texel(input,vec4(0.),false); }
+// `shade` with the texel `given` when `has_texel` (image_effects.wgsl's,
+// which works it out), rather than sampled at `uv`.
+fn shade_texel(input:Out, given:vec4<f32>, has_texel:bool)->vec4<f32> {
  // Where the pixel is, in logical units: from its own position, so a quad
  // drawn in pieces (`push_panel`) shades every pixel as the whole would. A
  // transformed quad keeps its interpolated, untransformed position.
@@ -139,7 +144,7 @@ fn shade(input:Out)->vec4<f32> {
  // scales alpha, rather than divided by it and multiplied back.
  var premultiplied=false; var rgb=vec3(0.); var scale=1.;
  if v.options.y>0.5 {
-   let tex=textureSample(atlas,tex_sampler,v.uv);
+   var tex=given; if !has_texel {tex=textureSample(atlas,tex_sampler,v.uv);}
    if v.options.y>1.5 {premultiplied=true; rgb=color.rgb*tex.rgb*color.a; color.a=color.a*tex.a;}
    else {color=vec4(color.rgb*tex.rgb,color.a*tex.a);}
  }

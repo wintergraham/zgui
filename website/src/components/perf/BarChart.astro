@@ -1,0 +1,57 @@
+---
+// One metric of one scene as a table whose bars are drawn in CSS: readable
+// as a table by a screen reader, with no script.
+import { chart, fmt, scene as sceneOf } from '@/lib/perf';
+
+interface Props {
+  scene: string;
+  metric: string;
+}
+const { scene, metric } = Astro.props;
+const c = chart(sceneOf(scene), metric);
+---
+
+<figure class="perf-chart not-prose">
+  <table class="perf-table">
+    <colgroup><col class="perf-col-mode" /><col class="perf-col-fw" /><col /></colgroup>
+    <caption>
+      <span class="perf-chart-title">{c.title}</span>
+      <span class="perf-chart-unit">{c.unit}</span>
+    </caption>
+    <thead class="sr-only">
+      <tr><th scope="col">Mode</th><th scope="col">Framework</th><th scope="col">Median (range)</th></tr>
+    </thead>
+    {
+      c.groups.map((g) => (
+        <tbody>
+          {g.bars.map((b, i) => {
+            const low = fmt(b.min, b.places);
+            const high = fmt(b.max, b.places);
+            return (
+              <tr data-fw={b.framework}>
+                {i === 0 && (
+                  <th scope="rowgroup" rowspan={g.bars.length} class="perf-mode">
+                    {g.label}
+                  </th>
+                )}
+                <th scope="row" class="perf-fw">{b.name}</th>
+                <td>
+<div class="perf-cell">
+                  <span class="perf-track" aria-hidden="true" title={low !== high ? `${b.name}: ${fmt(b.median, b.places)}, trials ${low}–${high}` : undefined}>
+                    <span class="perf-bar" style={`width:${Math.max(0.6, (100 * b.median) / c.top).toFixed(1)}%`} />
+                    {low !== high && (
+                      <span class="perf-whisker" style={`left:${((100 * b.min) / c.top).toFixed(1)}%;width:${Math.min(100 - (100 * b.min) / c.top, (100 * (b.max - b.min)) / c.top).toFixed(1)}%`} />
+                    )}
+                  </span>
+                  <span class="perf-value">{fmt(b.median, b.places)}</span>
+                  {low !== high && <span class="sr-only">(trials {low} to {high})</span>}
+                </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      ))
+    }
+  </table>
+</figure>

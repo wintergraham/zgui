@@ -6,11 +6,15 @@
 Builds zgx-run, opens the component catalog and the dashboard example, and
 reads each window's accessibility tree through the AX API
 (scripts/macos_ax_tree.swift): attributes only, no input sent, so it is safe
-on a desktop in use. Checks that grids give VoiceOver their rows (its table
-navigation), that charts drawn on canvases are images named by what they
+on a desktop in use. Checks that the menu bar (made after the first
+frame) has its standard menus and lists the open window, that grids give
+VoiceOver their rows (its table navigation), that charts drawn on canvases are images named by what they
 show, that a group of chips is a radio group saying which is chosen, and
 that a list's options are named, selectable and pressable, and that an
-invalid form field says so and why (scripts/macos_ax_form). Needs this
+invalid form field says so and why (scripts/macos_ax_form), and that a
+text area's text, selection and caret read and show where its characters
+are (scripts/macos_ax_text; its selection is set through accessibility, as
+VoiceOver sets it). Needs this
 terminal to be allowed to control the computer (System Settings, Privacy &
 Security, Accessibility); exits 2 if it is not. macOS only.
 """
@@ -94,6 +98,14 @@ def main():
     for role, name in [('AXRadioGroup', 'Range'), ('AXIncrementor', 'Copies'), ('AXSlider', 'Volume'),
                        ('AXTabGroup', 'Documents'), ('AXPopUpButton', 'Fruit')]:
         check(bool(named(catalog, role, name)), f'{name}: a {role}')
+    # The menu bar, made once the first frame shows: the application menu's
+    # standard items, and the window (open before it) in the Window menu.
+    bar = [n for n in walk(catalog) if n.get('role') == 'AXMenuBar']
+    items = [n.get('title') for n in walk(bar[0]) if n.get('role') == 'AXMenuItem'] if bar else []
+    check('Services' in items and 'Minimize' in items and any(i and i.startswith('Quit') for i in items),
+          f'the menu bar has the application and Window menus ({len(items)} items)')
+    windows = [n.get('title') for n in catalog.get('children', []) if n.get('role') == 'AXWindow']
+    check(bool(windows) and windows[0] in items, f'the Window menu lists the window ({windows[:1]})')
 
     dashboard = read_tree(reader, EXAMPLES / 'dashboard', lambda t: named(t, 'AXList', 'Instruments'))
     check(bool(named(dashboard, 'AXImage', 'Price, last ')), "the price chart is an image named by what it shows")
@@ -118,6 +130,41 @@ def main():
     name = named(form, 'AXTextField', 'Name')
     check(bool(name) and name[0].get('invalid') is True and 'A name is required' in name[0].get('help', ''),
           'a field whose error shows nowhere says it too')
+
+    # A text area as VoiceOver reads and moves through it: its text, a
+    # selection set through AX (as VoiceOver sets one) read back, and where
+    # its characters and a caret on the second line show on screen
+    # (AXBoundsForRange), inside the field (scripts/macos_ax_text).
+    texter = work / 'macos_ax_text'
+    subprocess.run(['swiftc', '-O', str(ROOT / 'scripts/macos_ax_text.swift'), '-o', str(texter)], check=True)
+    env = {'HOME': os.environ['HOME'], 'PATH': os.environ['PATH']}
+    process = subprocess.Popen([str(zgx_run), str(ROOT / 'scripts/macos_ax_text')], env=env,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        time.sleep(1.5)
+        result = subprocess.run([str(texter), str(process.pid), 'Note'], capture_output=True, text=True, timeout=60)
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+    if result.returncode == 3:
+        sys.exit('not allowed to read accessibility: allow this terminal in System Settings, '
+                 'Privacy & Security, Accessibility')
+    text = json.loads(result.stdout) if result.returncode == 0 and result.stdout else {}
+    check(text.get('value') == 'one two\nthree four', f"the note's text reads ({text.get('value')!r})")
+    check(text.get('selected_range') == [4, 3] and text.get('selected_text') == 'two',
+          f"a selection set as VoiceOver sets one takes ({text.get('selected_range')}, {text.get('selected_text')!r})")
+    frame, shown = text.get('frame'), text.get('selection_bounds')
+
+    def inside(box):
+        return bool(box and frame) and box[2] > 0 and box[3] > 0 and frame[0] - 1 <= box[0] \
+            and box[0] + box[2] <= frame[0] + frame[2] + 1 and frame[1] - 1 <= box[1] \
+            and box[1] + box[3] <= frame[1] + frame[3] + 1
+
+    check(inside(shown), f'the selection shows where its characters are (AXBoundsForRange {shown} in {frame})')
+    check(text.get('caret_range') == [8, 0], f"the caret moves to the second line ({text.get('caret_range')})")
+    first, second = text.get('first_line_bounds'), text.get('second_line_bounds')
+    check(inside(first) and inside(second) and second[1] > first[1],
+          f'the second line shows below the first ({first}, {second})')
 
     if failures:
         sys.exit(f'{len(failures)} failed')

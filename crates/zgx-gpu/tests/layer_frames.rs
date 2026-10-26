@@ -183,6 +183,159 @@ fn plain_frames_flip_tiles_whose_contents_are_set_once() {
     assert!(!tiles[0].1, "at rest the kept tile shows");
 }
 
+/// The host's bounds, the plain layer's, and each tile's frame.
+#[cfg(target_os = "macos")]
+fn geometry(
+    host: &objc2_quartz_core::CALayer,
+) -> (
+    objc2_core_foundation::CGRect,
+    objc2_core_foundation::CGRect,
+    Vec<objc2_core_foundation::CGRect>,
+) {
+    // SAFETY: the layers' live sublayer arrays, read on the main thread.
+    let plain = unsafe { host.sublayers() }
+        .and_then(|subs| subs.iter().find(|sub| unsafe { sub.sublayers() }.is_some()))
+        .expect("a plain layer holding tiles");
+    let tiles = unsafe { plain.sublayers() }
+        .expect("tiles")
+        .iter()
+        .map(|tile| tile.frame())
+        .collect();
+    (host.bounds(), plain.bounds(), tiles)
+}
+
+/// Every tile is exactly the plain layer's box, and the plain layer the
+/// host's, after every show: a host that starts empty (an overlay plane's)
+/// and grows to a fractional width (1168.5 points at scale 2) once left the
+/// first tile at the whole points autoresizing gave it, its surface stretched
+/// a pixel wider than the other's as they took turns (the layout shifted a
+/// pixel while a caret blinked).
+#[cfg(target_os = "macos")]
+fn tiles_fill_the_plain_layer_exactly_after_the_host_grows() {
+    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+    use objc2_quartz_core::CATransaction;
+    let mut window = Window::new(1);
+    // The first tile, made while the host is empty.
+    window.show();
+    CATransaction::begin();
+    CATransaction::setDisableActions(true);
+    window.host.setFrame(CGRect::new(
+        CGPoint::new(0., 0.),
+        CGSize::new(1168.5, 400.25),
+    ));
+    CATransaction::commit();
+    for live in 2..10 {
+        window.live.set(live);
+        window.show();
+        let (host, plain, tiles) = geometry(&window.host);
+        assert_eq!(
+            plain, host,
+            "frame {live}: the plain layer is not the host's box"
+        );
+        for tile in &tiles {
+            assert_eq!(
+                *tile, plain,
+                "frame {live}: a tile is not the plain layer's box ({tiles:?})"
+            );
+        }
+    }
+}
+
+/// A region of the shown frame (`ShownFrame::read`) is those rows and
+/// columns of the whole frame (`shown_pixels`), clipped to it.
+#[cfg(target_os = "macos")]
+fn shown_frame_regions_are_the_whole_frames_rows() {
+    let mut window = Window::new(3);
+    let (width, height, whole) = {
+        window.show();
+        window.gpu.shown_pixels().expect("a surface shown")
+    };
+    let frame = window.gpu.shown_frame().expect("a frame shown");
+    let (x, y, w, h) = (37, 11, 64, 9);
+    let (rw, rh, region) = frame.read(x, y, w, h).expect("a region");
+    assert_eq!((rw, rh), (w, h));
+    for row in 0..h as usize {
+        let at = ((y as usize + row) * width as usize + x as usize) * 4;
+        assert_eq!(
+            &region[row * w as usize * 4..][..w as usize * 4],
+            &whole[at..at + w as usize * 4],
+            "row {row}"
+        );
+    }
+    // Past the right and bottom edges: clipped.
+    let (cw, ch, _) = frame
+        .read(width - 5, height - 3, 64, 64)
+        .expect("a clipped region");
+    assert_eq!((cw, ch), (5, 3));
+    assert!(
+        frame.read(width, 0, 4, 4).is_none(),
+        "a region outside the frame"
+    );
+}
+
+/// At the display's full rate frames are tiles too: no video layer (its
+/// CoreMedia thread never starts), one tile shown at a time, and at rest one
+/// tile left.
+#[cfg(target_os = "macos")]
+fn full_rate_frames_show_as_tiles_without_a_video_layer() {
+    let mut window = Window::new(1);
+    window.gpu.set_full_rate(true);
+    for live in 2..12 {
+        window.live.set(live);
+        window.show();
+        // SAFETY: the host's live sublayer array, read on the main thread.
+        let classes: Vec<String> = unsafe { window.host.sublayers() }
+            .map(|subs| {
+                subs.iter()
+                    .map(|sub| sub.class().name().to_str().unwrap_or("?").to_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(
+            classes
+                .iter()
+                .all(|class| !class.contains("AVSampleBufferDisplayLayer")),
+            "frame {live}: a video layer at full rate ({classes:?})"
+        );
+        let tiles = tiles(&window.host);
+        assert_eq!(
+            tiles.iter().filter(|(_, hidden)| !hidden).count(),
+            1,
+            "frame {live}: one tile shows ({tiles:?})"
+        );
+        assert!(tiles.len() <= 3, "frame {live}: {} tiles", tiles.len());
+    }
+    window.gpu.set_full_rate(false);
+    window.gpu.trim();
+    let tiles = tiles(&window.host);
+    assert_eq!(tiles.len(), 1, "at rest: one tile ({tiles:?})");
+}
+
+/// Input after a window idled (`trim`) wakes the GPU once (`warm_up`): not
+/// before it idles, not for later input, and again after the next idle; the
+/// frames drawn around it show as before.
+#[cfg(target_os = "macos")]
+fn input_after_idle_wakes_the_gpu_once() {
+    let mut window = Window::new(1);
+    window.show();
+    window.gpu.warm_up();
+    assert_eq!(window.gpu.debug_warms(), 0, "warmed before idling");
+    window.gpu.trim();
+    window.gpu.warm_up();
+    window.gpu.warm_up();
+    assert_eq!(window.gpu.debug_warms(), 1, "one input after idling");
+    window.live.set(2);
+    assert!(
+        window.show() == Window::new(2).show(),
+        "the frame after a warm-up differs from the scene drawn whole"
+    );
+    window.gpu.warm_up();
+    assert_eq!(window.gpu.debug_warms(), 1, "warmed while drawing");
+    window.gpu.trim();
+    window.gpu.warm_up();
+    assert_eq!(window.gpu.debug_warms(), 2, "the next idle");
+}
+
 fn main() {
     #[cfg(target_os = "macos")]
     {
@@ -190,5 +343,13 @@ fn main() {
         println!("layer_frames: scattered damage through surfaces matches drawing whole");
         plain_frames_flip_tiles_whose_contents_are_set_once();
         println!("layer_frames: plain frames flip tiles whose contents are set once");
+        tiles_fill_the_plain_layer_exactly_after_the_host_grows();
+        println!("layer_frames: tiles fill the plain layer exactly after the host grows");
+        shown_frame_regions_are_the_whole_frames_rows();
+        println!("layer_frames: shown frame regions are the whole frame's rows");
+        full_rate_frames_show_as_tiles_without_a_video_layer();
+        println!("layer_frames: full-rate frames show as tiles without a video layer");
+        input_after_idle_wakes_the_gpu_once();
+        println!("layer_frames: input after idle wakes the GPU once");
     }
 }

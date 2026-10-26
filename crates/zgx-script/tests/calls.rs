@@ -241,6 +241,198 @@ fn fetch_goes_through_the_hosts_transport() {
     );
 }
 
+const STREAM_APP: &str = r#"
+local text = ui.state("text", "")
+local events = ui.state("events", "")
+local shown = ui.state("shown", "")
+local request = nil
+local running = nil
+local function listen(url: string)
+    return ui.fetch(url, {
+        on_chunk = function(t) text:set(text:peek() .. t) end,
+        on_event = function(e)
+            events:set(`{events:peek()}[{e.event}|{e.data}|{e.id or "-"}]`)
+        end,
+    })
+end
+-- The buttons first: the texts below grow as they are heard.
+return ui.column {
+    ui.button { id = "stream", w = 40, h = 20, "s", on_click = function()
+        ui.task(function()
+            local r = listen("https://api.test/stream"):await()
+            shown:set(`{r.status} {r.ok} [{r.body}]`)
+        end)
+    end },
+    ui.button { id = "fail", w = 40, h = 20, "f", on_click = function()
+        listen("https://api.test/fail"):after(function(r) shown:set(`{r.status} {r.ok} {r.body}`) end)
+    end },
+    ui.button { id = "endless", w = 40, h = 20, "e", on_click = function()
+        request = listen("https://api.test/endless")
+        request:after(nil, function(e) shown:set(`stopped {e}`) end)
+    end },
+    ui.button { id = "endless_task", w = 40, h = 20, "t", on_click = function()
+        running = ui.task(function() listen("https://api.test/endless"):await() end)
+    end },
+    ui.button { id = "cancel", w = 40, h = 20, "c", on_click = function() request:cancel() end },
+    ui.button { id = "cancel_task", w = 40, h = 20, "k", on_click = function() running:cancel() end },
+    ui.button { id = "whole", w = 40, h = 20, "w", on_click = function()
+        listen("https://api.test/whole"):after(function(r) shown:set(`whole [{r.body}]`) end)
+    end },
+    ui.text { id = "shown", "{shown}" },
+    ui.text { id = "events", "{events}" },
+    ui.text { id = "text", "{text}" },
+}
+"#;
+
+/// A streaming transport: `/stream` writes its pieces a frame apart,
+/// waiting for `go` before the last; `/endless` writes until the script
+/// stops listening, counting the futures still alive in `running`.
+struct Streams {
+    go: std::rc::Rc<std::cell::Cell<bool>>,
+    running: std::rc::Rc<std::cell::Cell<usize>>,
+}
+fn streaming(host: &ScriptHost) -> Streams {
+    let go = std::rc::Rc::new(std::cell::Cell::new(false));
+    let running = std::rc::Rc::new(std::cell::Cell::new(0));
+    let (wait, alive) = (go.clone(), running.clone());
+    host.streaming_fetcher(move |request, body| {
+        let (wait, alive) = (wait.clone(), alive.clone());
+        async move {
+            let ok = |status| zgx_script::Response {
+                status,
+                headers: vec![("Content-Type".into(), "text/event-stream".into())],
+                body: Vec::new(),
+            };
+            match request.url.as_str() {
+                "https://api.test/stream" => {
+                    // "é" split between pieces; CRLF and a CR split from
+                    // its LF; a comment; an event named, with an id, and
+                    // data on two lines.
+                    let pieces: [&[u8]; 6] = [
+                        b"data: caf\xc3",
+                        b"\xa9\r\n\r",
+                        b"\n: a comment\nevent: delta\nid: 7\ndata: one\n",
+                        b"data: two\n\n",
+                        b"data:x\n\n",
+                        b"data: dropped",
+                    ];
+                    for (i, piece) in pieces.iter().enumerate() {
+                        if i == pieces.len() - 1 {
+                            while !wait.get() {
+                                zgx::timer::sleep(Duration::from_millis(1)).await;
+                            }
+                        }
+                        body.write(piece);
+                        zgx::timer::sleep(Duration::from_millis(1)).await;
+                    }
+                    Ok(ok(200))
+                }
+                "https://api.test/fail" => {
+                    body.write(br#"{"error":"over quota"}"#);
+                    Ok(ok(429))
+                }
+                "https://api.test/endless" => {
+                    struct Alive(std::rc::Rc<std::cell::Cell<usize>>);
+                    impl Drop for Alive {
+                        fn drop(&mut self) {
+                            self.0.set(self.0.get() - 1);
+                        }
+                    }
+                    alive.set(alive.get() + 1);
+                    let _alive = Alive(alive.clone());
+                    while body.is_open() {
+                        body.write(b"data: tick\n\n");
+                        zgx::timer::sleep(Duration::from_millis(1)).await;
+                    }
+                    Ok(ok(200))
+                }
+                _ => Ok(zgx_script::Response {
+                    status: 200,
+                    headers: vec![],
+                    body: b"all at once".to_vec(),
+                }),
+            }
+        }
+    });
+    Streams { go, running }
+}
+
+#[test]
+fn a_streamed_response_is_heard_as_it_arrives() {
+    let mut streams = None;
+    let mut h = Harness::new(|runtime| {
+        let host = ScriptHost::inline(runtime, "app", STREAM_APP);
+        streams = Some(streaming(&host));
+        host
+    });
+    let streams = streams.unwrap();
+    h.click("stream");
+    // Heard before the body ends.
+    wait_for(
+        &mut h,
+        "events",
+        "[message|café|-][delta|one\ntwo|7][message|x|7]",
+    );
+    assert_eq!(h.text("shown"), "");
+    streams.go.set(true);
+    wait_for(&mut h, "shown", "200 true []");
+    assert!(h.text("text").starts_with("data: café\r\n\r\n: a comment"));
+    assert!(h.text("text").ends_with("data: dropped"));
+    // An event the body ended in the middle of is dropped.
+    assert_eq!(
+        h.text("events"),
+        "[message|café|-][delta|one\ntwo|7][message|x|7]"
+    );
+    // A failure keeps its body, to say why.
+    h.click("fail");
+    wait_for(&mut h, "shown", r#"429 false {"error":"over quota"}"#);
+    // A transport that answers whole is heard in one piece.
+    h.click("whole");
+    wait_for(&mut h, "shown", "whole []");
+    assert!(h.text("text").ends_with("all at once"));
+    assert_eq!(h.error(), None);
+}
+
+#[test]
+fn a_cancelled_stream_stops_its_request() {
+    let mut streams = None;
+    let mut h = Harness::new(|runtime| {
+        let host = ScriptHost::inline(runtime, "app", STREAM_APP);
+        streams = Some(streaming(&host));
+        host
+    });
+    let streams = streams.unwrap();
+    let ticks = |h: &mut Harness| h.text("events").matches("tick").count();
+    // `p:cancel()`: rejected as cancelled, the transport's future dropped.
+    h.click("endless");
+    wait_for_count(&mut h, |h| ticks(h) >= 3);
+    assert_eq!(streams.running.get(), 1);
+    h.click("cancel");
+    wait_for(&mut h, "shown", "stopped cancelled");
+    wait_for_count(&mut h, |_| streams.running.get() == 0);
+    let heard = ticks(&mut h);
+    std::thread::sleep(Duration::from_millis(10));
+    h.settle();
+    assert_eq!(ticks(&mut h), heard, "nothing heard after");
+    // The task awaiting it cancelled: the request stops too.
+    h.click("endless_task");
+    wait_for_count(&mut h, |h| ticks(h) >= heard + 3);
+    h.click("cancel_task");
+    wait_for_count(&mut h, |_| streams.running.get() == 0);
+    assert_eq!(h.error(), None);
+}
+
+/// Settle until `done` holds.
+fn wait_for_count(h: &mut Harness, mut done: impl FnMut(&mut Harness) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !done(h) {
+        assert!(Instant::now() < deadline, "timed out");
+        h.settle();
+        h.ui.prepare_frame();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 #[test]
 fn without_a_fetcher_fetch_says_so() {
     let mut h = Harness::new(|runtime| ScriptHost::inline(runtime, "app", FETCH_APP));
@@ -705,5 +897,118 @@ fn enter_submits_a_form_focusing_what_is_wrong_and_saving_in_a_task() {
     // The server refuses the next: its message is the form's failure.
     h.click("send");
     wait_for(&mut h, "state", "false refused saved grace@x.org");
+    assert_eq!(h.error(), None);
+}
+
+const CANCEL_APP: &str = r#"
+local after = ui.state("after", 0)
+local loads_finished = ui.state("loads_finished", 0)
+local id = ui.state("id", 1)
+local saved = ui.state("saved", "")
+local running = nil
+local user = ui.resource(function()
+    local which = id:get()
+    local answer = ui.call("slow", which):await()
+    loads_finished:add(1)
+    return answer
+end)
+local form = ui.form {
+    fields = { name = "Ada" },
+    submit = function(values) return ui.call("slow", 9):await() end,
+    on_success = function(answer) saved:set(answer) end,
+}
+return ui.column {
+    ui.text { id = "shown", function()
+        return `{after:get()} {loads_finished:get()} {user.data:get() or "-"} {form.pending:get()} {saved:get()}`
+    end },
+    ui.button { id = "start", w = 40, h = 20, "s", on_click = function()
+        running = ui.task(function()
+            ui.call("slow", 1):await()
+            after:add(1)
+        end)
+    end },
+    ui.button { id = "cancel", w = 40, h = 20, "c", on_click = function()
+        running:cancel()
+        assert(running.cancelled)
+    end },
+    ui.button { id = "next", w = 40, h = 20, "n", on_click = function() id:add(1) end },
+    ui.button { id = "submit", w = 40, h = 20, "u", on_click = form.submit },
+    ui.button { id = "stop", w = 40, h = 20, "x", on_click = form.cancel },
+}
+"#;
+
+#[test]
+fn a_cancelled_task_stops_at_its_await() {
+    let mut h = Harness::new(|runtime| {
+        let host = ScriptHost::inline(runtime, "app", CANCEL_APP);
+        host.async_action("slow", |arg| async move {
+            zgx::timer::sleep(Duration::from_millis(20)).await;
+            Ok(Value::Str(format!("answer {arg}").into()))
+        });
+        host
+    });
+    wait_for(&mut h, "shown", "0 1 answer 1 false ");
+    // A task cancelled while it awaits: the answer comes, unheard.
+    h.click("start");
+    h.click("cancel");
+    std::thread::sleep(Duration::from_millis(40));
+    h.frames(3);
+    assert_eq!(h.text("shown"), "0 1 answer 1 false ");
+    // A resource asked again: its earlier load, cancelled, finishes nothing.
+    h.click("next");
+    h.click("next");
+    wait_for(&mut h, "shown", "0 2 answer 3 false ");
+    std::thread::sleep(Duration::from_millis(40));
+    h.frames(3);
+    assert_eq!(
+        h.text("shown"),
+        "0 2 answer 3 false ",
+        "the second load stopped"
+    );
+    // A form's submit cancelled: not pending, and its answer not heard.
+    h.click("submit");
+    assert_eq!(h.text("shown"), "0 2 answer 3 true ");
+    h.click("stop");
+    assert_eq!(h.text("shown"), "0 2 answer 3 false ");
+    std::thread::sleep(Duration::from_millis(40));
+    h.frames(3);
+    assert_eq!(h.text("shown"), "0 2 answer 3 false ");
+    assert_eq!(h.error(), None);
+}
+
+#[test]
+fn ui_try_gives_a_value_or_what_was_raised_as_text_in_a_task_too() {
+    let mut h = Harness::new(|runtime| {
+        let host = ScriptHost::inline(
+            runtime,
+            "app",
+            r#"
+local said = ui.state("said", "")
+local rows = ui.state("rows", { 1 })
+ui.command { id = "run", run = function()
+    local v, e = ui.try(function(a, b) return a + b end, 2, 3)
+    local _, raised = ui.try(function() error("plain words", 0) end)
+    -- An error mlua made (a wrong path): its text, no traceback.
+    local _, wrong = ui.try(function() rows:set_key({ 1, true }, 0) end)
+    said:set(`{v} {e == nil} {raised} {wrong:find("traceback") == nil} {wrong:find("not boolean") ~= nil}`)
+    ui.task(function()
+        local _, refused = ui.try(function() return ui.call("refuse"):await() end)
+        local answer = ui.try(function() return ui.call("answer"):await() end)
+        said:set(said:peek() .. ` / {refused} {answer}`)
+    end)
+end }
+return ui.text { id = "said", "{said}" }
+"#,
+        );
+        host.async_action("refuse", |_| async { Err("no, thank you".into()) });
+        host.async_action("answer", |_| async { Ok(Value::Num(42.)) });
+        host
+    });
+    assert!(h.host.run_command("run"));
+    wait_for(
+        &mut h,
+        "said",
+        "5 true plain words true true / no, thank you 42",
+    );
     assert_eq!(h.error(), None);
 }

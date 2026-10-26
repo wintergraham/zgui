@@ -70,7 +70,9 @@ Further native Linux probes, each on a private Xvfb/Openbox desktop or a nested 
 - Wayland clipboard: copy and paste go through the compositor (`set_selection`, `receive`, `send` in the protocol trace) via one data device per seat, which Weston requires (`wayland_input_smoke.py`).
 - The primary selection: an editor's double-clicked word and Ctrl+A reach other clients, and another client's selection lands where a middle click puts the caret, on X11 (`xclip`) and as a native Wayland client of Sway (`wl-paste`/`wl-copy --primary`) (`primary_selection_smoke.py`). Selected display text is the primary selection too (`selectable_text_smoke.py`).
 - Copying display text reaches other clients: selectable_text's document, pressed on and selected whole with Ctrl+A, copied with Ctrl+C, is read back by xclip on X11 and by wl-paste through Sway as `text/html` and UTF-8 plain text, both with all 10,000 lines of its transcript's virtual list in order (the rows it never mounted included) and none of the part marked unselectable: 10,012 lines, 669 KB of HTML (`selection_copy_smoke.py`).
-- A Luau board and a measured list, on X11 and as a Wayland client of Sway (`scripts/luau_views/app.luau` under the luau_probe example, read from screen captures and from what it prints): the canvas's `bg_grid` shows its 2-pixel dots every 20 points and `each`'s shapes where `draw_item` drew them, once each; wheel buttons (X11) or two fingers (Wayland) pan its `view` and the shapes and grid move by the view's offset to the pixel, nothing drawn again; doubling the zoom shows the shapes twice the size at twice their place and the grid's marks 40 pixels apart, still 2 across, nothing drawn again; a press recolouring one shape (`set_key`) draws that item alone. `el:scroll_to_row(2000, { align = "center" })` on a `measured = true` list of 3,000 rows, guessed 30 points, centres row 2000 to the pixel at its measured 108 pixels, its neighbours at theirs (`luau_views_smoke.py`).
+- An input method that goes with a focus queued for the app (ibus-x11 killed while the app is stopped and focus moves to it): the app takes the focus without a round trip to the gone server, keeps answering, and closes on Alt+F4; before, it waited in libX11's `_XimRead` forever (`native_ime_smoke.py --server-gone`).
+- Images through the clipboard, on X11 (`xclip`) and as a Wayland client of Sway (`wl-copy`, `wl-paste`): clipboard_image's Paste takes a 30 by 20 PNG another client offered as `image/png`, its half-transparent columns' alpha straight, at its size and pixels (their digest); its Copy offers its 64 by 48 gradient as `image/png`, read back pixel for pixel, its transparent column included (`clipboard_image_smoke.py`).
+- A Luau board and a measured list, on X11 and as a Wayland client of Sway (`scripts/luau_views/app.luau` under the luau_probe example, read from screen captures and from what it prints): the canvas's `bg_grid` shows its 2-pixel dots every 20 points and `each`'s shapes where `draw_item` drew them, once each; wheel buttons (X11) or two fingers (Wayland) pan its `view` and the shapes and grid move by the view's offset to the pixel, nothing drawn again; doubling the zoom shows the shapes twice the size at twice their place and the grid's marks 40 pixels apart, still 2 across, nothing drawn again; a press recolouring one shape (`set_key`) draws that item alone. `el:scroll_to_row(2000, { align = "center" })` on a `measured = true` list of 3,000 rows, guessed 30 points, centres row 2000 to the pixel at its measured 108 pixels, its neighbours at theirs. A chip dragged (`on_drag`) onto the board and resting springs it open (`on_drag_spring`) 0.5 s after it came onto it, not before, once however it then moves within, and drops there (`on_drop`) (`luau_views_smoke.py`).
 - Cursor styles as a native Wayland client: `wp_cursor_shape_v1` shapes for move, not-allowed, crosshair, a reactive wait and the default (`wayland_cursors_smoke.py`), beside the X11 cursor-image check.
 - An undecorated window's title bar (`Titlebar::Inset`): no window manager frame, its drawn buttons maximize, restore, minimize and close it, a press on its corner resizes it through the window manager, and on its drag strip a double click maximizes and restores it and a drag moves it (`window_buttons_smoke.py`).
 - The desktop's interface font: GNOME's `font-name` from a stand-in portal reaches the gallery's sans-serif text, and on X11 xsettingsd's `Gtk/FontName` comes before it (the window under the portal's "DejaVu Sans 11" and XSETTINGS' "DejaVu Serif 11" is pixel for pixel the serif one) (`desktop_font_smoke.py`).
@@ -83,15 +85,16 @@ Further native Linux probes, each on a private Xvfb/Openbox desktop or a nested 
 - Overlay scrollbars follow GNOME's `overlay-scrolling` (from a stand-in portal): on, the scrollbars example's vertical scrollbar is hidden at rest, shows as its view is scrolled with the wheel and hides again 2.5 s after; off, it shows at rest (`overlay_scrolling_smoke.py`).
 - XSETTINGS on X11 come ahead of the portal, as GTK takes them there: xsettingsd's `Net/DndDragThreshold` 30 and `Net/DoubleClickTime` 1000 hold over a stand-in portal's GNOME 8 and 300 (XFCE with the GTK portal installed): 20 pixels is no drag and 40 one, two presses 700 ms apart a double click; changed to 10 and reloaded, 20 pixels drags once the window is activated again. With the portal's `color-scheme` no preference, `Net/ThemeName` "Greybird" makes the primary_selection example light, and changed to "Greybird-dark", dark once its window is activated again (`xsettings_smoke.py`).
 - A touchpad flick coasts on as a native Wayland client of a headless sway: a virtual pointer (`wayland_pointer.py`, `zwlr_virtual_pointer_v1` in plain Python) scrolls with two fingers at 120 Hz and lifts them; the rows still move between 80 and 500 ms after the lift and have stopped by 2 s (`touchpad_fling_smoke.py`).
+- A wheel tape (devtools' `zgx inspect replay`) plays back through a real X11 window's input path: its pixel motion and wheel line, at their times, scroll the window's view by exactly what they hold (`wheel-tape`, a host test in `zgx-desktop`).
 - A launcher's token reaches the first window: on X11 its startup notification ends (`_NET_STARTUP_INFO` on the root window), as a Wayland client of sway it activates its surface with the token (`launch_token_smoke.py`).
 - A file dialog through the desktop portal (xdg-desktop-portal and its GTK backend, on a private session bus): the chooser is modal and transient for the app's window, the path typed into it reaches the app, Escape is no choice rather than an error, and a save starts in the folder and with the name given (`portal_dialog_smoke.py`).
 - A file dialog with no portal on the session bus: zenity's chooser shows, the path typed into it reaches the app, and closing the app's window while it shows ends it (`zenity_dialog_smoke.py`).
-- The catalogue's components over a private AT-SPI bus with real X11 keys (`components_atspi_smoke.py`, on `components_probe`): each one's role and name (radio buttons, spin buttons, combo box, page tabs, trees, a table and its column headers); the data grid as a table of 21 rows (its header's and those not built counted) and 2 columns, saying several rows can be selected, and which are; a tree opening with Right, and right to left with Left, its item saying it is expandable and then open and its child showing in the tree; grid rows selected by the arrows and Shift and copied with Ctrl+C as text and as an HTML table (`xclip`); Enter on a header sorting; and the segmented control, stepper, time field, date picker and tabs answering their keys.
+- The catalogue's components over a private AT-SPI bus with real X11 keys (`components_atspi_smoke.py`, on `components_probe`): each one's role and name (radio buttons, spin buttons, combo box, page tabs, trees, a table and its column headers); a field with an error `INVALID_ENTRY`, its `ERROR_MESSAGE` relation the label showing the error (not said again in its description), a valid one not flagged; the data grid as a table of 21 rows (its header's and those not built counted) and 2 columns, saying several rows can be selected, and which are; a tree opening with Right, and right to left with Left, its item saying it is expandable and then open and its child showing in the tree; grid rows selected by the arrows and Shift and copied with Ctrl+C as text and as an HTML table (`xclip`); Enter on a header sorting; and the segmented control, stepper, time field, date picker and tabs answering their keys.
 - Popups past the window on X11: popup_probe's menu shows in its own override-redirect window, typed a popup menu and transient for its parent, past the window's bottom edge, drawn and chosen there; a press on the bare desktop closes it; no popup window exists before one is near, none shows after, and the app is idle; at a scale of 2 its window is its size in the screen's pixels (400 × 404), where the scene put it, drawn to its far corner, and its last item is chosen there (`popup_windows_smoke.py`). The menus, submenus and overlays probes run through popup windows too: a submenu flips at the screen's edge, and a panel hangs past a short window's bottom edge.
 - Drag previews on X11 (under picom): the drag_drop example's card preview shows in its own override-redirect window, drawn, the pointer passing through it (an empty input shape); it follows 30 pointer moves past the window's edge pixel for pixel with no frame drawn in it or the window; released on nothing, it slides back to its card and hides; dropped on the destination, it goes at once; and the app is idle after (`drag_preview_smoke.py`).
 - Drags between windows on X11 (under picom): drag_probe's tab dropped on its other window's strip lands there; over an xmessage window covering that strip it does not, and released there it is torn off; tab_windows' tab torn off below its window opens with the tab's grabbed point under the pointer, to the pixel; that window's only tab moves the window, which follows the pointer to the pixel and stays where it is let go, and dropped on the other window's strip merges into it (`drag_windows_smoke.py`).
 - Where windows open on Linux: on X11 (Openbox) a second window opens a title bar's height down and right of the first; a window with `frame_autosave` moved and resized is saved once the moves settle (the app then killed), and reopens there at its size; maximized and closed at once with Alt+F4 it reopens maximized, and restores to the frame before; at a saved frame no monitor shows it opens on the screen at its saved size. Under Weston it reopens at its saved size, or maximized from its first frame, no buffer drawn at the saved size (Weston's protocol trace) (`window_frames_smoke.py`).
-- Drags out to other apps on X11: drag_probe's chip, exporting its text, dragged with real input onto a GTK window of the probe's own (`xdnd_target.py`) is taken over XDND as `UTF8_STRING`, and the source hears it accepted; out of the window the preview follows the pointer pixel for pixel, drawing nothing and the window nothing; back over its own window, with Escape, or over a GTK target that refuses it, nothing is dropped and the source hears it not taken (`xdnd_source_smoke.py`).
+- Drags out to other apps on X11: drag_probe's chip, exporting its text, dragged with real input onto a GTK window of the probe's own (`xdnd_target.py`) is taken over XDND as `UTF8_STRING`, and the source hears it accepted; out of the window the preview follows the pointer pixel for pixel, drawing nothing and the window nothing; back over its own window, with Escape, or over a GTK target that refuses it, nothing is dropped and the source hears it not taken; and a text field's selected words, pressed on and dragged out the same way, arrive at the target as text (`xdnd_source_smoke.py`).
 - Drags between windows on X11 (under picom): drag_probe's tab dropped on its other window's strip lands there; over an xmessage window covering that strip it does not, and released there it is torn off; tab_windows' tab torn off below its window opens with the tab's grabbed point under the pointer, to the pixel (`drag_windows_smoke.py`).
 - No fonts at all: the gallery on Xvfb, its fontconfig listing only an empty directory, draws its window (every control, no text), says once on stderr why its text does not show, and does not panic (`no_fonts_smoke.py`).
 - X screens of 16 and 30 bits: the gallery on Xvfb at each depth shows a window of a 32-bit visual, drawing exactly the pixels it draws on a 24-bit screen, with no panic (`x11_depths_smoke.py`).
@@ -580,15 +583,17 @@ checked against the workspace; full command logs are retained beside them.
 ## Editor pointer selection and native click metadata
 
 Editors now support Shift-click anchor extension, Unicode word-boundary segment
-selection on double-click, and visual-line selection on triple-click. Dragging
-extends whole selected units and reverses around the original opposite edge.
-Single-line triple-click selects all text; line selections exclude hard newline
-terminators. Selection remains available read-only, cancels preedit, and leaves
+selection on double-click, and paragraph selection on triple-click (its break
+included, as NSTextView and browsers' text areas select one, not the wrapped
+row it was clicked on). Dragging extends whole selected units and reverses
+around the original opposite edge, and a Shift-click after a double or triple
+click extends by those units too. Single-line triple-click selects all text. Selection remains available read-only, cancels preedit, and leaves
 committed text and undo/redo history intact. Ordinary synthetic dispatch remains
 unmodified single-click input; native/custom-host modifier dispatch supplies
 per-event metadata and a target/button-specific 500 ms, four-logical-pixel
 click chain. Counts cycle 1/2/3/1 and reset with the documented interaction
-lifecycle. OS-specific multi-click preferences are not queried.
+lifecycle. The system's double-click time and distance are queried (see the
+platform services above).
 
 Seven new editor integration tests exercise Shift and unit dragging, grapheme-safe
 combining/emoji selection, punctuation/whitespace, right-half glyph hits,
@@ -866,7 +871,9 @@ All 175 archived source inputs and the tested native binary hashes are verified.
 `scripts/macos_accessibility_probe.py` opens the component catalog and the
 dashboard example on a real macOS desktop and reads their windows through
 the AX API, as VoiceOver does (attributes only: no input is sent). It checks
-that data grids and the date picker's month give their rows (VoiceOver's
+that the menu bar, made once the first frame shows, has the application and
+Window menus and lists the open window (AppKit lists only windows that
+change after the Window menu is set: zgx lists those open before), that data grids and the date picker's month give their rows (VoiceOver's
 table navigation; AccessKit gave a grid none, fixed in
 `vendor/accesskit_macos`), that the tree, segmented control, stepper,
 slider, tabs and select have their roles and names, that charts drawn on
@@ -874,7 +881,14 @@ canvases are images named by what they show, that a group of chips is a
 radio group saying which is chosen, that a list's options are named,
 selectable and pressable, and that an invalid form field
 (`scripts/macos_ax_form`) says so (`AXInvalid`) and gives its error
-message in `AXHelp`, from the text showing it or its own. Passed on macOS
+message in `AXHelp`, from the text showing it or its own, and that a text
+area (`scripts/macos_ax_text`, read with `scripts/macos_ax_text.swift`)
+reads its text, takes a selection set through `AXSelectedTextRange` as
+VoiceOver sets one, and says where the selection and a caret on its second
+line show (`AXBoundsForRange`, inside the field, the second line below the
+first): what VoiceOver's cursor, Zoom and Hover Text follow. Without its
+runs' geometry (before 2026-10-26) that box was empty, `[0, 1800, 0, 0]`.
+Passed on macOS
 26 (M5), 2026-10-24, and with the form checks (16), 2026-10-25; it fails
 without the AccessKit patches (AXRows 0, no AXInvalid). The macOS bundle
 (`macos_native_validation.py`) runs it. Speech itself (VoiceOver reading
@@ -892,3 +906,15 @@ never mounted are in it (their text derived from how the rows are built).
 The app reads only what it wrote, so macOS prompts no one; it is launched
 as a direct child from a temporary directory and sends no input. Passed on
 macOS 26 (M5), 2026-10-25: 10,012 lines, 670 KB of HTML.
+
+## macOS full-rate animation (the display's refresh)
+
+`scripts/macos_full_rate_probe.py` runs the animation_workload example three
+times for four seconds and fails when a run animates under 90% of the
+display's maximum refresh (`NSScreen.maximumFramesPerSecond`). The host takes
+the display's period from the spacing of its display link's output times
+(`frame_source::refresh_period`), not from the mode the display reports: a
+120 Hz panel whose mode read 60 Hz at launch paced full-rate content at half
+rate, intermittently, as a window started. The app is launched as a direct
+child from a temporary directory and sends no input. Passed on macOS 26 (M5,
+120 Hz), 2026-10-25: 113.7, 117.2 and 116.7 fps.

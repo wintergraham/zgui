@@ -36,6 +36,7 @@ A focusable box whose children lie in a row; `on_click` runs on a click, Space o
 | `bg` | `Color` | `"$button.bg"` | `hover` defaults to `"$button.hover"` |
 | `rounded` | `number` | `6` | |
 | `focus` | `Styles` | an accent ring | `focus = { border = 0 }` removes it |
+| `variant` | `"primary"`, `"ghost"`, `"danger"`, `"default"` | `"default"` | how it looks where its own styles don't say: `primary` the accent (`$accent`, `$accent.text`, `$accent.hover` under the pointer), `ghost` no background until hovered (`$hover`), `danger` `$danger` |
 
 ## input and textarea
 
@@ -43,7 +44,7 @@ A text editor bound to a string state: selection, undo, clipboard and IME includ
 
 | Option | Type | Default | |
 | --- | --- | --- | --- |
-| `value` | `State<string>`, or `() -> string \| number` | required | the text, both ways; or, controlled as React's inputs are, a function it shows, edits going out by `on_change` and `on_commit`. Focused, it keeps what is being typed; left, it shows the function's text again |
+| `value` | `State<string>`, or `() -> string \| number` | required | the text, both ways; or, controlled as React's inputs are, a function it shows, edits going out by `on_change` and `on_commit`. Focused, it keeps what is being typed (the function's answer to an edit, a number formatted, waits), and shows a change from elsewhere at once (a send clearing the draft); left, it shows the function's text again |
 | `on_change` | `(text: string) -> ()` | none | a controlled input's every edit |
 | `on_commit` | `(text: string) -> ()` | none | a controlled input's text on Enter, or on leaving it changed: where an inspector's field applies, and an undo step records |
 | `label` | `string` | `""` | its accessible name (not drawn) |
@@ -165,7 +166,15 @@ A field over a list of commands near the window's top, filtered by a fuzzy match
 
 ```lua
 local open = ui.state("palette", false)
-ui.command { id = "palette", title = "Command Palette", menu = "View", key = "cmd+shift+p", run = function() open:set(true) end }
+ui.command {
+	id = "palette",
+	title = "Command Palette",
+	menu = "View",
+	key = "cmd+shift+p",
+	run = function()
+		open:set(true)
+	end,
+}
 ui.command { id = "theme", title = "Toggle Theme", menu = "View", run = function() end }
 return ui.command_palette { open = open }
 ```
@@ -244,7 +253,9 @@ local form = ui.form {
 	submit = function(values)
 		-- In a task: it awaits, and raises what went wrong.
 		local response = ui.fetch("https://api.example/people", { method = "POST", body = values }):await()
-		if not response.ok then error(`The server answered {response.status}`, 0) end
+		if not response.ok then
+			error(`The server answered {response.status}`, 0)
+		end
 		return response.json
 	end,
 }
@@ -264,9 +275,13 @@ return ui.column {
 	field("name", "Name"),
 	field("email", "Email"),
 	ui.segmented { field = form.fields.role, options = { "Engineer", "Designer" } },
-	ui.presence(form.failure, function(message: string) return ui.text { message, color = "$danger" } end),
+	ui.presence(form.failure, function(message: string)
+		return ui.text { message, color = "$danger" }
+	end),
 	ui.button {
-		function() return if form.pending:get() then "Saving…" else "Save" end,
+		function()
+			return if form.pending:get() then "Saving…" else "Save"
+		end,
 		disabled = form.pending,
 		on_click = form.submit,
 	},
@@ -287,6 +302,7 @@ return ui.column {
 | `valid`, `attempted`, `pending`, `failure` | every check passes; a submit has been tried; a submit is under way; what the last one raised |
 | `submit()` | checks every field: one wrong shows so, and the first wrong (top, then left) takes focus; all fine, runs `submit`. A handler as it is (`on_click = form.submit`) |
 | `reset(values?)` | back to the first values (or `values`), nothing shown wrong |
+| `cancel()` | stops a submit under way (a Cancel button): not `pending` any more, and what it awaits is not heard. A form gone (its component, a reload) cancels its own |
 
 `field` binds a control's `value`, marks the field left as it loses focus, gives it the field's `error`, and on a one-line input makes Enter submit the form. It works on `input`, `textarea`, `checkbox`, `slider`, `segmented`, `stepper`, `select` and `combobox`; `on_blur` and `on_key` given beside it still run.
 

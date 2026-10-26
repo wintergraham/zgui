@@ -1,0 +1,10 @@
+---
+title: API index
+description: Every function and value of ui and anime, with the type luau-lsp checks it against, read from zgx.d.luau when the site builds.
+---
+
+import LuauApi from '@/components/LuauApi.astro';
+
+Each entry is a member of `declare ui` or `declare anime` in [`zgx.d.luau`](https://github.com/zeronsh/zgx/blob/main/crates/zgx-script/types/zgx.d.luau), the definitions `zgx check` gives luau-lsp, with the comment it carries there. A name links to the page that covers it.
+
+<LuauApi />

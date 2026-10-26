@@ -20,7 +20,7 @@ Linux native probes (real X11/Wayland windows, input, IME, clipboard, accessibil
 ## Before you commit
 
 - `cargo fmt`, clippy with `-D warnings`, and the tests of every crate you touched.
-- Luau scripts: `cargo run -p zgx-script --bin zgx -- lint <dir>` and `... -- check <dir>` (luau-lsp), then `stylua` (2.6, `crates/zgx-script`).
+- Luau scripts: `cargo run -p zgx-script --bin zgx -- lint <dir>` and `... -- check <dir>` (luau-lsp), then `stylua .` (2.6, from the repository root: CI checks every Luau file).
 - A commit title says what is now true ("Wheel scrolling eases in whole pixels"), the body why.
 
 ## Principles
@@ -61,5 +61,6 @@ The interface is built once; Rust re-runs only what reads state that changed. `z
 
 - `docs/scripting.md` (scripts, state, animation, lint), `docs/reference/` (every Luau element and API), `crates/zgx-script/types/zgx.d.luau` (types luau-lsp checks).
 - `docs/composition.md`, `docs/styling.md`, `docs/layout.md` (Rust views).
+- `docs/agents/inspect.md`: `zgx-run --inspect` and `zgx inspect`, to see and drive a running Luau app (its tree, states, errors; clicks, typing, keys) by the targets tests use.
 - `docs/validation.md` (what is verified, on which platform), `docs/ROADMAP.md`, `docs/windows.md`, `docs/linux.md`.
 - `.github/workflows/ci.yml`: Linux, macOS and Windows jobs on every PR.

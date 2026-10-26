@@ -1,0 +1,16 @@
+---
+title: Microbenchmarks
+description: One state change, and one scroll step of 10,000 rows, timed headless in process CPU per operation, from the change to a frame ready to present.
+---
+
+import MicroCharts from '@/components/perf/MicroCharts.astro';
+
+Each figure is the median over batches after a warm-up, with the 10th to 90th percentile beside it. Each framework's frame is compared with the frames that do the same work: GPUI Fast's headless frame stops before the GPU encode, so it sits beside zgx's frame without one; Rune's and MyGo's include it (MyGo's also rasterizes on the CPU), beside zgx's with it. Lower is better.
+
+<MicroCharts />
+
+- **The change alone** ("write") is not compared: GPUI Fast, Rune and MyGo store the value and mark the window to draw, leaving all their work to the frame, where zgx's bindings update their nodes as the value is set. The frame is the figure that counts, and it includes the write.
+- **MyGo's frame** rasterizes its scene on the CPU, as its headless tester does, where a window would draw on the GPU; it is shown at a raster scale of 0.05×, which leaves its layout and paint and makes the raster almost free.
+- **Most of a frame with the GPU encode is what any Metal frame costs:** a bare Metal frame (a command buffer, one empty render pass, commit) takes 44–94 µs of process CPU back to back on this Mac, most of it in Metal's own threads.
+
+How they are defined and run: [microbenchmarks](/performance/methodology#microbenchmarks-one-state-change-one-scroll-step). Raw rows: [micro.jsonl](https://github.com/zeronsh/zgx/blob/main/site/micro.jsonl).

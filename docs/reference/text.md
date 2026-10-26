@@ -1,6 +1,6 @@
 # Text: text, rich, span, markdown
 
-`ui.text` shows one string in one style; `ui.rich` shows runs of differently styled text (`ui.span`s) as one paragraph. Both follow state without calling the script when their text is a template, and call it again only for a function.
+`ui.text` shows one string in one style; `ui.rich` shows runs of differently styled text (`ui.span`s) as one paragraph. Both follow state without calling the script when their text is a template or a state given as it is (`ui.text { count }`: a component's `ui.use_state`, which no template can name, as its value), and call it again only for a function.
 
 ```luau
 ui.text(content: Text | TextProps) -> Node
@@ -109,10 +109,23 @@ return ui.column {
 ## Markdown
 
 ```luau
+ui.markdown_view(props: MarkdownViewProps) -> Node
+```
+
+`ui.markdown_view { text }` draws markdown: paragraphs and headings of styled runs (bold, italic, struck, `code`, links), lists, quotes, rules, tables, and code blocks with their language and a Copy button, in the theme's colours and sizes (`$surface.sunken`, `$border.subtle`, `$text.tertiary`, `$font.size.*`), selectable as prose is. Its text is a string, a template, a state's (`"{reply}"`) or a function. As the text changes it parses only what changed and builds only the blocks whose value changed, so a reply streaming in grows by its last block, and every block before it keeps its nodes, layout and paint. Options: `breaks` (single newlines break lines), `paths` (repository paths are files), `copy = false` (no Copy buttons); the rest are a column's styles (`gap` between blocks is 10).
+
+```lua
+local reply = ui.state("reply", "Some **bold** text, then code:\n\n```lua\nprint(1)\n```")
+return ui.markdown_view { "{reply}", w = 520, text_size = 15 }
+```
+
+To draw blocks your own way, take them from `ui.markdown`:
+
+```luau
 ui.markdown(text: string, opts: MarkdownOptions?) -> { MarkdownBlock }
 ```
 
-`ui.markdown` parses markdown (CommonMark with tables, strikethrough and task lists; raw HTML dropped) into blocks for a script to draw its own way. A block has `t`: `p` (`s`: runs), `h` (`l`: level, `s`), `code` (`lang`, `text`), `ul` and `ol` (`start`, `items`: each item a list of blocks), `quote` (`b`: blocks), `hr`, `table` (`head`: cells, `rows`: rows of cells, a cell being runs) and `img` (`src`, `alt`). A tight list item's text is a `p` with `tight`. Quotes and lists nest 64 levels at most (a list level counts two); deeper ones show as the deepest level's blocks. A run is `{ x = text, b?, i?, c? (code), s? (strike), a? (link), f? (a file) }`.
+`ui.markdown` parses markdown (CommonMark with tables, strikethrough and task lists; raw HTML dropped) into blocks for a script to draw its own way. A block has `t`: `p` (`s`: runs), `h` (`l`: level, `s`), `code` (`lang`, `text`), `ul` and `ol` (`start`, `items`: each item a list of blocks), `quote` (`b`: blocks), `hr`, `table` (`head`: cells, `rows`: rows of cells, a cell being runs) and `img` (`src`, `alt`). A tight list item's text is a `p` with `tight`. Quotes and lists nest 64 levels at most (a list level counts two); deeper ones show as the deepest level's blocks. A run is `{ x = text, b?, i?, c? (code), s? (strike), a? (link), f? (a file) }`. The types say so: a `MarkdownBlock` is a union by `t`, so `if b.t == "code" then … b.lang … end` is checked, and a run is a `MarkdownRun`.
 
 | Option | Type | Default | |
 |---|---|---|---|
@@ -125,7 +138,7 @@ Without a `key`, the same text gives the same blocks. Rust hosts parse with `zgx
 ```lua
 local reply = ui.state("reply", "A **streaming** reply.\n\n- one\n- two")
 
-local function runs(list: { any }): Node
+local function runs(list: { MarkdownRun }): Node
 	local props: RichProps = { wrap = true }
 	for _, r in list do
 		table.insert(props, ui.span { r.x, literal = true, weight = if r.b then 600 else nil })
@@ -144,23 +157,30 @@ return ui.column {
 		if b.t == "ul" then
 			local items: { Child } = {}
 			for _, item in b.items do
-				table.insert(items, runs(item[1].s))
+				local first = item[1]
+				if first and first.t == "p" then
+					table.insert(items, runs(first.s))
+				end
 			end
 			return ui.column { gap = 4, items }
+		elseif b.t == "p" or b.t == "h" then
+			return runs(b.s)
 		end
-		return runs(b.s or {})
+		return ui.div {}
 	end),
 }
 ```
 
 ## Selectable text
 
-Text is not selectable unless asked, as in native apps. `selectable = true` on any node makes the text in it and everything it holds selectable as a web page's is: one selection runs across its texts, paragraphs, list rows and spans in document order. Drag to select; a double press selects a word and a triple press a paragraph, and dragging after either extends by words or paragraphs; Shift extends; ⌘A / Ctrl+A selects it all and ⌘C / Ctrl+C copies plain text (a tab between texts side by side, a blank line between blocks set apart). A secondary press on selected text offers Copy and Select All. Links and buttons inside still click; a drag that starts on one selects. Holding a drag past a scroll viewport's edge scrolls it, and a selection in `ui.list`'s rows outlives the rows it recycles. `selectable = false` keeps a part out (a toolbar, a timestamp). Markdown has no built-in view, so put `selectable = true` on the node you draw its blocks in, as above. [crates/zgx-script/examples/selectable](../../crates/zgx-script/examples/selectable/app.luau) draws a whole document (`cargo run -p zgx-script --example selectable`). The highlight follows CSS's `::selection`. `selection_color` and `selected_text_color` on the selectable node set its background and the selected glyphs' colour (a colour, a `"$token"`, a state or a function). The tokens `$selection`, `$selection.inactive` (window at the back), `$selection.text` and `$selection.text.inactive` (transparent, the default, keeps the glyphs' colours) and `$selection.radius` style it per subtree through `theme`: `ui.column { selectable = true, theme = { ["selection.text"] = "#ffffff", ["selection.radius"] = 3 }, … }`. Prose the examples ship (the agent trace, the streaming transcript, the notes preview) is selectable, as a browser's would be; controls and chrome are not.
+Text is not selectable unless asked, as in native apps. `selectable = true` on any node makes the text in it and everything it holds selectable as a web page's is: one selection runs across its texts, paragraphs, list rows and spans in document order. Drag to select; a double press selects a word and a triple press a paragraph, and dragging after either extends by words or paragraphs; Shift extends; ⌘A / Ctrl+A selects it all and ⌘C / Ctrl+C copies plain text (a tab between texts side by side, a blank line between blocks set apart). A secondary press on selected text offers Copy and Select All. Links and buttons inside still click; a drag that starts on one selects. Holding a drag past a scroll viewport's edge scrolls it, and a selection in `ui.list`'s rows outlives the rows it recycles. `selectable = false` keeps a part out (a toolbar, a timestamp). `ui.markdown_view` is selectable already; drawing `ui.markdown`'s blocks yourself, put `selectable = true` on the node you draw them in, as above. [crates/zgx-script/examples/selectable](../../crates/zgx-script/examples/selectable/app.luau) draws a whole document (`cargo run -p zgx-script --example selectable`). The highlight follows CSS's `::selection`. `selection_color` and `selected_text_color` on the selectable node set its background and the selected glyphs' colour (a colour, a `"$token"`, a state or a function). The tokens `$selection`, `$selection.inactive` (window at the back), `$selection.text` and `$selection.text.inactive` (transparent, the default, keeps the glyphs' colours) and `$selection.radius` style it per subtree through `theme`: `ui.column { selectable = true, theme = { ["selection.text"] = "#ffffff", ["selection.radius"] = 3 }, … }`. Prose the examples ship (the agent trace, the streaming transcript, the notes preview) is selectable, as a browser's would be; controls and chrome are not.
+
+On macOS a selection, or an input's, also answers the system's text services: the context menu offers Look Up “…” (⌃⌘D looks up without it), the Services menu takes it as plain text, and a service returning text replaces an editable selection. Selected text drags into inputs, where it moves (Option copies), and into other apps as plain text; a password's never leaves its field ([Rust: dragging text](../drag-drop.md#dragging-text)).
 
 ## Gotchas
 
 - Text from data is a template too: a commit message with `{id}` in it looks for state named `id` (an error if there is none), and `{{` shows as `{`. Pass `literal = true` (on `ui.text`, `ui.rich` or a span) for text the script didn't write.
-- A template names state by its key, not by its Luau variable: `"{count}"` shows `ui.state("count", …)` whatever the local is called, and `"{state.count}"` is state `state`'s field `count`, not a module's state. A name no state has is an error when the text is built.
+- A template names state by its key, not by its Luau variable: `"{count}"` shows `ui.state("count", …)` whatever the local is called (a component's `ui.use_state` has no key: give `ui.text` the state itself, `ui.text { count }`), and `"{state.count}"` is state `state`'s field `count`, not a module's state. A name no state has is an error when the text is built.
 - Text does not wrap by default, and a row shrinks it no narrower than it is (its min-content, unwrapped): `wrap = true` (in a box with a width) lets it wrap down to its longest word, or `min_w = 0, truncate = true` ends it with "…" in a row.
 - Span options are plain values, read once: a state or function there is not followed (its value at build time is used). Only the run's text follows state. To restyle a run, build the paragraph in a function, or use two texts.
 - A span's `font` only knows `"mono"`; any other family is ignored (`ui.text`'s `font` takes names).

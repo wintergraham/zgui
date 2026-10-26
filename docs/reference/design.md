@@ -53,8 +53,14 @@ return ui.column {
 	Button { tone = "ghost", size = "sm", "Cancel" },
 	-- Chosen by a function: restyled in Rust when `danger` changes.
 	ui.button {
-		variants = button { tone = function() return if danger:get() then "danger" else "solid" end },
-		on_click = function() danger:toggle() end,
+		variants = button {
+			tone = function()
+				return if danger:get() then "danger" else "solid"
+			end,
+		},
+		on_click = function()
+			danger:toggle()
+		end,
 		"Delete",
 	},
 	ui.button { variants = button, p = 0, "Its own padding wins" },
@@ -104,7 +110,12 @@ ui.theme.strict("warn")
 return ui.row {
 	gap = "$space.2",
 	p = "$space.3",
-	ui.div { w = 16, h = 16, rounded = "$radius.full", bg = ui.raw("#e5484d", "the brand mark's red, not a theme colour") },
+	ui.div {
+		w = 16,
+		h = 16,
+		rounded = "$radius.full",
+		bg = ui.raw("#e5484d", "the brand mark's red, not a theme colour"),
+	},
 	ui.text { "zgx", color = "$text.primary", text_size = "$font.size.lg" },
 }
 ```

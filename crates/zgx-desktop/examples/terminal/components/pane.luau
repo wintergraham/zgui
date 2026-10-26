@@ -175,6 +175,7 @@ return ui.component(function(props: Props)
 		end,
 		on_mount = function(el)
 			element = el
+			frames.set_pane_element(pane, el)
 			-- Arriving with a change, it fades in where it goes.
 			if (frames.frames:peek()).smooth then
 				anime.animate(el, { opacity = { 0, 1 }, duration = 220, ease = "outQuad" })
@@ -254,8 +255,11 @@ return ui.component(function(props: Props)
 					return { kind = "pane", id = pane }
 				end,
 				drag_preview = function()
-					return tabs.chip(pane)
+					return tabs.mini_pane(pane)
 				end,
+				-- Below the pointer, so where it would go shows.
+				drag_preview_anchor = { 0.5, 0 },
+				drag_preview_offset = { 0, 18 },
 				on_drag_end = function()
 					dragging:set {}
 					actions.hide_slot()

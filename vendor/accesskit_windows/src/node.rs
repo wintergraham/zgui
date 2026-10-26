@@ -23,7 +23,7 @@ use windows::{
     core::*,
     Win32::{
         Foundation::*,
-        System::{Com::*, Variant::*},
+        System::{Com::*, Ole::*, Variant::*},
         UI::Accessibility::*,
     },
 };
@@ -842,7 +842,8 @@ fn enqueue_property_change(
     ISelectionProvider,
     ITextProvider,
     IExpandCollapseProvider,
-    IWindowProvider
+    IWindowProvider,
+    IRawElementProviderAdviseEvents
 )]
 pub(crate) struct PlatformNode {
     pub(crate) context: Weak<Context>,
@@ -1198,6 +1199,41 @@ impl IRawElementProviderFragment_Impl for PlatformNode_Impl {
 }
 
 #[allow(non_snake_case)]
+/// zgx patch: UIA tells the fragment root which events clients listen for.
+impl IRawElementProviderAdviseEvents_Impl for PlatformNode_Impl {
+    fn AdviseEventAdded(&self, event_id: UIA_EVENT_ID, property_ids: *const SAFEARRAY) -> Result<()> {
+        self.advise(event_id, property_ids, true)
+    }
+    fn AdviseEventRemoved(&self, event_id: UIA_EVENT_ID, property_ids: *const SAFEARRAY) -> Result<()> {
+        self.advise(event_id, property_ids, false)
+    }
+}
+
+impl PlatformNode {
+    /// Record a client's handler for `event_id` (and, for property changes,
+    /// the properties in `property_ids`) on the context.
+    fn advise(&self, event_id: UIA_EVENT_ID, property_ids: *const SAFEARRAY, added: bool) -> Result<()> {
+        let mut ids = vec![event_id.0];
+        if event_id == UIA_AutomationPropertyChangedEventId && !property_ids.is_null() {
+            // SAFETY: UIA passes a one-dimensional SAFEARRAY of property ids
+            // (VT_I4), alive for the call.
+            unsafe {
+                let lower = SafeArrayGetLBound(property_ids, 1)?;
+                let upper = SafeArrayGetUBound(property_ids, 1)?;
+                for index in lower..=upper {
+                    let mut id = 0i32;
+                    SafeArrayGetElement(property_ids, &index, (&mut id as *mut i32).cast())?;
+                    ids.push(id);
+                }
+            }
+        }
+        if let Some(context) = self.context.upgrade() {
+            context.advise(&ids, added);
+        }
+        Ok(())
+    }
+}
+
 impl IRawElementProviderFragmentRoot_Impl for PlatformNode_Impl {
     fn ElementProviderFromPoint(&self, x: f64, y: f64) -> Result<IRawElementProviderFragment> {
         self.resolve_with_context(|node, context| {

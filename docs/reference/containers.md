@@ -71,10 +71,13 @@ The divider drags without running script (only the panes lay out again), shows a
 A strip of tabs and the panel of the chosen one, as WAI-ARIA's tabs and an editor's tab strip. One Tab stop: the arrows move among the tabs and the choice follows (mirrored right to left), Home and End go to the ends. A closable tab closes with its ×, Delete, or a middle click; closing the chosen one chooses its neighbour. Reorderable tabs drag along the strip, or move with ⌘ (Ctrl) Shift and an arrow. A strip too long for its width scrolls, and a menu at its end lists every tab.
 
 ```lua
-local items = ui.state("items", {
-	{ id = "a", label = "README.md", closable = true },
-	{ id = "b", label = "main.rs", closable = true },
-} :: { TabItem })
+local items = ui.state(
+	"items",
+	{
+		{ id = "a", label = "README.md", closable = true },
+		{ id = "b", label = "main.rs", closable = true },
+	} :: { TabItem }
+)
 local chosen = ui.state("chosen", "a")
 return ui.column {
 	w = 400,
@@ -105,10 +108,13 @@ return ui.column {
 Items in a hierarchy, as WAI-ARIA's tree and Finder's sidebar. The tree is one Tab stop and keeps focus; its current item is its active descendant, which assistive technology reads with its level and its place among its siblings. Up and Down move; Right opens an item and then enters it, Left closes it and then goes to its parent (mirrored right to left); Home and End go to the ends; typing goes to the next item starting with it; Enter or a double click activates. A click chooses, and a click on the chevron opens and closes. The rows are virtual: a tree of thousands builds only what shows.
 
 ```lua
-local items = ui.state("items", {
-	{ id = "src", label = "src", children = { { id = "main", label = "main.luau" } } },
-	{ id = "docs", label = "docs", lazy = true },
-} :: { TreeNode })
+local items = ui.state(
+	"items",
+	{
+		{ id = "src", label = "src", children = { { id = "main", label = "main.luau" } } },
+		{ id = "docs", label = "docs", lazy = true },
+	} :: { TreeNode }
+)
 local open = ui.state("open", {} :: { string })
 local current = ui.state("current", nil :: string?)
 return ui.column {
@@ -146,10 +152,13 @@ local people = ui.state("people", {
 	{ name = "Grace", age = 85 },
 	{ name = "Linus", age = 21 },
 })
-local columns = ui.state("columns", {
-	{ id = "name", title = "Name", width = 160, sortable = true, editable = true },
-	{ id = "age", title = "Age", width = 80, sortable = true, editable = true, align = "end" },
-} :: { GridColumn })
+local columns = ui.state(
+	"columns",
+	{
+		{ id = "name", title = "Name", width = 160, sortable = true, editable = true },
+		{ id = "age", title = "Age", width = 80, sortable = true, editable = true, align = "end" },
+	} :: { GridColumn }
+)
 local sort = ui.state("sort", nil :: GridSort?)
 return ui.column {
 	h = 240,

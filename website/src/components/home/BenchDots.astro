@@ -1,0 +1,67 @@
+---
+// Each test a row; each rival a mark at its figure as a multiple of zgx's,
+// on a log scale with zgx at 1×. Drawn in HTML and CSS: no script, and a
+// table underneath for screen readers.
+import { relativeTests, fmt } from '@/lib/perf';
+
+interface Props {
+  metric: 'cpu_percent_one_core' | 'gpu_power_mw';
+  id: string;
+}
+const { metric, id } = Astro.props;
+const tests = relativeTests(metric);
+const unit = metric === 'gpu_power_mw' ? 'mW' : '%';
+const min = 0.8;
+const max = 8;
+const x = (r: number) => (100 * (Math.log(Math.min(max, Math.max(min, r))) - Math.log(min))) / (Math.log(max) - Math.log(min));
+const ticks = [1, 2, 4, 8];
+const shown = (v: number) => (unit === '%' ? `${fmt(v, 1)}%` : `${fmt(v, 0)} mW`);
+---
+
+<div class="dots" id={id}>
+  <div class="dots-axis" aria-hidden="true">
+    <span class="dots-axis-label">{metric === 'gpu_power_mw' ? 'GPU power' : 'CPU'}, as a multiple of zgx’s</span>
+    <div class="dots-ticks">
+      {ticks.map((t) => <span style={`left:${x(t)}%`}>{t}×</span>)}
+    </div>
+    <span class="dots-axis-end">zgx</span>
+  </div>
+  <ol class="dots-rows" aria-hidden="true">
+    {
+      tests.map((t) => (
+        <li class="dots-row">
+          <span class="dots-label">
+            {t.scene}
+            {t.mode && <span class="dots-mode"> · {t.mode}</span>}
+          </span>
+          <span class="dots-track">
+            {ticks.map((tick) => <span class={tick === 1 ? 'dots-one' : 'dots-grid'} style={`left:${x(tick)}%`} />)}
+            {t.rivals.map((r) => (
+              <span class={`dot dot-${r.framework}`} style={`left:${x(r.ratio)}%`} title={`${r.name}: ${shown(r.value)}, ${r.ratio.toFixed(1)}× zgx’s ${shown(t.zgx)}`} />
+            ))}
+          </span>
+          <span class="dots-value">{shown(t.zgx)}</span>
+        </li>
+      ))
+    }
+  </ol>
+  <div class="sr-only">
+  <table>
+    <caption>{metric === 'gpu_power_mw' ? 'GPU power' : 'CPU'} by test: zgx, and each rival as a multiple of zgx</caption>
+    <thead>
+      <tr><th scope="col">Test</th><th scope="col">zgx</th>{tests[0].rivals.map((r) => <th scope="col">{r.name}</th>)}</tr>
+    </thead>
+    <tbody>
+      {
+        tests.map((t) => (
+          <tr>
+            <th scope="row">{t.scene}{t.mode && `, ${t.mode}`}</th>
+            <td>{shown(t.zgx)}</td>
+            {t.rivals.map((r) => <td>{shown(r.value)} ({r.ratio.toFixed(1)}×)</td>)}
+          </tr>
+        ))
+      }
+    </tbody>
+  </table>
+  </div>
+</div>

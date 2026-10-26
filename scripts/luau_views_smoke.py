@@ -18,7 +18,10 @@ what it prints.
 - Jump (`el:scroll_to_row(2000, { align = "center" })`) on a measured list
   of 3,000 rows one to three lines tall, guessed 30 points: row 2000's five
   lines (108 pixels) centred in the list to the pixel, its neighbours at
-  their measured heights (48 and 28)."""
+  their measured heights (48 and 28);
+- a chip dragged onto the board (`on_drag`) springs it open once it has
+  rested there past the delay (`on_drag_spring`, 0.5 s), not before, once
+  however it then moves within it, and drops there (`on_drop`)."""
 import argparse
 import json
 import os
@@ -41,6 +44,8 @@ BOARD_BG, GRID, RED, GREEN = (16, 16, 16), (255, 0, 255), (255, 0, 0), (0, 255, 
 # The app's places, in its window's points: the board, the buttons' centres,
 # and the list's box.
 BOARD = (0, 0, 400, 400)
+# The drag chip's centre, and where on the board (empty) its drag rests.
+DRAG, REST = (650, 20), (60, 340)
 ZOOM, JUMP = (450, 20), (550, 20)
 LIST = (400, 40, 800, 400)
 # Rows (`lines` in the app): a line is 20 points, a row's padding 8.
@@ -104,10 +109,11 @@ def main():
                 raise AssertionError(f"timed out waiting for {what}: {json.dumps(checks, indent=2)}")
             time.sleep(.05)
 
-    def session(name, env, shot, origin, wheel, click):
+    def session(name, env, shot, origin, wheel, click, pointer):
         """The checks on one display: `shot()` captures it, `origin()` finds
         the window's content, `wheel()` pans the board, `click(x, y)` presses
-        at the window's points."""
+        at the window's points, `pointer(x, y, held)` moves there (at the
+        window's points) with the button held or not."""
         app, log = launch(f"{name}-app", [str(args.runner), str(APP)], env)
         text = lambda: log.read_text(errors="replace")
         draws = lambda: re.findall(r"^DRAW_ITEM (\d+)$", text(), re.M)
@@ -231,6 +237,36 @@ def main():
         else:
             checks[f"{name}: row 2000 shows, whole"] = False
         checks[f"{name}: the jump draws nothing on the board"] = len(draws()) == 3
+
+        # The chip dragged to an empty spot on the board, resting: it
+        # springs open past the delay, once, and takes the drop.
+        sprung = lambda: text().count("SPRUNG chip")
+        pointer(*DRAG, False)
+        pointer(*DRAG, True)
+        entered = None
+        for step in range(1, 11):
+            x = DRAG[0] + (REST[0] - DRAG[0]) * step // 10
+            pointer(x, DRAG[1] + (REST[1] - DRAG[1]) * step // 10, True)
+            # The delay runs from the step that comes onto the board
+            # (moving on within it does not start it again).
+            if entered is None and x < BOARD[2]:
+                entered = time.monotonic()
+            time.sleep(.03)
+        until(f"{name}: the drag", lambda: "DRAGGING chip" in text())
+        time.sleep(max(0., entered + .3 - time.monotonic()))
+        early, read_at = sprung(), time.monotonic() - entered
+        # Read later than the delay's start allows (a slow machine), it says
+        # nothing about before.
+        checks[f"{name}: not sprung before the delay"] = early == 0 if read_at < .45 else f"read late, {read_at:.2f} s"
+        until(f"{name}: sprung", sprung, 5)
+        checks[f"{name} sprung after"] = after = round(time.monotonic() - entered, 2)
+        checks[f"{name}: sprung past the delay"] = after >= .45
+        pointer(REST[0] + 30, REST[1], True)
+        time.sleep(1)
+        checks[f"{name}: sprung once, however it moves within"] = sprung() == 1
+        pointer(REST[0] + 30, REST[1], False)
+        until(f"{name}: the drop", lambda: "DROPPED chip" in text())
+        checks[f"{name}: the drag drops on the board"] = True
         stop(app)
 
     try:
@@ -285,7 +321,15 @@ def main():
             def x11_click(x, y):
                 xdo("mousemove", "--window", x11_window(), x, y, "click", 1)
 
-            session("x11", x11, x11_shot, x11_origin, x11_wheel, x11_click)
+            held = [False]
+
+            def x11_pointer(x, y, down):
+                xdo("mousemove", "--window", x11_window(), x, y)
+                if down != held[0]:
+                    xdo("mousedown" if down else "mouseup", 1)
+                    held[0] = down
+
+            session("x11", x11, x11_shot, x11_origin, x11_wheel, x11_click, x11_pointer)
 
             # Wayland: a headless sway, its window at the output's top left,
             # driven by a virtual pointer and captured by grim.
@@ -327,8 +371,18 @@ def main():
                 pointer.click()
                 park()
 
+            sway_held = [False]
+
+            def sway_pointer(x, y, down):
+                pointer.move_to(x, y, 1280, 960)
+                if down != sway_held[0]:
+                    pointer.button(down)
+                    sway_held[0] = down
+                    if not down:
+                        park()
+
             park()
-            session("wayland", wayland, sway_shot, sway_origin, sway_wheel, sway_click)
+            session("wayland", wayland, sway_shot, sway_origin, sway_wheel, sway_click, sway_pointer)
             pointer.close()
             stop(sway)
             for process in reversed(processes):

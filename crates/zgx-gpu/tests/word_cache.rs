@@ -79,3 +79,43 @@ fn a_word_cached_left_to_right_is_shaped_again_right_to_left() {
     glyphs(&mut fonts, "a (");
     assert_eq!(glyphs(&mut fonts, rtl), fresh);
 }
+
+/// A cache replaced (a renderer at rest drops its words) starts its
+/// attribute ids afresh: a word shaped just after, under the same
+/// attributes as before, is not kept under an id the new cache then gives
+/// other attributes. Its bold is served bold.
+#[test]
+fn a_word_shaped_after_the_cache_is_replaced_is_kept_for_its_own_attributes() {
+    use cosmic_text::{
+        Attrs, AttrsList, BufferLine, Family, FontSystem, LineEnding, Shaping, Weight,
+    };
+    let gpu = GpuRenderer::new(16, 16).unwrap();
+    let fonts = gpu.text_system();
+    let mut fonts = fonts.borrow_mut();
+    FontData::new(GEIST.to_vec()).unwrap().install(&mut fonts);
+    let glyphs = |fonts: &mut FontSystem, weight: Weight| -> Vec<(usize, u16, u32)> {
+        let attrs = Attrs::new().family(Family::Name("Geist")).weight(weight);
+        let mut line = BufferLine::new(
+            "Requests",
+            LineEnding::None,
+            AttrsList::new(&attrs),
+            Shaping::Advanced,
+        );
+        let shape = line.shape(fonts, 8);
+        shape
+            .spans
+            .iter()
+            .flat_map(|span| &span.words)
+            .flat_map(|word| &word.glyphs)
+            .map(|glyph| (glyph.start, glyph.glyph_id, glyph.x_advance.to_bits()))
+            .collect()
+    };
+    fonts.shape_run_cache = Default::default();
+    let bold = glyphs(&mut fonts, Weight::BOLD);
+    fonts.shape_run_cache = Default::default();
+    let regular = glyphs(&mut fonts, Weight::NORMAL);
+    assert_ne!(regular, bold, "the variable font draws bold wider");
+    fonts.shape_run_cache = Default::default();
+    glyphs(&mut fonts, Weight::NORMAL);
+    assert_eq!(glyphs(&mut fonts, Weight::BOLD), bold);
+}

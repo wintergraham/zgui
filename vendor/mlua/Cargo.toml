@@ -13,7 +13,7 @@
 edition = "2024"
 rust-version = "1.88"
 name = "zgx-mlua"
-version = "0.12.2"
+version = "0.12.3"
 authors = [
     "Aleksandr Orlenko <zxteam@pm.me>",
     "kyren <catherine@kyju.org>",
@@ -76,7 +76,10 @@ luajit52 = [
     "luajit",
     "ffi/luajit52",
 ]
-luau = ["ffi/luau"]
+luau = [
+    "ffi/luau",
+    "dep:luau0-src",
+]
 luau-jit = [
     "luau",
     "ffi/luau-codegen",
@@ -127,6 +130,13 @@ optional = true
 [dependencies.ffi]
 version = "0.13.0"
 package = "mlua-sys"
+
+# zgx patch: mlua-sys builds whichever Luau 0.22 resolves, and Luau 744
+# (luau0-src 0.22.1) fails mlua 0.12.2's setup ("attempt to load a text
+# chunk (mode is 'b')"): held to 0.22.0 (Luau 740) until mlua takes it.
+[dependencies.luau0-src]
+version = "=0.22.0"
+optional = true
 
 [dependencies.futures-util]
 version = "0.3"

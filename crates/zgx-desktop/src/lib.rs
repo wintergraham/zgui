@@ -37,6 +37,8 @@ mod linux_spelling;
 #[cfg(target_os = "linux")]
 mod linux_zenity;
 mod local_time;
+#[cfg(target_os = "macos")]
+mod look_up;
 mod native_drag;
 mod native_events;
 mod native_prompt;
@@ -47,6 +49,9 @@ mod portal_dialog;
 #[cfg(target_os = "linux")]
 mod portal_parent;
 mod scrollers;
+#[cfg(target_os = "macos")]
+mod services;
+mod thumbnail;
 mod url;
 #[cfg(target_os = "linux")]
 mod wayland_data;
@@ -75,7 +80,9 @@ pub use native_events::{ApplicationEvent, ApplicationEventError};
 pub use native_prompt::{PromptButtons, PromptLevel, PromptOptions, PromptResponse};
 pub use url::{OpenUrlError, open_url};
 pub use window_chrome::{Glass, GlassMaterial, Titlebar};
-pub use window_info::{DisplayInfo, DisplaySelector, WindowBounds, WindowCapabilities, WindowInfo};
+pub use window_info::{
+    DisplayInfo, DisplaySelector, WindowBounds, WindowCapabilities, WindowInfo, WindowLevel,
+};
 mod native_host;
 #[cfg(target_os = "macos")]
 pub use native_host::{BackdropReport, NativeDiagnostics, NativeViewReport};
@@ -106,6 +113,7 @@ mod scoped_task;
 mod scroll_resample;
 mod system_colors;
 mod touch;
+mod wheel_tape;
 pub use scoped_task::ScopedTask;
 
 #[cfg(doctest)]

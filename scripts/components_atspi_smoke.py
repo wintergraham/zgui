@@ -202,6 +202,23 @@ def main():
                         fail(f"`{name}` is a {node.get_role_name()!r}, not {roles}")
                 checks.append("roles and names")
 
+                # An invalid field: so flagged, its error message the text
+                # that shows it (a relation, not said again), and a valid
+                # one not flagged.
+                email = wait_for(lambda: find("Probe email"), "the email field")
+                if not state(email, Atspi.StateType.INVALID_ENTRY):
+                    fail("the field with an error doesn't say it is invalid")
+                if state(find("Probe quantity"), Atspi.StateType.INVALID_ENTRY):
+                    fail("a valid field says it is invalid")
+                messages = [relation.get_target(index) for relation in email.get_relation_set()
+                            if relation.get_relation_type() == Atspi.RelationType.ERROR_MESSAGE
+                            for index in range(relation.get_n_targets())]
+                if [(m.get_name(), m.get_role_name()) for m in messages] != [("An email is required", "label")]:
+                    fail(f"the field's error message is {[(m.get_name(), m.get_role_name()) for m in messages]}")
+                if "An email is required" in (email.get_description() or ""):
+                    fail("the shown error is said again in the description: " + email.get_description())
+                checks.append("an invalid field, its error message a relation to the text showing it")
+
                 # The grid: a table of its rows (the header's too, and those
                 # not built) and columns, several of whose rows can be
                 # selected.

@@ -160,25 +160,90 @@ fn rejected_outside_and_escape_drags_end_without_drop() {
     view.unmount();
 }
 #[test]
-fn removing_source_disposes_preview_and_payload() {
+fn a_drag_outlives_its_removed_source_and_drops_where_it_led() {
     let mut ui = Ui::new(400., 200.);
     let value = Rc::new(());
     let weak = Rc::downgrade(&value);
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let (dropped, ended) = (log.clone(), log.clone());
     let source = ui.mount(
         div()
             .size(100., 80.)
             .on_drag(move || value.clone())
-            .drag_preview(|_: &Rc<()>| div().size(40., 40.)),
+            .drag_preview(|_: &Rc<()>| div().size(40., 40.))
+            .on_drag_end(move |_: &Rc<()>, accepted| {
+                ended.borrow_mut().push(format!("end:{accepted}"))
+            }),
+    );
+    let target = ui.mount(
+        div()
+            .absolute()
+            .left(200.)
+            .size(100., 80.)
+            .on_drop(move |_: &Rc<()>, _| dropped.borrow_mut().push("drop".to_owned())),
     );
     ui.prepare_frame();
+    let children = ui.scene.borrow().children(ui.root()).len();
     down(&ui, 20., 20.);
     moved(&ui, 35., 20.);
     assert!(ui.input.is_dragging());
+    // Gone (moved elsewhere by what the drag did): the drag goes on, its
+    // preview following the pointer.
     source.unmount();
     ui.prepare_frame();
+    assert!(ui.input.is_dragging(), "the drag outlives its source");
+    let preview = ui
+        .input
+        .drag_state()
+        .and_then(|d| d.preview)
+        .expect("its preview");
+    moved(&ui, 230., 30.);
+    let at = ui.scene.borrow().bounds(preview);
+    assert_eq!((at.x, at.y), (230. - 20., 30. - 20.), "the preview follows");
+    up(&ui, 230., 30.);
+    assert_eq!(
+        &*log.borrow(),
+        &["drop", "end:true"],
+        "dropped, and its source's listeners hear it end"
+    );
     assert!(!ui.input.is_dragging());
-    assert!(weak.upgrade().is_none());
-    assert!(ui.scene.borrow().children(ui.root()).is_empty());
+    assert!(weak.upgrade().is_none(), "the payload goes with the drag");
+    assert_eq!(
+        ui.scene.borrow().children(ui.root()).len(),
+        children - 1,
+        "and the preview"
+    );
+    target.unmount();
+}
+/// What a removed source's listeners hold goes once the drag ends, and may
+/// reach input as it goes.
+#[test]
+fn a_removed_sources_listeners_drop_after_the_drag_lets_input_go() {
+    struct Touches(zgx::input::InputDispatcher, Rc<RefCell<bool>>);
+    impl Drop for Touches {
+        fn drop(&mut self) {
+            *self.1.borrow_mut() = self.0.is_dragging();
+        }
+    }
+    let mut ui = Ui::new(400., 200.);
+    let dropped_while_dragging = Rc::new(RefCell::new(true));
+    let held = Touches(ui.input.clone(), dropped_while_dragging.clone());
+    let source = ui.mount(div().size(100., 80.).on_drag(|| Card(1)).on_drag_end(
+        move |_: &Card, _| {
+            let _ = &held;
+        },
+    ));
+    ui.prepare_frame();
+    down(&ui, 20., 20.);
+    moved(&ui, 35., 20.);
+    source.unmount();
+    ui.prepare_frame();
+    up(&ui, 230., 30.);
+    assert!(!ui.input.is_dragging());
+    assert!(
+        !*dropped_while_dragging.borrow(),
+        "dropped as the drag ended"
+    );
 }
 #[test]
 fn nearest_typed_destination_wins_and_removed_target_cannot_receive_drop() {
@@ -214,26 +279,50 @@ fn nearest_typed_destination_wins_and_removed_target_cannot_receive_drop() {
     source.unmount();
 }
 #[test]
-fn hidden_source_cancels_and_releases_preview() {
+fn a_hidden_source_keeps_its_drag_and_a_disabled_one_cancels_it() {
     let mut ui = Ui::new(400., 200.);
+    let ends = Rc::new(RefCell::new(Vec::new()));
+    let log = ends.clone();
     let source = ui.mount(
         div()
             .size(100., 80.)
             .on_drag(|| Card(1))
-            .drag_preview(|_: &Card| div().size(20., 20.)),
+            .drag_preview(|_: &Card| div().size(20., 20.))
+            .on_drag_end(move |_: &Card, accepted| log.borrow_mut().push(accepted)),
     );
     ui.prepare_frame();
     down(&ui, 20., 20.);
     moved(&ui, 35., 20.);
-    let mut style = ui.scene.borrow().style(source.node());
-    style.layout_options = Some(std::sync::Arc::new(zgx::layout::LayoutOptions {
-        visible: Some(false),
-        ..Default::default()
-    }));
-    ui.scene.borrow_mut().set_style(source.node(), style);
+    let set_visible = |ui: &Ui, visible: bool| {
+        let mut style = ui.scene.borrow().style(source.node());
+        style.layout_options = Some(std::sync::Arc::new(zgx::layout::LayoutOptions {
+            visible: Some(visible),
+            ..Default::default()
+        }));
+        ui.scene.borrow_mut().set_style(source.node(), style);
+        ui.prepare_frame();
+    };
+    // Hidden (its tab no longer shown): the drag goes on.
+    set_visible(&ui, false);
+    assert!(ui.input.is_dragging());
+    assert_eq!(
+        ui.scene.borrow().children(ui.root()).len(),
+        2,
+        "the preview stays"
+    );
+    moved(&ui, 60., 20.);
+    assert!(ui.input.is_dragging());
+    // Shown and disabled: it can no longer take input, so the drag ends.
+    set_visible(&ui, true);
+    ui.set_disabled(source.node(), true);
     ui.prepare_frame();
     assert!(!ui.input.is_dragging());
-    assert_eq!(ui.scene.borrow().children(ui.root()).len(), 1);
+    assert_eq!(&*ends.borrow(), &[false]);
+    assert_eq!(
+        ui.scene.borrow().children(ui.root()).len(),
+        1,
+        "its preview goes"
+    );
 }
 #[test]
 fn grouped_external_paths_route_once_to_nearest_handler() {
@@ -585,4 +674,104 @@ fn a_drag_may_move_its_window() {
     assert!(ui.input.drag_state().expect("dragging").moves_window);
     up(&ui, 30., 10.);
     assert!(!ui.input.is_dragging());
+}
+#[test]
+fn a_drag_resting_on_a_destination_springs_it_open_once() {
+    use std::time::{Duration, Instant};
+    let mut ui = Ui::new(400., 200.);
+    let sprang = Rc::new(RefCell::new(0));
+    let count = sprang.clone();
+    let view = ui.mount(
+        row()
+            .gap(20.)
+            .child(div().size(80., 80.).on_drag(|| Card(1)))
+            .child(
+                div()
+                    .size(100., 80.)
+                    .on_drop(|_: &Card, _| {})
+                    .on_drag_spring(move |_: &Card| {
+                        *count.borrow_mut() += 1;
+                        true
+                    }),
+            )
+            .child(div().size(100., 80.).on_drop(|_: &Card, _| {})),
+    );
+    ui.prepare_frame();
+    let later = |ms| Instant::now() + Duration::from_millis(ms);
+    down(&ui, 20., 20.);
+    moved(&ui, 110., 20.);
+    // Resting on it: it springs once the delay passes, not before.
+    let due = ui.input.next_spring_deadline().expect("waiting to spring");
+    assert!(
+        due <= later(500) && due > later(400),
+        "the platform's delay"
+    );
+    ui.advance_interactions(later(300)).unwrap();
+    assert_eq!(*sprang.borrow(), 0);
+    // Moving within it does not start the delay again.
+    moved(&ui, 150., 40.);
+    assert_eq!(ui.input.next_spring_deadline(), Some(due));
+    ui.advance_interactions(later(520)).unwrap();
+    assert_eq!(*sprang.borrow(), 1);
+    ui.advance_interactions(later(2000)).unwrap();
+    assert_eq!(*sprang.borrow(), 1, "once per stay");
+    assert!(ui.input.next_spring_deadline().is_none());
+    // Over another destination and back: it waits again, and Space springs
+    // it at once.
+    moved(&ui, 260., 20.);
+    moved(&ui, 150., 20.);
+    assert!(ui.input.next_spring_deadline().is_some());
+    pointer(
+        &ui,
+        InputEvent::KeyDown {
+            key: Key::Space,
+            modifiers: Modifiers::default(),
+            repeat: false,
+        },
+    );
+    assert_eq!(*sprang.borrow(), 2);
+    assert!(ui.input.is_dragging(), "Space does not end the drag");
+    up(&ui, 150., 20.);
+    assert!(
+        ui.input.next_spring_deadline().is_none(),
+        "nothing waits after the drag"
+    );
+    // Over another window a while and back: the delay starts again.
+    down(&ui, 20., 20.);
+    moved(&ui, 110., 20.);
+    ui.input.set_drag_away(&ui.scene, true);
+    ui.input.set_drag_away(&ui.scene, false);
+    let back = Instant::now();
+    moved(&ui, 110., 20.);
+    let due = ui.input.next_spring_deadline().expect("waiting to spring");
+    assert!(due >= back + zgx::input::SPRING_DELAY, "from the return");
+    up(&ui, 110., 20.);
+    assert_eq!(*sprang.borrow(), 2);
+    // Turned off by the platform: never.
+    ui.input.set_spring_delay(None);
+    down(&ui, 20., 20.);
+    moved(&ui, 110., 20.);
+    assert!(ui.input.next_spring_deadline().is_none());
+    ui.advance_interactions(later(5000)).unwrap();
+    assert_eq!(*sprang.borrow(), 2);
+    up(&ui, 110., 20.);
+    view.unmount();
+}
+#[test]
+fn an_anchored_preview_hangs_below_the_pointer_centred() {
+    let mut ui = Ui::new(400., 300.);
+    let view = ui.mount(
+        div()
+            .size(100., 80.)
+            .on_drag(|| Card(1))
+            .drag_preview_anchored((0.5, 0.), (0., 16.), |_: &Card| div().size(60., 40.)),
+    );
+    ui.prepare_frame();
+    down(&ui, 20., 20.);
+    moved(&ui, 150., 100.);
+    let preview = ui.input.drag_state().and_then(|d| d.preview).unwrap();
+    let at = ui.scene.borrow().bounds(preview);
+    assert_eq!((at.x, at.y, at.width), (150. - 30., 100. + 16., 60.));
+    up(&ui, 150., 100.);
+    view.unmount();
 }

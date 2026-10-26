@@ -1,0 +1,55 @@
+---
+import { fmt, microFrames, microGroups, text } from '@/lib/perf';
+const frames = microFrames();
+const us = (ns: number, median: number) => fmt(ns / 1000, median < 100_000 ? 1 : 0);
+---
+
+<div class="perf-charts">
+  {
+    Object.entries(text.micro_scenes).map(([key, info]) => {
+      const cells = frames[key] ?? {};
+      return (
+        <figure class="perf-chart not-prose">
+          <table class="perf-table">
+            <colgroup><col class="perf-col-mode" /><col class="perf-col-fw" /><col /></colgroup>
+            <caption>
+              <span class="perf-chart-title">{info.title}</span>
+              <span class="perf-chart-unit">µs of CPU per operation. {info.note}</span>
+            </caption>
+            <thead class="sr-only">
+              <tr><th scope="col">Frame</th><th scope="col">Framework</th><th scope="col">Median (p10–p90)</th></tr>
+            </thead>
+            {microGroups.map((group) => {
+              const present = group.members.filter(([k]) => cells[k]);
+              const top = Math.max(...present.map(([k]) => cells[k].median_ns)) || 1;
+              return (
+                <tbody>
+                  {present.map(([k, name], i) => {
+                    const row = cells[k];
+                    const fw = k.startsWith('zgx-luau') ? 'zgx-luau' : k.startsWith('zgx') ? 'zgx' : k;
+                    return (
+                      <tr data-fw={fw}>
+                        {i === 0 && <th scope="rowgroup" rowspan={present.length} class="perf-mode">{group.label}</th>}
+                        <th scope="row" class="perf-fw">{name}</th>
+                        <td>
+<div class="perf-cell">
+                          <span class="perf-track" aria-hidden="true" title={`${name}: ${us(row.median_ns, row.median_ns)} µs, p10–p90 ${us(row.p10_ns, row.median_ns)}–${us(row.p90_ns, row.median_ns)}`}>
+                            <span class="perf-bar" style={`width:${Math.max(0.6, (100 * row.median_ns) / top).toFixed(1)}%`} />
+                            <span class="perf-whisker" style={`left:${Math.min(100, (100 * row.p10_ns) / top).toFixed(1)}%;width:${Math.min(100 - (100 * row.p10_ns) / top, (100 * (row.p90_ns - row.p10_ns)) / top).toFixed(1)}%`} />
+                          </span>
+                          <span class="perf-value">{us(row.median_ns, row.median_ns)}</span>
+                          <span class="sr-only">(p10 {us(row.p10_ns, row.median_ns)} to p90 {us(row.p90_ns, row.median_ns)})</span>
+                        </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              );
+            })}
+          </table>
+        </figure>
+      );
+    })
+  }
+</div>

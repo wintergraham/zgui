@@ -6,9 +6,11 @@ on exit. This checks native behavior, not hardware GPU performance.
 """
 import argparse
 import contextlib
+import ctypes
 import json
 import os
 import pathlib
+import re
 import select
 import shutil
 import subprocess
@@ -75,9 +77,73 @@ def wait_for_wm(env, seconds=20):
         if check.startswith("0x") and "_NET_WM_NAME" in prop("-id", check, "_NET_WM_NAME") \
                 and "_NET_ACTIVE_WINDOW" in prop("-root", "_NET_SUPPORTED"):
             settle_keyboard(env, deadline)
+            start_keep_awake(env, check)
             return
         time.sleep(.05)
     raise RuntimeError("the window manager did not start")
+
+
+def start_keep_awake(env, check):
+    """`keep_awake` on `env`'s display, whose window manager's check window
+    is `check`, in a process of its own, which ends with the display or
+    this process."""
+    code = f"import sys; sys.path.insert(0, {str(pathlib.Path(__file__).resolve().parent)!r}); " \
+           f"import os, platform_smoke; platform_smoke.keep_awake(os.environ, {check!r}, {os.getpid()})"
+    subprocess.Popen([sys.executable, "-c", code], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+class _ClientMessage(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong), ("send_event", ctypes.c_int),
+                ("display", ctypes.c_void_p), ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                ("format", ctypes.c_int), ("data", ctypes.c_long * 5), ("pad", ctypes.c_long * 12)]
+
+
+_x11 = ctypes.CDLL("libX11.so.6")
+_x11.XOpenDisplay.argtypes, _x11.XOpenDisplay.restype = [ctypes.c_char_p], ctypes.c_void_p
+_x11.XInternAtom.argtypes, _x11.XInternAtom.restype = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int], ctypes.c_ulong
+_x11.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_long, ctypes.POINTER(_ClientMessage)]
+_x11.XFlush.argtypes = [ctypes.c_void_p]
+_x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+
+
+def keep_awake(env, check, parent, period=.5):
+    """Wake the window manager every `period` seconds while its display
+    lives, from a process of its own (`start_keep_awake`): Xlib exits the
+    process its display goes from. Openbox 3.6 keeps a queue of X events
+    of its own (obt/xqueue.c) beside Xlib's, filled when it looks ahead for
+    an event (managing a window, a timer), but its main loop's source asks
+    only XPending, Xlib's:
+    events left in its own queue wait for the next X traffic to wake it. On
+    a probe's idle desktop that is never, and a request the probe made (a
+    window to map, a key to close it, a desktop count) went unanswered: 10
+    stuck requests in 1,200 loaded starts were each answered as soon as an
+    unrelated root property changed. The wake is a client message of a type
+    no one knows (`_ZGX_WAKE`) sent to the root window for its substructure
+    redirect, which only the window manager selects: nothing else hears it,
+    and Openbox does nothing with it but wake."""
+    x11 = ctypes.CDLL("libX11.so.6")
+    x11.XOpenDisplay.argtypes, x11.XOpenDisplay.restype = [ctypes.c_char_p], ctypes.c_void_p
+    x11.XDefaultRootWindow.argtypes, x11.XDefaultRootWindow.restype = [ctypes.c_void_p], ctypes.c_ulong
+    x11.XInternAtom.argtypes, x11.XInternAtom.restype = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int], ctypes.c_ulong
+    x11.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_long,
+                               ctypes.POINTER(_ClientMessage)]
+    x11.XFlush.argtypes = [ctypes.c_void_p]
+    # The display's number may be another's by now: this one's window
+    # manager, or none.
+    found = subprocess.run(["xprop", "-root", "_NET_SUPPORTING_WM_CHECK"], env=env, capture_output=True, text=True)
+    display = x11.XOpenDisplay(env["DISPLAY"].encode())
+    if not display or found.stdout.rsplit("# ", 1)[-1].strip() != check:
+        return
+    root = x11.XDefaultRootWindow(display)
+    event = _ClientMessage(type=33, send_event=1, display=display, window=root,  # ClientMessage
+                           message_type=x11.XInternAtom(display, b"_ZGX_WAKE", 0), format=32)
+    substructure_redirect = 1 << 20
+    # Until the display goes, when Xlib exits this process, or the probe.
+    while os.getppid() == parent:
+        x11.XSendEvent(display, root, 0, substructure_redirect, ctypes.byref(event))
+        x11.XFlush(display)
+        time.sleep(period)
 
 
 def settle_keyboard(env, deadline):
@@ -88,10 +154,10 @@ def settle_keyboard(env, deadline):
     meanwhile reached the app instead of Openbox's Close, and the app stayed
     open (one probe run in thirty, under load). The window manager handles X
     events in order, so once it has answered a request sent after the key,
-    it has rebound: a desktop added and taken away. Openbox, already
-    showing its 4 desktops, left the request for 5 unanswered in 4 of 900
-    loaded starts (and the probe failed): one unanswered is sent again each
-    half second, and any it answers was sent after the key."""
+    it has rebound: a desktop added and taken away. A request left in
+    Openbox's own queue (`keep_awake`) is sent again each half second, which
+    wakes it; any it answers was sent after the key. The desktop count it
+    settled on, or None without one."""
     def desktops():
         found = subprocess.run(["xprop", "-root", "_NET_NUMBER_OF_DESKTOPS"], env=env, capture_output=True,
                                text=True).stdout.rsplit("=", 1)[-1].strip()
@@ -99,7 +165,7 @@ def settle_keyboard(env, deadline):
     subprocess.run(["xdotool", "key", "shift"], env=env, check=True)
     count = desktops()
     if count is None:
-        return
+        return None
     for want in (count + 1, count):
         asked = 0.
         while (shown := desktops()) != want:
@@ -113,6 +179,94 @@ def settle_keyboard(env, deadline):
                 subprocess.run(["xdotool", "set_num_desktops", str(want)], env=env, check=True)
                 asked = time.monotonic()
             time.sleep(.02)
+    return count
+
+
+def close_window(env, window):
+    """Ask `window` (an id) to close as a window manager does for Alt+F4 or
+    its close button: `WM_DELETE_WINDOW`, with no key sent. Under IBus's
+    asynchronous mode a key still being handled as the window closes (Alt+F4's
+    Alt) crashed ibus-x11 1.5.29 (SIGSEGV, 92 of 120 loaded runs with keys in
+    flight; none in its default synchronous mode), and libX11 waits for a
+    crashed input method's reply forever (#564)."""
+    display = _x11.XOpenDisplay(env["DISPLAY"].encode())
+    if not display:
+        raise RuntimeError("no display to close the window on")
+    try:
+        event = _ClientMessage(type=33, send_event=1, display=display, window=int(window, 0),  # ClientMessage
+                               message_type=_x11.XInternAtom(display, b"WM_PROTOCOLS", 0), format=32)
+        event.data[0] = _x11.XInternAtom(display, b"WM_DELETE_WINDOW", 0)
+        event.data[1] = 0  # CurrentTime
+        _x11.XSendEvent(display, int(window, 0), 0, 0, ctypes.byref(event))
+        _x11.XFlush(display)
+    finally:
+        _x11.XCloseDisplay(display)
+
+
+def wait_for_exit(app, env, output, seconds):
+    """Wait `seconds` for `app` to exit, as one closed should. One that is
+    still running is a hang on the way out: its threads' stacks and the
+    display go to `output`/display.log before the timeout is raised (one
+    native-ime run on CI printed its last words, its window closed, and
+    did not exit within 25 s)."""
+    try:
+        return app.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        dump_display(env, output, app.pid)
+        # The input method's side too (#564: blocked in an XIM round trip,
+        # the app waits on ibus-x11 or the two wait on each other).
+        with (output / "display.log").open("a") as log:
+            # Who holds each input method's selection (`@server=…`): with
+            # #578 an app asks before a round trip, and one still hung.
+            log.write("\n" + input_method_owners(env))
+            ibus = [pid for name in ("ibus-x11", "ibus-daemon", "ibus-ui-gtk3", "ibus-engine-lib")
+                    for pid in display_processes(env, name)]
+            for pid in ibus:
+                state = subprocess.run(["ps", "-o", "pid,stat,wchan:30,comm", "-p", str(pid)], capture_output=True,
+                                       text=True).stdout
+                stacks = subprocess.run(["sudo", "-n", "gdb", "-q", "-batch", "-p", str(pid), "-ex",
+                                         "thread apply all bt 25"], capture_output=True, text=True, timeout=60)
+                log.write(f"\n$ ps; gdb -p {pid}\n{state}{stacks.stdout}{stacks.stderr}")
+            if not ibus:
+                log.write("\nno IBus process on this display\n")
+        raise
+
+
+def input_method_owners(env):
+    """Each XIM server the root names (`XIM_SERVERS`) and who owns its
+    selection: the window, and what xwininfo says of it."""
+    import ctypes
+    x11 = ctypes.CDLL("libX11.so.6")
+    x11.XOpenDisplay.argtypes, x11.XOpenDisplay.restype = [ctypes.c_char_p], ctypes.c_void_p
+    x11.XInternAtom.argtypes, x11.XInternAtom.restype = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int], ctypes.c_ulong
+    x11.XGetSelectionOwner.argtypes, x11.XGetSelectionOwner.restype = [ctypes.c_void_p, ctypes.c_ulong], ctypes.c_ulong
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    servers = subprocess.run(["xprop", "-root", "XIM_SERVERS"], env=env, capture_output=True, text=True).stdout
+    names = re.findall(r"@server=[^,\s]+", servers)
+    display = x11.XOpenDisplay(env["DISPLAY"].encode())
+    if not display:
+        return "input method owners: no display\n"
+    report = f"input method owners ({servers.strip()}):\n"
+    for name in names:
+        owner = x11.XGetSelectionOwner(display, x11.XInternAtom(display, name.encode(), 1))
+        info = subprocess.run(["xwininfo", "-id", hex(owner)], env=env, capture_output=True, text=True).stdout \
+            if owner else ""
+        report += f"{name}: owner {hex(owner)}\n{info}"
+    x11.XCloseDisplay(display)
+    return report
+
+
+def display_processes(env, name):
+    """The processes called `name` on `env`'s display (by their DISPLAY)."""
+    found = []
+    for proc in pathlib.Path("/proc").iterdir():
+        try:
+            if proc.name.isdigit() and (proc / "comm").read_text().strip() == name and \
+                    f"DISPLAY={env.get('DISPLAY')}\0".encode() in (proc / "environ").read_bytes():
+                found.append(int(proc.name))
+        except OSError:
+            continue
+    return found
 
 
 def dump_display(env, output, pid=None):

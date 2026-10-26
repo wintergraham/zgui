@@ -137,26 +137,40 @@ instructions. A window that loses its kept frame to a change no patch
 makes keeps one again after two frames in a row that would have patched
 (#446).
 
-Anything else draws whole: a container repainting, a composite change, a
-node mounted or removed, a layer, an effect, a shader fill or polyline.
-Patching those too was measured first and is waiting. The plan was to
-re-walk each changed subtree from what its root inherited, splice its
-items over the old range, and offset the quads of rows that only
-translated. Measured with retired instructions in `apps_bench`, warm,
-it would save little:
+A plain box among the repainted leaves (a flat colour, or a box without
+decoration, shadows or a pass over its content, outside any clip region)
+is made straight into its place by the quad and clip code the frame loop
+uses, rather than through the frame loop: about 900 instructions a box,
+found and made, rather than 1,250. Heavy `stream` renders 6% fewer instructions again
+(3,150 K to 2,955 K a frame), and a single bound colour write about 1.5%
+fewer.
 
-- **Mail's archive** (31 repaints a frame, 12 newly mounted nodes, 40%
-  of the window damaged) renders 1.7–3 M instructions a frame for about
-  1,100 instances. 6–11 newly mounted texts are shaped each frame, which
-  patching cannot avoid. Copying the unchanged items instead of making
-  them again would save about 0.15 M a frame, and offsetting the moved
-  rows about 0.1 M. That is roughly 1 M of the interaction's 18.4 M
-  (script 6.5 M, layout 4.0 M, paint 4.2 M).
-- **The dashboard's** sort, filter and feed tick paint under 1 M of 43–54
-  M; their `update` phase is 17–45 M.
+One that layout alone moved or resized (the flush marks it `BOX_ONLY`)
+and that is drawn as one quad keeps its quad's colours, corners and
+border. Only its box is written, with its shading, its cull against the
+clip and its draw worked out again. That costs about a third of making it
+again, and heavy `stream` renders 7% fewer instructions (2,424 K to
+2,243 K a frame).
 
-So the reactive update and layout phases come first. Patching subtrees
-is worth doing when paint is again a large share of an interaction.
+A repainted subtree (a container repainting, a composite change, nodes
+mounted or removed under it) is walked again from what its root
+inherited, its items made as a frame makes them, and spliced over the
+range its old items held (#615). Splicing pays only while the subtrees
+are under a quarter of the window's items and the damage covers at least
+half of it. Below that, drawing the frame as usual walks less, and the
+frame is drawn so. The heavy dashboard's `both` mode (a feed streaming
+while its list scrolls, every frame) renders 7.9% fewer instructions at 1×
+and 2×, and 11.6% fewer at 1.5×, where the scroll can't be copied. Its
+`stream` mode renders 2.9% fewer. Its frames no longer walk the whole
+window.
+
+Moving the items of rows that only translated, instead of making them
+again, was measured and dropped. It is exact only on whole device pixels
+at a power-of-two scale, and checking and moving each row's quads costs
+more than making them again from their cached shapes. With it, heavy
+`both` rendered 5% more than with plain splicing.
+
+Anything else draws whole: a layer, an effect, a shader fill or polyline.
 
 ## Accepted costs
 

@@ -2089,6 +2089,25 @@ impl MacTerminal {
     }
 }
 impl TerminalBackend for MacTerminal {
+    fn snapshot(&self, max_width: u32) -> Option<std::sync::Arc<zgx::image::ImageData>> {
+        // Ghostty's renderer makes the view's layer an IOSurface layer, its
+        // contents the IOSurface it last drew (BGRA, premultiplied).
+        let layer = self.view.layer()?;
+        // SAFETY: `contents` is a CALayer property, an object or nil.
+        let contents: *mut AnyObject = unsafe { msg_send![&*layer, contents] };
+        if contents.is_null() {
+            return None;
+        }
+        // SAFETY: `contents` is a live CF object (the layer holds it); its
+        // type is compared with IOSurface's before it is used as one.
+        let surface = unsafe {
+            if iosurface::CFGetTypeID(contents.cast()) != iosurface::IOSurfaceGetTypeID() {
+                return None;
+            }
+            contents.cast::<c_void>()
+        };
+        iosurface::thumbnail(surface, max_width)
+    }
     fn run(&self, command: TerminalCommand) {
         let surface = self.view.ivars().surface.get();
         match command {
@@ -2191,5 +2210,37 @@ mod tests {
         );
         assert_eq!(shell_escape("/tmp/a'b&c$d"), r"/tmp/a\'b\&c\$d");
         assert_eq!(shell_escape("/plain/path.jpg"), "/plain/path.jpg");
+    }
+}
+
+/// Reading a terminal's last frame (an IOSurface of Ghostty's) into a
+/// thumbnail.
+mod iosurface {
+    use std::ffi::c_void;
+
+    #[link(name = "IOSurface", kind = "framework")]
+    unsafe extern "C" {
+        pub fn IOSurfaceGetTypeID() -> usize;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        pub fn CFGetTypeID(object: *const c_void) -> usize;
+    }
+
+    /// `surface` (live, BGRA with premultiplied alpha) scaled down by a whole
+    /// factor to at most `max_width` pixels wide, each pixel the average of
+    /// those it covers, as straight-alpha RGBA.
+    pub fn thumbnail(
+        surface: *const c_void,
+        max_width: u32,
+    ) -> Option<std::sync::Arc<zgx::image::ImageData>> {
+        // SAFETY: `surface` is a live IOSurface of four bytes a pixel (the
+        // caller checked its type, and its layer holds it).
+        unsafe {
+            zgx_gpu::iosurface::with_pixels(surface, |bytes, width, height, stride| {
+                crate::thumbnail::image(bytes, width, height, stride, max_width as usize)
+            })
+            .flatten()
+        }
     }
 }

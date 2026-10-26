@@ -91,6 +91,29 @@ impl View {
             }
         })
     }
+    /// Spring open as a drag of `T` rests here (`DragPhase::Spring`): after
+    /// the platform's spring-loading delay, or at once on Space. `spring`
+    /// says whether it did (a tab that already shows does not), and the
+    /// event goes no further if so. The node must take the drag
+    /// (`on_drop`, `on_drop_when`) for a drag to rest on it.
+    pub fn on_drag_spring<T: 'static>(self, mut spring: impl FnMut(&T) -> bool + 'static) -> Self {
+        self.on_event(move |cx| {
+            if cx.phase == EventPhase::Capture || cx.default_prevented() {
+                return;
+            }
+            let InputEvent::Drag(event) = &cx.event else {
+                return;
+            };
+            if event.phase != DragPhase::Spring {
+                return;
+            }
+            let sprang = event.payload.downcast_ref::<T>().is_some_and(&mut spring);
+            if sprang {
+                cx.prevent_default();
+                cx.stop_propagation();
+            }
+        })
+    }
     /// Render an ordinary component as the retained pointer-following preview.
     /// Its top-left follows the pointer minus the grab point, so a same-sized
     /// preview stays under the spot where the source was pressed.
@@ -104,16 +127,28 @@ impl View {
         offset: (f32, f32),
         build: impl FnMut(&T) -> View + 'static,
     ) -> Self {
-        self.preview(build, Some(offset))
+        self.preview(build, Some(((0., 0.), offset)))
+    }
+    /// A preview whose point `anchor` (fractions of its own size: `(0.5,
+    /// 0.)` its top middle) is `offset` from the pointer: `((0.5, 0.), (0.,
+    /// 16.))` hangs it below the pointer, centred, leaving in view what
+    /// the drag is over, which a preview at the grab point would cover.
+    pub fn drag_preview_anchored<T: 'static>(
+        self,
+        anchor: (f32, f32),
+        offset: (f32, f32),
+        build: impl FnMut(&T) -> View + 'static,
+    ) -> Self {
+        self.preview(build, Some((anchor, offset)))
     }
     fn preview<T: 'static>(
         mut self,
         mut build: impl FnMut(&T) -> View + 'static,
-        cursor_offset: Option<(f32, f32)>,
+        place: Option<((f32, f32), (f32, f32))>,
     ) -> Self {
         self.rare_mut().drag_preview = Some(PreviewBuilder {
             build: Box::new(move |payload| payload.downcast_ref::<T>().map(&mut build)),
-            cursor_offset,
+            place,
         });
         self
     }
@@ -204,7 +239,9 @@ impl View {
 type BuildPreview = Box<dyn FnMut(&Action) -> Option<View>>;
 pub(crate) struct PreviewBuilder {
     build: BuildPreview,
-    cursor_offset: Option<(f32, f32)>,
+    /// Its anchor (fractions of its size) and that anchor's offset from the
+    /// pointer; `None`: its top-left at the pointer minus the grab point.
+    place: Option<((f32, f32), (f32, f32))>,
 }
 struct Preview(Option<ViewHandle>);
 impl Drop for Preview {
@@ -245,6 +282,11 @@ pub(crate) fn mount(ui: &mut Ui, source: NodeId, mut builder: PreviewBuilder) {
                     if ui.popup_previews() {
                         ui.scene.borrow_mut().set_popup(node, true);
                     }
+                    // Placed by its size: laid out now, so its first frame
+                    // shows it where it goes.
+                    if builder.place.is_some_and(|(anchor, _)| anchor != (0., 0.)) {
+                        ui.scene.borrow_mut().prepare_layout();
+                    }
                     preview.0 = Some(view);
                 }
             }
@@ -257,8 +299,14 @@ pub(crate) fn mount(ui: &mut Ui, source: NodeId, mut builder: PreviewBuilder) {
             _ => {}
         }
         if let Some(view) = &preview.0 {
-            let (x, y) = match builder.cursor_offset {
-                Some((x, y)) => (event.x + x, event.y + y),
+            let (x, y) = match builder.place {
+                Some(((ax, ay), (dx, dy))) => {
+                    let size = ui.scene.borrow().layout_bounds(view.node());
+                    (
+                        event.x - ax * size.width + dx,
+                        event.y - ay * size.height + dy,
+                    )
+                }
                 None => (event.x - event.grab_x, event.y - event.grab_y),
             };
             if ui.scene.borrow().is_popup(view.node()) {

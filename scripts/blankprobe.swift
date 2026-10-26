@@ -38,7 +38,13 @@ let columns: [Double] = [4, 8, 12]
 let blank = 24.0
 
 func distance(_ a: [Double], _ b: [Double]) -> Double {
-    zip(a, b).map { ($0 - $1) * ($0 - $1) }.reduce(0, +)
+    // A plain loop: the closure form's operator overloads timed out the type
+    // checker ("unable to type-check this expression in reasonable time").
+    var sum = 0.0
+    for (x, y) in zip(a, b) {
+        sum += (x - y) * (x - y)
+    }
+    return sum
 }
 
 func longestBlank(_ image: CGImage, scale: Double) -> Double {

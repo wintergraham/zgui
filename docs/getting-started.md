@@ -6,23 +6,23 @@ zgx runs on macOS, Windows and Linux. On Linux, install the fontconfig, xkbcommo
 
 ## In Rust
 
-Add the crates. Until zgx's first release is on crates.io, from its repository:
+Add the crates, from crates.io:
+
+```toml
+[dependencies]
+zgx = "0.1.2"
+zgx-desktop = "0.1.2"
+# The component library (a data grid, a tree, tabs, toasts…), if you use it.
+zgx-components = "0.1.2"
+```
+
+Or, for what is not released yet ([the changelog](../CHANGELOG.md) says what), from its repository:
 
 ```toml
 [dependencies]
 zgx = { git = "https://github.com/zeronsh/zgx" }
 zgx-desktop = { git = "https://github.com/zeronsh/zgx" }
-# The component library (a data grid, a tree, tabs, toasts…), if you use it.
 zgx-components = { git = "https://github.com/zeronsh/zgx" }
-```
-
-Once it is released, from crates.io, with nothing else:
-
-```toml
-[dependencies]
-zgx = "0.1"
-zgx-desktop = "0.1"
-zgx-components = "0.1"
 ```
 
 That builds as it is: zgx's own forks (of cosmic-text, taffy and mlua) come with it as crates of their own. A few more of its dependencies are patched in zgx's repository alone (winit, wgpu-hal, the AccessKit adapters), and an app gets their releases instead, which zgx builds with, short of those fixes: Wayland popups open in their window, Metal frames take more command buffers, VoiceOver misses headings and grid rows, a field's error message is said only in its description ([releasing](releasing.md) lists them). To have them too, add the patches your app's build then takes from zgx's repository (a dependency's `[patch]` never reaches an app):
@@ -223,9 +223,11 @@ To ship it on Windows (an icon, a manifest, one instance per user, an installer)
 The same interface as a script, hot reloaded as you save it, without a Rust host of your own. Install the runner and the checker:
 
 ```sh
-LUAU_CXXFLAGS=-DNDEBUG cargo install --git https://github.com/zeronsh/zgx zgx-run
-LUAU_CXXFLAGS=-DNDEBUG cargo install --git https://github.com/zeronsh/zgx zgx-script --bin zgx
+LUAU_CXXFLAGS=-DNDEBUG cargo install zgx-run
+LUAU_CXXFLAGS=-DNDEBUG cargo install zgx-script --bin zgx
 ```
+
+(For what is not released yet, `--git https://github.com/zeronsh/zgx` before the crate's name installs from the repository.)
 
 (`zgx-run` uses mimalloc as its allocator, for 6–10% less CPU on script, text and layout work at about 2 MB more memory; add `--no-default-features` to keep the system's. `LUAU_CXXFLAGS=-DNDEBUG` builds Luau without its asserts, a fifth faster: the repository's own builds set it in `.cargo/config.toml`, which an install doesn't read. Without it, `zgx-run` says so as it starts.)
 

@@ -110,3 +110,32 @@ heard `ThemeChanged`, so its content kept its mode too.
    (`src/platform_impl/windows/{event_loop,dark_mode}.rs`). Checked by
    `scripts/windows_settings_smoke.py --both`: switched both ways while
    the window runs, its title bar and its content follow within a second.
+
+## X11: no waiting on an input method that has gone
+
+libX11 learns that an input method's server went (ibus-x11 killed or
+crashed) from its window's `DestroyNotify`, which only filtering an event
+handles, and winit hears of it then (`xim_destroy_callback`). A synchronous
+call in between, `XSetICFocus` (which reaches `XGetICValues`) or the preedit
+spot's `XSetICValues`, waits in `_XimRead` for a reply that never comes, and
+the event loop with it: on CI, native-ime's app hung as its window closed,
+ibus-x11 gone (zgx#564). Before focusing, unfocusing or moving the spot, the
+input method's server is asked for by its selection (`@server=name`, the
+X server answers): owned by no one, the input method counts as destroyed,
+as the callback would have it (`ime/mod.rs`, `InputMethod::server_name` in
+`ime/input_method.rs`).
+
+## macOS: the Services menu on a window's selection
+
+AppKit offers a view's selection to the Services menu (a translator, Make
+New Sticky Note, Search With…) only if the view answers
+`validRequestorForSendType:returnType:` and writes the selection on
+`writeSelectionToPasteboard:types:`, and puts a returned text in its place on
+`readSelectionFromPasteboard:`. winit's view did none, so Services never
+acted on zgx's text.
+
+10. `platform::macos::SelectionServices` and `set_selection_services`: an
+    app's answers (the selected text, whether it can be replaced, replacing
+    it), kept on the main thread; winit's view answers the three messages
+    from it for plain text, and passes any other request to `NSView`
+    (`view.rs`).

@@ -670,6 +670,11 @@ struct State {
     visit: Option<drag::Visit>,
     /// How the last drag ended, until its host takes it (`take_drag_ended`).
     drag_ended: Option<drag::DragEnded>,
+    /// The destination the drag rests on, toward springing it open.
+    spring: Option<drag::SpringArm>,
+    /// The spring-loading delay the host set (`set_spring_delay`): `None`
+    /// until it does, `Some(None)` where it turned spring-loading off.
+    spring_delay: Option<Option<std::time::Duration>>,
     /// The physical key of the key event being dispatched (`set_key_code`).
     key_code: Option<Rc<str>>,
     /// The scroll view a wheel gesture is latched to, the axis it moves
@@ -1574,8 +1579,9 @@ impl InputDispatcher {
         if count != 0 {
             self.state.borrow_mut().clicks.0 = None;
         }
-        // An activation carries the keys held as it was made (a ⌘-click).
-        let held = if matches!(event, InputEvent::Activate) {
+        // An activation carries the keys held as it was made (a ⌘-click),
+        // and a drag's phases the keys held over it (Option to copy).
+        let held = if matches!(event, InputEvent::Activate | InputEvent::Drag(_)) {
             self.state.borrow().modifiers
         } else {
             Modifiers::default()
@@ -1610,6 +1616,9 @@ impl InputDispatcher {
                 | InputEvent::PointerLeave
                 | InputEvent::PointerCancel
                 | InputEvent::Activate
+                // A drop says what keys are held (Option copies a dragged
+                // selection rather than moving it).
+                | InputEvent::Drag(_)
         ) {
             modifiers
         } else {
@@ -3598,4 +3607,4 @@ mod disabled_observer_tests {
 
 #[path = "input_drag.rs"]
 mod drag;
-pub use drag::{DragEnded, DragEvent, DragItem, DragPhase, DragState};
+pub use drag::{DragEnded, DragEvent, DragItem, DragPhase, DragState, DraggedText, SPRING_DELAY};

@@ -39,6 +39,13 @@ pub struct InputMethod {
 }
 
 impl InputMethod {
+    /// zgx patch: the name its server holds a selection by (`@server=` it),
+    /// for an input method opened by name (`@im=ibus`); none for the
+    /// locale's own.
+    pub fn server_name(&self) -> Option<&str> {
+        self._name.strip_prefix("@im=").filter(|name| !name.is_empty() && *name != "none")
+    }
+
     fn new(xconn: &Arc<XConnection>, im: ffi::XIM, name: String) -> Option<Self> {
         let mut styles: *mut XIMStyles = std::ptr::null_mut();
 

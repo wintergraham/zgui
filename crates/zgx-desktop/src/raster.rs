@@ -235,9 +235,13 @@ impl Raster {
                                 self.image(item.bounds, clip, &image, item.effects);
                             }
                         }
-                        NodeKind::Image(image) => {
-                            self.image(item.bounds, clip, image, item.effects)
-                        }
+                        NodeKind::Image(image) => self.image_revealed(
+                            item.bounds,
+                            clip,
+                            image,
+                            item.effects,
+                            scene.shader_uniforms(item.id).params,
+                        ),
                         NodeKind::Canvas(canvas) => {
                             // A grid under its drawing, within its box.
                             if scene.has_grid_fills()
@@ -455,13 +459,28 @@ impl Raster {
         for round in rounded.iter().flatten() {
             let r = round.rect;
             let [tl, tr, br, bl] = round.radii;
-            for (x, y, radius) in [
-                (r.x, r.y, tl),
-                (r.x + r.width - tr, r.y, tr),
-                (r.x + r.width - br, r.y + r.height - br, br),
-                (r.x, r.y + r.height - bl, bl),
-            ] {
-                let Some(square) = intersect(Rect::new(x, y, radius, radius), clip) else {
+            // A feathered clip fades a band all round, its corners in it:
+            // four strips that don't overlap (each pixel saved once).
+            let feather = round.feather.points();
+            let band = feather.max(tl).max(tr).max(br).max(bl);
+            let areas = if feather > 0. {
+                let (w, h) = (band.min(r.width / 2.), band.min(r.height / 2.));
+                [
+                    Rect::new(r.x, r.y, r.width, h),
+                    Rect::new(r.x, r.y + r.height - h, r.width, h),
+                    Rect::new(r.x, r.y + h, w, r.height - 2. * h),
+                    Rect::new(r.x + r.width - w, r.y + h, w, r.height - 2. * h),
+                ]
+            } else {
+                [
+                    Rect::new(r.x, r.y, tl, tl),
+                    Rect::new(r.x + r.width - tr, r.y, tr, tr),
+                    Rect::new(r.x + r.width - br, r.y + r.height - br, br, br),
+                    Rect::new(r.x, r.y + r.height - bl, bl, bl),
+                ]
+            };
+            for area in areas {
+                let Some(square) = intersect(area, clip) else {
                     continue;
                 };
                 let (x0, y0, x1, y1) = self.region(square);
@@ -521,6 +540,21 @@ impl Raster {
         }
     }
     fn image(&mut self, bounds: Rect, clip: Rect, image: &zgx::image::ImageData, effects: Effects) {
+        self.image_revealed(bounds, clip, image, effects, [[0.; 4]; 4]);
+    }
+    /// `image`, characters revealed by `reveal` (its node's shader
+    /// parameters; see `ImageData::characters`).
+    fn image_revealed(
+        &mut self,
+        bounds: Rect,
+        clip: Rect,
+        image: &zgx::image::ImageData,
+        effects: Effects,
+        reveal: [[f32; 4]; 4],
+    ) {
+        if let zgx::image::ImageEffect::Characters(pixel) = image.effect() {
+            return self.characters(bounds, clip, image, effects, pixel, reveal);
+        }
         let transform = image.paint_transform(bounds);
         let Some(inverse) = transform.inverse() else {
             return;
@@ -529,6 +563,7 @@ impl Raster {
             return;
         };
         let (x0, y0, x1, y1) = self.region(visible);
+        let dot = image.dither();
         for y in y0..y1 {
             for x in x0..x1 {
                 let (local_x, local_y) = inverse.point(x as f32 + 0.5, y as f32 + 0.5);
@@ -539,16 +574,149 @@ impl Raster {
                 {
                     continue;
                 }
-                let sx = (((local_x - bounds.x) / bounds.width * image.width() as f32) as u32)
+                // Dithered: sampled at its dot's centre on the screen's grid.
+                let cell = (
+                    (x as f32 / dot.max(1.)).floor(),
+                    (y as f32 / dot.max(1.)).floor(),
+                );
+                let (sample_x, sample_y) = if dot > 0. {
+                    inverse.point((cell.0 + 0.5) * dot, (cell.1 + 0.5) * dot)
+                } else {
+                    (local_x, local_y)
+                };
+                let sx = (((sample_x - bounds.x) / bounds.width * image.width() as f32).max(0.)
+                    as u32)
                     .min(image.width() - 1);
-                let sy = (((local_y - bounds.y) / bounds.height * image.height() as f32) as u32)
+                let sy = (((sample_y - bounds.y) / bounds.height * image.height() as f32).max(0.)
+                    as u32)
                     .min(image.height() - 1);
                 let i = ((sy * image.width() + sx) * 4) as usize;
                 let p = &image.pixels()[i..i + 4];
+                let [r, g, b, a] = if dot > 0. {
+                    dithered([p[0], p[1], p[2], p[3]], cell.0 as u32, cell.1 as u32)
+                } else {
+                    [p[0], p[1], p[2], p[3]]
+                };
                 blend(
                     &mut self.pixels[y * self.width + x],
-                    Color(p[0], p[1], p[2], p[3]),
+                    Color(r, g, b, a),
                     effects.opacity * edge_alpha(local_y, bounds, effects.edge_fade),
+                );
+            }
+        }
+    }
+    /// `ImageData::characters`, as the GPU draws it: cells of 6 by 8 font
+    /// pixels on the screen's grid, a glyph each over the image dimmed, those
+    /// the reveal's front hasn't reached empty and those in its band a glyph
+    /// alone.
+    fn characters(
+        &mut self,
+        bounds: Rect,
+        clip: Rect,
+        image: &zgx::image::ImageData,
+        effects: Effects,
+        pixel: f32,
+        reveal: [[f32; 4]; 4],
+    ) {
+        let transform = image.paint_transform(bounds);
+        let Some(inverse) = transform.inverse() else {
+            return;
+        };
+        let Some(visible) = intersect(image.paint_bounds(bounds), clip) else {
+            return;
+        };
+        let texel = |x: f32, y: f32| -> [f32; 4] {
+            let (lx, ly) = inverse.point(x, y);
+            let sx = (((lx - bounds.x) / bounds.width * image.width() as f32).max(0.) as u32)
+                .min(image.width() - 1);
+            let sy = (((ly - bounds.y) / bounds.height * image.height() as f32).max(0.) as u32)
+                .min(image.height() - 1);
+            let i = ((sy * image.width() + sx) * 4) as usize;
+            let p = &image.pixels()[i..i + 4];
+            [p[0], p[1], p[2], p[3]].map(|c| c as f32 / 255.)
+        };
+        let (cw, ch) = (6. * pixel, 8. * pixel);
+        let [front_at, band, ragged, _] = reveal[0];
+        let [dx, dy, _, _] = reveal[1];
+        let (x0, y0, x1, y1) = self.region(visible);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                let (lx, ly) = inverse.point(px, py);
+                if lx < bounds.x
+                    || lx >= bounds.x + bounds.width
+                    || ly < bounds.y
+                    || ly >= bounds.y + bounds.height
+                {
+                    continue;
+                }
+                let (cx, cy) = ((px / cw).floor(), (py / ch).floor());
+                let cell = (cx as u32, cy as u32);
+                let (centre_x, centre_y) = ((cx + 0.5) * cw, (cy + 0.5) * ch);
+                // As draw.wgsl: the picture fades in per pixel behind the
+                // band, glyphs scatter ahead of it, scrambling until it comes.
+                let reach = |x: f32, y: f32| {
+                    let qx = ((x / self.width as f32 - 0.5 - dx) * 2.).abs();
+                    let qy = ((y / self.height as f32 - 0.5 - dy) * 2.).abs();
+                    front_at - (qx.powi(4) + qy.powi(4)).sqrt().sqrt()
+                };
+                let (mut shown, mut glyph_alpha, mut scrambling, mut scramble) = (1., 1., false, 0);
+                if band > 0. {
+                    shown = smoothstep(band * 0.35, band * 1.35, reach(px, py));
+                    let into = (reach(centre_x, centre_y)
+                        + (cell_hash(cell.0, cell.1) - 0.5) * ragged)
+                        / band;
+                    let present = cell_hash(cell.0.wrapping_add(77), cell.1.wrapping_add(13))
+                        < into.clamp(0., 1.).powf(0.7);
+                    glyph_alpha = if present {
+                        smoothstep(0., 0.6, into)
+                    } else {
+                        0.
+                    };
+                    scrambling = into < 1.;
+                    scramble = (into.max(0.) * 12.) as u32;
+                }
+                let at = texel(centre_x, centre_y);
+                let lum = (0.299 * at[0] + 0.587 * at[1] + 0.114 * at[2]) * at[3];
+                let index = if scrambling {
+                    1 + (cell_hash(
+                        cell.0
+                            .wrapping_add(scramble.wrapping_mul(7).wrapping_add(1)),
+                        cell.1.wrapping_add(scramble),
+                    ) * 9.999) as u32
+                } else {
+                    (((lum - 0.3) / 0.65).clamp(0., 1.).powf(1.6) * 10.999) as u32
+                };
+                let (lo, hi) = GLYPHS[index as usize];
+                let (fx, fy) = (
+                    ((px - cx * cw) / pixel).floor() as u32,
+                    ((py - cy * ch) / pixel).floor() as u32,
+                );
+                let lit = fx < 5 && fy < 7 && {
+                    let bits = if fy < 6 { lo >> (fy * 5) } else { hi };
+                    (bits >> (4 - fx)) & 1 == 1
+                };
+                let peak = at[0].max(at[1]).max(at[2]).max(0.25);
+                let ink = [at[0] / peak, at[1] / peak, at[2] / peak];
+                let own = texel(px, py);
+                let k = if lit {
+                    glyph_alpha * (1. + (0.65 - 1.) * shown)
+                } else {
+                    0.
+                };
+                // Premultiplied, then back to straight for `blend`.
+                let premul =
+                    |i: usize| ink[i] * at[3] * k + own[i] * own[3] * 0.88 * shown * (1. - k);
+                let alpha = at[3] * k + own[3] * shown * (1. - k);
+                if alpha <= 0. {
+                    continue;
+                }
+                let rgb = [premul(0) / alpha, premul(1) / alpha, premul(2) / alpha];
+                let byte = |v: f32| (v * 255.).round().clamp(0., 255.) as u8;
+                blend(
+                    &mut self.pixels[y * self.width + x],
+                    Color(byte(rgb[0]), byte(rgb[1]), byte(rgb[2]), byte(alpha)),
+                    effects.opacity * edge_alpha(ly, bounds, effects.edge_fade),
                 );
             }
         }
@@ -1377,6 +1545,111 @@ mod tests {
         assert_eq!(at(&pixels, 31, 11), 0x10141c);
     }
     #[test]
+    fn dithered_images_light_or_dim_each_dot() {
+        let mut s = scene();
+        let flat = zgx::image::ImageData::new(8, 8, [200u8, 100, 50, 255].repeat(64)).unwrap();
+        let node = s.append(
+            s.root(),
+            NodeKind::Image(std::sync::Arc::new(flat.dithered(2.))),
+            Style {
+                width: Some(40.),
+                height: Some(40.),
+                ..Default::default()
+            },
+        );
+        let mut raster = Raster::new(100, 80);
+        let (pixels, full) = incremental_and_full(&mut raster, &mut s);
+        assert_eq!(pixels, full);
+        let at = |pixels: &[u32], x: usize, y: usize| pixels[y * 100 + x];
+        // Threshold 0 lit, 15 and 14 dimmed, as the GPU draws them.
+        assert_eq!(at(&pixels, 1, 1), 0xff8040);
+        assert_eq!(at(&pixels, 0, 6), 0x100804);
+        assert_eq!(at(&pixels, 4, 2), 0x100804);
+        assert_eq!(at(&pixels, 2, 2), 0xff8040);
+        s.set_kind(node, NodeKind::Image(std::sync::Arc::new(flat)));
+        let (pixels, _) = incremental_and_full(&mut raster, &mut s);
+        assert_eq!(at(&pixels, 0, 6), 0xc86432);
+    }
+    #[test]
+    fn characters_draw_a_glyph_a_cell_and_reveal_cell_by_cell() {
+        let mut s = scene();
+        let flat = zgx::image::ImageData::new(8, 8, [240u8, 200, 160, 255].repeat(64)).unwrap();
+        let node = s.append(
+            s.root(),
+            NodeKind::Image(std::sync::Arc::new(flat.characters(1.))),
+            Style {
+                width: Some(100.),
+                height: Some(80.),
+                ..Default::default()
+            },
+        );
+        let mut raster = Raster::new(100, 80);
+        let (pixels, full) = incremental_and_full(&mut raster, &mut s);
+        assert_eq!(pixels, full);
+        let at = |pixels: &[u32], x: usize, y: usize| pixels[y * 100 + x];
+        // Bright (0.81), it picks `8`, whose second row starts lit: its ink
+        // over the image dimmed, as the GPU draws it; its top row's first
+        // pixel, unlit, the image dimmed alone.
+        assert_eq!(at(&pixels, 0, 1), 0xf0c8a0);
+        assert_eq!(at(&pixels, 0, 0), 0xd3b08d);
+        // The front short of the middle: nothing (the background shows).
+        s.set_shader_uniforms(
+            node,
+            zgx::decoration::ShaderUniforms {
+                time: 0.,
+                params: [[-0.1, 0.2, 0., 0.], [0.; 4], [0.; 4], [0.; 4]],
+            },
+        );
+        let (pixels, _) = incremental_and_full(&mut raster, &mut s);
+        assert_eq!(at(&pixels, 50, 40), 0x10141c);
+        assert_eq!(at(&pixels, 0, 2), 0x10141c);
+    }
+    #[test]
+    fn feathered_clips_fade_in_from_their_edge() {
+        let mut s = scene();
+        let card = s.append(
+            s.root(),
+            NodeKind::Panel {
+                layout: Layout::Overlay,
+                quad: zgx::scene::QuadStyle {
+                    radius: 1000.,
+                    decoration: Some(std::sync::Arc::new(zgx::decoration::Decoration {
+                        clip_feather: 10.,
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+            },
+            Style {
+                width: Some(40.),
+                height: Some(40.),
+                clip: true,
+                ..Default::default()
+            },
+        );
+        s.set_transform(card, Transform { x: 30., y: 10. });
+        s.append(
+            card,
+            NodeKind::Rect(Color(255, 0, 0, 255)),
+            Style {
+                width: Some(40.),
+                height: Some(40.),
+                ..Default::default()
+            },
+        );
+        let mut raster = Raster::new(100, 80);
+        let (pixels, full) = incremental_and_full(&mut raster, &mut s);
+        assert_eq!(pixels, full);
+        let red = |pixels: &[u32], x: usize, y: usize| (pixels[y * 100 + x] >> 16) & 255;
+        // A circle of radius 20 at (50, 30): whole within 10 of its edge,
+        // part-way 3 inside, the background past it.
+        assert_eq!(red(&pixels, 50, 30), 0xff);
+        assert_eq!(red(&pixels, 50, 21), 0xff);
+        let part = red(&pixels, 50, 13);
+        assert!(part > 0x18 && part < 0xd0, "{part:x}");
+        assert_eq!(pixels[11 * 100 + 31], 0x10141c);
+    }
+    #[test]
     fn content_blurs_spread_and_masks_hide_their_layers() {
         let mut s = scene();
         let red = rectangle(&mut s, 30., Color(255, 0, 0, 255));
@@ -1576,7 +1849,57 @@ fn rounded_coverage(round: &zgx::scene::RoundRect, x: f32, y: f32) -> f32 {
     };
     let (dx, dy) = (qx.abs() - half_w + radius, qy.abs() - half_h + radius);
     let outside = (dx.max(0.).powi(2) + dy.max(0.).powi(2)).sqrt() + dx.max(dy).min(0.) - radius;
+    let feather = round.feather.points();
+    if feather > 0. {
+        // Faded in over `feather` from the edge, as the GPU's `rounded`.
+        let t = (-outside / feather).clamp(0., 1.);
+        return t * t * (3. - 2. * t);
+    }
     (0.5 - outside).clamp(0., 1.)
+}
+/// `ImageData::characters`' font, as draw.wgsl's `glyph`: ` .-+xXS80#@`,
+/// 5 by 7 pixels, rows 0 to 5 five bits each in the first, row 6 the second.
+const GLYPHS: [(u32, u32); 11] = [
+    (0, 0),
+    (402653184, 12),
+    (1015808, 0),
+    (139432064, 0),
+    (340083712, 17),
+    (581052977, 17),
+    (35078671, 30),
+    (588727854, 14),
+    (597347886, 14),
+    (368409930, 10),
+    (561700398, 15),
+];
+/// WGSL's `smoothstep`.
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0., 1.);
+    t * t * (3. - 2. * t)
+}
+/// A cell's own random number, 0 to 1, as draw.wgsl's `cell_hash`.
+fn cell_hash(x: u32, y: u32) -> f32 {
+    let mut h = x
+        .wrapping_mul(1664525)
+        .wrapping_add(y.wrapping_mul(1013904223))
+        .wrapping_add(0x9e3779b9);
+    h ^= h >> 16;
+    h = h.wrapping_mul(2246822519);
+    h ^= h >> 13;
+    h = h.wrapping_mul(3266489917);
+    h ^= h >> 16;
+    (h & 16777215) as f32 / 16777216.
+}
+/// `ImageData::dithered`'s two levels for the dot at (`x`, `y`) (in dots):
+/// the colour at full value where its brightest channel passes the dot's 4x4
+/// Bayer threshold, else 8% of it, as the GPU's.
+fn dithered([r, g, b, a]: [u8; 4], x: u32, y: u32) -> [u8; 4] {
+    const BAYER: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+    let peak = r.max(g).max(b) as f32;
+    let bright = peak / 255. > (BAYER[y as usize % 4][x as usize % 4] as f32 + 0.5) / 16.;
+    let gain = if bright { 255. / peak.max(1.) } else { 0.08 };
+    let level = |c: u8| (c as f32 * gain).round().min(255.) as u8;
+    [level(r), level(g), level(b), a]
 }
 fn rounded_distance(x: f32, y: f32, bounds: Rect, radius: f32) -> f32 {
     let r = radius.max(0.).min(bounds.width.min(bounds.height) * 0.5);

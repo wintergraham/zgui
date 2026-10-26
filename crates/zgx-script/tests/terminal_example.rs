@@ -424,6 +424,47 @@ impl App {
         self.pointer = (tx, ty);
         self.settle();
     }
+    /// Display frames until `done` holds, or five seconds pass (timers run
+    /// in real time); whether it held.
+    fn wait_until(&mut self, mut done: impl FnMut(&mut Self) -> bool) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            self.h.frame();
+            if done(self) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        false
+    }
+    /// Show the grip of the terminal pane at `pane` (the pointer near its
+    /// top) and press it.
+    fn press_grip(&mut self, pane: Rect) {
+        let node = self
+            .h
+            .natives
+            .nodes()
+            .into_iter()
+            .find(|n| self.h.ui.scene.borrow().bounds(*n) == pane)
+            .unwrap();
+        let Some(zgx::native_view::NativeContent::Terminal(term)) = self.h.natives.content(node)
+        else {
+            panic!("no terminal")
+        };
+        term.set_pointer(Some((pane.width / 2., 10.)));
+        self.settle();
+        // The grip: centered, 6 points below the pane's top.
+        let (x, y) = (pane.x + pane.width / 2., pane.y + 1. + 6. + 11.);
+        self.h
+            .ui
+            .dispatch(zgx::input::InputEvent::PointerMove { x, y });
+        self.h.ui.dispatch(zgx::input::InputEvent::PointerDown {
+            x,
+            y,
+            button: zgx::input::PointerButton::Primary,
+        });
+        self.pointer = (x, y);
+    }
     fn release(&mut self, (x, y): (f32, f32)) {
         use zgx::input::{InputEvent, PointerButton};
         self.h.ui.dispatch(InputEvent::PointerUp {
@@ -842,7 +883,15 @@ fn any_theme_styles_it_the_light_theme_too() {
 
 /// A plugin with a panel, as terminal.rs would find it and load it.
 fn notes_plugin(status: &str) -> (Value, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(format!("zterm-notes-{}-{status}", std::process::id()));
+    // A directory of its own: tests run side by side, and one rewriting a
+    // shared file (truncated, then written) as another loads it gave that
+    // one an empty plugin, no panel.
+    static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "zterm-notes-{}-{made}-{status}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let entry = dir.join("init.luau");
     std::fs::write(
@@ -1395,4 +1444,227 @@ fn a_panels_bar_keeps_its_clicks_while_the_grip_shows() {
     app.h.click("hn-back");
     app.settle();
     assert!(app.h.find("story-7").is_some(), "back at the feed");
+}
+
+#[test]
+fn a_dragged_tab_is_a_small_window_of_its_panes_as_laid_out() {
+    let mut app = App::new();
+    app.run("split_right");
+    app.run("new_tab");
+    let strip = app.tab_names();
+    // The first tab: two panes side by side.
+    let grab = (strip[0].x + 4., strip[0].y + strip[0].height / 2.);
+    app.drag(grab, (200., 200.));
+    let preview = app
+        .h
+        .ui
+        .input
+        .drag_state()
+        .and_then(|drag| drag.preview)
+        .expect("a preview follows the pointer");
+    app.h.ui.prepare_frame();
+    let scene = app.h.ui.scene.borrow();
+    // Its title row, then the panes' area: a box per pane.
+    let children = scene.children(preview).to_vec();
+    assert_eq!(children.len(), 2, "a title and the panes");
+    let boxes: Vec<_> = scene
+        .children(children[1])
+        .iter()
+        .map(|b| scene.bounds(*b))
+        .collect();
+    assert_eq!(boxes.len(), 2, "a box per pane: {boxes:?}");
+    let (left, right) = (boxes[0], boxes[1]);
+    assert!(
+        left.x < right.x && (left.y - right.y).abs() < 0.5 && (left.width - right.width).abs() < 1.,
+        "side by side, as the tab has them: {left:?} {right:?}"
+    );
+    drop(scene);
+    app.release((200., 200.));
+    assert!(app.h.ui.input.drag_state().is_none());
+    assert_eq!(app.h.host.error().get(), None);
+}
+
+#[test]
+fn a_pane_dragged_by_its_grip_is_a_small_picture_of_it_below_the_pointer() {
+    let mut app = App::new();
+    app.run("split_right");
+    let left = app.panes()[0];
+    app.press_grip(left);
+    let at = (left.x + 60., left.y + 120.);
+    app.drag_to(at);
+    let preview = app
+        .h
+        .ui
+        .input
+        .drag_state()
+        .and_then(|drag| drag.preview)
+        .expect("a preview follows the pointer");
+    app.h.ui.prepare_frame();
+    let scene = app.h.ui.scene.borrow();
+    // The pane alone, in proportion to its card, a fraction of its size.
+    let shown = scene.bounds(preview);
+    let (card, small) = (left.width / left.height, shown.width / shown.height);
+    assert!(
+        (card - small).abs() < 0.1,
+        "in proportion: {left:?} {shown:?}"
+    );
+    assert!(shown.width < left.width, "small: {shown:?}");
+    // Hung below the pointer, centred: what it is over stays in view.
+    assert!(
+        (shown.x + shown.width / 2. - at.0).abs() < 1. && shown.y > at.1,
+        "below the pointer: {shown:?} {at:?}"
+    );
+    drop(scene);
+    app.release(at);
+    assert_eq!(app.h.host.error().get(), None);
+}
+
+#[test]
+fn a_pane_resting_on_another_tab_springs_it_open_and_drops_among_its_panes() {
+    use std::time::{Duration, Instant};
+    let mut app = App::new();
+    app.run("split_right");
+    app.run("new_tab");
+    // The new tab's pane, over the first tab's name (two panes): anywhere
+    // on a tab but its thin edges.
+    let pane = app.panes()[0];
+    let first = app.tab_names()[0];
+    app.press_grip(pane);
+    app.drag_to((first.x + first.width / 2., first.y + first.height / 2.));
+    // Moving about on it does not start the delay again.
+    let due = app
+        .h
+        .ui
+        .input
+        .next_spring_deadline()
+        .expect("resting on the tab");
+    app.drag_to((first.x, first.y + first.height / 2.));
+    assert_eq!(app.h.ui.input.next_spring_deadline(), Some(due));
+    assert_eq!(app.panes().len(), 1, "not before the delay");
+    // The delay passes: it flashes, then shows.
+    app.h
+        .ui
+        .advance_interactions(Instant::now() + Duration::from_secs(2))
+        .unwrap();
+    assert!(
+        app.wait_until(|app| app.panes().len() == 2),
+        "the first tab shows"
+    );
+    assert!(
+        app.h.ui.input.is_dragging(),
+        "the drag goes on, its pane's tab hidden"
+    );
+    // Dropped on the right pane's bottom edge: it joins the tab there.
+    let right = app.panes()[1];
+    let at = (right.x + right.width / 2., right.y + right.height - 20.);
+    app.drag_to(at);
+    app.release(at);
+    assert_eq!(app.panes().len(), 3, "the pane among the first tab's");
+    assert_eq!(app.tab_names().len(), 1, "its own tab, empty, closed");
+    assert!(!app.h.ui.input.is_dragging());
+    assert_eq!(app.h.host.error().get(), None);
+}
+
+#[test]
+fn a_tab_resting_on_another_tab_springs_it_open_and_dropped_there_joins_it() {
+    use std::time::{Duration, Instant};
+    let mut app = App::new();
+    app.run("split_right");
+    app.run("new_tab");
+    // The new tab (one pane), dragged onto the first tab's middle (two panes).
+    let strip = app.tab_names();
+    let (first, second) = (strip[0], strip[1]);
+    let grab = (second.x + 4., second.y + second.height / 2.);
+    app.drag(grab, (first.x - 8., first.y + first.height / 2.));
+    assert_eq!(app.tab_names().len(), 2, "its middle reorders nothing");
+    assert!(
+        app.h.ui.input.next_spring_deadline().is_some(),
+        "resting on it"
+    );
+    app.h
+        .ui
+        .advance_interactions(Instant::now() + Duration::from_secs(2))
+        .unwrap();
+    assert!(
+        app.wait_until(|app| app.panes().len() == 2),
+        "the first tab shows"
+    );
+    // Dropped on its middle: the tab's pane joins the first tab's.
+    let first = app.tab_names()[0];
+    app.drag_to((first.x - 8., first.y + first.height / 2.));
+    app.release((first.x - 8., first.y + first.height / 2.));
+    assert_eq!(app.panes().len(), 3, "three panes in one tab");
+    assert_eq!(app.tab_names().len(), 1);
+    assert_eq!(app.h.host.error().get(), None);
+}
+
+#[test]
+fn a_dragged_tabs_panel_shows_as_the_window_last_showed_it() {
+    let mut app = with_notes("enabled");
+    app.open_panel("panel:notes/notes");
+    app.run("new_tab");
+    // The host's pictures: a pixel a point of the box asked for.
+    let asked: Rc<RefCell<Vec<zgx::scene::Rect>>> = Rc::default();
+    let log = asked.clone();
+    app.h.ui.on_snapshot(move |rect, _| {
+        log.borrow_mut().push(rect);
+        let (w, h) = (rect.width as u32, rect.height as u32);
+        zgx::image::ImageData::new(w, h, vec![255; (w * h * 4) as usize])
+            .ok()
+            .map(std::sync::Arc::new)
+    });
+    // The first tab, named for its focused pane (the panel), in the strip.
+    let first_tab = |app: &mut App| {
+        app.h.ui.prepare_frame();
+        let scene = app.h.ui.scene.borrow();
+        let mut stack = vec![scene.root()];
+        while let Some(n) = stack.pop() {
+            if let zgx::scene::NodeKind::Text { text, .. } = scene.kind(n)
+                && &**text == "Notes"
+                && scene.bounds(n).y < 40.
+            {
+                let b = scene.bounds(n);
+                return (b.x + 4., b.y + b.height / 2.);
+            }
+            stack.extend(scene.children(n).iter().copied());
+        }
+        panic!("no Notes tab in the strip");
+    };
+    // The second tab shows: the first's panel is hidden, so no picture.
+    let grab = first_tab(&mut app);
+    app.drag(grab, (200., 200.));
+    assert!(asked.borrow().is_empty(), "a hidden pane has no picture");
+    // Back where it was (over a pane, it would join that tab).
+    app.drag_to(grab);
+    app.release(grab);
+    // Shown, it does: the panel's card, beside the terminal's name.
+    app.run("tab_1");
+    let grab = first_tab(&mut app);
+    app.drag(grab, (200., 200.));
+    assert_eq!(
+        asked.borrow().len(),
+        1,
+        "the panel's picture: {:?}",
+        asked.borrow()
+    );
+    let card = asked.borrow()[0];
+    let preview = app.h.ui.input.drag_state().and_then(|d| d.preview).unwrap();
+    app.h.ui.prepare_frame();
+    let scene = app.h.ui.scene.borrow();
+    let mut images = Vec::new();
+    let mut stack = vec![preview];
+    while let Some(n) = stack.pop() {
+        if let zgx::scene::NodeKind::Image(image) = scene.kind(n) {
+            images.push((image.width(), image.height()));
+        }
+        stack.extend(scene.children(n).iter().copied());
+    }
+    assert_eq!(
+        images,
+        vec![(card.width as u32, card.height as u32)],
+        "one picture, the panel's"
+    );
+    drop(scene);
+    app.release((200., 200.));
+    assert_eq!(app.h.host.error().get(), None);
 }

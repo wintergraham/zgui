@@ -30,6 +30,28 @@ line, which allocates its per-byte tables.
    `ShapeLine::build` builds that span directly; every other line takes the
    upstream path.
 
+3. **Span attributes by id.** A rich text's line has attribute spans
+   (zgx gives each run of a paragraph its own, with its metrics and
+   metadata). For every word, the shape-run cache's key looked up the spans
+   overlapping it, compared each with the defaults, and cloned it into the
+   key, which the cache then hashed and compared whole. The spans that
+   differ from a line's defaults now get ids from the cache's intern table
+   once a line (`ShapeBuffer::line_spans`). A word's key holds the
+   overlapping spans' ranges and ids, so it is equal to another exactly when
+   the attributes are. The intern table only grows (`trim` never prunes it,
+   as it never pruned the defaults): one entry for each distinct set of
+   attributes. zgx's span metadata is the run's index in its paragraph, so
+   that is about the longest paragraph's run count times the styles it uses.
+4. **Ids from the cache they were given by.** A renderer at rest replaces
+   its shape-run cache, and the new cache numbers attributes from 0 again.
+   The key kept for reuse still held the old cache's id for its defaults,
+   so a word shaped next under the same defaults went into the new cache
+   under an id the new table could then give other attributes, and their
+   words were served its glyphs (a bold label drawn regular). Each cache
+   now has a generation of its own (a clone too: its table diverges), and
+   a key from another's re-interns its defaults (zgx-gpu's
+   `tests/word_cache.rs`).
+
 ## Checked
 
 `check/` lays out 4,000 random lines (ASCII with every control and
@@ -42,7 +64,9 @@ checked never to change what is drawn):
     cargo run --release --manifest-path vendor/cosmic-text/check/Cargo.toml
     cargo run --release --manifest-path vendor/cosmic-text/check/Cargo.toml -- bench
 
-15,076 layouts are identical; on the other 968 (lines mixing paragraph
+15,076 layouts are identical, and so are 12,033 of the same texts in up
+to four spans of different weight, family, metadata and size, cut at
+random places (`set_rich_text`); on the other 968 (lines mixing paragraph
 directions) both versions panic, as upstream documents. Reshaping a
 streaming transcript's last seven 105-byte lines takes 40.2 µs a tick instead
 of 48.7 µs (M5 Max), and zgx's headless lab stream lays out in 0.047 ms a
@@ -136,3 +160,19 @@ everything but the text draws, and the first such run says once on stderr
 why the text does not show. `font_cache`'s
 `text_shapes_to_nothing_with_no_font_installed` and the Linux `no-fonts`
 probe check it.
+
+## A run's first font is kept for its attributes
+
+Every run shaped without the word cache (a new value: a dashboard's figure)
+looked its attributes' font matches up by an owned key (`get_font_matches`)
+and walked them to its family's face again (`FontFallbackIter::next`). For a
+family other than monospace, which looks at each word's characters, that face
+depends only on the attributes, so `FontSystem::first_font` keeps it with the
+matches for the last eight attribute sets runs shaped with (a font without an
+optical size axis matching at any size, as `get_font_at` instances it once).
+`shape_run` starts its fallback search past the face it knows. Both are
+forgotten when the font matches are (`db_mut`, or the cache's limit).
+`shape_run` is out of line, so the word cache's path through `Shaping::run`
+keeps its code. zgx-gpu's `first_font` test shapes texts in turn under
+changing families, weights, sizes and scripts, with characters only another
+font has, to the same glyphs from the same fonts as each alone.

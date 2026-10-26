@@ -1,0 +1,25 @@
+name: Direct3D 12 debug layer
+# Manual only: installing Windows' Graphics Tools, which carry the debug
+# layer, takes minutes. Run it after a change to the Direct3D 12 path
+# (crates/zgx-gpu, vendor/wgpu-hal/src/dx12): frames on WARP under the debug
+# layer must raise no error (crates/zgx-gpu/tests/d3d12_validation.rs).
+on:
+  workflow_dispatch:
+env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+jobs:
+  debug-layer:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+      - run: Add-WindowsCapability -Online -Name Tools.Graphics.DirectX~~~~0.0.1.0
+        shell: pwsh
+      - run: cargo test -p zgx-gpu --test d3d12_validation --locked -- --nocapture
+        env:
+          ZGX_REQUIRE_DEBUG_LAYER: "1"

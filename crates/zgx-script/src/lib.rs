@@ -33,6 +33,7 @@ pub mod check;
 mod command;
 mod data;
 mod design;
+pub mod driver;
 mod element;
 #[cfg(target_os = "macos")]
 mod file_events;
@@ -43,6 +44,9 @@ mod file_events;
 #[path = "file_events_linux.rs"]
 mod file_events;
 mod form;
+#[cfg(feature = "inspect")]
+pub mod inspect;
+pub mod inspect_client;
 mod interrupt;
 mod io;
 #[cfg(feature = "components")]
@@ -66,7 +70,7 @@ mod variants;
 mod windows;
 
 pub use bundle::{Bundle, BundleFile, build};
-pub use calls::{Request, Response};
+pub use calls::{Body, Request, Response};
 pub use command::Command;
 pub use design::DesignLint;
 pub use persist::app_data_dir;
@@ -1209,8 +1213,24 @@ impl ScriptHost {
         F: Fn(Request) -> Fut + 'static,
         Fut: std::future::Future<Output = Result<Response, String>> + 'static,
     {
-        *self.0.fetcher.borrow_mut() = Some(Rc::new(move |request| -> calls::Fetch {
+        *self.0.fetcher.borrow_mut() = Some(Rc::new(move |request, _| -> calls::Fetch {
             Box::pin(fetch(request))
+        }));
+    }
+    /// A transport that streams: `fetch` writes the response's body to
+    /// its `Body` as it arrives (a model's reply, server-sent events), and
+    /// answers with the status and headers once it ends. A script's
+    /// `on_chunk` and `on_event` hear each piece as it is written; a script
+    /// reading the body whole gets it all. Once `Body::is_open` is false the
+    /// script has cancelled (or reloaded): the future is dropped at its next
+    /// await, and the transport may stop at once. It replaces `fetcher`.
+    pub fn streaming_fetcher<F, Fut>(&self, fetch: F)
+    where
+        F: Fn(Request, Body) -> Fut + 'static,
+        Fut: std::future::Future<Output = Result<Response, String>> + 'static,
+    {
+        *self.0.fetcher.borrow_mut() = Some(Rc::new(move |request, body| -> calls::Fetch {
+            Box::pin(fetch(request, body))
         }));
     }
     /// Let plugin `plugin` (its file name, `stats.luau`, or `plugin`'s
@@ -1408,6 +1428,66 @@ impl ScriptHost {
         loaded.map_or(0, |l| {
             l._vms.iter().map(|vm| value::converted_len(&vm.lua)).sum()
         })
+    }
+    /// Every named state the scripts hold (`ui.state` and `ui.persist`, a
+    /// module's own named `module.luau::name`, and the host's `ui.shared`),
+    /// by name, in name order, with its value: what devtools show. zgx's
+    /// own (`zgx.…`) are left out.
+    pub fn states(&self) -> Vec<(String, Value)> {
+        let mut out: Vec<(String, Value)> = self
+            .named_states()
+            .into_iter()
+            .map(|(name, signal)| (name, signal.with_untracked(Clone::clone)))
+            .filter(|(name, _)| !name.starts_with("zgx."))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out.dedup_by(|a, b| a.0 == b.0);
+        out
+    }
+    pub(crate) fn named_states(&self) -> Vec<(String, Signal<Value>)> {
+        let stores: Vec<Rc<Store>> = self.0.stores.borrow().values().cloned().collect();
+        let mut out: Vec<(String, Signal<Value>)> = Vec::new();
+        for store in stores.iter().chain(std::iter::once(&self.0.shared)) {
+            out.extend(store.entries());
+        }
+        out.extend(self.0.persist.entries());
+        out
+    }
+    /// Sets the named state `name` (`ui.state`, `ui.persist`, or
+    /// `ui.shared`) to `value`, as the script's `set` would: what reads it
+    /// follows. A module's own state answers to its name alone when no
+    /// other has it.
+    pub fn set_state(&self, name: &str, value: Value) -> Result<(), String> {
+        let all = self.named_states();
+        let exact: Vec<_> = all.iter().filter(|(n, _)| n == name).collect();
+        let suffix = format!("::{name}");
+        let found: Vec<_> = if exact.is_empty() {
+            all.iter().filter(|(n, _)| n.ends_with(&suffix)).collect()
+        } else {
+            exact
+        };
+        match found.as_slice() {
+            [(_, signal)] => {
+                signal.set(value);
+                Ok(())
+            }
+            [] => Err(format!("no state named `{name}`")),
+            many => Err(format!(
+                "`{name}` names {} states: {}",
+                many.len(),
+                many.iter()
+                    .map(|(n, _)| n.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+    }
+    /// The application script's file, if it was loaded from one.
+    pub fn script_path(&self) -> Option<PathBuf> {
+        match &self.0.app {
+            Script::File(path) => Some(path.clone()),
+            _ => None,
+        }
     }
     /// The latest load or script error, shown over the interface until fixed.
     pub fn error(&self) -> Signal<Option<String>> {
@@ -2181,6 +2261,7 @@ impl ScriptHost {
                 _ => name.as_str().into(),
             },
             meter: plugin.then(|| meter::Meter::new(&lua, memory, watch)),
+            assets: self.0.assets.clone(),
         });
         node::install(&lua).map_err(fail)?;
         let ui: mlua::Table = lua.globals().get("ui").map_err(fail)?;

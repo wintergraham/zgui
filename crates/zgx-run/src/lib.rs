@@ -257,7 +257,19 @@ fn file_path(url: &str) -> Option<PathBuf> {
 /// those that name files opened with it (its `ui.on_open`), as a file
 /// opened with an app is.
 pub fn run_with(path: &Path, args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    run_hosting(path, args, |_| {})
+}
+
+/// As [`run_with`], `host` given the script's host before it loads: an app
+/// that serves its script (a fetcher, actions, shared state) keeps
+/// everything `run` gives it, the menu bar of its commands included.
+pub fn run_hosting(
+    path: &Path,
+    args: Vec<String>,
+    host: impl Fn(&ScriptHost) + 'static,
+) -> Result<(), Box<dyn std::error::Error>> {
     use std::{cell::RefCell, rc::Rc};
+    let configure = host;
     let script = script_path(path);
     if !script.is_file() {
         return Err(format!("{}: no such script", script.display()).into());
@@ -321,32 +333,109 @@ pub fn run_with(path: &Path, args: Vec<String>) -> Result<(), Box<dyn std::error
             cx.window_info.titlebar_area.clone(),
             cx.window_info.controls.clone(),
         );
+        configure(&host);
         let _ = host.reload();
         cx.tasks.spawn(host.watch(Duration::from_millis(250)));
-        // The script's commands are the menu bar; their keys work wherever
-        // focus is.
-        let commands = host.commands();
-        let windows = cx.windows.clone();
-        let menus_follow = cx.ui.runtime.effect(move || {
-            if let Err(error) = windows.set_menus(menus(&commands.get())) {
-                eprintln!("zgx run: menus: {error}");
-            }
-        });
+        let menus_follow = serve_commands(&host, cx);
         // The script's windows (`ui.window`): each open while its state is.
         let windows_follow = follow_windows(&host, cx);
-        let run = host.clone();
-        cx.on_menu_action(move |action| {
-            run.run_command(&action.0);
-        });
         let saving = host.clone();
-        let keep = std::cell::RefCell::new(Some((menus_follow, windows_follow)));
+        let devtools_asked = inspect_asked();
+        #[cfg(feature = "inspect")]
+        if devtools_asked {
+            zgx_script::inspect::prepare();
+        }
+        let handle = cx.render(host.view());
+        let devtools = devtools_asked
+            .then(|| inspect(&host, cx, handle, &script))
+            .flatten();
+        let keep = std::cell::RefCell::new(Some((menus_follow, windows_follow, devtools)));
         cx.on_closed(move || {
             saving.save();
             drop(keep.borrow_mut().take());
         });
-        cx.render(host.view());
     })?;
     Ok(())
+}
+
+static INSPECT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Serve devtools (`zgx inspect`) from the next window `run` opens, as
+/// `zgx run --inspect` asks (`ZGX_INSPECT_SOCKET=1` asks too). Built
+/// without the `inspect` feature, it says so and does nothing.
+pub fn set_inspect(on: bool) {
+    INSPECT.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Devtools for the window, if asked: the socket that serves them, alive
+/// while what this returns is.
+/// Whether devtools are asked for: `--inspect`, or `ZGX_INSPECT_SOCKET=1`.
+fn inspect_asked() -> bool {
+    #[cfg(feature = "inspect")]
+    let env = zgx_script::inspect::asked();
+    #[cfg(not(feature = "inspect"))]
+    let env = false;
+    INSPECT.load(std::sync::atomic::Ordering::Relaxed) || env
+}
+
+#[cfg(feature = "inspect")]
+fn inspect(
+    host: &ScriptHost,
+    cx: &mut zgx_desktop::WindowContext,
+    handle: zgx::compose::ViewHandle,
+    script: &Path,
+) -> Option<zgx_script::inspect::Server> {
+    let session =
+        zgx_script::inspect::Session::new(&cx.ui, handle, host, Some(cx.inspector.clone()));
+    let tasks = cx.tasks.clone();
+    match zgx_script::inspect::serve(session, &script.display().to_string(), move |task| {
+        tasks.spawn(task)
+    }) {
+        Ok(server) => {
+            eprintln!(
+                "zgx run: devtools at {} (zgx inspect help)",
+                server.path().display()
+            );
+            Some(server)
+        }
+        Err(error) => {
+            eprintln!("zgx run: devtools: {error}");
+            None
+        }
+    }
+}
+#[cfg(not(feature = "inspect"))]
+fn inspect(
+    _: &ScriptHost,
+    _: &mut zgx_desktop::WindowContext,
+    _: zgx::compose::ViewHandle,
+    _: &Path,
+) -> Option<()> {
+    eprintln!("zgx run: built without devtools (the `inspect` feature)");
+    None
+}
+
+/// `host`'s commands (`ui.command`) as the application's menu bar, kept
+/// current as a reload changes them, each item running its command: their
+/// shortcuts work wherever focus is, as `run` gives them. For a Rust host
+/// that makes its own window; keep the effect it returns while the window
+/// lives.
+pub fn serve_commands(
+    host: &ScriptHost,
+    cx: &mut zgx_desktop::WindowContext,
+) -> zgx::reactive::Effect {
+    let commands = host.commands();
+    let windows = cx.windows.clone();
+    let follow = cx.ui.runtime.effect(move || {
+        if let Err(error) = windows.set_menus(menus(&commands.get())) {
+            eprintln!("zgx run: menus: {error}");
+        }
+    });
+    let run = host.clone();
+    cx.on_menu_action(move |action| {
+        run.run_command(&action.0);
+    });
+    follow
 }
 
 /// Open and close `host`'s windows (`ui.window`) as their `open` states

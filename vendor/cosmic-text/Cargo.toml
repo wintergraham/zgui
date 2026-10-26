@@ -98,7 +98,7 @@ version = "0.23"
 default-features = false
 
 [dependencies.harfrust]
-version = "0.5.2"
+version = "0.5.3"
 path = "../harfrust"
 default-features = false
 package = "zgx-harfrust"

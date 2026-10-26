@@ -31,7 +31,7 @@ vulkan = ["wgpu/vulkan"]
 
 [dependencies]
 smallvec = "1.16"
-zgx = { path = "../zgx", version = "0.1.0" }
+zgx = { path = "../zgx", version = "0.1.2" }
 # wgpu's defaults less WebGPU (the browser's), and Vulkan and GL, which only
 # Linux and its kind always build (below).
 wgpu = { version = "29.0.4", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "wgsl"] }
@@ -81,10 +81,12 @@ objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["
 # build these.
 [dev-dependencies]
 # Shaping with and without its kept advances (tests/variable_advances.rs).
-harfrust = { package = "zgx-harfrust", version = "0.5.2", path = "../../vendor/harfrust" }
+harfrust = { package = "zgx-harfrust", version = "0.5.3", path = "../../vendor/harfrust" }
 
 [target.'cfg(windows)'.dev-dependencies]
 windows = { version = "0.62", default-features = false, features = ["Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D12", "Win32_Graphics_DirectComposition", "Win32_Graphics_Gdi", "Win32_Foundation", "Win32_Security", "Win32_System_LibraryLoader", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_WindowsAndMessaging"] }
+# The debug layer's errors, collected (tests/d3d12_validation.rs).
+wgpu-hal = { version = "29.0.4", default-features = false, features = ["validation_canary"] }
 
 # Tests of a format need its feature.
 # On the main thread, as layer presentation runs (`fn main`).

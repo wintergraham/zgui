@@ -479,12 +479,15 @@ pub(crate) fn compile(
                     original: None,
                     overridden: Rc::default(),
                     path: path.take(),
+                    implicit_from: false,
+                    deferred: Default::default(),
                 });
                 return Ok(());
             }
             let mut unit = None;
             let mut kf_composition = None;
             let mut kf_modifier = None;
+            let implicit_from = kfs.first().is_some_and(|kf| kf.from.is_none());
             for kf in kfs {
                 let ease = kf.ease.clone().unwrap_or_else(|| base_ease.clone());
                 let length = kf.duration.unwrap_or_else(|| {
@@ -531,6 +534,8 @@ pub(crate) fn compile(
                 original: None,
                 overridden: Rc::default(),
                 path: path.take(),
+                implicit_from,
+                deferred: Default::default(),
             });
             Ok(())
         };

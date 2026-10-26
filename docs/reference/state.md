@@ -25,7 +25,8 @@ ui.add(state: State<number>, by: number?) -> Action
 ui.action(name: string, arg: unknown?) -> Action
 ui.invoke(name: string, arg: unknown?) -> ()
 ui.call(name: string, arg: unknown?) -> Promise
-ui.task<A...>(f: (A...) -> (), A...) -> ()
+ui.task<A...>(f: (A...) -> (), A...) -> Task
+ui.try<T, A...>(f: (A...) -> ...T, A...) -> (T?, string?)
 ui.resource<T>(load: () -> T, opts: { initial: T }?) -> Resource<T>
 ui.fetch(url: string, opts: FetchOptions?) -> Promise<Response>
 ui.clipboard.read() -> string?
@@ -72,7 +73,8 @@ local tabs = ui.state("tabs", {} :: { Tab })
 | `peek(): T` | the value, without subscribing | for handlers and for reading what an effect should not follow |
 | `set(value: T)` | replaces the value | |
 | `update(f: (value: T) -> ...T)` | `f` gets a mutable copy: change it and return nothing, or return the new value | copies the whole value into Luau and back |
-| `set_key(path, value)` | one key (`"title"`), a list index from 1 (`3`), or a path (`{ "tabs", 3, "title" }`); `nil` removes a key | makes missing tables along the path; an index may be one past the end (appends); a list cannot get a hole (`nil` removes only its last item); the value is not type checked |
+| `set_key(path, value)` | one key (`"title"`), a list index from 1 (`3`), or a path (`{ "tabs", 3, "title" }`), where a table step picks a list's first item with those fields (`{ "c1", { id = "m5" }, "text" }`); `nil` removes a key | makes missing tables along the path; an index may be one past the end (appends); a list cannot get a hole (`nil` removes only its last item); the value is not type checked |
+| `append(path, text)` | adds `text` to the string at `path` (or puts it there) | concatenated in Rust: a token streaming into a reply, without the text so far copied into the script and back |
 | `patch(fields: { ... })` | a shallow merge of string keys | each field as `set_key(name, value)` |
 | `toggle()` | `not value` | |
 | `add(by: number?)` | adds `by` (1) to a number; anything else counts as 0 (a boolean as 0 or 1) | |
@@ -107,14 +109,37 @@ Handlers take a function or an action Rust runs without calling the script:
 | `p:await()` | inside `ui.task(function() ... end)` only: waits for it, returns its value or raises its error (the host's message as it wrote it, so `pcall` catches it) |
 
 ```luau
-local user = ui.call("load_user", id)            -- the interface follows it
-ui.text { function() return if user.done then user.value.name else "Loading" end }
+local user = ui.call("load_user", id) -- the interface follows it
+ui.text {
+	function()
+		return if user.done then user.value.name else "Loading"
+	end,
+}
 
-ui.task(function()                               -- steps in order
-    local token = ui.call("sign_in"):await()
-    local ok, err = pcall(function() return ui.call("sync", token):await() end)
-    if not ok then status:set(err) end
+ui.task(function() -- steps in order
+	local token = ui.call("sign_in"):await()
+	local ok, err = pcall(function()
+		return ui.call("sync", token):await()
+	end)
+	if not ok then
+		status:set(err)
+	end
 end)
+```
+
+`ui.task` returns its handle: `task:cancel()` stops it at the await it is at, never to go on (`task.cancelled` says so). A fetch it awaited (and nothing else hears) stops: the host's transport sees its `Body` close and its future is dropped. An action it awaited goes on, its answer unheard. Cancel what a closed view started, as React's effects abort a fetch in their cleanup: `ui.on_cleanup(function() task:cancel() end)`. A resource cancels a load it begins again, and its owner going cancels its load; a form cancels its submit with `form.cancel()` and as it goes.
+
+`ui.try(f, ...)` is `pcall` with its error typed: `f(...)`'s value and nil, or nil and what it raised as text a person reads (an error object's message, without its traceback), where Luau types `pcall`'s error as `f`'s result. Awaits inside `f` work in a task as through `pcall`:
+
+```lua
+local status = ui.state("status", "")
+ui.task(function()
+	local _, err = ui.try(function()
+		return ui.call("load_user"):await()
+	end)
+	status:set(if err then `Couldn't load: {err}` else "Loaded")
+end)
+return ui.text { "{status}" }
 ```
 
 A rejection that nothing handles (no `on_error`, no read of `error`, no `await`) is reported as a script error with the action's name, so a failure is never silent. A script reloaded since a call hears nothing of it. A call costs about a microsecond on top of the host's work (`ui.call`, settling and an `:after` callback; `tests/calls.rs`), and the same however many are in flight.
@@ -137,20 +162,28 @@ A rejection that nothing handles (no `on_error`, no read of `error`, no `await`)
 type Person = { name: string }
 local id = ui.state("id", 1)
 local person = ui.resource(function(): Person?
-    local response = ui.fetch(`https://api.example/people/{id:get()}`):await()
-    if not response.ok then error(`The server answered {response.status}`, 0) end
-    return response.json :: Person
+	local response = ui.fetch(`https://api.example/people/{id:get()}`):await()
+	if not response.ok then
+		error(`The server answered {response.status}`, 0)
+	end
+	return response.json :: Person
 end)
 return ui.switch(person.status, {
-    loading = ui.text "Loading…",
-    failed = ui.column {
-        ui.text { function() return person.error:get() end },
-        ui.button { "Try again", on_click = person.reload },
-    },
-    ready = ui.text { function()
-        local found = person.data:get()
-        return if found then found.name else ""
-    end },
+	loading = ui.text("Loading…"),
+	failed = ui.column {
+		ui.text {
+			function()
+				return person.error:get()
+			end,
+		},
+		ui.button { "Try again", on_click = person.reload },
+	},
+	ready = ui.text {
+		function()
+			local found = person.data:get()
+			return if found then found.name else ""
+		end,
+	},
 })
 ```
 
@@ -159,6 +192,47 @@ return ui.switch(person.status, {
 ### The network
 
 `ui.fetch(url, { method, headers, body })` makes an HTTP request through the host's transport, `ScriptHost::fetcher(|request| async { … })`: the app owns the HTTP stack, redirects, headers and credentials (a token minted per request), and zgx adds no HTTP dependency. The promise settles with `{ status, ok, headers, body, json }`: `ok` for a 2xx status, header names in lower case, `json` the decoded body when the response says it is JSON; a transport error rejects it. A table `body` is sent as JSON with its content type. Without a fetcher, `ui.fetch` is an error.
+
+A response can be read as it arrives (a model's reply, a log): `on_chunk = function(text)` gets the body's text piece by piece, in whole characters, and `on_event = function(e)` each server-sent event (`text/event-stream`) as it ends, `e.event` (`"message"` unless named), `e.data` (its `data:` lines joined by line breaks) and `e.id`. The promise settles once the body has ended, with the status and headers, and with an empty `body` unless the request failed (then the body's start, an error's JSON). `p:cancel()` stops a fetch at once (the promise rejects with `"cancelled"`, reported nowhere), as does cancelling the task that awaits it; a reload stops the rest of a stream. The host streams with `ScriptHost::streaming_fetcher(|request, body| async { … })`, writing each piece to `body` as it comes and answering with the status once it ends; a plain `fetcher`'s body arrives as one piece.
+
+```lua
+local reply = ui.state("reply", "")
+local running = nil
+local function ask(question: string)
+	reply:set("")
+	running = ui.task(function()
+		local response = ui.fetch("https://api.example/chat", {
+			method = "POST",
+			body = { question = question, stream = true },
+			on_event = function(e: ServerEvent)
+				if e.data ~= "[DONE]" then
+					reply:set(reply:peek() .. e.data)
+				end
+			end,
+		}):await()
+		if not response.ok then
+			reply:set(`Failed: {response.status}`)
+		end
+	end)
+end
+return ui.column {
+	ui.button {
+		"Ask",
+		on_click = function()
+			ask("Why is the sky blue?")
+		end,
+	},
+	ui.button {
+		"Stop",
+		on_click = function()
+			if running then
+				running:cancel()
+			end
+		end,
+	},
+	ui.text { "{reply}", wrap = true },
+}
+```
 
 `ui.image { src = "https://…" }` and `ui.svg { src = "https://…" }` load through the same fetcher: one request per URL however many nodes show it, decoded off the main thread, cached for the host's life; a node shows nothing until its source arrives, and only the nodes showing it redraw.
 
@@ -182,7 +256,9 @@ State converts what it holds between Luau and Rust, through Luau's C API: 100,00
 
 ```lua
 local initial = {}
-for i = 1, 1000 do initial[i] = { id = i, price = i } end
+for i = 1, 1000 do
+	initial[i] = { id = i, price = i }
+end
 local rows = ui.state("rows", initial)
 ui.every(250, function()
 	ui.batch(function()
@@ -196,13 +272,17 @@ end)
 local order = ui.sorted(rows, { by = "price", descending = true })
 return ui.list {
 	h = 300,
-	count = function() return order:len() end,
+	count = function()
+		return order:len()
+	end,
 	height = 24,
 	row = function(i)
-		return ui.text { function()
-			local row = order:at(i)
-			return if row then ui.number(row.price, { decimals = 2 }) else ""
-		end }
+		return ui.text {
+			function()
+				local row = order:at(i)
+				return if row then ui.number(row.price, { decimals = 2 }) else ""
+			end,
+		}
 	end,
 }
 ```
@@ -239,6 +319,21 @@ local Card = ui.component(function(props: CardProps) … end)
 ```
 
 What `each` rows, `presence` content and `list` rows build owns what it makes in the same way, as long as that part is mounted. Made at the top level, computeds and effects live as long as the script.
+
+`provide = { name = value }` on any node gives its subtree values that the components and rows built in it read with `ui.use_context(name, default)`, as React's context does: the signed-in user, a list's selection, a density, without passing them down every level. A state provided is the state, so what reads it follows it; a nearer `provide` of the same name wins, and the rest of an outer one is kept. `ui.use_context` belongs in a component's, row's or presence's build (where it is mounted); elsewhere it is an error.
+
+```lua
+local user = ui.state("user", "Ada")
+local Greeting = ui.component(function()
+	local who = ui.use_context("user")
+	return ui.text {
+		function()
+			return `Hello, {who:get()}`
+		end,
+	}
+end)
+return ui.column { provide = { user = user }, Greeting {} }
+```
 
 ## Example
 

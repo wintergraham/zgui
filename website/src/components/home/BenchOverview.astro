@@ -1,0 +1,107 @@
+---
+// The benchmark at a glance: every test, CPU or GPU power, each rival as a
+// multiple of zgx's. On the home page and atop the performance page.
+import BenchDots from './BenchDots.astro';
+import { headline } from '@/lib/perf';
+const h = headline();
+---
+
+<div class="bench-card">
+  <div class="bench-controls">
+    <div class="seg" role="radiogroup" aria-label="Metric">
+      <input type="radio" name="bench-metric" id="bench-cpu" value="cpu" checked />
+      <label for="bench-cpu">CPU</label>
+      <input type="radio" name="bench-metric" id="bench-gpu" value="gpu" />
+      <label for="bench-gpu">GPU power</label>
+    </div>
+    <ul class="legend" aria-label="Frameworks">
+      <li><span class="dot dot-gpui-fast" aria-hidden="true"></span>GPUI Fast</li>
+      <li><span class="dot dot-mygo" aria-hidden="true"></span>MyGo</li>
+      <li><span class="dot dot-rune" aria-hidden="true"></span>Rune</li>
+      <li><span class="legend-line" aria-hidden="true"></span>zgx</li>
+    </ul>
+  </div>
+  <div class="bench-panel bench-cpu"><BenchDots metric="cpu_percent_one_core" id="dots-cpu" /></div>
+  <div class="bench-panel bench-gpu"><BenchDots metric="gpu_power_mw" id="dots-gpu" /></div>
+  <p class="bench-gpu-note bench-gpu">The least GPU power in {h.ledGpu} of {h.tests}: in the animation, MyGo draws for a little less.</p>
+</div>
+
+<style>
+  .bench-card {
+    padding: clamp(1.1rem, 2.5vw, 1.75rem);
+    border: 1px solid color-mix(in oklab, var(--color-fd-foreground) 10%, transparent);
+    border-radius: 1rem;
+    background: var(--cb-bg);
+  }
+  .bench-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  input:focus-visible + label {
+    outline: 2px solid var(--color-fd-ring);
+    outline-offset: 2px;
+  }
+  .seg {
+    display: inline-flex;
+    padding: 0.2rem;
+    border-radius: 0.6rem;
+    background: color-mix(in oklab, var(--color-fd-foreground) 6%, transparent);
+  }
+  .seg input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .seg label {
+    padding: 0.35rem 0.85rem;
+    border-radius: 0.45rem;
+    font-size: 0.8125rem;
+    font-weight: 550;
+    color: var(--color-fd-muted-foreground);
+    cursor: pointer;
+    transition: color 120ms ease, background-color 120ms ease;
+  }
+  .seg input:checked + label {
+    background: var(--color-fd-background);
+    color: var(--color-fd-foreground);
+    box-shadow: 0 1px 2px color-mix(in oklab, black 14%, transparent);
+  }
+  .bench-card:has(#bench-cpu:checked) .bench-gpu,
+  .bench-card:has(#bench-gpu:checked) .bench-cpu {
+    display: none;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.1rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 0.8125rem;
+    color: var(--color-fd-muted-foreground);
+  }
+  .legend li {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+  .legend .dot {
+    position: static;
+    transform: none;
+  }
+  .legend-line {
+    width: 2px;
+    height: 0.9rem;
+    border-radius: 1px;
+    background: var(--color-zgx);
+  }
+  .bench-gpu-note {
+    margin: 1rem 0 0;
+    font-size: 0.8125rem;
+    color: var(--color-fd-muted-foreground);
+  }
+</style>

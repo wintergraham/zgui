@@ -37,7 +37,10 @@ subtract.
 
 Each run's window is brought to the front (a window opened from a process in
 the background stays behind the foreground one), and a run whose window
-stays covered is invalid. Keep the machine otherwise idle, and on mains
+stays covered is invalid. Windows' High performance power plan is held for
+the runs (`--power-plan keep` leaves the user's) and each run records the
+processors' clock: under Balanced, a busy UI thread's clock moved from run
+to run and so did its cycles. Keep the machine otherwise idle, and on mains
 power.
 """
 import argparse
@@ -138,6 +141,36 @@ def windows_titled(title):
     return found
 
 
+HIGH_PERFORMANCE = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"
+
+
+def active_power_plan():
+    out = subprocess.run(["powercfg", "/getactivescheme"], capture_output=True, text=True).stdout
+    found = re.search(r"GUID: ([0-9a-f-]+)\s+\((.*)\)", out)
+    return (found.group(1), found.group(2)) if found else (None, None)
+
+
+class PowerPlan:
+    """Windows' High performance power plan for the runs, the user's own
+    restored after. Under Balanced, Windows clocked a busy UI thread up and
+    down from run to run (66 to 73% of nominal across eight runs), and
+    cycles a frame, which count time, spread 30% between runs of one binary;
+    under High performance, 5%."""
+
+    def __init__(self, guid):
+        self.guid, self.previous = guid, None
+
+    def __enter__(self):
+        self.previous, _ = active_power_plan()
+        if self.guid and self.previous and self.guid != self.previous:
+            subprocess.run(["powercfg", "/setactive", self.guid], check=True)
+        return self
+
+    def __exit__(self, *_):
+        if self.guid and self.previous and self.guid != self.previous:
+            subprocess.run(["powercfg", "/setactive", self.previous], check=True)
+
+
 class Minimized:
     """Windows titled any of `titles` minimized for the measurement and
     restored after, as the macOS suite hides Zeron: a translucent, animated
@@ -197,6 +230,7 @@ def run(path, mode, seconds, warmup, log_path):
         dwm = windows_pdh.pid_of("dwm.exe")
         counters = windows_pdh.Counters([windows_pdh.dwm_cpu(), windows_pdh.gpu_time(dwm),
                                          windows_pdh.gpu_time(proc.pid)])
+        clock, clocks = windows_pdh.Rate(windows_pdh.processor_performance()), []
         compositor = []
         try:
             front = bring_forward(proc)
@@ -211,6 +245,7 @@ def run(path, mode, seconds, warmup, log_path):
                         samples.append((time.perf_counter(), win.cpu_seconds(proc.pid), win.cycles(proc.pid),
                                         working, private))
                         compositor.append(counters.sample())
+                        clocks.append(clock.sample())
                     except OSError:
                         pass
                     # Still uncovered as sampling ends.
@@ -219,6 +254,7 @@ def run(path, mode, seconds, warmup, log_path):
                 time.sleep(0.1)
         finally:
             counters.close()
+            clock.close()
             if proc.poll() is None:
                 proc.kill()
             code = proc.wait()
@@ -268,6 +304,9 @@ def run(path, mode, seconds, warmup, log_path):
         "uia_client_attached": "accessibility: a client asked for the tree" in text,
         # Brought to the front, and found uncovered as sampling began and ended.
         "window_uncovered": True,
+        # The processors' clock against nominal: cycles count time, so a run
+        # clocked down costs more of them for the same work.
+        "processor_performance_percent": statistics.mean(c for c in clocks if c is not None),
     }
 
 
@@ -289,6 +328,8 @@ def main():
     parser.add_argument("--max-repeats", type=int, default=6)
     parser.add_argument("--spread", type=float, default=0.05,
                         help="another round while (max - min) / median exceeds this")
+    parser.add_argument("--power-plan", default="high", choices=("high", "keep"),
+                        help="hold Windows' High performance plan for the runs (the user's restored after)")
     parser.add_argument("--keep", action="append", default=[],
                         help="leave this window title showing (Zeron's are minimized during the runs)")
     parser.add_argument("--desktop", action="store_true",
@@ -340,7 +381,8 @@ def main():
                   f"{'  UIA client attached' if row['uia_client_attached'] else ''}", flush=True)
 
     # Zeron, translucent and animated, minimized while the runs go (restored after).
-    with Minimized([t for t in ("Zeron",) if t not in args.keep]) as hidden:
+    power = PowerPlan(HIGH_PERFORMANCE if args.power_plan == "high" else None)
+    with power, Minimized([t for t in ("Zeron",) if t not in args.keep]) as hidden:
         for scene in args.scenes.split(","):
             modes, names = SCENES[scene]
             frameworks = [n for n in FRAMEWORKS if n in dirs and n in names and (dirs[n] / names[n]).exists()]
@@ -388,6 +430,7 @@ def main():
         "invalid_runs": failures,
         # Each run's window was brought forward and found uncovered (else invalid).
         "windows_minimized": [win.title(h) for h in hidden.hwnds],
+        "power_plan": "High performance" if power.guid else "the user's",
         "font_file": str(font_file) if font_file else None,
         "binary_bytes": {key: os.path.getsize(path) for key, path in binaries.items()},
         "binary_sha256": {key: hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()

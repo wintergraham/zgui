@@ -1,7 +1,8 @@
 //! The catalogue's components on one screen, for the Linux accessibility
 //! probe (`scripts/components_atspi_smoke.py`): a segmented control, a
 //! stepper, a select, a date picker, a time field, tabs, a tree left to
-//! right and one right to left, and a data grid. Each change prints the
+//! right and one right to left, a data grid, and a field with an error
+//! shown beside it. Each change prints the
 //! state it reaches (`COMPONENTS …`), which the probe reads beside the
 //! accessibility tree.
 //! Run: cargo run -p zgx-desktop --example components_probe
@@ -35,6 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let due = ui.signal(CalendarDate::new(2026, 10, 23));
             let start = ui.signal(TimeOfDay::new(8, 30));
             let tab = ui.signal("one".to_owned());
+            let email = ui.signal(String::new());
             let tabs_list = ui.signal(vec![
                 Tab::new("one", "One"),
                 Tab::new("two", "Two"),
@@ -111,6 +113,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ))
                             .child(date_picker("Probe due", due, calendar_options))
                             .child(time_field("Probe start", start, TimeOptions::default())),
+                    )
+                    // Invalid, its error the text after it.
+                    .child(
+                        row()
+                            .gap(8.)
+                            .items_center()
+                            .child(
+                                text_input("Probe email", email)
+                                    .w(220.)
+                                    .error_when(|| Some("An email is required".into())),
+                            )
+                            .child(text("An email is required")),
                     )
                     .child(
                         column().h(110.).shrink_0().child(tabs(

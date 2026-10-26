@@ -253,6 +253,19 @@ impl EditorHandle {
     pub fn value(&self) -> &EditorValue {
         &self.hint.value
     }
+    /// Show the platform's definition of the selected text over it (Look
+    /// Up); whether it did. A password's text is never looked up.
+    pub fn look_up(&self, platform: &crate::platform::PlatformService) -> bool {
+        let text = self.copy();
+        if text.trim().is_empty() {
+            return false;
+        }
+        let start = self.editor.borrow().selection().range().start;
+        let Some((at, size)) = self.scene.borrow().text_baseline(self.text, start) else {
+            return false;
+        };
+        platform.0.look_up(&text, at, size)
+    }
     /// Where an input method's candidate window goes: under the clause it
     /// is converting (Japanese, Chinese), as a native field puts it, in the
     /// window's points; `None` while there is none (the caret, then).
@@ -832,12 +845,39 @@ struct EditorDrag {
     mode: Cell<Option<EditorPointerSelection>>,
     pointer: Cell<(f32, f32)>,
     generation: Cell<u64>,
+    /// The words or paragraphs the last presses selected by, and the
+    /// selection they made: a shift-click extending it, while it stands,
+    /// goes by those units too, as AppKit's text views do.
+    units: Cell<Option<(EditorPointerSelection, (usize, usize))>>,
+    /// A press on the selection, where and on what byte: moved far enough
+    /// it drags the selected text; released, the caret goes there.
+    text_press: Cell<Option<(f32, f32, usize)>>,
+    /// The selection while a drag of text shows where it would drop (the
+    /// caret there): back as it leaves, or before the drop.
+    drop_restore: Cell<Option<crate::text_edit::Selection>>,
 }
 impl EditorDrag {
     fn cancel(&self) {
         self.mode.set(None);
+        self.text_press.set(None);
         self.generation.set(self.generation.get().wrapping_add(1));
     }
+}
+/// The host's picture of a region of what the window last showed.
+type Snapshotter = Rc<dyn Fn(Rect, u32) -> Option<std::sync::Arc<crate::image::ImageData>>>;
+/// The host's recorder and player of wheel input (`Ui::on_wheel_tape`).
+type WheelTaper = Rc<dyn Fn(WheelTape) -> Result<String, String>>;
+/// What devtools ask of the host's wheel input (`Ui::wheel_tape`): to record
+/// what the window receives, or to play a recording back as if received.
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq)]
+pub enum WheelTape {
+    /// Start recording (what was recorded before is dropped).
+    Record,
+    /// Stop: the recording, as text (`zgx_desktop`'s tape format).
+    Stop,
+    /// Play `tape` back, its events at their times, at `at` (in points).
+    Play { tape: String, at: (f32, f32) },
 }
 pub(crate) struct UiStorage {
     runtime: Runtime,
@@ -861,6 +901,12 @@ pub(crate) struct UiStorage {
     /// whether it was called and not yet heard (`popup_soon_heard`).
     popup_soon: RefCell<Option<Rc<dyn Fn()>>>,
     popup_soon_sent: Cell<bool>,
+    /// The host's way to picture what the window last showed (`Ui::on_snapshot`).
+    snapshotter: RefCell<Option<Snapshotter>>,
+    /// The host's wheel recorder and player (`Ui::on_wheel_tape`).
+    wheel_taper: RefCell<Option<WheelTaper>>,
+    /// The display's refresh period (`Ui::set_refresh_interval`).
+    refresh_interval: Cell<std::time::Duration>,
     /// The host shows drag previews in windows of their own (`set_popup_previews`).
     popup_previews: Cell<bool>,
     pub(crate) scene: Rc<RefCell<Scene>>,
@@ -1089,6 +1135,9 @@ impl Ui {
             popups: RefCell::new(Vec::new()),
             popup_soon: RefCell::new(None),
             popup_soon_sent: Cell::new(false),
+            snapshotter: RefCell::new(None),
+            wheel_taper: RefCell::new(None),
+            refresh_interval: Cell::new(std::time::Duration::from_micros(16_667)),
             popup_previews: Cell::new(false),
             runtime,
             scene: Rc::new(RefCell::new(Scene::new(width, height))),
@@ -1307,6 +1356,10 @@ impl Ui {
                 f();
                 guard.completed = true;
             });
+            #[cfg(feature = "trace")]
+            if crate::trace::enabled() {
+                crate::trace::name(effect.number(), format!("@{} binding", owner.number()));
+            }
             self.storage
                 .owned
                 .borrow_mut()
@@ -2145,6 +2198,71 @@ impl Ui {
     pub(crate) fn popup_flips(&self) -> Signal<Vec<(NodeId, (bool, bool))>> {
         self.storage.popup_flips.clone()
     }
+    /// How the host pictures what the window last showed: `take(rect,
+    /// max_width)` gives `rect` (in points, the window's coordinates) at
+    /// most `max_width` pixels wide, its height in proportion, or `None`.
+    /// What [`Ui::snapshot`] and `NodeHandle::snapshot` use; without it they
+    /// give nothing.
+    pub fn on_snapshot(
+        &self,
+        take: impl Fn(Rect, u32) -> Option<std::sync::Arc<crate::image::ImageData>> + 'static,
+    ) {
+        *self.storage.snapshotter.borrow_mut() = Some(Rc::new(take));
+    }
+    /// A picture of `node` as the window last showed it (a thumbnail of a
+    /// pane, say): its box, at most `max_width` pixels wide. Native views
+    /// in it (a page, a terminal) are the platform's to draw and show as
+    /// what zgx drew under them. `None` if the host takes no pictures, or
+    /// the node is not laid out or is hidden (its box is not what shows).
+    pub fn snapshot(
+        &self,
+        node: NodeId,
+        max_width: u32,
+    ) -> Option<std::sync::Arc<crate::image::ImageData>> {
+        let take = self.storage.snapshotter.borrow().clone()?;
+        let bounds = {
+            let scene = self.scene.borrow();
+            if !scene.layout_visible(node) {
+                return None;
+            }
+            scene.bounds(node)
+        };
+        if bounds.width <= 0. || bounds.height <= 0. {
+            return None;
+        }
+        take(bounds, max_width.max(1))
+    }
+    /// The display's refresh period, as the host knows it (60 Hz until
+    /// told): what the engine times itself steps by (a stretched view
+    /// springing back, overlay scrollbars fading), so they move every
+    /// refresh, on a 120 Hz display as on a 60 Hz one.
+    pub fn set_refresh_interval(&self, interval: std::time::Duration) {
+        if interval >= std::time::Duration::from_millis(2)
+            && interval <= std::time::Duration::from_millis(100)
+        {
+            self.storage.refresh_interval.set(interval);
+        }
+    }
+    pub(crate) fn refresh_interval(&self) -> std::time::Duration {
+        self.storage.refresh_interval.get()
+    }
+    /// How the host records and plays back wheel input for devtools (`zgx
+    /// inspect`'s gesture replays): its input path, the trackpad's phases,
+    /// resampling and edges included, runs as for the platform's events.
+    #[doc(hidden)]
+    pub fn on_wheel_tape(&self, tape: impl Fn(WheelTape) -> Result<String, String> + 'static) {
+        *self.storage.wheel_taper.borrow_mut() = Some(Rc::new(tape));
+    }
+    /// Ask the host's wheel recorder or player (`on_wheel_tape`); an error
+    /// if the host has none.
+    #[doc(hidden)]
+    pub fn wheel_tape(&self, request: WheelTape) -> Result<String, String> {
+        let taper = self.storage.wheel_taper.borrow().clone();
+        match taper {
+            Some(taper) => taper(request),
+            None => Err("this host records and plays no wheel input".into()),
+        }
+    }
     /// Call `soon` as the pointer reaches something that opens a popup (a
     /// popover's or menu's trigger, a view with a tooltip or context menu),
     /// once until the host hears it (`popup_soon_heard`): a host showing
@@ -2549,10 +2667,13 @@ impl Ui {
             && self.input.focused() == Some(job.owner)
             && self.input.is_enabled(&self.scene.borrow(), job.owner)
     }
-    /// Next deadline for active editor drag autoscroll. Idle editors schedule nothing.
+    /// Next deadline of a timed interaction: a key sequence waiting, a drag
+    /// resting on a destination toward springing it open, editor drag
+    /// autoscroll. Idle windows schedule nothing.
     pub fn next_interaction_deadline(&self) -> Option<Instant> {
         [
             self.input.next_key_deadline(),
+            self.input.next_spring_deadline(),
             self.next_editor_interaction_deadline(),
             self.next_selection_deadline(),
             crate::compose_scrollbar::next_fade(self),
@@ -2602,6 +2723,13 @@ impl Ui {
         };
         // A stretched scroll view springing back.
         let keys = if crate::elastic::advance(self, now) {
+            self.try_prepare_frame()?;
+            true
+        } else {
+            keys
+        };
+        // A drag resting on a destination long enough to spring it open.
+        let keys = if self.input.advance_spring(&self.scene, now) {
             self.try_prepare_frame()?;
             true
         } else {
@@ -3089,6 +3217,9 @@ impl Ui {
                 label,
             ),
         );
+        // Its text shows in `text`: where assistive technology finds its
+        // lines' geometry.
+        self.semantics.borrow_mut().set_text_node(root, text);
         let scene = self.scene.clone();
         let sem = self.semantics.clone();
         let edit = editor.clone();
@@ -3995,6 +4126,34 @@ impl Ui {
         });
         let scene = self.scene.clone();
         let input_storage = Rc::downgrade(&self.storage);
+        // The byte a drop at `x`, `y` (the window's points) goes in at.
+        let drop_point: Rc<dyn Fn(f32, f32) -> usize> = {
+            let scene = scene.clone();
+            let editor = editor.clone();
+            let scroll = scroll.clone();
+            let typography = typography.clone();
+            let wrap = wrap.clone();
+            let input_storage = input_storage.clone();
+            Rc::new(move |x, y| {
+                let s = scene.borrow();
+                let bounds = s.bounds(viewport);
+                let offset = *scroll.borrow();
+                let (_, size, font) = typography.borrow().clone();
+                let edit = editor.borrow();
+                let layout = committed_layout(
+                    &input_storage,
+                    &s,
+                    root,
+                    &edit,
+                    size,
+                    wrap.get().then_some(bounds.width.max(1.)),
+                    &font,
+                );
+                let x = (x - bounds.x).clamp(0., bounds.width.max(0.)) + offset.0;
+                let y = (y - bounds.y).clamp(0., (bounds.height - 0.01).max(0.)) + offset.1;
+                layout.hit_position(x, y).byte_offset
+            })
+        };
         let drag_select: Rc<dyn Fn()> = {
             let scene = scene.clone();
             let gesture = gesture.clone();
@@ -4042,17 +4201,17 @@ impl Ui {
                             line,
                             multiline,
                         );
-                        if current.0.byte_offset < edges.0.byte_offset {
-                            (edges.1.byte_offset, current.0)
-                        } else if current.1.byte_offset > edges.1.byte_offset {
-                            (edges.0.byte_offset, current.1)
-                        } else {
-                            (edges.0.byte_offset, edges.1)
-                        }
+                        extend_by_units(edges, current)
                     }
                 };
                 edit.set_selection(anchor, focus.byte_offset);
                 position.set(focus);
+                if let EditorPointerSelection::Unit { .. } = mode {
+                    gesture.units.set(Some((
+                        mode,
+                        (edit.selection().anchor, edit.selection().focus),
+                    )));
+                }
             })
         };
         let velocity: Rc<dyn Fn() -> (f32, f32)> = {
@@ -4322,8 +4481,30 @@ impl Ui {
                     let x = x - bounds.x + scroll.0;
                     let y = y - bounds.y + scroll.1;
                     let hit = layout.hit_position(x, y);
+                    // A press on the selection may drag it (as AppKit's text
+                    // views and browsers do): it stays until the pointer
+                    // moves or lets go.
+                    let selected_range = edit.selection().range();
+                    if !cx.pointer_modifiers().shift
+                        && cx.click_count() == 1
+                        && !hint.secure.get()
+                        && !selected_range.is_empty()
+                        && selected_range.start < hit.byte_offset
+                        && hit.byte_offset < selected_range.end
+                    {
+                        gesture.cancel();
+                        let (px, py) = gesture.pointer.get();
+                        gesture.text_press.set(Some((px, py, hit.byte_offset)));
+                        return;
+                    }
+                    let selected = (edit.selection().anchor, edit.selection().focus);
+                    let units = gesture
+                        .units
+                        .get()
+                        .filter(|(_, made)| *made == selected)
+                        .map(|(units, _)| units);
                     let mode = if cx.pointer_modifiers().shift {
-                        EditorPointerSelection::Character(edit.selection().anchor)
+                        units.unwrap_or(EditorPointerSelection::Character(edit.selection().anchor))
                     } else {
                         match cx.click_count() {
                             2 => {
@@ -4339,12 +4520,21 @@ impl Ui {
                     };
                     let (anchor, focus) = match mode {
                         EditorPointerSelection::Character(anchor) => (anchor, hit),
+                        EditorPointerSelection::Unit { edges, line } if cx.pointer_modifiers().shift => {
+                            let current = editor_pointer_unit(edit.around(hit.byte_offset), layout.as_ref(), hit, x, y, line, multiline);
+                            extend_by_units(edges, current)
+                        }
                         EditorPointerSelection::Unit { edges, .. } => (edges.0.byte_offset, edges.1),
                     };
                     edit.set_selection(anchor, focus.byte_offset);
                     position.set(focus);
                     gesture.cancel();
                     gesture.mode.set(Some(mode));
+                    let made = (edit.selection().anchor, edit.selection().focus);
+                    gesture.units.set(match mode {
+                        EditorPointerSelection::Unit { .. } => Some((mode, made)),
+                        EditorPointerSelection::Character(_) => None,
+                    });
                 }
                 // Middle-click paste, where the desktop has a primary
                 // selection: the caret goes under the pointer, and the host
@@ -4419,6 +4609,21 @@ impl Ui {
                     }
                     gesture.cancel();
                 }
+                InputEvent::PointerMove { x, y } if gesture.text_press.get().is_some() => {
+                    let (px, py, _) = gesture.text_press.get().unwrap();
+                    if (x - px).hypot(y - py) > cx.drag_threshold() {
+                        gesture.text_press.set(None);
+                        let edit = editor.borrow();
+                        let range = edit.selection().range();
+                        let text = edit.slice(range.clone()).into_owned();
+                        drop(edit);
+                        cx.start_drag_from(
+                            crate::input::DraggedText::from_editor(text, root, range),
+                            px,
+                            py,
+                        );
+                    }
+                }
                 InputEvent::PointerMove { x, y } if gesture.mode.get().is_some() => {
                     gesture.pointer.set((x, y));
                     drag_select();
@@ -4429,8 +4634,106 @@ impl Ui {
                     ..
                 }
                 | InputEvent::PointerCancel => {
+                    // Pressed on the selection and let go: the caret there.
+                    if let Some((_, _, at)) = gesture.text_press.take()
+                        && matches!(event, InputEvent::PointerUp { .. })
+                    {
+                        editor.borrow_mut().set_selection(at, at);
+                        position.set(TextPosition {
+                            byte_offset: at,
+                            affinity: TextAffinity::After,
+                        });
+                        changed = true;
+                    }
                     gesture.cancel();
                     cx.release_pointer();
+                }
+                InputEvent::Drag(drag) => {
+                    let dragged = drag.payload.downcast_ref::<crate::input::DraggedText>();
+                    match (drag.phase, dragged) {
+                        // Out of this editor: other apps take it as text.
+                        (crate::input::DragPhase::Start, Some(text))
+                            if text.from.as_ref().is_some_and(|(from, _)| *from == root) =>
+                        {
+                            cx.set_drag_export(vec![crate::input::DragItem::Text(
+                                text.text().to_owned(),
+                            )]);
+                        }
+                        // Over it: the caret where it would drop.
+                        (crate::input::DragPhase::Over, Some(_)) if !read_only.get() => {
+                            cx.accept_drag();
+                            let at = drop_point(drag.x, drag.y);
+                            let mut edit = editor.borrow_mut();
+                            if gesture.drop_restore.get().is_none() {
+                                gesture.drop_restore.set(Some(edit.selection()));
+                            }
+                            if edit.selection() != (crate::text_edit::Selection { anchor: at, focus: at }) {
+                                edit.set_selection(at, at);
+                                position.set(TextPosition {
+                                    byte_offset: at,
+                                    affinity: TextAffinity::After,
+                                });
+                                changed = true;
+                            }
+                        }
+                        (crate::input::DragPhase::Leave, Some(_)) => {
+                            if let Some(was) = gesture.drop_restore.take()
+                                && !drag.accepted
+                            {
+                                editor.borrow_mut().set_selection(was.anchor, was.focus);
+                                changed = true;
+                            }
+                        }
+                        (crate::input::DragPhase::Drop, Some(text))
+                            if !read_only.get() && !cx.default_prevented() =>
+                        {
+                            let at = drop_point(drag.x, drag.y);
+                            let mut edit = editor.borrow_mut();
+                            if let Some(was) = gesture.drop_restore.take() {
+                                edit.set_selection(was.anchor, was.focus);
+                            }
+                            let modifiers = cx.pointer_modifiers();
+                            let copy = if cfg!(target_os = "macos") {
+                                modifiers.alt
+                            } else {
+                                modifiers.control
+                            };
+                            let moved_here = !copy
+                                && text.from.as_ref().is_some_and(|(from, range)| {
+                                    *from == root && edit.slice(range.clone()) == text.text()
+                                });
+                            let dropped = match &text.from {
+                                Some((_, range)) if moved_here => edit.move_text(range.clone(), at),
+                                _ => edit.insert_dropped(at, text.text()),
+                            };
+                            if dropped {
+                                // From another editor, moved: it lets it go.
+                                if !copy && !moved_here && text.from.is_some() {
+                                    text.taken.set(true);
+                                }
+                                position.set(TextPosition {
+                                    byte_offset: edit.selection().focus,
+                                    affinity: TextAffinity::After,
+                                });
+                                changed = true;
+                            }
+                            cx.prevent_default();
+                            cx.stop_propagation();
+                        }
+                        // Dragged out of here and moved elsewhere: let it go.
+                        (crate::input::DragPhase::End, Some(text)) if text.taken.get() => {
+                            if let Some((from, range)) = &text.from
+                                && *from == root
+                            {
+                                let mut edit = editor.borrow_mut();
+                                if edit.slice(range.clone()) == text.text() {
+                                    edit.set_selection(range.start, range.end);
+                                    changed = edit.backspace();
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 InputEvent::KeyUp {
                     key: Key::Space, ..
@@ -4488,7 +4791,7 @@ impl Ui {
                         _ => None,
                     };
                     let directional = paging || (matches!(key, Key::ArrowUp | Key::ArrowDown)
-                        && !(cfg!(target_os = "macos") && modifiers.meta));
+                        && !(cfg!(target_os = "macos") && (modifiers.meta || modifiers.alt)));
                     if !directional {
                         preferred_x.set(None);
                     }
@@ -4536,6 +4839,12 @@ impl Ui {
                             }
                             Key::ArrowDown if cfg!(target_os = "macos") && modifiers.meta => {
                                 e.move_document_end(modifiers.shift)
+                            }
+                            // By paragraphs, as AppKit's text views go.
+                            Key::ArrowUp | Key::ArrowDown
+                                if cfg!(target_os = "macos") && modifiers.alt =>
+                            {
+                                e.move_paragraph(key == Key::ArrowUp, modifiers.shift)
                             }
                             // Right-to-left text: the arrows go the way it
                             // shows (the macOS way), by its layout.
@@ -4831,6 +5140,22 @@ enum EditorPointerSelection {
     },
 }
 
+/// A selection by units (`edges`, the first selected) reaching the unit at
+/// the pointer (`current`): from the far edge of the first, to the near edge
+/// of the one reached, either way.
+fn extend_by_units(
+    edges: (TextPosition, TextPosition),
+    current: (TextPosition, TextPosition),
+) -> (usize, TextPosition) {
+    if current.0.byte_offset < edges.0.byte_offset {
+        (edges.1.byte_offset, current.0)
+    } else if current.1.byte_offset > edges.1.byte_offset {
+        (edges.0.byte_offset, current.1)
+    } else {
+        (edges.0.byte_offset, edges.1)
+    }
+}
+
 pub(crate) fn editor_pointer_unit(
     around: (usize, std::borrow::Cow<'_, str>),
     layout: &dyn TextLayout,
@@ -4840,13 +5165,19 @@ pub(crate) fn editor_pointer_unit(
     line: bool,
     multiline: bool,
 ) -> (TextPosition, TextPosition) {
-    if line && multiline {
-        return layout.visual_line_range(hit);
-    }
     // The text around the hit (its line, in a long text) from where it
     // starts in the whole.
     let (base, text) = (around.0, &*around.1);
-    let (start, end) = if line {
+    let (start, end) = if line && multiline {
+        // Its paragraph, break included, as AppKit's text views and
+        // browsers' text areas select one (not the wrapped row).
+        let offset = hit.byte_offset.saturating_sub(base).min(text.len());
+        let start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
+        let end = text[offset..]
+            .find('\n')
+            .map_or(text.len(), |i| offset + i + 1);
+        (base + start, base + end)
+    } else if line {
         (base, base + text.len())
     } else {
         // A hit is the nearest caret, not necessarily the grapheme underneath

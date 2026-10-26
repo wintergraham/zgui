@@ -1,0 +1,57 @@
+---
+// Code blocks' copy buttons and tabs (lib/code-frame.mjs makes the markup).
+// One listener for the page: the blocks are static HTML, in or out of React.
+---
+
+<script>
+  const timers = new WeakMap<HTMLElement, number>();
+
+  async function copy(button: HTMLElement) {
+    const block = button.closest('.cb');
+    const panel = block?.querySelector<HTMLElement>('.cb-panel:not([hidden])') ?? block;
+    const code = panel?.querySelector('code');
+    if (!code) return;
+    await navigator.clipboard.writeText(code.innerText.replace(/\n$/, ''));
+    button.dataset.copied = '';
+    button.setAttribute('aria-label', 'Copied');
+    clearTimeout(timers.get(button));
+    timers.set(button, window.setTimeout(() => {
+      delete button.dataset.copied;
+      button.setAttribute('aria-label', 'Copy code');
+    }, 1600));
+  }
+
+  function select(tab: HTMLElement, focus = false) {
+    const list = tab.closest('[role="tablist"]');
+    const block = tab.closest('.cb');
+    if (!list || !block) return;
+    for (const other of list.querySelectorAll<HTMLElement>('[role="tab"]')) {
+      const on = other === tab;
+      other.setAttribute('aria-selected', String(on));
+      other.tabIndex = on ? 0 : -1;
+      const panel = block.querySelector<HTMLElement>(`#${other.getAttribute('aria-controls')}`);
+      if (panel) panel.hidden = !on;
+    }
+    if (focus) tab.focus();
+  }
+
+  document.addEventListener('click', (event) => {
+    const target = event.target as HTMLElement;
+    const button = target.closest<HTMLElement>('.cb-copy');
+    if (button) return void copy(button);
+    const tab = target.closest<HTMLElement>('.cb [role="tab"]');
+    if (tab) select(tab);
+  });
+
+  // Arrow keys move between tabs, as ARIA's tabs pattern does.
+  document.addEventListener('keydown', (event) => {
+    const tab = (event.target as HTMLElement).closest<HTMLElement>('.cb [role="tab"]');
+    if (!tab) return;
+    const tabs = [...tab.parentElement!.querySelectorAll<HTMLElement>('[role="tab"]')];
+    const at = tabs.indexOf(tab);
+    const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 }[event.key];
+    if (to === undefined) return;
+    event.preventDefault();
+    select(tabs[(to + tabs.length) % tabs.length], true);
+  });
+</script>

@@ -7,9 +7,11 @@
 -- `view`, over a magenta dot grid every 20 points, its two shapes drawn one
 -- by one (`each`, `draw_item`). The wheel pans it; a click on a shape
 -- recolours that shape alone.
--- Right, from x 400: Zoom (doubles the view's zoom) and Jump (the list's
--- row 2000 to its centre), 100 by 40 each, over a measured list 400 by 360
--- of rows one to three lines tall; row 2000 is five lines, in green.
+-- Right, from x 400: Zoom (doubles the view's zoom), Jump (the list's
+-- row 2000 to its centre) and a Drag chip, 100 by 40 each, over a measured
+-- list 400 by 360 of rows one to three lines tall; row 2000 is five lines,
+-- in green. The chip dragged onto the board springs it open once it rests
+-- there (SPRUNG), and drops (DROPPED).
 type Shape = { id: number, x: number, y: number, w: number, h: number, color: string }
 type View = { x: number, y: number, zoom: number }
 
@@ -49,6 +51,13 @@ local board = ui.overlay {
 				shapes:set_key({ i, "color" }, "#00ff00")
 			end
 		end
+	end,
+	on_drag_spring = function(payload: string)
+		print("SPRUNG " .. payload)
+		return true
+	end,
+	on_drop = function(payload: string)
+		print("DROPPED " .. payload)
 	end,
 	ui.canvas {
 		w_full = true,
@@ -120,6 +129,16 @@ return ui.row {
 					print("JUMP 2000")
 				end
 			end),
+			ui.div {
+				w = 100,
+				h = 40,
+				bg = "#404060",
+				on_drag = function()
+					print("DRAGGING chip")
+					return "chip"
+				end,
+				ui.text { "Drag", literal = true },
+			},
 		},
 		ui.list {
 			ref = list,

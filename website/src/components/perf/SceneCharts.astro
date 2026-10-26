@@ -1,0 +1,25 @@
+---
+import BarChart from './BarChart.astro';
+import { scene as sceneOf, text, runUrl } from '@/lib/perf';
+
+interface Props {
+  scene: string;
+  /** The metrics shown, in order (default: every metric the scene has). */
+  metrics?: string[];
+}
+const { scene } = Astro.props;
+const s = sceneOf(scene);
+const has = (metric: string) => {
+  const source = text.metrics[metric as keyof typeof text.metrics].source;
+  return s.cells.some((c) => source in c);
+};
+const metrics = (Astro.props.metrics ?? Object.keys(text.metrics)).filter(has);
+const info = text.scenes[scene as keyof typeof text.scenes];
+---
+
+<p class="perf-note">
+  {info.note} {s.trials} trials. <a href={runUrl(s)}>Raw data</a>
+</p>
+<div class="perf-charts">
+  {metrics.map((metric) => <BarChart scene={scene} metric={metric} />)}
+</div>

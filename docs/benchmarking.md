@@ -79,6 +79,15 @@ Its protocol (`run_macos_comparison.py --suite`) is shorter than the full one:
 | frame pacing | 3 captures of 8 s per cell (of two, one bad capture moved a median: lab scroll on 2026-10-25 read 30.0 and 17.8 ms, and ten more captures of the same build 18.0) | 8 |
 | blank rows | vlist, scroll and jump: one 8 s capture of the window at 10 Hz per cell | none |
 
+An app that exits abnormally (a signal, or no report before the runner ends
+it) is launched once more, in a timed trial, a pacing capture or a blank-row
+capture alike, and the run records each such exit beside the launches of its
+framework (`abnormal_exits`, `launches` in audit.json), which the site states.
+GPUI Fast aborts now and then inside AppKit while ScreenCaptureKit captures its
+window (`-[NSWindow _updateButtonsForWindowSharingSession]`, about 1 launch in
+12 on 2026-10-25); its crash dialog still stops the next preflight until it is
+dismissed by hand.
+
 Every trial is checked: it must run as long as asked (its exit within 3 s of
 `ZGX_SECONDS`) with the ticks that length makes (58–61 a second while active,
 none while idle; animate's frames matching the rate it reports), or the run is
@@ -175,10 +184,105 @@ Each reports two figures:
 `RENDER=0` measures text as a renderer would and draws nothing, the frame's
 CPU work without a GPU, as CI's instruction gate counts it (`micro-state`,
 `micro-vscroll-fixed`, `micro-vscroll-variable`, at 300 operations each).
+
+`micro_luau_bench` runs the same scenes written in Luau and loaded through
+`ScriptHost` (`support/micro_luau.rs`), a binary of its own so `micro_bench`
+links no script engine: the counter is a `ui.state` its
+handler (`ui.command`) adds to, the lists are `ui.list` rows built by the
+script, each row's text read from the host with `ui.call_sync`, and a scroll
+step moves the list's `ui.shared` offset as a host would. The JSON says
+`"framework":"zgx-luau"`. What it adds to Rust's figures is the script's own
+cost: running the handler, and building each row that scrolls in from Luau
+(its tables, props and lowering). The gate counts these as `micro-*-luau`.
 Engine changes that move these keep the public API and ship only if they make
 every measured figure faster.
 
+**The floor under a frame with the GPU encode.** Most of zgx's `RENDER=1`
+frame is what any Metal frame costs. `crates/zgx-gpu/examples/mtl_floor.rs`
+times a bare one (a command buffer, one empty render pass into a 2048 × 1536
+target, scissor, end, commit, waiting for it before the next):
+
+| on this Mac (2026-10-25) | process CPU | main thread | Metal's own threads |
+| --- | --- | --- | --- |
+| back to back | 44–94 µs | 12–24 µs | about 30–70 µs |
+| one frame per 16.7 ms | about 209 µs | about 80 µs | about 130 µs |
+
+The main thread retires the same 70,000 instructions either way; paced frames
+take longer because each starts on cold caches and a clocked-down core.
+zgx's own work over the floor is about 15,000 instructions drawing and 18,000
+presenting, beside its frame without the encode. So judge renderer changes by
+the main thread's retired instructions, and quote a frame's process CPU against
+this floor.
+
+## Changes to zgx, A/B on a Mac: cells
+
+The comparison measures frameworks; `scripts/perf/cells.py` measures
+candidate changes to zgx against each other, windowed. A cell is a base commit
+with PR heads merged in and environment variables set. Cells merging the same
+commits share one binary, so a change behind a toggle is A/B'd with no build
+noise.
+
+```sh
+python3 scripts/perf/cells.py build cells.json   # builds each distinct cell from git
+python3 scripts/perf/cells.py run cells.json     # measures, interleaved (quiet desktop)
+python3 scripts/perf/cells.py report             # /tmp/zgx-cells/out/results.json
+```
+
+```json
+{"base": "e5d796d1",
+ "cells": {"base":       {"merge": ["5f242aaf"]},
+           "base+warm":  {"merge": ["5f242aaf"], "env": {"ZGX_GPU_WARM": "1"}},
+           "timer":      {"merge": ["4b06f949", "5f242aaf"]}},
+ "parts": {"gestures": ["base", "base+warm", "timer"],
+           "animate":  ["base", "base+warm"],
+           "scroll":   ["base", "timer"]},
+ "rounds": {"gestures": 4, "animate": 3, "scroll": 3}}
+```
+
+Builds happen in a worktree of their own under `$ZGX_CELLS_DIR` (default
+`/tmp/zgx-cells`), and merges stay local. A run waits for a quiet desktop
+(`preflight.py`). It launches staged copies from `/tmp` (`staging.py`), and
+it stops at a system dialog without touching it. There are three parts:
+
+- **gestures**, the first frame after idle. The mail example runs under
+  `zgx-run --inspect`. Each round idles 4 s, so the window trims (at 1.5 s),
+  then plays a wheel tape (`scripts/perf/tapes/`, modeled flings) through
+  `zgx inspect replay`, twice, and samples 5 s at rest. Each cell launches
+  twice a round:
+  - **With `ZGX_PRESENT_LOG=1`**, for the timings only: the first frame after
+    each trim is checked for being forced whole (`render forced=`), caught up
+    from the shown surface (`draw … catch_up=`) and warmed. Then its render
+    to present and render to second present are read.
+  - **Without the log**, for late frames (over 1.5 refreshes), CPU and
+    instructions per frame shown, and CPU at rest. The log samples the layer
+    tree every 4 ms on the main thread: 1.25% of a core and about 32 M
+    instructions a second on a window otherwise at 0.002%.
+
+  Render to second present is the time the second frame shows. First to
+  second present widens whenever the first frame shows sooner, so judge by
+  render to second.
+- **animate**: the animation workload at the display's rate, without the log.
+  This gives CPU, GPU power, instructions and WindowServer CPU (`macsample`).
+  One short logged launch per cell counts warm-ups; it has no input, so there
+  should be none.
+- **scroll**: the heavy and lab workloads scrolling, as 15 s trials plus
+  pacing captures (`framepace`: p99, long intervals).
+
+Pacing depends on the display: a 60 Hz Mac (most M1 MacBooks) cannot judge
+pacing at 120 Hz, so those cells need a ProMotion Mac.
+
 ## The macOS comparison, quick and full
+
+Sampling starts from window readiness: the runner polls for up to 2.5 seconds
+until the app has a window that is frontmost and uncovered, then warms it for
+five seconds before the sample. It only activates the benchmark app; system
+dialogs stop the run without being touched. Apps get three extra seconds of
+lifetime; readiness taking over 2.5 seconds is a slow launch, retried once.
+Timeouts and covered windows are retried once too. Exhausted retries are
+recorded without a sample and reject the audit, while other cells continue.
+Logs retain readiness time,
+and the audit records the sampling anchor and actual requested lifetime. A
+shortened sample is rejected. Startup remains a separate measurement.
 
 `python3 scripts/run_macos_comparison.py --scene heavy --quick` measures zgx
 against GPUI Fast in about ten minutes: two repeats of each mode, frame
@@ -272,6 +376,24 @@ Within zgx's start, `ZGX_PROFILE=1` prints the process's instructions and millis
 
 `crates/zgx-gpu/examples/startup_bench.rs` isolates the renderer's share headless: the GPU device, the system font database and the first text in four styles.
 
+Measured again in October 2026 (dist builds, instructions retired, the lab window at rest), zgx's start against GPUI Fast's:
+- **Overall:** over the first 2.5 s, zgx retires about 966 M instructions and GPUI Fast about 902 M (7% more for zgx). zgx's peak footprint is lower, 229.6 against 241 MB, and the wall time to content is the same within noise.
+- **zgx to its first present, about 754 M:**
+  - the loader and Rust start: 55 M;
+  - wgpu's adapter, 40–52 M, and its device, about 65 M, both on a background thread while AppKit launches;
+  - the event loop and menus: about 114 M;
+  - AppKit's launch up to the window request: about 88 M;
+  - AppKit making the `NSWindow`: about 217 M;
+  - the first frame: about 145 M.
+- **Inside the GPU steps:**
+  - `BufferWrites::new` (vendor/wgpu-hal), about 12 M, is the process's first shader compile.
+  - `MetalFrame::new` in the first frame was about 15 M, about 10.5 M of it naga translating `draw.wgsl` and `copy_offset.wgsl` to MSL. Their MSL is now translated ahead (`src/draw.metal`, `src/copy_offset.metal`, kept current by a test), which cut the first frame by about 10 M. Metal's `newLibraryWithSource` is 0.4 M in-process; Metal compiles out of process and caches binaries itself.
+- **What doesn't account for the gap:**
+  - Linking WebKit, AVFoundation and CoreMedia: about 2 M at launch.
+  - The accessibility adapter: 2–5 M.
+- **What does:** the gap with GPUI's direct Metal is mostly wgpu's adapter and device setup.
+- **The menu bar:** AppKit's first `setMainMenu` is about 46 M on the main thread, and building the menus' items about 27 M more. winit's default menu bar paid the first at launch, only to be replaced. Now zgx makes its menu bar once the first frame shows (at once with no window about to show one), and winit makes none. The first present went from about 742 M to 657 M instructions (median of 6 launches), and from about 89 to 80 ms.
+
 ## On Windows
 
 `scripts/windows_compare.py` runs the comparison scenes (`comparisons/README.md`) for zgx, GPUI Fast, MyGo and the older GPUI adapter in turn on the same desktop, the Windows counterpart of the macOS runner:
@@ -291,9 +413,11 @@ Startup and keystroke latency are measured apart:
 - **`scripts/windows_startup_probe.py`** times a launch to its first content as macOS's probe does: spawn, the window, then its header strip until the header's text has drawn, read as the window drew it (`PrintWindow`), so a window covering it cannot pass for its text. It reports medians of wall time, CPU time and cycles over launches in rotating order; `--settle 5` then keeps each at rest five seconds and takes its private bytes and working set.
 - **`scripts/windows_latency_probe.py --press`** times a key press to the composed screen. Use `key_workload` (zgx-desktop's example) against GPUI's `keys`: each redraws a counter at every key.
 
-Each run also records whether a UI Automation client read zgx's window (zgx prints `accessibility: a client asked for the tree` when `ZGX_ACCESSIBILITY_LOG` is set, which the harness sets), and the summary says whether a screen reader ran (`SPI_GETSCREENREADER`) and which known UIA client processes did (the shell's touch keyboard host, Voice Access, Magnifier, test tools). Real desktops have such clients, so runs measure the machine as it is; zgx's accessibility work for them is part of its cost, and GPUI Fast and MyGo have no UI Automation provider. Compare only runs whose clients match.
+Each run also records whether a UI Automation client read zgx's window (zgx prints `accessibility: a client asked for the tree` when `ZGX_ACCESSIBILITY_LOG` is set, which the harness sets), and the summary says whether a screen reader ran (`SPI_GETSCREENREADER`) and which known UIA client processes did (the shell's touch keyboard host, Voice Access, Magnifier, test tools). Real desktops have such clients, so runs measure the machine as it is; zgx's accessibility work for them is part of its cost, and GPUI Fast and MyGo have no UI Automation provider. Compare only runs whose clients match. To size that work, `ZGX_ACCESSIBILITY=0` runs zgx with no provider at all: a diagnostic, never a figure to publish, since users get one.
 
-Keep the windows uncovered, the machine otherwise idle and on mains power, and repeat a comparison: the same binary's cycles a frame have moved by 15% between sessions on one machine (`animation_workload`, 2.73, then 3.16 after a day of GPU driver stress tests, then 2.66 after a reboot), so compare only runs that alternate within one session. A process's private bytes include the graphics driver's floor, which differs between Direct3D 12 (zgx) and Direct3D 11 (GPUI Fast, MyGo): see `vendor/wgpu-hal/ZGX_PATCH.md` and [windows.md](windows.md).
+Each run's window is brought to the front and must be uncovered as sampling begins and ends (a window opened from a process in the background stays behind the foreground one, and a covered window cost the compositor about three times as much and its own process far less to present); Zeron's windows are minimized for the runs. Keep the machine otherwise idle and on mains power, and repeat a comparison: the same binary's cycles a frame have moved by 15% between sessions on one machine (`animation_workload`, 2.73, then 3.16 after a day of GPU driver stress tests, then 2.66 after a reboot), so compare only runs that alternate within one session. A process's private bytes include the graphics driver's floor, which differs between Direct3D 12 (zgx) and Direct3D 11 (GPUI Fast, MyGo): see `vendor/wgpu-hal/ZGX_PATCH.md` and [the Windows notes](windows.md).
+
+The runner holds Windows' High performance power plan for its runs and restores the user's after (`--power-plan keep` leaves it). Under Balanced, Windows clocked a busy UI thread up and down from run to run, and since the cycles it counts are time, one binary's cycles a frame spread 30% (5% under High performance). Each run records the processors' clock against nominal (`processor_performance_percent`).
 
 ## Selecting and validating the zgx renderer
 

@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.astro/
+# Built from the repository's docs by scripts/sync-docs.mjs
+content/
+public/_docs/
+test-results/
+screenshots/
+src/generated/
+public/_redirects
+design/

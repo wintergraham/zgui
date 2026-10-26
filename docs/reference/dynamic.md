@@ -36,10 +36,13 @@ ui.presence(value: string | Readable<unknown> | (() -> unknown), build: (value: 
 
 ```lua
 type Task = { id: string, title: string, done: boolean }
-local tasks = ui.state("tasks", {
-	{ id = "a", title = "Write the docs", done = false },
-	{ id = "b", title = "Ship it", done = true },
-} :: { Task })
+local tasks = ui.state(
+	"tasks",
+	{
+		{ id = "a", title = "Write the docs", done = false },
+		{ id = "b", title = "Ship it", done = true },
+	} :: { Task }
+)
 local filter = ui.state("filter", "all")
 local selected = ui.state("selected", nil :: string?)
 local made = 0
@@ -88,12 +91,9 @@ return ui.column {
 		enter = { opacity = { 0, 1 }, duration = 200 },
 		exit = { opacity = 0, duration = 150 },
 	}),
-	ui.show(
-		function()
-			return #tasks:get() == 0
-		end,
-		ui.text { "Nothing to do" }
-	),
+	ui.show(function()
+		return #tasks:get() == 0
+	end, ui.text { "Nothing to do" }),
 	-- The selected task's id, crossfading as it changes.
 	ui.presence(selected, function(id: string)
 		return ui.text { "Selected: " .. id }

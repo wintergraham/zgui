@@ -14,7 +14,7 @@ from ctypes import wintypes
 
 pdh = ctypes.WinDLL("pdh")
 for _name in ("PdhOpenQueryW", "PdhAddEnglishCounterW", "PdhCollectQueryData", "PdhGetRawCounterArrayW",
-              "PdhCloseQuery"):
+              "PdhGetFormattedCounterValue", "PdhCloseQuery"):
     # PDH_STATUS: unsigned, as its codes are written (PDH_MORE_DATA).
     getattr(pdh, _name).restype = wintypes.DWORD
 PDH_MORE_DATA = 0x800007D2
@@ -46,6 +46,38 @@ def gpu_time(pid, engine="3D"):
     """`pid`'s running time on the GPU's `engine` engines (3D: where both
     an app's frames and the compositor's are drawn), in 100 ns units."""
     return rf"\GPU Engine(pid_{pid}_*_engtype_{engine})\Running Time"
+
+
+class PDH_FMT_COUNTERVALUE(ctypes.Structure):
+    _fields_ = [("CStatus", wintypes.DWORD), ("doubleValue", ctypes.c_double)]
+
+
+class Rate:
+    """One counter read as a rate, over the time since the last sample (the
+    processors' performance): `sample()` gives it as PDH formats it."""
+
+    def __init__(self, path):
+        self.query, self.counter = wintypes.HANDLE(), wintypes.HANDLE()
+        if pdh.PdhOpenQueryW(None, 0, ctypes.byref(self.query)) or pdh.PdhAddEnglishCounterW(
+                self.query, path, 0, ctypes.byref(self.counter)):
+            raise OSError(f"PDH could not open {path}")
+        pdh.PdhCollectQueryData(self.query)
+
+    def sample(self):
+        pdh.PdhCollectQueryData(self.query)
+        value = PDH_FMT_COUNTERVALUE()
+        if pdh.PdhGetFormattedCounterValue(self.counter, 0x200, None, ctypes.byref(value)):  # PDH_FMT_DOUBLE
+            return None
+        return value.doubleValue
+
+    def close(self):
+        pdh.PdhCloseQuery(self.query)
+
+
+def processor_performance():
+    """The processors' clock as a percentage of their nominal frequency
+    (a `Rate`): above 100 while boosting, below while Windows clocks down."""
+    return r"\Processor Information(_Total)\% Processor Performance"
 
 
 class Counters:

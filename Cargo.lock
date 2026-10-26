@@ -4409,7 +4409,7 @@ dependencies = [
 
 [[package]]
 name = "zgx"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "objc2-core-foundation",
  "objc2-core-video",
@@ -4423,7 +4423,7 @@ dependencies = [
 
 [[package]]
 name = "zgx-components"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "zgx",
  "zgx-desktop",
@@ -4453,7 +4453,7 @@ dependencies = [
 
 [[package]]
 name = "zgx-demo"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "softbuffer",
  "winit",
@@ -4465,7 +4465,7 @@ dependencies = [
 
 [[package]]
 name = "zgx-desktop"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "accesskit",
  "accesskit_atspi_common",
@@ -4522,11 +4522,11 @@ dependencies = [
 
 [[package]]
 name = "zgx-ghostty-sys"
-version = "0.1.0"
+version = "0.1.2"
 
 [[package]]
 name = "zgx-gpu"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "bytemuck",
  "gif",
@@ -4556,7 +4556,7 @@ dependencies = [
 
 [[package]]
 name = "zgx-harfrust"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
@@ -4567,11 +4567,12 @@ dependencies = [
 
 [[package]]
 name = "zgx-mlua"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "bstr",
  "either",
  "libc",
+ "luau0-src",
  "mlua-sys",
  "num-traits",
  "parking_lot",
@@ -4580,8 +4581,9 @@ dependencies = [
 
 [[package]]
 name = "zgx-run"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
+ "png 0.18.1",
  "serde_json",
  "zgx",
  "zgx-desktop",
@@ -4590,10 +4592,11 @@ dependencies = [
 
 [[package]]
 name = "zgx-script"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "libc",
  "memchr",
+ "png 0.18.1",
  "pulldown-cmark",
  "serde_json",
  "smallvec",

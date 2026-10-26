@@ -51,7 +51,7 @@ pub fn decode_svg(bytes: &[u8], width: u32, height: u32) -> Result<Arc<ImageData
     let mut pixmap = tiny_skia::Pixmap::new(width, height)
         .ok_or_else(|| GpuError("SVG image allocation failed".into()))?;
     // A raster where an SVG was asked for (a URL that serves either): drawn
-    // as that picture, scaled to fit.
+    // as that picture, fitted as an SVG is.
     if image::guess_format(bytes).is_ok() {
         let image = decode_image(bytes)?;
         let mut source = tiny_skia::Pixmap::new(image.width(), image.height())
@@ -71,10 +71,7 @@ pub fn decode_svg(bytes: &[u8], width: u32, height: u32) -> Result<Arc<ImageData
                 quality: tiny_skia::FilterQuality::Bicubic,
                 ..Default::default()
             },
-            tiny_skia::Transform::from_scale(
-                width as f32 / image.width() as f32,
-                height as f32 / image.height() as f32,
-            ),
+            contain(image.width() as f32, image.height() as f32, width, height),
             None,
         );
     } else {
@@ -97,7 +94,22 @@ pub fn decode_svg(bytes: &[u8], width: u32, height: u32) -> Result<Arc<ImageData
         .map_err(|e| GpuError(e.into()))
 }
 
-/// An SVG document drawn into `pixmap`, scaled to fill it.
+/// A picture `w` by `h` scaled to fit `width` by `height` whole, centred,
+/// keeping its proportions: an SVG's default `preserveAspectRatio`
+/// (`xMidYMid meet`), so a wide mark in a square box is not squeezed.
+fn contain(w: f32, h: f32, width: u32, height: u32) -> tiny_skia::Transform {
+    let scale = (width as f32 / w).min(height as f32 / h);
+    tiny_skia::Transform::from_row(
+        scale,
+        0.,
+        0.,
+        scale,
+        (width as f32 - w * scale) / 2.,
+        (height as f32 - h * scale) / 2.,
+    )
+}
+
+/// An SVG document drawn into `pixmap`, fitted to it (`contain`).
 #[cfg(feature = "svg")]
 fn render_svg(
     bytes: &[u8],
@@ -109,10 +121,7 @@ fn render_svg(
     options.image_href_resolver.resolve_string = Box::new(|_, _| None);
     let tree =
         resvg::usvg::Tree::from_data(bytes, &options).map_err(|e| GpuError(e.to_string()))?;
-    let transform = tiny_skia::Transform::from_scale(
-        width as f32 / tree.size().width(),
-        height as f32 / tree.size().height(),
-    );
+    let transform = contain(tree.size().width(), tree.size().height(), width, height);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
     Ok(())
 }
@@ -213,6 +222,30 @@ pub fn decode_gif(_: &[u8]) -> Result<Arc<zgx::animation::Animation>, GpuError> 
 
 #[cfg(test)]
 mod tests {
+    /// An SVG in a box of other proportions keeps its own, centred: a 2:1
+    /// mark in a square box fills its width and half its height.
+    #[cfg(feature = "svg")]
+    #[test]
+    fn an_svg_keeps_its_proportions_in_a_box_of_others() {
+        let wide = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="12" viewBox="0 0 2 1"><rect width="2" height="1"/></svg>"#;
+        let image = super::decode_svg(wide, 8, 8).unwrap();
+        let alpha = |x: usize, y: usize| image.pixels()[(y * 8 + x) * 4 + 3];
+        for x in 0..8 {
+            assert_eq!(
+                [alpha(x, 1), alpha(x, 2), alpha(x, 5), alpha(x, 6)],
+                [0, 255, 255, 0]
+            );
+        }
+        let tall = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 2"><rect width="1" height="2"/></svg>"#;
+        let image = super::decode_svg(tall, 8, 8).unwrap();
+        let alpha = |x: usize, y: usize| image.pixels()[(y * 8 + x) * 4 + 3];
+        for y in 0..8 {
+            assert_eq!(
+                [alpha(1, y), alpha(2, y), alpha(5, y), alpha(6, y)],
+                [0, 255, 255, 0]
+            );
+        }
+    }
     /// A format left out fails to decode, with an error naming the feature
     /// that brings it back.
     #[cfg(not(all(feature = "svg", feature = "png", feature = "gif")))]

@@ -79,6 +79,15 @@ enum Command {
         primary: bool,
         reply: mpsc::Sender<Result<Loaded, String>>,
     },
+    /// Publish a PNG as the clipboard, offered as `image/png` alone.
+    StoreImage {
+        png: Arc<[u8]>,
+        reply: mpsc::Sender<Result<(), String>>,
+    },
+    /// The clipboard's `image/png`.
+    LoadImage {
+        reply: mpsc::Sender<Result<Loaded, String>>,
+    },
     /// Raise `window` with an activation token; held here until done, so
     /// its surface lives as long.
     Activate {
@@ -163,29 +172,7 @@ impl WaylandClipboard {
         self.0
             .send(Command::Load { primary, reply })
             .map_err(|_| "Wayland data worker stopped".to_string())?;
-        let started = Instant::now();
-        let loaded = answer
-            .recv_timeout(LOAD_TIMEOUT)
-            .map_err(|_| "Wayland data worker did not answer".to_string())??;
-        let Loaded(mut stream, normalize) = loaded;
-        let mut bytes = Vec::new();
-        let mut buffer = [0u8; 65536];
-        loop {
-            let left = LOAD_TIMEOUT
-                .checked_sub(started.elapsed())
-                .filter(|left| !left.is_zero())
-                .ok_or("selection owner did not finish writing")?;
-            stream
-                .set_read_timeout(Some(left))
-                .map_err(|e| e.to_string())?;
-            match stream.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(n) if bytes.len() + n > LOAD_LIMIT => return Err("selection too large".into()),
-                Ok(n) => bytes.extend_from_slice(&buffer[..n]),
-                Err(error) if error.kind() == ErrorKind::Interrupted => {}
-                Err(error) => return Err(error.to_string()),
-            }
-        }
+        let (bytes, normalize) = read_loaded(answer)?;
         let text = String::from_utf8_lossy(&bytes);
         Ok(if normalize {
             text.replace("\r\n", "\n")
@@ -193,6 +180,57 @@ impl WaylandClipboard {
             text.into_owned()
         })
     }
+    /// Publish `png`, an encoded image, as the clipboard; fails as `store`
+    /// does before any input.
+    pub fn store_image(&self, png: Vec<u8>) -> Result<(), String> {
+        let (reply, answer) = mpsc::channel();
+        self.0
+            .send(Command::StoreImage {
+                png: png.into(),
+                reply,
+            })
+            .map_err(|_| "Wayland data worker stopped".to_string())?;
+        answer
+            .recv_timeout(LOAD_TIMEOUT)
+            .map_err(|_| "Wayland data worker did not answer".to_string())?
+    }
+    /// The clipboard's image, as the PNG it offers.
+    pub fn load_image(&self) -> Result<Vec<u8>, String> {
+        let (reply, answer) = mpsc::channel();
+        self.0
+            .send(Command::LoadImage { reply })
+            .map_err(|_| "Wayland data worker stopped".to_string())?;
+        Ok(read_loaded(answer)?.0)
+    }
+}
+/// What the selection's owner writes to the stream the worker `answer`s
+/// with, up to `LOAD_LIMIT` within `LOAD_TIMEOUT`; and whether it is text
+/// to normalize.
+fn read_loaded(answer: mpsc::Receiver<Result<Loaded, String>>) -> Result<(Vec<u8>, bool), String> {
+    let started = Instant::now();
+    let loaded = answer
+        .recv_timeout(LOAD_TIMEOUT)
+        .map_err(|_| "Wayland data worker did not answer".to_string())??;
+    let Loaded(mut stream, normalize) = loaded;
+    let mut bytes = Vec::new();
+    let mut buffer = [0u8; 65536];
+    loop {
+        let left = LOAD_TIMEOUT
+            .checked_sub(started.elapsed())
+            .filter(|left| !left.is_zero())
+            .ok_or("selection owner did not finish writing")?;
+        stream
+            .set_read_timeout(Some(left))
+            .map_err(|e| e.to_string())?;
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(n) if bytes.len() + n > LOAD_LIMIT => return Err("selection too large".into()),
+            Ok(n) => bytes.extend_from_slice(&buffer[..n]),
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok((bytes, normalize))
 }
 impl NativeData {
     /// Raise `window` with another launch's activation `token`.
@@ -273,6 +311,12 @@ impl NativeData {
                             }
                             Command::Load { primary, reply } => {
                                 let _ = reply.send(state.load(primary));
+                            }
+                            Command::StoreImage { png, reply } => {
+                                let _ = reply.send(state.store_image(png));
+                            }
+                            Command::LoadImage { reply } => {
+                                let _ = reply.send(state.load_image());
                             }
                             Command::Activate { token, window } => state.activate(&token, &window),
                             Command::Drag {
@@ -365,6 +409,8 @@ struct Offer {
     uris: bool,
     /// The preferred text type offered, an index into `TEXT_TYPES`.
     text: Option<usize>,
+    /// Whether it offers `image/png`.
+    png: bool,
 }
 struct Seat {
     name: u32,
@@ -444,6 +490,13 @@ struct Completion {
     accepted: std::sync::mpsc::Receiver<bool>,
     deadline: Instant,
 }
+/// What this process published as the clipboard.
+enum Published {
+    /// Text, and the same as HTML.
+    Text(Arc<str>, Option<Arc<str>>),
+    /// An image, as PNG.
+    Png(Arc<[u8]>),
+}
 struct State {
     routes: Routes,
     handler: Handler,
@@ -459,7 +512,7 @@ struct State {
     primary_offers: HashMap<u32, (PrimaryOffer, Option<usize>)>,
     primary_selection: Option<(PrimaryOffer, Option<usize>)>,
     /// What this process published, until another client replaces it.
-    source: Option<(wl_data_source::WlDataSource, Arc<str>, Option<Arc<str>>)>,
+    source: Option<(wl_data_source::WlDataSource, Published)>,
     primary_source: Option<(PrimarySource, Arc<str>)>,
     /// The latest input serial and the seat it came from.
     serial: Option<(u32, u32)>,
@@ -713,12 +766,40 @@ impl State {
                 source.offer((*kind).into());
             }
             device.set_selection(Some(&source), serial);
-            if let Some((previous, ..)) = self.source.replace((source, text, html.map(Into::into)))
-            {
+            let published = Published::Text(text, html.map(Into::into));
+            if let Some((previous, _)) = self.source.replace((source, published)) {
                 previous.destroy();
             }
         }
         Ok(())
+    }
+    fn store_image(&mut self, png: Arc<[u8]>) -> Result<(), String> {
+        let (seat, serial) = self.serial.ok_or("no input has reached this client yet")?;
+        let seat = self
+            .seats
+            .iter()
+            .find(|candidate| candidate.name == seat)
+            .ok_or("the input seat is gone")?;
+        let (Some(manager), Some(device)) = (&self.manager, &seat.device) else {
+            return Err("the compositor has no data device".into());
+        };
+        let source = manager.create_data_source(&self.qh, ());
+        source.offer("image/png".into());
+        device.set_selection(Some(&source), serial);
+        if let Some((previous, _)) = self.source.replace((source, Published::Png(png))) {
+            previous.destroy();
+        }
+        Ok(())
+    }
+    fn load_image(&mut self) -> Result<Loaded, String> {
+        let (read, write) = UnixStream::pair().map_err(|e| e.to_string())?;
+        let offer = self.selection.as_ref().ok_or("the clipboard is empty")?;
+        if !offer.png {
+            return Err("the clipboard holds no PNG image".into());
+        }
+        offer.proxy.receive("image/png".into(), write.as_fd());
+        drop(write);
+        Ok(Loaded(read, false))
     }
     fn load(&mut self, primary: bool) -> Result<Loaded, String> {
         // Even this process's own selection goes through the compositor: its
@@ -1053,11 +1134,19 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for State {
                 }
             }
             wl_data_source::Event::Send { mime_type, fd } => {
-                if let Some((current, text, html)) = &state.source
+                if let Some((current, published)) = &state.source
                     && current == source
                 {
-                    let html = html.as_ref().filter(|_| mime_type == "text/html");
-                    write_selection(fd, html.unwrap_or(text).clone());
+                    match published {
+                        Published::Text(text, html) => {
+                            let html = html.as_ref().filter(|_| mime_type == "text/html");
+                            write_selection(fd, html.unwrap_or(text).clone());
+                        }
+                        Published::Png(png) if mime_type == "image/png" => {
+                            write_bytes(fd, png.clone());
+                        }
+                        Published::Png(_) => {}
+                    }
                 }
             }
             wl_data_source::Event::Cancelled => {
@@ -1218,6 +1307,7 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for State {
             wl_data_offer::Event::Offer { mime_type } => {
                 if let Some(saved) = state.offers.get_mut(&offer.id().protocol_id()) {
                     saved.uris |= mime_type == "text/uri-list";
+                    saved.png |= mime_type == "image/png";
                     saved.text = preferred(saved.text, &mime_type);
                 }
             }
@@ -1255,6 +1345,7 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for State {
                         proxy: id,
                         uris: false,
                         text: None,
+                        png: false,
                     },
                 );
             }

@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import time
 
-from platform_smoke import release_mounts, stop, wait_for_wm, use_ibus_engine, wait_for_ibus_xim
+from platform_smoke import release_mounts, stop, wait_for_wm, use_ibus_engine, wait_for_ibus_xim, wait_for_exit
 
 
 def main():
@@ -146,7 +146,7 @@ def main():
                 # Closed as a user closes it (Openbox's Alt+F4), not by the app's
                 # own timer, which a quick run would wait out.
                 xdo('windowactivate', '--sync', window, 'key', 'alt+F4')
-                app.wait(timeout=25)
+                wait_for_exit(app, env, args.output, 25)
             trace = (args.output/'application.log').read_text()
             assert app.returncode == 0, trace
             assert re.search(r'PREEDIT "[^"\n]+"', trace), trace

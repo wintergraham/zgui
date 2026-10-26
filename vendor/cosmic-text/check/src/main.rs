@@ -37,6 +37,53 @@ macro_rules! layout {
     }};
 }
 
+/// `layout!` for `text` in up to four spans of different attributes (a
+/// weight, a family, metadata, a size), cut at `cuts` (character counts),
+/// as a rich text's runs are.
+macro_rules! layout_rich {
+    ($ct:ident, $fonts:expr, $text:expr, $cuts:expr, $width:expr, $wrap:expr) => {{
+        use $ct::*;
+        let wrap = [Wrap::None, Wrap::Word, Wrap::Glyph, Wrap::WordOrGlyph][$wrap];
+        let mut buffer = Buffer::new($fonts, Metrics::new(14., 18.));
+        buffer.set_wrap(wrap);
+        buffer.set_size(Some($width), None);
+        let base = Attrs::new().family(Family::SansSerif);
+        let kinds = [
+            base.clone().metadata(1),
+            base.clone().weight(Weight::BOLD).metadata(2),
+            base.clone().family(Family::Monospace).metadata(3),
+            base.clone().metrics(Metrics::new(17., 21.)).metadata(4),
+        ];
+        let text: &str = $text;
+        let bounds: Vec<usize> = text.char_indices().map(|(i, _)| i).chain([text.len()]).collect();
+        let mut spans = Vec::new();
+        let mut at = 0;
+        for (k, cut) in $cuts.iter().enumerate() {
+            let end = bounds[(*cut).min(bounds.len() - 1)].max(at);
+            if end > at {
+                spans.push((&text[at..end], kinds[k % kinds.len()].clone()));
+            }
+            at = end;
+        }
+        if at < text.len() {
+            spans.push((&text[at..], base.clone()));
+        }
+        buffer.set_rich_text(spans, &base, Shaping::Advanced, None);
+        buffer.shape_until_scroll($fonts, false);
+        let mut out = Vec::new();
+        for run in buffer.layout_runs() {
+            out.push(format!("line {} rtl {} y {} w {}", run.line_i, run.rtl, run.line_y, run.line_w));
+            for g in run.glyphs {
+                out.push(format!(
+                    "{} {}..{} x {} y {} w {} level {} font {:?} meta {}",
+                    g.glyph_id, g.start, g.end, g.x, g.y, g.w, g.level.number(), g.font_id, g.metadata
+                ));
+            }
+        }
+        out
+    }};
+}
+
 /// Shaping time for a transcript growing by a token a tick, its last seven
 /// 105-byte lines reshaped every tick.
 macro_rules! bench {
@@ -114,7 +161,7 @@ fn main() {
     let mut up = upstream::FontSystem::new();
     let mut pa = patched::FontSystem::new();
     std::panic::set_hook(Box::new(|_| {}));
-    let (mut identical, mut both_panicked) = (0, 0);
+    let (mut identical, mut rich, mut both_panicked) = (0, 0, 0);
     for (i, text) in texts.iter().enumerate() {
         for (width, wrap) in [(1e6, 0), (120., 1), (60., 2), (240., 3)] {
             let a = catch_unwind(AssertUnwindSafe(|| layout!(upstream, &mut up, text, width, wrap)));
@@ -137,9 +184,37 @@ fn main() {
                 }
             }
         }
+        // The same text in spans of different attributes (a rich text's
+        // runs), cut at random places.
+        let chars = text.chars().count().max(1) as u64;
+        let cuts: Vec<usize> = {
+            let mut cuts: Vec<usize> = (0..3).map(|_| (next(&mut seed) % (chars + 1)) as usize).collect();
+            cuts.sort();
+            cuts
+        };
+        for (width, wrap) in [(1e6, 0), (120., 1), (240., 3)] {
+            let a = catch_unwind(AssertUnwindSafe(|| layout_rich!(upstream, &mut up, text, cuts, width, wrap)));
+            let b = catch_unwind(AssertUnwindSafe(|| layout_rich!(patched, &mut pa, text, cuts, width, wrap)));
+            match (a, b) {
+                (Ok(a), Ok(b)) if a == b => rich += 1,
+                (Err(_), Err(_)) => {
+                    both_panicked += 1;
+                    up = upstream::FontSystem::new();
+                    pa = patched::FontSystem::new();
+                }
+                (a, b) => {
+                    let _ = std::panic::take_hook();
+                    let first = match (&a, &b) {
+                        (Ok(a), Ok(b)) => a.iter().zip(b).find(|(x, y)| x != y).map(|(x, y)| format!("{x}\n  {y}")),
+                        _ => None,
+                    };
+                    panic!("rich text {i} {text:?} cut {cuts:?} (wrap {wrap}) differs: {:?}", first.unwrap_or_else(|| format!("upstream panicked {}, patched panicked {}", a.is_err(), b.is_err())));
+                }
+            }
+        }
         if i % 4 == 3 {
             pa.shape_run_cache.trim(1);
         }
     }
-    println!("{identical} identical layouts; both panicked on {both_panicked}");
+    println!("{identical} identical layouts, {rich} of rich text; both panicked on {both_panicked}");
 }

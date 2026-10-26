@@ -2985,3 +2985,385 @@ fn native_views_come_from_the_host_by_key_and_survive_reloads() {
     h.frame();
     assert!(h.natives.is_empty());
 }
+
+#[test]
+fn a_controlled_input_keeps_its_typing_and_shows_changes_from_elsewhere() {
+    let mut h = Harness::inline(
+        r##"local name = ui.state("name", "")
+        local told = ui.state("told", "")
+        ui.command { id = "clear", run = function() name:set("") end }
+        return ui.column {
+            ui.input { id = "field", w = 200,
+                -- Shown in capitals: what is typed stays as typed meanwhile.
+                value = function() return name:get():upper() end,
+                on_change = function(t) name:set(t); told:set(t) end },
+            ui.text { id = "told", "{told}" },
+            ui.button { id = "other", w = 40, h = 20, "o" },
+        }"##,
+    );
+    h.type_text("field", "ada");
+    h.frames(1);
+    assert_eq!(h.text("told"), "ada");
+    assert_eq!(h.text("field"), "ada", "the function's answer waits");
+    // A change from elsewhere shows while it is focused, as a send
+    // clearing a composer does.
+    assert!(h.host.run_command("clear"));
+    h.frames(1);
+    assert_eq!(h.text("told"), "ada", "not told back to on_change");
+    h.ui.dispatch(zgx::input::InputEvent::Text("b".into()));
+    h.settle();
+    h.frames(1);
+    assert_eq!(h.text("told"), "b", "typing goes on from what it shows");
+    // Left, it shows the function's text.
+    h.click("other");
+    h.frames(1);
+    assert_eq!(h.text("field"), "B");
+    assert_eq!(h.error(), None);
+}
+
+#[test]
+fn a_list_of_data_builds_rows_from_items_and_runs_only_the_row_that_changed() {
+    let mut h = Harness::inline(
+        r##"local messages = ui.state("messages", {
+            { id = "a", text = "one" }, { id = "b", text = "two" }, { id = "c", text = "three" },
+        })
+        local built = ui.state("built", 0)
+        ui.command { id = "grow", run = function()
+            messages:set_key({ 2, "text" }, messages:peek()[2].text .. "!")
+        end }
+        ui.command { id = "first", run = function() messages:remove(1) end }
+        ui.command { id = "retitle", run = function() messages:set_key({ 1, "title" }, "x") end }
+        return ui.column { w = 300, h = 400,
+            ui.text { id = "built", "{built}" },
+            -- Built once each, following its item.
+            ui.list { id = "live", w = 300, h = 120, height = 20,
+                data = messages, key = function(m) return m.id end,
+                row = function(m, index, row)
+                    built:set(built:peek() + 1)
+                    return ui.text { id = `live-{m.id}`, function()
+                        return `{index:get()} {row:get().text}`
+                    end }
+                end },
+            -- Built again when its item changes, by place.
+            ui.list { id = "plain", w = 300, h = 120, height = 20, data = messages,
+                row = function(m, index)
+                    return ui.text { id = `plain-{index:peek()}`, m.text, literal = true }
+                end },
+        }"##,
+    );
+    h.frames(1);
+    assert_eq!(h.text("live-b"), "2 two");
+    assert_eq!(h.text("plain-3"), "three");
+    assert_eq!(h.text("built"), "3");
+    // One item changes: its row's function runs, no row is built.
+    let calls = h.calls();
+    assert!(h.host.run_command("grow"));
+    h.frames(1);
+    assert_eq!(h.text("live-b"), "2 two!");
+    assert_eq!(h.text("plain-2"), "two!");
+    assert_eq!(h.text("built"), "3");
+    // The command, the live row's text and the plain row's build.
+    assert!(h.calls() - calls <= 4, "{} calls", h.calls() - calls);
+    // Keyed rows move with their items; their index follows.
+    assert!(h.host.run_command("first"));
+    h.frames(1);
+    assert!(h.find("live-a").is_none());
+    assert_eq!(h.text("live-b"), "1 two!");
+    assert_eq!(h.text("live-c"), "2 three");
+    assert_eq!(h.text("plain-1"), "two!");
+    assert_eq!(h.text("built"), "3");
+    assert_eq!(h.error(), None);
+}
+
+#[test]
+fn a_list_of_data_takes_no_count() {
+    let runtime = zgx::reactive::Runtime::new();
+    let host = zgx_script::ScriptHost::inline(
+        &runtime,
+        "app",
+        r#"return ui.list { data = ui.state("l", {}), count = 3, row = function() return ui.div {} end }"#,
+    );
+    let error = host.reload().unwrap_err();
+    assert!(error.contains("not with `count`"), "{error}");
+}
+
+#[test]
+fn a_markdown_view_draws_blocks_and_builds_again_only_those_that_change() {
+    let mut h = Harness::with_desktop(|runtime| {
+        zgx_script::ScriptHost::inline(
+            runtime,
+            "app",
+            r##"local reply = ui.state("reply", "# Title\n\nSome **bold** words.\n\n```lua\nprint(1)\n```\n\nThen")
+            ui.command { id = "more", run = function() reply:set(reply:peek() .. " more") end }
+            return ui.column { w = 300, h = 280, ui.markdown_view { "{reply}", w_full = true } }"##,
+        )
+    });
+    h.frames(1);
+    let texts = h.texts();
+    for want in [
+        "Title",
+        "Some bold words.",
+        "lua",
+        "print(1)",
+        "Copy",
+        "Then",
+    ] {
+        assert!(texts.iter().any(|t| t == want), "{want} in {texts:?}");
+    }
+    // The code block before the growing paragraph keeps its nodes.
+    let copy = h.find("copy").unwrap();
+    assert!(h.host.run_command("more"));
+    h.frames(1);
+    assert!(h.texts().iter().any(|t| t == "Then more"));
+    assert_eq!(
+        h.find("copy"),
+        Some(copy),
+        "the code block was not built again"
+    );
+    // Copy puts the code on the clipboard.
+    h.click("copy");
+    h.frames(1);
+    assert_eq!(h.desktop.as_ref().unwrap().clipboard(), "print(1)");
+    h.frames(1);
+    assert!(h.texts().iter().any(|t| t == "Copied"));
+    assert_eq!(h.error(), None);
+}
+
+#[test]
+fn a_buttons_variant_styles_what_its_props_leave_unset() {
+    let mut h = Harness::inline(
+        r##"return ui.column {
+            ui.button { id = "plain", "Send" },
+            ui.button { id = "primary", "Send", variant = "primary" },
+            ui.button { id = "icon", "x", variant = "ghost", size = 24 },
+        }"##,
+    );
+    h.frames(1);
+    assert_eq!(h.bounds("primary").height, h.bounds("plain").height);
+    // `size` stays the box's, as on any element: no variant of its own.
+    assert!(h.find("icon").is_some());
+    assert_eq!(h.error(), None);
+    let runtime = zgx::reactive::Runtime::new();
+    let host = zgx_script::ScriptHost::inline(
+        &runtime,
+        "app",
+        r#"return ui.button { "x", variant = "loud" }"#,
+    );
+    let error = host.reload().unwrap_err();
+    assert!(error.contains("`variant` is"), "{error}");
+}
+
+#[test]
+fn a_subtree_provides_values_its_components_and_rows_read() {
+    let mut h = Harness::inline(
+        r##"local user = ui.state("user", "Ada")
+        local Badge = ui.component(function(props: { id: string })
+            local who = ui.use_context("user")
+            local tone = ui.use_context("tone", "plain")
+            return ui.text { id = props.id, function() return `{who:get()} {tone}` end }
+        end)
+        local names = ui.state("names", { "a" })
+        ui.command { id = "rename", run = function() user:set("Grace") end }
+        return ui.column {
+            provide = { user = user },
+            Badge { id = "outer" },
+            ui.column { provide = { tone = "loud" },
+                Badge { id = "inner" },
+                ui.each(names, function(n) return Badge { id = `row-{n}` } end),
+            },
+        }"##,
+    );
+    h.frames(1);
+    assert_eq!(h.text("outer"), "Ada plain");
+    assert_eq!(
+        h.text("inner"),
+        "Ada loud",
+        "nearer values over farther, the rest kept"
+    );
+    assert_eq!(h.text("row-a"), "Ada loud", "rows read it too");
+    // A state provided is the state: what reads it follows it.
+    assert!(h.host.run_command("rename"));
+    h.frames(1);
+    assert_eq!(h.text("inner"), "Grace loud");
+    assert_eq!(h.error(), None);
+}
+
+#[test]
+fn a_text_given_a_state_follows_it_without_the_script() {
+    let mut h = Harness::inline(
+        r##"local Counter = ui.component(function()
+            local count = ui.use_state(2)
+            return ui.column {
+                ui.text { id = "count", count },
+                ui.button { id = "add", w = 40, h = 20, on_click = ui.add(count, 1), "+" },
+            }
+        end)
+        return Counter {}"##,
+    );
+    h.frames(1);
+    assert_eq!(h.text("count"), "2");
+    let calls = h.calls();
+    h.click("add");
+    h.frames(1);
+    assert_eq!(h.text("count"), "3");
+    assert_eq!(
+        h.calls(),
+        calls,
+        "no script ran: the add and the text are Rust's"
+    );
+    assert_eq!(h.error(), None);
+}
+
+/// An app's scene as it shows: every node in document order, its kind,
+/// text and box: what two renders are compared by.
+fn scene_shown(h: &mut Harness) -> String {
+    h.ui.prepare_frame();
+    let scene = h.ui.scene.borrow();
+    let mut out = String::new();
+    let mut stack = vec![(scene.root(), 0)];
+    while let Some((node, depth)) = stack.pop() {
+        let b = scene.bounds(node);
+        let text = match scene.kind(node) {
+            zgx::scene::NodeKind::Text { text, .. } => format!(" {text:?}"),
+            zgx::scene::NodeKind::RichText { text, .. } => format!(" {:?}", text.text()),
+            _ => String::new(),
+        };
+        out.push_str(&format!(
+            "{}{}{text} {:.1},{:.1} {:.1}x{:.1}\n",
+            "  ".repeat(depth),
+            zgx::inspect::kind_name(&scene, node),
+            b.x,
+            b.y,
+            b.width,
+            b.height
+        ));
+        for child in scene.children(node).iter().rev() {
+            stack.push((*child, depth + 1));
+        }
+    }
+    out
+}
+
+#[test]
+fn a_streamed_markdown_view_matches_a_full_render_after_every_piece() {
+    let document = "# Plan\n\nSome **bold** words, then `code` and a [link](https://example.com).\n\n```rust\nfn main() {\n    println!(\"hi\");\n}\n```\n\nAfter the code.\n\n1. one\n2. two\n3. three continues\n   on a second line\n\n- a\n- b\n\n> quoted\n> twice\n\n## Done\n\nThe end.";
+    const APP: &str =
+        r#"return ui.column { w = 380, h = 900, ui.markdown_view { "{reply}", w_full = true } }"#;
+    let app = |text: &str| {
+        let mut reply = None;
+        let h = Harness::new(|runtime| {
+            let host = zgx_script::ScriptHost::inline(runtime, "app", APP);
+            reply = Some(host.shared("reply", zgx_script::Value::from(text)));
+            host
+        });
+        (h, reply.unwrap())
+    };
+    let (mut streamed, reply) = app("");
+    let mut at = 0;
+    while at < document.len() {
+        // Pieces of 1 to 7 bytes, at character boundaries.
+        let mut next = (at + 1 + at % 7).min(document.len());
+        while !document.is_char_boundary(next) {
+            next += 1;
+        }
+        let so_far = &document[..next];
+        reply.set(zgx_script::Value::from(so_far));
+        streamed.frames(1);
+        let (mut whole, _) = app(so_far);
+        whole.frames(1);
+        assert_eq!(
+            scene_shown(&mut streamed),
+            scene_shown(&mut whole),
+            "after {next} bytes: {so_far:?}"
+        );
+        at = next;
+    }
+    assert_eq!(streamed.error(), None);
+}
+
+#[test]
+fn a_shrunk_column_grows_back_to_content_that_outgrew_it() {
+    let mut h = Harness::inline(
+        r##"local tall = ui.state("tall", 290)
+        ui.command { id = "grow", run = function() tall:set(310) end }
+        return ui.column { w = 380, h = 900, id = "outer",
+            ui.column { id = "inner", ui.div { w = 10, h = tall } } }"##,
+    );
+    h.frames(1);
+    let before = h.bounds("outer").height;
+    assert!(h.host.run_command("grow"));
+    h.frames(1);
+    let streamed = h.bounds("outer").height;
+    let mut fresh = Harness::inline(
+        r##"return ui.column { w = 380, h = 900, id = "outer",
+            ui.column { id = "inner", ui.div { w = 10, h = 310 } } }"##,
+    );
+    fresh.frames(1);
+    assert_eq!(streamed, fresh.bounds("outer").height, "was {before}");
+}
+
+/// A Luau input's blinking caret moves nothing, by a pixel, and damages the
+/// caret alone: a field sized by its text and a multiline one, beside text
+/// that would shift if either did.
+#[test]
+fn a_luau_inputs_blinking_caret_moves_nothing() {
+    use std::time::Duration;
+    for multiline in [false, true] {
+        let mut h = Harness::inline(&format!(
+            r#"
+local name = ui.state("name", "blink, and nothing moves")
+return ui.column {{
+    ui.row {{
+        ui.text {{ id = "before", "before" }},
+        ui.input {{ id = "field", label = "Name", value = name, multiline = {multiline} }},
+        ui.text {{ id = "after", "after" }},
+    }},
+}}
+"#
+        ));
+        h.click("field");
+        h.frame();
+        h.ui.set_caret_blink(Some(zgx::caret_blink::CaretBlink {
+            on: Duration::from_millis(500),
+            off: Duration::from_millis(400),
+            timeout: None,
+        }));
+        h.ui.scene.borrow_mut().flush();
+        let boxes = |h: &Harness| {
+            let scene = h.ui.scene.borrow();
+            let mut out = Vec::new();
+            let mut stack = vec![scene.root()];
+            while let Some(node) = stack.pop() {
+                out.push((node, scene.bounds(node)));
+                stack.extend(scene.children(node).iter().rev().copied());
+            }
+            out
+        };
+        let before = boxes(&h);
+        let caret = h.ui.focused_editor().expect("the field is focused").caret;
+        for blink in 0..6 {
+            let at = h.ui.next_interaction_deadline().expect("blinking");
+            assert!(h.ui.advance_interactions(at).unwrap());
+            h.ui.prepare_frame();
+            let report = h.ui.scene.borrow_mut().flush();
+            assert_eq!(
+                report.layout_nodes, 0,
+                "multiline {multiline}, blink {blink}"
+            );
+            assert!(
+                boxes(&h) == before,
+                "multiline {multiline}, blink {blink}: a box moved"
+            );
+            let shown = h.ui.scene.borrow().bounds(caret);
+            for damage in &report.damage {
+                assert!(
+                    damage.x >= shown.x - 1.
+                        && damage.y >= shown.y - 1.
+                        && damage.x + damage.width <= shown.x + shown.width + 1.
+                        && damage.y + damage.height <= shown.y + shown.height + 1.,
+                    "multiline {multiline}, blink {blink}: {damage:?} past the caret {shown:?}"
+                );
+            }
+        }
+    }
+}

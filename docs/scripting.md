@@ -1,13 +1,17 @@
 # Scripting zgx with Luau
 
+Coming from React? [Coming from React](coming-from-react.md) maps its patterns (state, effects, context, lists, data loading, forms, modals) to these, with the performance rules.
+
 `zgx-script` builds interfaces from [Luau](https://luau.org) scripts. A script runs once per load and returns a description of components, state bindings and animations; Rust lowers it to ordinary retained views. Layout, drawing, state and animation all stay in Rust. The script is called again only for event handlers, components as they mount, and properties it explicitly computes with a function. Text templates (`"Count: {count}"`) and every animation run without calling the script.
 
 ```lua
 local count = ui.state("count", 0)
 return ui.column {
-    p = 24, gap = 12, bg = "#172030",
-    ui.text { "Count: {count}", text_size = 18 },
-    ui.button { on_click = ui.add(count), px = 16, py = 10, "Increment" },
+	p = 24,
+	gap = 12,
+	bg = "#172030",
+	ui.text { "Count: {count}", text_size = 18 },
+	ui.button { on_click = ui.add(count), px = 16, py = 10, "Increment" },
 }
 ```
 
@@ -25,7 +29,7 @@ State is Rust-owned and keyed, so a reload keeps it, as React's Fast Refresh kee
 
 The [Luau reference](reference/index.md) has a page per element and API group: signatures, every option with its type and default, an example and the gotchas. [App structure](reference/app-structure.md) shows how to split a large app across modules that share its state.
 
-Examples: `hot_reload` (an app and two plugins), `frame_profiler` (a profiler window with sample data, menus, popovers and tooltips), `stream_luau` / `stream_rust` (the same window in Luau and Rust, compared by `examples/stream/measure.sh`), `anime_showcase` (the animation API), `anime_bench` (per-frame engine cost), `state_bench` (what a state update costs), `notes` (an app that saves with `ui.persist`), `mail` (a mail client in modules: a virtualized list, a selectable message, a spellchecked compose sheet, menus, tooltips and a settings window; run it with `zgx-run`), and in zgx-desktop `terminal` and `zgx_monitor` (multi-module apps whose panes split, resize and move by dragging; the monitor's host samples processes and publishes them as shared state).
+Examples: `hot_reload` (an app and two plugins), `frame_profiler` (a profiler window with sample data, menus, popovers and tooltips), `stream_luau` / `stream_rust` (the same window in Luau and Rust, compared by `examples/stream/measure.sh`), `anime_showcase` (the animation API), `anime_bench` (per-frame engine cost), `state_bench` (what a state update costs), `notes` (an app that saves with `ui.persist`), `mail` (a mail client in modules: a virtualized list, a selectable message, a spellchecked compose sheet, menus, tooltips and a settings window; run it with `zgx-run`), `chat` (a chat client against a model served in memory: replies streamed as server-sent events into a virtualized transcript of markdown with code blocks, a composer that grows, conversations with a search, and shortcuts; `cargo run -p zgx-run --example chat`, `zgx_run::run_hosting` serving it), and in zgx-desktop `terminal` and `zgx_monitor` (multi-module apps whose panes split, resize and move by dragging; the monitor's host samples processes and publishes them as shared state).
 
 ## Types
 
@@ -119,6 +123,7 @@ The component library's elements (`ui.data_grid`, `ui.tree`, `ui.calendar`, `ui.
 | `scroll`, `scroll_x` | scroll views; `offset = state` binds the position in points; `follow = true` keeps the view at its end while the content grows, until it is scrolled away (a transcript) |
 | `text "…"`, `text { "…", … }`, `text(fn)` | `{name}` interpolates state in Rust; `{{` `}}` are literal braces |
 | `rich { "plain", span { "bold", bold = true, on_click = … } }` | inline runs: `color bg text_size weight bold italic underline strike font on_click href` |
+| `markdown_view { text, breaks, paths, copy }` | markdown drawn (code blocks with Copy, the theme's colours), parsed as its text changes and only its changed blocks built again: a streaming reply's view ([reference](reference/text.md#markdown)) |
 | `markdown(text, { key, breaks, paths })` | markdown parsed into blocks of runs to draw your own way; with `key`, text that grows (a streaming reply) parses only its new end and keeps its earlier blocks the same tables ([reference](reference/text.md#markdown)) |
 | `image { src = "a.png", fit = "cover" }` | PNG or JPEG, relative to the script; `src` may be state |
 | `svg { src = "icon.svg" }`, `svg { code = "<svg…>" }` | `tint = color` (a state or function re-tints it); `tint = "currentColor"` follows the text color it inherits (a button's, hover included) |
@@ -145,13 +150,30 @@ Canvas drawing: `c:rect(x, y, w, h, paint, radius)`, `c:circle(x, y, r, paint)`,
 ```lua
 local web = ui.web { profile = "ephemeral" }
 local url = ui.state("url", "https://example.com")
+local function back()
+	web:back()
+end
 return ui.column {
-    ui.row { ui.button { "Back", on_click = function() web:back() end }, ui.text { function() return web.title end } },
-    ui.webview {
-        web = web, src = url, grow = 1, rounded = 12,
-        on_navigate = function(e) print(e.kind, e.url) end,   -- started, committed, finished, failed, changed
-        on_message = function(value) print(value.kind) end,   -- window.zgx.postMessage({ kind = … }) from the page
-    },
+	ui.row {
+		ui.button { "Back", on_click = back },
+		ui.text {
+			function()
+				return web.title
+			end,
+		},
+	},
+	ui.webview {
+		web = web,
+		src = url,
+		grow = 1,
+		rounded = 12,
+		on_navigate = function(e)
+			print(e.kind, e.url) -- started, committed, finished, failed, changed
+		end,
+		on_message = function(value)
+			print(value.kind) -- window.zgx.postMessage({ kind = … }) from the page
+		end,
+	},
 }
 ```
 
@@ -163,14 +185,25 @@ The controller's `url`, `title`, `loading`, `progress`, `can_go_back`, `can_go_f
 
 ```lua
 local term = ui.term("p1", {
-    cwd = "~/src",
-    on_title = function(title) print(title) end,
-    on_close = function(alive) term:close() end,   -- the process exited (alive = false)
+	cwd = "~/src",
+	on_title = function(title)
+		print(title)
+	end,
+	on_close = function(alive)
+		term:close()
+	end, -- the process exited (alive = false)
 })
-return ui.terminal { term = term, grow = 1, rounded = 10, on_focus = function() print("typing here") end }
+return ui.terminal {
+	term = term,
+	grow = 1,
+	rounded = 10,
+	on_focus = function()
+		print("typing here")
+	end,
+}
 ```
 
-The session's `title` (what the program set), `pwd` (the shell's directory), `process` (the foreground program's name), `pid`, `focused`, `bell`, `progress`, `exited`, `columns` and `rows` are tracked like state. Methods: `focus()`, `blur()`, `input(text)` (as typed), `paste(text)`, `binding(action)` (a Ghostty binding action: `"copy_to_clipboard"`, `"clear_screen"`, `"increase_font_size:1"`), `needs_confirm()` (whether closing ends something other than an idle shell) and `close()`. Events, as options: `on_title`, `on_pwd`, `on_process`, `on_exit(code)`, `on_close(alive)`, `on_bell`, `on_command(exit_code, ms)` (shell integration) and `on_notify(title, body)`. `progress_error` says the last progress report (OSC 9;4) was an error. `status` is what the program reports of itself through the [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status) (OSC 7501), when it does: `state` (`"idle"`, `"working"`, `"done"`, `"blocked"`, `"error"`), `kind` (what a blocked program waits for: `"permission"`, `"question"`, `"auth"`), `progress`, `app`, `title`, `msg`, `child_blocked` (a sub-task is blocked) and `since` (Unix seconds); `nil` otherwise. A terminal host fills it in; zgx-desktop's terminal example keeps a session's reports in its session server. The terminal reads its own keyboard, IME and mouse; app shortcuts reach the app through its menus (see [Commands](#commands-and-host-actions)). `zgx-desktop/examples/terminal` is a multiplexer written this way.
+The session's `title` (what the program set), `pwd` (the shell's directory), `process` (the foreground program's name), `pid`, `focused`, `bell`, `progress`, `exited`, `columns` and `rows` are tracked like state. Methods: `focus()`, `blur()`, `input(text)` (as typed), `paste(text)`, `binding(action)` (a Ghostty binding action: `"copy_to_clipboard"`, `"clear_screen"`, `"increase_font_size:1"`), `needs_confirm()` (whether closing ends something other than an idle shell), `snapshot(max_width?)` (a picture of what it shows now, as a `ui.image` `src`) and `close()`. Events, as options: `on_title`, `on_pwd`, `on_process`, `on_exit(code)`, `on_close(alive)`, `on_bell`, `on_command(exit_code, ms)` (shell integration) and `on_notify(title, body)`. `progress_error` says the last progress report (OSC 9;4) was an error. `status` is what the program reports of itself through the [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status) (OSC 7501), when it does: `state` (`"idle"`, `"working"`, `"done"`, `"blocked"`, `"error"`), `kind` (what a blocked program waits for: `"permission"`, `"question"`, `"auth"`), `progress`, `app`, `title`, `msg`, `child_blocked` (a sub-task is blocked) and `since` (Unix seconds); `nil` otherwise. A terminal host fills it in; zgx-desktop's terminal example keeps a session's reports in its session server. The terminal reads its own keyboard, IME and mouse; app shortcuts reach the app through its menus (see [Commands](#commands-and-host-actions)). `zgx-desktop/examples/terminal` is a multiplexer written this way.
 
 ### Native views
 
@@ -197,7 +230,7 @@ return ui.overlay { grow = 1,
 
 ### Drag and drop
 
-A node becomes a drag source with `on_drag = function() return payload end` (any plain value), dragged once the pointer moves past the system's drag threshold (GNOME's and KDE's setting, GTK's 8 points on Linux without one, Windows' `SM_CXDRAG`, 4 elsewhere); `drag_preview = function(payload) return node end` builds what follows the pointer, and `on_drag_end(payload, accepted)` reports how it ended. A destination takes `on_drop(payload, e)`, optionally `drop_when(payload)` to accept only some payloads, and `on_drag_over(payload, e)` / `on_drag_leave(payload)` to show where a drop would land; `e` is `{ x, y, local_x, local_y, w, h }`. The nearest accepting destination gets the drag. A node with `on_press` and `on_pointer_move` or `on_release` keeps the pointer from press to release, wherever it goes (a divider being dragged).
+A node becomes a drag source with `on_drag = function() return payload end` (any plain value), dragged once the pointer moves past the system's drag threshold (GNOME's and KDE's setting, GTK's 8 points on Linux without one, Windows' `SM_CXDRAG`, 4 elsewhere); `drag_preview = function(payload) return node end` builds what follows the pointer, and `on_drag_end(payload, accepted)` reports how it ended. A destination takes `on_drop(payload, e)`, optionally `drop_when(payload)` to accept only some payloads, and `on_drag_over(payload, e)` / `on_drag_leave(payload)` to show where a drop would land; `e` is `{ x, y, local_x, local_y, w, h }`. `on_drag_spring(payload)` spring-loads it: the drag rested on it for the system's delay (or Space was pressed), so it opens what it stands for, as a tab shows. `drag_preview_anchor = { 0.5, 0 }` with `drag_preview_offset = { 0, 16 }` hangs the preview below the pointer. The nearest accepting destination gets the drag. A node with `on_press` and `on_pointer_move` or `on_release` keeps the pointer from press to release, wherever it goes (a divider being dragged).
 
 ### Context menus
 
@@ -240,8 +273,12 @@ Sizes are border-box, as in CSS with `box-sizing: border-box`: `w` and `h` inclu
 An `absolute = true` node positions against its containing block: the nearest ancestor with `relative = true`, searched from its parent up but not past an `absolute` ancestor (which contains its own absolute descendants); with none, its parent. `left`, `top`, `right` and `bottom` count from that block's padding box, inside its border; percentages are of its size; both insets on an axis without a size stretch it between them; an axis without insets keeps it at its parent's content origin (plus `ml`/`mt`). `show`, `switch`, `each` and `presence` wrap their content in a node of their own, so mark the intended ancestor `relative` rather than relying on being its direct child. Transforms and scroll offsets never change the containing block: an absolute node moves with them, and still paints in its parent's place, under its clips.
 
 ```lua
-ui.column { relative = true, w = 300, h = 200,
-	ui.column { p = 12, ui.div { absolute = true, right = 8, bottom = 8, w = 16, h = 16 } } }
+ui.column {
+	relative = true,
+	w = 300,
+	h = 200,
+	ui.column { p = 12, ui.div { absolute = true, right = 8, bottom = 8, w = 16, h = 16 } },
+}
 ```
 
 ### Responsive layout
@@ -282,18 +319,23 @@ Three things animate what layout does, all the same way: after the layout pass t
 
 ```lua
 ui.each(tabs, function(tab)
-    return ui.row {
-        px = 10, h = 28,
-        -- Under the tab's content, filling it: the presence is placed.
-        ui.presence(function() return if active:get() == tab.id then "on" else nil end, function()
-            return ui.div { layout_id = "selection", h_full = true, rounded = 8, bg = "#ffffff14" }
-        end, { absolute = true, top = 0, left = 0, right = 0, bottom = 0 }),
-        ui.text { tab.name },
-    }
+	return ui.row {
+		px = 10,
+		h = 28,
+		-- Under the tab's content, filling it: the presence is placed.
+		ui.presence(function()
+			return if active:get() == tab.id then "on" else nil
+		end, function()
+			return ui.div { layout_id = "selection", h_full = true, rounded = 8, bg = "#ffffff14" }
+		end, { absolute = true, top = 0, left = 0, right = 0, bottom = 0 }),
+		ui.text { tab.name },
+	}
 end, {
-    key = function(tab) return tab.id end,
-    animate = { duration = 240, ease = "outQuint" },
-    exit = { opacity = 0, duration = 150 },
+	key = function(tab)
+		return tab.id
+	end,
+	animate = { duration = 240, ease = "outQuint" },
+	exit = { opacity = 0, duration = 150 },
 })
 ```
 
@@ -336,7 +378,7 @@ return Card { title = "Saved" }   -- `Card { titel = … }` is a type error in t
 
 ```lua
 local notes = ui.persist("notes", {})
-notes:insert(1, { id = "n1", title = "Groceries" })   -- saved within 250 ms
+notes:insert(1, { id = "n1", title = "Groceries" }) -- saved within 250 ms
 ```
 
 A key is read from disk the first time a run asks for it, while the script loads; after that it lives in the host like `ui.state`, so a hot reload keeps the live value and reads nothing. Keys are the script's own and a required module's are its own, as with `ui.state`. Writes are batched: the first change starts a 250 ms timer, and then every value changed since becomes JSON once, on the main thread, and are written by a background thread to a temporary file renamed over the old one, so a crash leaves the old value or the new, never half a file. `ScriptHost::save()` writes what is pending and waits; dropping the host does too. A file that is not JSON starts the key from `initial`, with a warning.
@@ -416,14 +458,21 @@ Some mistakes are not errors but are probably wrong; each is reported once per c
 A style names a theme token as a string: `bg = "$surface.raised"`, `color = "$text.secondary"`, `p = "$space.3"`, `rounded = "$radius.md"`, `font = "$font.mono"`, `shadow = "$shadow.lg"`. The standard tokens, their file format, app tokens and costs are described in [styling: Theming](styling.md#theming); every theme defines the standard tokens, so a script styled with them takes any theme.
 
 ```lua
-ui.theme.tokens({ app = { card = "{surface.raised}", badge = "alpha({accent}, 0.2)" } })
-ui.theme.default(ui.theme.load("brand.json"))   -- the app's look, unless the user picks another
+ui.theme.tokens { app = { card = "{surface.raised}", badge = "alpha({accent}, 0.2)" } }
+ui.theme.default(ui.theme.load("brand.json")) -- the app's look, unless the user picks another
 return ui.column {
-    bg = "$background", p = "$space.4", gap = "$space.2",
-    ui.text { "Settings", text_size = "$font.size.xl" },
-    ui.div { bg = "$app.card", rounded = "$radius.lg", h = 80 },
-    ui.button { "Light", on_click = function() ui.theme.set("zgx-light") end },
-    ui.column { theme = "zgx-light", bg = "$surface.raised", ui.text { "A light card" } },
+	bg = "$background",
+	p = "$space.4",
+	gap = "$space.2",
+	ui.text { "Settings", text_size = "$font.size.xl" },
+	ui.div { bg = "$app.card", rounded = "$radius.lg", h = 80 },
+	ui.button {
+		"Light",
+		on_click = function()
+			ui.theme.set("zgx-light")
+		end,
+	},
+	ui.column { theme = "zgx-light", bg = "$surface.raised", ui.text { "A light card" } },
 }
 ```
 
@@ -449,11 +498,17 @@ The `anime` global follows anime.js v4's API. Animations run in a Rust engine: o
 
 ```lua
 anime.animate(".card", {
-    x = { 0, 240 }, opacity = 0.6, rotate = "1turn",
-    delay = anime.stagger(60, { from = "center" }),
-    duration = 900, ease = "outElastic(1, .5)",
-    loop = true, alternate = true,
-    onComplete = function(a) print("done") end,
+	x = { 0, 240 },
+	opacity = 0.6,
+	rotate = "1turn",
+	delay = anime.stagger(60, { from = "center" }),
+	duration = 900,
+	ease = "outElastic(1, .5)",
+	loop = true,
+	alternate = true,
+	onComplete = function(a)
+		print("done")
+	end,
 })
 ```
 

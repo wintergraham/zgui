@@ -1,0 +1,46 @@
+---
+import { render } from 'astro:content';
+import type { TOCItemType } from 'fumadocs-core/toc';
+import Base from '@/layouts/Base.astro';
+import { Docs } from '@/components/docs';
+import CodeBlocks from '@/components/CodeBlocks.astro';
+import { pageTree, source } from '@/lib/source';
+import { markdownUrl, ogImage, repoUrl } from '@/lib/shared';
+
+export async function getStaticPaths() {
+  return source.getPages().map((page) => ({
+    params: { slug: page.slugs.join('/') },
+    props: { slugs: page.slugs },
+  }));
+}
+
+const { slugs } = Astro.props;
+const page = source.getPage(slugs)!;
+const entry = page.data._raw;
+const { Content, headings } = await render(entry);
+const toc: TOCItemType[] = headings
+  .filter((h) => h.depth >= 2 && h.depth <= 3)
+  // (the text without the heading's own "#" link, lib/rehype-prose.mjs)
+  .map((h) => ({ depth: h.depth, title: h.text.replace(/#$/, ''), url: `#${h.slug}` }));
+const sourceUrl = entry.data.source ? `${repoUrl}/blob/main/${entry.data.source}` : undefined;
+---
+
+<Base title={page.data.title} description={page.data.description} image={ogImage(slugs)}>
+  <a href="#nd-page" class="skip">Skip to content</a>
+  <Docs
+    client:load
+    tree={pageTree}
+    pathname={page.url}
+    params={Astro.params}
+    title={page.data.title}
+    description={page.data.lede ? page.data.description : undefined}
+    toc={toc}
+    markdownUrl={markdownUrl(page.url)}
+    sourceUrl={sourceUrl}
+  >
+    <div class="prose flex-1 text-fd-foreground/90">
+      <Content />
+    </div>
+  </Docs>
+  <CodeBlocks />
+</Base>

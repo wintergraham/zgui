@@ -19,6 +19,8 @@ on_resize: ((size: Size, element: Element) -> ())?
 on_visible: ((visible: boolean, element: Element) -> ())?
 on_drag: (() -> any)?
 drag_preview: ((payload: any) -> Node)?
+drag_preview_anchor: { number }?
+drag_preview_offset: { number }?
 on_drag_end: ((payload: any, accepted: boolean) -> ())?
 drag_export: ((payload: any) -> DragExport?)?
 on_drag_outside: ((payload: any, e: { x, y, grab_x, grab_y }) -> ())?
@@ -27,6 +29,7 @@ drop_when: ((payload: any) -> unknown)?
 on_drag_over: ((payload: any, e: DragPoint) -> ())?
 on_drag_leave: ((payload: any) -> ())?
 on_drop: ((payload: any, e: DragPoint) -> ())?
+on_drag_spring: ((payload: any) -> boolean?)?
 ```
 
 ## Options
@@ -48,6 +51,7 @@ on_drop: ((payload: any, e: DragPoint) -> ())?
 | `on_visible` | whether any of it shows, its element | it comes into view or all of it leaves (inside every clip and scroll viewport above it), and at its first layout (as an IntersectionObserver reports): build what only matters on screen |
 | `on_drag` | nothing; returns the payload | the pointer moves past the system's drag threshold from a press on it (4 points until the desktop gives its own, GTK's 8 on Linux): a drag starts, carrying what it returns (any plain value) |
 | `drag_preview` | the payload; returns a node | what follows the pointer while it drags |
+| `drag_preview_anchor`, `drag_preview_offset` | (values) `{ x, y }` | where the preview goes: its point `anchor` (fractions of its size; `{ 0.5, 0 }` its top middle) `offset` points from the pointer. `{ 0.5, 0 }` with `{ 0, 16 }` hangs it below the pointer, centred, so what the drag is over stays in view; without either, the grab point stays under the pointer |
 | `on_drag_end` | the payload, whether it was dropped on a destination | the drag ends |
 | `drag_export` | the payload; returns `{ text, url, files }` | the drag leaves the window: other apps take what it returns (macOS) |
 | `on_drag_outside` | the payload, `{ x, y, grab_x, grab_y }` | released outside every window of the app (macOS): a tab torn off its window; its preview goes rather than sliding back |
@@ -56,6 +60,7 @@ on_drop: ((payload: any, e: DragPoint) -> ())?
 | `on_drag_over` | the payload, `{ x, y, local_x, local_y, w, h }` | an accepted drag moves over it |
 | `on_drag_leave` | the payload | the drag leaves it |
 | `on_drop` | the payload, `{ x, y, local_x, local_y, w, h }` | an accepted drag is released over it |
+| `on_drag_spring` | the payload; returns `false` to decline | spring-loading: an accepted drag has rested on it for the system's delay (macOS's setting, 0.5 s by default; never where it is turned off), or Space was pressed while it is over it. Open what it stands for, as a tab shows or a folder opens; once per stay (moving within it does not start the delay again, leaving does) |
 
 `cmd` is the platform's command key, as `cmd` in a command's keys: Command (`meta`) on macOS, Ctrl (`ctrl`) elsewhere; test it for a shortcut (`e.cmd and e.key == "z"`) rather than `meta or ctrl`, which takes Super+Z on Linux and Ctrl+Z on macOS. `x` and `y` are in points from the window's top left, `local_x` and `local_y` from the node's, `w` and `h` its size. Key names are the character typed (`"a"`, `"A"`, `"/"`), `" "` for Space, `"F1"` to `"F35"`, or one of `"Tab"`, `"Enter"`, `"Escape"`, `"Backspace"`, `"Delete"`, `"ArrowLeft"`, `"ArrowRight"`, `"ArrowUp"`, `"ArrowDown"`, `"Home"`, `"End"`, `"PageUp"`, `"PageDown"`, `"Insert"`.
 
@@ -173,6 +178,7 @@ declare extern type Element with
 	function select_all(self): boolean
 	function set_selection(self, a: number, b: number?): boolean
 	function selection(self): (number?, number?)
+	function snapshot(self, max_width: number?): string?
 end
 ```
 
@@ -186,6 +192,7 @@ end
 | `has_class(class)` | whether its `class` names `class` |
 | `select_all()`, `set_selection(a, b)` | an input's selection, in characters (Unicode code points from 0, as `utf8.len` counts them); `b` defaults to `a`, a caret. False for other elements |
 | `selection()` | an input's anchor and focus (where the caret is); nil for other elements |
+| `snapshot(max_width?)` | a picture of it as the window last showed it, at most `max_width` pixels wide (480 if not given): the `src` of an image showing it (`ui.image { src = el:snapshot(240) }`, a pane's thumbnail), replaced on each call and forgotten as its node goes. Nil if it is not laid out or the host takes none (the desktop host on macOS takes them); native views in it (a page, a terminal) show as what is under them, so ask a terminal itself (`term:snapshot`) |
 
 A ref (`ui.ref()`, given to nodes as `ref = r`) answers `r:get()` and `r.element` (its first mounted element, else nil), `r:peek()` (the same, without following), `r.mounted`, `r.count`, `r:elements()` (every mounted node sharing it, in document order), and `r.width` and `r.height` (its element's laid-out size, nil while none is mounted). Reading `get`, `element`, `mounted`, `count`, `elements`, `width` or `height` in an effect or a computed follows the ref (and `width` and `height` follow layout resizing the element), so an effect that needs the element runs again once it mounts. A ref has no `focus` or other element methods: ask its element (`local el = r:get(); if el then el:focus() end`).
 

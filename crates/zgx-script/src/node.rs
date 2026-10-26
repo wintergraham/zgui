@@ -89,6 +89,9 @@ pub(crate) struct Node {
     pub source: Option<Rc<str>>,
     /// `theme = …`: the subtree's theme scope.
     pub theme: Option<ThemeSpec>,
+    /// `provide = { name = value }`: values the components and rows built
+    /// in this subtree read with `ui.use_context(name)`.
+    pub provide: Option<Rc<[Given]>>,
     /// `variants = …` chosen by state, with interaction styles: they follow
     /// it (see `crate::variants`).
     pub variant_interaction: Option<Rc<crate::variants::Selection>>,
@@ -434,6 +437,7 @@ impl Node {
             tooltip: None,
             source: None,
             theme: None,
+            provide: None,
             variant_interaction: None,
         }
     }
@@ -510,6 +514,7 @@ impl Node {
             Kind::Button => "button",
             Kind::Scroll { .. } => "scroll",
             Kind::Text(_) => "text",
+            Kind::Markdown { .. } => "markdown_view",
             Kind::Rich(_) => "rich",
             Kind::Image { .. } => "image",
             Kind::Svg { .. } => "svg",
@@ -576,6 +581,11 @@ pub(crate) struct Events {
     /// `on_drag_end(payload, accepted)` on the source when it ends.
     pub drag: Option<Function>,
     pub drag_preview: Option<Function>,
+    /// `drag_preview_anchor = { 0.5, 0 }`, `drag_preview_offset = { 0, 16 }`:
+    /// that point of the preview (fractions of its size) that far from the
+    /// pointer, rather than the preview at the grab point.
+    pub drag_preview_anchor: Option<(f32, f32)>,
+    pub drag_preview_offset: Option<(f32, f32)>,
     pub drag_end: Option<Function>,
     /// `drag_export(payload) -> { text, url, files }`: what the drag carries
     /// to other apps as it leaves the window (macOS).
@@ -594,6 +604,10 @@ pub(crate) struct Events {
     pub drop_when: Option<Function>,
     pub drag_over: Option<Function>,
     pub drag_leave: Option<Function>,
+    /// `on_drag_spring(payload)`: an accepted drag has rested on it for the
+    /// platform's spring-loading delay, or Space was pressed (returning
+    /// `false` declines: it does not spring open).
+    pub drag_spring: Option<Function>,
     /// `fn({ x, y, local_x, local_y }) -> { menu_item, … }`: a secondary
     /// click (control-click on macOS) shows what it returns as a menu at
     /// the pointer; nothing returned, no menu.
@@ -631,6 +645,8 @@ impl Events {
         visible: None,
         drag: None,
         drag_preview: None,
+        drag_preview_anchor: None,
+        drag_preview_offset: None,
         drag_end: None,
         drag_export: None,
         drag_outside: None,
@@ -639,6 +655,7 @@ impl Events {
         drop_when: None,
         drag_over: None,
         drag_leave: None,
+        drag_spring: None,
         context_menu: None,
         context_menu_style: None,
         context_menu_below: false,
@@ -660,6 +677,7 @@ impl Events {
             || self.drop.is_some()
             || self.drag_over.is_some()
             || self.drag_leave.is_some()
+            || self.drag_spring.is_some()
     }
 }
 
@@ -679,6 +697,12 @@ pub(crate) enum Kind {
         scrollbar: bool,
     },
     Text(Text),
+    /// `ui.markdown_view { text }`: markdown drawn, parsed as the text
+    /// changes and only its changed blocks built again.
+    Markdown {
+        text: Text,
+        options: crate::markdown::view::ViewOptions,
+    },
     Rich(Vec<Span>),
     Image {
         label: String,
@@ -765,6 +789,11 @@ pub(crate) enum Kind {
     /// A virtualized list: only visible rows are built.
     List {
         count: Source,
+        /// `data`: the list state its rows show, as `ui.each`'s: its length
+        /// is the count, `key` is given an item, and `row` an item (built
+        /// again when it changes) or, taking a third parameter, its item as
+        /// a state too, kept current (it updates in place).
+        items: Option<Signal<Value>>,
         height: f32,
         /// Each row's own height (`heights`), instead of one `height`: the
         /// row count is its length.
@@ -1222,7 +1251,7 @@ props! {
     "brightness" => Brightness: Num, "contrast" => Contrast: Num, "saturate" => Saturate: Num, "blur" => Blur: Num, "backdrop_blur" => BackdropBlur: Num,
     "fade" => Fade: Pair, "fade_x" => FadeX: Pair, "fade_sides" => FadeSides: Corners,
     "fade_overflow" => FadeOverflow: Bool, "snap" => Snap: Bool,
-    "clip_inset" => ClipInset: Corners, "layer" => Layer: Bool, "fit" => Fit: Str, "tint" => Tint: Color,
+    "clip_inset" => ClipInset: Corners, "clip_feather" => ClipFeather: Num, "layer" => Layer: Bool, "fit" => Fit: Str, "tint" => Tint: Color, "dither" => Dither: Num, "characters" => Characters: Num,
     "cursor" => Cursor: Str,
     // Text.
     "text_size" => TextSize: Num, "weight" => Weight: Num, "bold" => Bold: Bool, "italic" => Italic: Bool,
@@ -1275,6 +1304,8 @@ pub(crate) struct Env {
     pub persist_as: Rc<str>,
     /// A plugin's: what its states hold, counted against its memory limit.
     pub meter: Option<Rc<crate::meter::Meter>>,
+    /// The images the host sets (`host:` sources): pictures scripts take.
+    pub assets: Rc<crate::lower::Assets>,
 }
 /// What a script adds to a slot: the slot, who added it (`ui.slot`'s
 /// `from`) and the node.
@@ -1282,6 +1313,12 @@ pub(crate) type Contribution = (String, Rc<str>, Rc<Node>);
 /// Each slot's contributions, by slot, with who added each.
 pub(crate) type Slots = std::collections::HashMap<String, Vec<(Rc<str>, Rc<Node>)>>;
 impl Env {
+    /// `image` as `host:<name>`, replacing what was there: the `src` that
+    /// shows it.
+    pub(crate) fn host_image(&self, name: &str, image: Arc<zgx::image::ImageData>) -> String {
+        self.assets.set_hosted(name, Some(image), &self.runtime);
+        format!("host:{name}")
+    }
     /// Whether the script may reach `key` of what the app `exposed`
     /// (`what` says which, for the error): the app's scripts always.
     pub(crate) fn permits(
@@ -1323,7 +1360,14 @@ impl Env {
 pub(crate) struct Scope {
     pub retained: RefCell<Vec<Box<dyn Any>>>,
     pub mounted: RefCell<Vec<Function>>,
+    /// What the subtree being built was provided (`provide`).
+    pub provided: Option<Rc<Provided>>,
 }
+/// A value a node provides its subtree, by its name.
+pub(crate) type Given = (Rc<str>, mlua::Value);
+/// The values a subtree was provided, its own over its ancestors'.
+#[derive(Default)]
+pub(crate) struct Provided(pub std::collections::HashMap<Rc<str>, mlua::Value>);
 
 pub(crate) struct NodeUd(pub Rc<Node>);
 impl UserData for NodeUd {}
@@ -1694,19 +1738,34 @@ fn template(lua: &Lua, text: &str) -> mlua::Result<Text> {
     }
     Ok(Text::Template(segments))
 }
+/// `f` of a Luau string's text, invalid UTF-8 replaced (as
+/// `to_string_lossy`): valid text (nearly every string) read where it lies,
+/// not scanned for invalid sequences into a `String` first.
+fn lossy<R>(string: &mlua::LuaString, f: impl FnOnce(&str) -> R) -> R {
+    let bytes = string.as_bytes();
+    match std::str::from_utf8(&bytes) {
+        Ok(text) => f(text),
+        Err(_) => f(&string.to_string_lossy()),
+    }
+}
 /// `literal`: a string is shown as it is, braces and all (data: code,
 /// titles, messages), not read as a template.
 fn text_of(lua: &Lua, value: mlua::Value, what: &str, literal: bool) -> mlua::Result<Text> {
+    // A state given as it is (a component's `ui.use_state`, which no
+    // template can name): its value as text, followed without the script.
+    if let Some(state) = state_of(&value) {
+        return Ok(Text::Template(vec![Segment::State(state, Rc::from([]))]));
+    }
     Ok(match value {
-        mlua::Value::String(s) if literal => Text::Literal(s.to_string_lossy()),
-        mlua::Value::String(s) => template(lua, &s.to_string_lossy())?,
+        mlua::Value::String(s) if literal => Text::Literal(lossy(&s, str::to_owned)),
+        mlua::Value::String(s) => lossy(&s, |text| template(lua, text))?,
         mlua::Value::Function(f) => Text::Computed(f),
         mlua::Value::Number(n) => Text::Literal(Value::Num(n).to_string()),
         mlua::Value::Integer(n) => Text::Literal(n.to_string()),
         mlua::Value::Nil => Text::Literal(String::new()),
         other => {
             return Err(mlua::Error::runtime(format!(
-                "{what} takes a string or function, not {}",
+                "{what} takes a string, a state or a function, not {}",
                 other.type_name()
             )));
         }
@@ -1790,7 +1849,7 @@ fn children(
             }
             mlua::Value::String(s) => out.push(Rc::new(Node::new(
                 owner.clone(),
-                Kind::Text(template(lua, &s.to_string_lossy())?),
+                Kind::Text(lossy(&s, |text| template(lua, text))?),
             ))),
             mlua::Value::Function(f) => out.push(Rc::new(Node::new(
                 owner.clone(),
@@ -1851,6 +1910,46 @@ fn live_mode(mode: &str) -> mlua::Result<Option<zgx::semantics::Live>> {
         ))),
     }
 }
+/// A button's `variant`, as the styles it stands for, written into its
+/// props where the script set none (its own `bg` still wins).
+fn button_look(lua: &Lua, table: &Table) -> mlua::Result<()> {
+    let variant = table.get::<Option<String>>("variant")?;
+    table.raw_set("variant", mlua::Value::Nil)?;
+    let hover = |field: &str, value: mlua::Value| -> mlua::Result<mlua::Value> {
+        let t = lua.create_table()?;
+        t.raw_set(field, value)?;
+        Ok(mlua::Value::Table(t))
+    };
+    let str = |s: &str| lua.create_string(s).map(mlua::Value::String);
+    let look: Vec<(&str, mlua::Value)> = match variant.as_deref() {
+        None | Some("default") => Vec::new(),
+        Some("primary") => vec![
+            ("bg", str("$accent")?),
+            ("color", str("$accent.text")?),
+            ("hover", hover("bg", str("$accent.hover")?)?),
+        ],
+        Some("danger") => vec![
+            ("bg", str("$danger")?),
+            ("color", str("$accent.text")?),
+            ("hover", hover("brightness", mlua::Value::Number(1.1))?),
+        ],
+        Some("ghost") => vec![
+            ("bg", str("#00000000")?),
+            ("hover", hover("bg", str("$hover")?)?),
+        ],
+        Some(other) => {
+            return Err(mlua::Error::runtime(format!(
+                "a button's `variant` is \"primary\", \"ghost\", \"danger\" or \"default\", not `{other}`"
+            )));
+        }
+    };
+    for (key, value) in look {
+        if table.raw_get::<mlua::Value>(key)?.is_nil() {
+            table.raw_set(key, value)?;
+        }
+    }
+    Ok(())
+}
 /// A `role` as ARIA names it.
 fn a11y_role(name: &str) -> Option<zgx::semantics::Role> {
     use zgx::semantics::Role;
@@ -1870,6 +1969,7 @@ fn a11y_role(name: &str) -> Option<zgx::semantics::Role> {
         "dialog" => Role::Dialog,
         "img" | "image" => Role::Image,
         "tabpanel" => Role::TabPanel,
+        "article" => Role::Article,
         "radiogroup" => Role::RadioGroup,
         "radio" => Role::RadioButton,
         "switch" => Role::Switch,
@@ -1938,6 +2038,7 @@ const WIDGET_FIELDS: &[&str] = &[
     "view",
     "bg_grid",
     "count",
+    "data",
     "height",
     "overscan",
     "heights",
@@ -2017,12 +2118,36 @@ fn set_handler(
     if !(key.starts_with("on_")
         || matches!(
             key,
-            "context_menu" | "drag_preview" | "drop_when" | "drag_export" | "drag_moves_window"
+            "context_menu"
+                | "drag_preview"
+                | "drag_preview_anchor"
+                | "drag_preview_offset"
+                | "drop_when"
+                | "drag_export"
+                | "drag_moves_window"
         ))
     {
         return Ok(Some(value));
     }
     let events = events.get_or_insert_default();
+    if let "drag_preview_anchor" | "drag_preview_offset" = key {
+        let mlua::Value::Table(t) = value else {
+            return Err(mlua::Error::runtime(format!("{key} takes {{ x, y }}")));
+        };
+        let at = |i: i64, name: &str| -> mlua::Result<f32> {
+            match t.get::<Option<f32>>(i)? {
+                Some(v) => Ok(v),
+                None => Ok(t.get::<Option<f32>>(name)?.unwrap_or(0.)),
+            }
+        };
+        let point = Some((at(1, "x")?, at(2, "y")?));
+        if key == "drag_preview_anchor" {
+            events.drag_preview_anchor = point;
+        } else {
+            events.drag_preview_offset = point;
+        }
+        return Ok(None);
+    }
     let slot = match key {
         "on_click" => &mut events.click,
         "on_press" => &mut events.press,
@@ -2064,7 +2189,8 @@ fn set_handler(
             return Ok(None);
         }
         "on_drag" | "drag_preview" | "on_drag_end" | "drag_export" | "on_drag_outside"
-        | "drag_moves_window" | "on_drop" | "drop_when" | "on_drag_over" | "on_drag_leave" => {
+        | "drag_moves_window" | "on_drop" | "drop_when" | "on_drag_over" | "on_drag_leave"
+        | "on_drag_spring" => {
             let mlua::Value::Function(f) = value else {
                 return Err(mlua::Error::runtime(format!("{key} takes a function")));
             };
@@ -2078,7 +2204,8 @@ fn set_handler(
                 "on_drop" => &mut events.drop,
                 "drop_when" => &mut events.drop_when,
                 "on_drag_over" => &mut events.drag_over,
-                _ => &mut events.drag_leave,
+                "on_drag_leave" => &mut events.drag_leave,
+                _ => &mut events.drag_spring,
             } = Some(f);
             return Ok(None);
         }
@@ -2117,7 +2244,7 @@ impl std::hash::Hasher for AddressHasher {
 /// Fills a node's properties, pseudo-states, handlers and children.
 pub(crate) fn fill(lua: &Lua, mut node: Node, table: Option<&Table>) -> mlua::Result<Node> {
     if let Some(table) = table {
-        fill_from(lua, &mut node, table, None)?;
+        fill_from(lua, &mut node, table, None, crate::design::mode(lua))?;
     }
     Ok(node)
 }
@@ -2135,6 +2262,7 @@ fn fill_from(
     node: &mut Node,
     table: &Table,
     mut text: Option<&mut TextArgs>,
+    lint: crate::DesignLint,
 ) -> mlua::Result<()> {
     let mut layout_given = false;
     let mut variants = None;
@@ -2142,7 +2270,7 @@ fn fill_from(
     // put in order after.
     let mut items = Vec::new();
     let keys = lua.app_data_ref::<StyleKeys>();
-    let lint = Some(crate::design::mode(lua));
+    let lint = Some(lint);
     // Keys are read where they lie on the stack (a string key's identity
     // finds its property): no reference is made for them.
     table.for_each_borrowed(|borrowed, value| {
@@ -2482,6 +2610,19 @@ fn fill_from(
                 }
                 node.events.get_or_insert_default().context_menu_style = Some(lits.into());
             }
+            "provide" => {
+                let mlua::Value::Table(values) = value else {
+                    return Err(mlua::Error::runtime(
+                        "`provide` takes a table of names and values: `provide = { user = user }`",
+                    ));
+                };
+                let mut provided: Vec<(Rc<str>, mlua::Value)> = Vec::new();
+                for pair in values.pairs::<String, mlua::Value>() {
+                    let (name, value) = pair?;
+                    provided.push((name.as_str().into(), value));
+                }
+                node.provide = Some(provided.into());
+            }
             "theme" => {
                 node.theme = Some(if let Some(state) = state_of(&value) {
                     ThemeSpec::State(state)
@@ -2789,6 +2930,12 @@ fn placement_of(value: mlua::Value) -> mlua::Result<Option<zgx::compose::Placeme
 pub(crate) fn owner(lua: &Lua) -> mlua::Result<Weak<Vm>> {
     Ok(env(lua)?.vm.clone())
 }
+/// `owner`, and the mode its design lint runs in (`design::mode`), from one
+/// look at the script's environment: an element took one for each.
+fn owner_and_lint(lua: &Lua) -> mlua::Result<(Weak<Vm>, crate::DesignLint)> {
+    let env = env(lua)?;
+    Ok((env.vm.clone(), env.warnings.borrow().design))
+}
 pub(crate) fn label(table: &Table) -> mlua::Result<String> {
     Ok(table.get::<Option<String>>("label")?.unwrap_or_default())
 }
@@ -2887,9 +3034,11 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     let ui = lua.create_table()?;
     let container = |kind: fn() -> Kind| {
         lua.create_function(move |lua, table: Option<Table>| {
-            let mut node = Node::new(owner(lua)?, kind());
+            // The script's owner and lint mode, looked up once a call.
+            let (owner, lint) = owner_and_lint(lua)?;
+            let mut node = Node::new(owner, kind());
             if let Some(table) = &table {
-                fill_from(lua, &mut node, table, None)?;
+                fill_from(lua, &mut node, table, None, lint)?;
             }
             node_ud(lua, node)
         })
@@ -2900,7 +3049,18 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     ui.set("object", lua.create_function(crate::value::object)?)?;
     ui.set("div", container(|| Kind::Div)?)?;
     ui.set("overlay", container(|| Kind::Overlay)?)?;
-    ui.set("button", container(|| Kind::Button)?)?;
+    ui.set(
+        "button",
+        lua.create_function(|lua, table: Option<Table>| {
+            let (owner, lint) = owner_and_lint(lua)?;
+            let mut node = Node::new(owner, Kind::Button);
+            if let Some(table) = &table {
+                button_look(lua, table)?;
+                fill_from(lua, &mut node, table, None, lint)?;
+            }
+            node_ud(lua, node)
+        })?,
+    )?;
     ui.set(
         "grid",
         lua.create_function(|lua, table: Option<Table>| {
@@ -2950,7 +3110,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     ui.set(
         "text",
         lua.create_function(|lua, arg: mlua::Value| {
-            let owner = owner(lua)?;
+            let (owner, lint) = owner_and_lint(lua)?;
             let mlua::Value::Table(table) = arg else {
                 let text = text_of(lua, arg, "ui.text", false)?;
                 return node_ud(lua, Node::new(owner, Kind::Text(text)));
@@ -2958,9 +3118,41 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
             // The content is element 1; the rest are styles.
             let mut args = TextArgs::default();
             let mut node = Node::new(owner, Kind::Text(Text::Literal(String::new())));
-            fill_from(lua, &mut node, &table, Some(&mut args))?;
+            fill_from(lua, &mut node, &table, Some(&mut args), lint)?;
             let literal = args.literal.unwrap_or(false);
             node.kind = Kind::Text(text_of(lua, args.content, "ui.text", literal)?);
+            node_ud(lua, node)
+        })?,
+    )?;
+    ui.set(
+        "markdown_view",
+        lua.create_function(|lua, table: Table| {
+            // Its own options, read before the styles are.
+            let flag = |name: &str, default: bool| -> mlua::Result<bool> {
+                let value = table.get::<Option<bool>>(name)?.unwrap_or(default);
+                table.raw_set(name, mlua::Value::Nil)?;
+                Ok(value)
+            };
+            let options = crate::markdown::view::ViewOptions {
+                parse: crate::markdown::Options {
+                    breaks: flag("breaks", false)?,
+                    paths: flag("paths", false)?,
+                    code: None,
+                },
+                copy: flag("copy", true)?,
+            };
+            let mut args = TextArgs::default();
+            let empty = Kind::Text(Text::Literal(String::new()));
+            let (owner, lint) = owner_and_lint(lua)?;
+            let mut node = Node::new(owner, empty);
+            fill_from(lua, &mut node, &table, Some(&mut args), lint)?;
+            let literal = args.literal.unwrap_or(false);
+            let text = text_of(lua, args.content, "ui.markdown_view", literal)?;
+            node.kind = Kind::Markdown { text, options };
+            // Prose: selectable as a web page's is, unless asked not to be.
+            if node.selectable.is_none() {
+                node.selectable = Some(true);
+            }
             node_ud(lua, node)
         })?,
     )?;
@@ -3381,9 +3573,18 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
                     "ui.list `measured` and `heights` don't go together: measured rows take their content's height",
                 ));
             }
-            let count = match (&heights, table.get::<mlua::Value>("count")?) {
-                (Some(_), mlua::Value::Nil) => Source::Lit(Lit::Num(0.)),
-                (_, count) => source(lua, Ty::Num, "count", count)?,
+            let items = match table.get::<mlua::Value>("data")? {
+                mlua::Value::Nil => None,
+                data => Some(expect_state(&data, "ui.list's `data`")?),
+            };
+            if items.is_some() && (heights.is_some() || table.contains_key("count")?) {
+                return Err(mlua::Error::runtime(
+                    "ui.list `data` gives the rows: not with `count` or `heights`",
+                ));
+            }
+            let count = match (&heights, &items, table.get::<mlua::Value>("count")?) {
+                (Some(_), _, mlua::Value::Nil) | (_, Some(_), _) => Source::Lit(Lit::Num(0.)),
+                (_, _, count) => source(lua, Ty::Num, "count", count)?,
             };
             let build: Function = table
                 .get("row")
@@ -3410,6 +3611,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
                         owner(lua)?,
                         Kind::List {
                             count,
+                            items,
                             height,
                             heights,
                             sticky,
@@ -3718,6 +3920,13 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
                     vm.report(e);
                 }
             });
+            // Named for devtools' traces by where the script made it.
+            #[cfg(feature = "inspect")]
+            if zgx::trace::enabled()
+                && let Some(at) = location(lua)
+            {
+                zgx::trace::name(effect.number(), format!("{at} effect"));
+            }
             retain(&env, Box::new(effect));
             Ok(())
         })?,
@@ -4236,6 +4445,25 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
                 env.permits(&env.exposed_actions, &name, "ui.action")?;
             }
             action(lua, Action::Host(name.into(), arg))
+        })?,
+    )?;
+    // `ui.use_context(name, default)`: what the nearest `provide = { name =
+    // … }` above the component or row being built gave, else `default`.
+    ui.set(
+        "use_context",
+        lua.create_function(|lua, (name, default): (String, mlua::Value)| {
+            let env = env(lua)?;
+            let scope = env.scope.borrow();
+            let Some(scope) = scope.as_ref() else {
+                return Err(mlua::Error::runtime(
+                    "ui.use_context reads what a component, row or presence is built in: call it in one's build",
+                ));
+            };
+            Ok(scope
+                .provided
+                .as_ref()
+                .and_then(|p| p.0.get(name.as_str()).cloned())
+                .unwrap_or(default))
         })?,
     )?;
     // `ui.on_cleanup(f)`: `f` runs when what is being built goes away (a

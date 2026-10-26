@@ -38,6 +38,8 @@ struct AdapterChangeHandler<'a> {
     queue: Vec<QueuedEvent>,
     text_changed: HashSet<NodeId>,
     selection_changed: HashMap<NodeId, SelectionChanges>,
+    /// zgx patch: whether a screen reader runs, read once for the update.
+    screen_reader: bool,
 }
 
 impl<'a> AdapterChangeHandler<'a> {
@@ -47,13 +49,20 @@ impl<'a> AdapterChangeHandler<'a> {
             queue: Vec::new(),
             text_changed: HashSet::new(),
             selection_changed: HashMap::new(),
+            screen_reader: crate::context::screen_reader(),
         }
+    }
+
+    /// zgx patch: whether `event_id` (a property change of `property_id`)
+    /// reaches a client (`Context::wanted`).
+    fn wanted(&self, event_id: UIA_EVENT_ID, property_id: Option<UIA_PROPERTY_ID>) -> bool {
+        self.context.wanted(event_id, property_id, self.screen_reader)
     }
 }
 
 impl AdapterChangeHandler<'_> {
     fn insert_text_change_if_needed_parent(&mut self, node: Node) {
-        if !node.supports_text_ranges() {
+        if !node.supports_text_ranges() || !self.wanted(UIA_Text_TextChangedEventId, None) {
             return;
         }
         let id = node.id();
@@ -485,6 +494,17 @@ impl Adapter {
                 let mut tree = context.tree.write().unwrap();
                 tree.update_and_process_changes(update_factory(), &mut handler);
                 handler.enqueue_selection_changes(&tree);
+                // zgx patch: only what a client listens for (`Context::wanted`).
+                let queue = std::mem::take(&mut handler.queue);
+                handler.queue = queue
+                    .into_iter()
+                    .filter(|event| match event {
+                        QueuedEvent::Simple { event_id, .. } => handler.wanted(*event_id, None),
+                        QueuedEvent::PropertyChanged { property_id, .. } => {
+                            handler.wanted(UIA_AutomationPropertyChangedEventId, Some(*property_id))
+                        }
+                    })
+                    .collect();
                 Some(QueuedEvents(handler.queue))
             }
         }

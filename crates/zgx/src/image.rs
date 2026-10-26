@@ -9,8 +9,30 @@ pub(crate) fn next_identity() -> Result<u64, &'static str> {
         .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
         .map_err(|_| "image identity exhausted")
 }
+/// How an image is drawn from its pixels (`ImageData::dithered`,
+/// `ImageData::characters`), worked out per pixel on the GPU as it draws.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum ImageEffect {
+    /// Its pixels.
+    #[default]
+    Plain,
+    /// Zeron's two-level dither, in dots this many points square.
+    Dither(f32),
+    /// Characters in a 5 by 7 pixel font, each pixel this many points
+    /// square, over the image (see `ImageData::characters`).
+    Characters(f32),
+}
+impl ImageEffect {
+    /// Its size in points (a dot's, a font pixel's); 0 when plain.
+    pub fn size(self) -> f32 {
+        match self {
+            Self::Plain => 0.,
+            Self::Dither(size) | Self::Characters(size) => size,
+        }
+    }
+}
 /// Decoded straight-alpha RGBA8 pixels shared between scene nodes, with a paint
-/// transform. Equal when they share pixels and transform.
+/// transform and effect. Equal when they share pixels, transform and effect.
 #[derive(Debug)]
 pub struct ImageData {
     id: u64,
@@ -18,6 +40,7 @@ pub struct ImageData {
     height: u32,
     pixels: Arc<[u8]>,
     transform: crate::affine::Affine,
+    effect: ImageEffect,
 }
 impl ImageData {
     /// A `width` by `height` image from RGBA8 `pixels`; fails unless both are
@@ -42,6 +65,7 @@ impl ImageData {
             height,
             pixels,
             transform: crate::affine::Affine::IDENTITY,
+            effect: ImageEffect::Plain,
         })
     }
     /// Its pixels' identity, shared by `transformed` copies; renderers key GPU
@@ -76,6 +100,62 @@ impl ImageData {
             } else {
                 crate::affine::Affine::IDENTITY
             },
+            effect: self.effect,
+        }
+    }
+    /// Share decoded pixels and GPU upload identity, drawn dithered as Zeron
+    /// dithers its wallpapers: in dots `dot` points square, on the screen's
+    /// grid, each the colour at its centre lit to that colour's full value
+    /// where its brightest channel passes a 4x4 Bayer threshold, and nearly
+    /// black (8%) where it doesn't. A vivid two-level dot picture keeping the
+    /// image's hues. Worked out per pixel as the image is drawn (one sample,
+    /// a compare): it follows the image as it moves and scales, with nothing
+    /// precomputed. 0 (or less, or not finite) draws it plainly.
+    pub fn dithered(&self, dot: f32) -> Self {
+        self.with_effect(match dot {
+            dot if dot.is_finite() && dot > 0. => ImageEffect::Dither(dot),
+            _ => ImageEffect::Plain,
+        })
+    }
+    /// Share decoded pixels and GPU upload identity, drawn as characters, as
+    /// an ASCII art generator draws a photo: a grid of cells, each a glyph of
+    /// a 5 by 7 pixel font (its pixels `pixel` points square, a cell 6 by 8
+    /// of them) picked by the brightness at the cell's centre (` .-+xXS80#@`)
+    /// and lit in that colour at full value, over the image a little dimmed.
+    ///
+    /// Its node's shader parameters (`Scene::set_shader_uniforms`, animated as
+    /// `shaderParam0` to `shaderParam5`) reveal it from a point of the window
+    /// out to a rounded box, cell by cell: `params[0]` is the front (the box's
+    /// size, 0 to 1 of the window's half-extents), the band of characters
+    /// ahead of the image (0: no reveal, all of it shown) and how ragged the
+    /// front is; `params[1]` the centre's offset from the window's middle, in
+    /// fractions of it. Ahead of the front, nothing; in its band, characters
+    /// scattered alone, sparse and faint at its outer edge and denser inward,
+    /// scrambling as the front moves; behind it, the image, fading in pixel
+    /// by pixel (no cells popping) under its glyphs. Measured in the window,
+    /// so every layer drawn so shares one front. 0 (or less, or not finite)
+    /// draws it plainly.
+    pub fn characters(&self, pixel: f32) -> Self {
+        self.with_effect(match pixel {
+            pixel if pixel.is_finite() && pixel > 0. => ImageEffect::Characters(pixel),
+            _ => ImageEffect::Plain,
+        })
+    }
+    fn with_effect(&self, effect: ImageEffect) -> Self {
+        Self {
+            effect,
+            ..self.transformed(self.transform)
+        }
+    }
+    /// How it is drawn (`dithered`, `characters`).
+    pub fn effect(&self) -> ImageEffect {
+        self.effect
+    }
+    /// Its dither's dot size in points (`dithered`); 0 when undithered.
+    pub fn dither(&self) -> f32 {
+        match self.effect {
+            ImageEffect::Dither(dot) => dot,
+            _ => 0.,
         }
     }
     /// Its paint transform (the identity unless `transformed`).
@@ -106,7 +186,7 @@ impl ImageData {
 }
 impl PartialEq for ImageData {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.transform == other.transform
+        self.id == other.id && self.transform == other.transform && self.effect == other.effect
     }
 }
 impl Eq for ImageData {}

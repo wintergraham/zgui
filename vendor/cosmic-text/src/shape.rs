@@ -115,6 +115,11 @@ pub struct ShapeBuffer {
     /// compare them again. 0 outside `ShapeLine::build`.
     #[cfg(feature = "shape-run-cache")]
     run_key_line: usize,
+    /// zgx patch: that list's spans that differ from its defaults, with
+    /// their attributes' ids (`ShapeRunCache::intern`), worked out once a
+    /// line rather than for every word.
+    #[cfg(feature = "shape-run-cache")]
+    line_spans: Vec<(Range<usize>, u32)>,
 
     /// zgx patch: a visual line's ranges in display order (`reorder`).
     order: Vec<Range<usize>>,
@@ -294,6 +299,9 @@ fn shape_fallback(
     missing
 }
 
+/// zgx patch: out of line, so the word cache's path through `Shaping::run`
+/// keeps its code whatever shaping a new run adds.
+#[inline(never)]
 fn shape_run(
     glyphs: &mut Vec<ShapeGlyph>,
     font_system: &mut FontSystem,
@@ -326,7 +334,7 @@ fn shape_run(
 
     let attrs = attrs_list.get_span(start_run);
 
-    let fonts = font_system.get_font_matches(&attrs);
+    let (fonts, kept) = font_matches(font_system, &attrs);
 
     let default_families = [&attrs.family];
     let mut font_iter = FontFallbackIter::new(
@@ -339,13 +347,26 @@ fn shape_run(
         attrs.optical,
     );
 
-    // zgx patch: no font at all (none installed, or none fontconfig
-    // finds): the run shapes to nothing, rather than panicking each frame.
-    let Some(font) = font_iter.next() else {
-        drop(font_iter);
-        font_system.shape_buffer.scripts = scripts;
-        no_font();
-        return;
+    let font = match kept {
+        Some(font) => {
+            font_iter.pass_default();
+            font
+        }
+        None => {
+            // zgx patch: no font at all (none installed, or none fontconfig
+            // finds): the run shapes to nothing, rather than panicking each
+            // frame.
+            let Some(font) = font_iter.next() else {
+                drop(font_iter);
+                font_system.shape_buffer.scripts = scripts;
+                no_font();
+                return;
+            };
+            if attrs.family != Family::Monospace && font_iter.gave_default() {
+                font_iter.font_system().keep_first_font(&attrs, &fonts, &font);
+            }
+            font
+        }
     };
 
     // zgx: masked text (a password) is a bullet for each character, each
@@ -494,39 +515,59 @@ fn shape_run_cached(
         Some(mut key) => {
             key.text.clear();
             key.text.push_str(&line[run_range.clone()]);
-            // Checked once a line: its attribute list is the same for every word.
-            let list = core::ptr::from_ref(attrs_list) as usize;
-            if font_system.shape_buffer.run_key_line != list {
-                if *key.default_attrs != *defaults {
-                    key.set_defaults(defaults.clone(), &mut font_system.shape_run_cache);
-                }
-                font_system.shape_buffer.run_key_line = list;
-            }
             key.attrs_spans.clear();
             key
         }
-        None => ShapeRunKey::new(
-            line[run_range.clone()].to_string(),
-            defaults.clone(),
-            &mut font_system.shape_run_cache,
-        ),
+        None => {
+            let key = ShapeRunKey::new(
+                line[run_range.clone()].to_string(),
+                defaults.clone(),
+                &mut font_system.shape_run_cache,
+            );
+            // Its defaults and spans found afresh below.
+            font_system.shape_buffer.run_key_line = 0;
+            key
+        }
     };
+    // Checked once a line: its attribute list is the same for every word.
+    // Its spans that differ from its defaults, by id, with it.
+    let list = core::ptr::from_ref(attrs_list) as usize;
+    // A key from a cache since replaced holds an id from its table.
+    if key.generation != font_system.shape_run_cache.generation {
+        key.set_defaults(defaults.clone(), &mut font_system.shape_run_cache);
+        font_system.shape_buffer.run_key_line = 0;
+    }
+    if font_system.shape_buffer.run_key_line != list {
+        if *key.default_attrs != *defaults {
+            key.set_defaults(defaults.clone(), &mut font_system.shape_run_cache);
+        }
+        font_system.shape_buffer.run_key_line = list;
+        let line_spans = &mut font_system.shape_buffer.line_spans;
+        line_spans.clear();
+        for (attrs_range, attrs) in attrs_list.spans.iter() {
+            if attrs != &*key.default_attrs {
+                line_spans.push((
+                    attrs_range.clone(),
+                    font_system.shape_run_cache.intern(attrs),
+                ));
+            }
+        }
+    }
     key.rtl = span_rtl;
-    // zgx patch: most text has no spans: no range query to find none.
-    let spans = (!attrs_list.spans.is_empty())
-        .then(|| attrs_list.spans.overlapping(&run_range))
-        .into_iter()
-        .flatten();
-    for (attrs_range, attrs) in spans {
-        if attrs == &*key.default_attrs {
-            // Skip if attrs matches default attrs
-            continue;
+    // As the attribute list's spans overlapping the run, in order, those
+    // the defaults cover left out.
+    let line_spans = &font_system.shape_buffer.line_spans;
+    // In order and apart: the first that can overlap the run is the first
+    // to end past its start.
+    let first = line_spans.partition_point(|(attrs_range, _)| attrs_range.end <= start_run);
+    for (attrs_range, id) in &line_spans[first..] {
+        if attrs_range.start >= end_run {
+            break;
         }
         let start = max(attrs_range.start, start_run).saturating_sub(start_run);
         let end = min(attrs_range.end, end_run).saturating_sub(start_run);
         if end > start {
-            let range = start..end;
-            key.attrs_spans.push((range, attrs.clone()));
+            key.attrs_spans.push((start..end, *id));
         }
     }
     if let Some(cache_glyphs) = font_system.shape_run_cache.get(&key) {
@@ -573,6 +614,27 @@ fn no_font() {
              install one, such as DejaVu Sans (fonts-dejavu-core)"
         );
     });
+}
+
+/// zgx patch: `attrs`' font matches, and the face a family other than
+/// monospace (which looks at each word's characters) gives first, if a run
+/// with these attributes found it. Out of line: the word cache's path
+/// through `Shaping::run` stays as it was.
+#[inline(never)]
+fn font_matches(
+    font_system: &mut FontSystem,
+    attrs: &crate::Attrs<'_>,
+) -> (
+    alloc::sync::Arc<Vec<crate::font::FontMatchKey>>,
+    Option<alloc::sync::Arc<Font>>,
+) {
+    match (attrs.family != Family::Monospace)
+        .then(|| font_system.first_font(attrs))
+        .flatten()
+    {
+        Some((fonts, font)) => (fonts, Some(font)),
+        None => (font_system.get_font_matches(attrs), None),
+    }
 }
 
 fn shape_skip(

@@ -20,6 +20,15 @@ STAGE = Path(os.environ.get('ZGX_STAGE_DIR', '/tmp/zgx-staged'))
 CWD = '/tmp'
 
 
+def clean_env(**extra):
+    """The environment a measured app launches with: the user's home, path and
+    temporary directory, and `extra`. Nothing else of the launching shell's
+    (an agent's variables, a build's) reaches the app or its measurement."""
+    env = {k: os.environ[k] for k in ('HOME', 'PATH', 'TMPDIR', 'USER', 'LANG') if k in os.environ}
+    env.setdefault('TMPDIR', '/tmp')
+    return {**env, **extra}
+
+
 def stage(binary):
     """`binary`, copied under STAGE (once per content), as the path to launch."""
     binary = Path(binary)

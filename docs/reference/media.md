@@ -21,12 +21,16 @@ A PNG or JPEG, decoded once per `src` and kept across reloads.
 | `src` | `Reactive<string>`, or a `Bitmap` | required | a path (from the script's directory) or an absolute one; `"host:<name>"`, an image the app made (`ScriptHost::image`), following each one it replaces it with; a `Bitmap` shown as it is (`ui.bitmap`, a pasted image from `ui.clipboard.read_image()`); a state or function (of a path or a `Bitmap`) swaps the image |
 | `fallback` | `Node` | none | shown in the image's place while a remote one (`https://…`) loads, and if it fails (a failed picture is logged, not a script error): an avatar's initials |
 | `fit` | `"fill" \| "contain" \| "cover" \| "none" \| "scale_down"` | `"fill"` | how the pixels fill the box (CSS `object-fit`) |
+| `dither` | `number` | none | drawn dithered as Zeron dithers its wallpapers, in dots this many points square on the screen's grid: each dot takes the colour at its centre, lit to that colour's full value where its brightest channel passes a 4x4 Bayer threshold, else dimmed to 8%. A vivid two-level dot picture of the image's own hues, worked out on the GPU as the image draws (one sample and a compare a pixel), so it follows the image as it moves, scales or crossfades, with nothing precomputed |
+| `characters` | `number` | none | drawn as characters, as an ASCII art generator draws a photo: the screen in cells of a 5 by 7 pixel font (each font pixel this many points, a cell 6 by 8 of them), each cell a glyph of ` .-+xXS80#@` picked by the brightness at its centre and lit in that colour at full value, over the image a little dimmed. On the GPU as it draws, with no texture of glyphs |
 | `label` | `string` | `""` | its accessible name |
 | `w`, `h` | `Length` | the image's size in pixels, as points | |
 
+With `characters`, its `shader_params` reveal it: `{ { front, band, ragged }, { dx, dy } }`, distances from the window's middle (offset by `dx`, `dy`, fractions of the window) measured out to a rounded box at 1 (the window's half-extents). Behind the `front`, the image, fading in pixel by pixel over the `band`'s depth (no cells popping) under its glyphs; across the band ahead of it, characters alone, scattered sparse and faint at its outer edge and denser and brighter inward, scrambling through the font as the front moves; beyond, nothing, so the picture dissolves into what is behind the window through its own characters. `ragged` (0 to about 0.3) scatters each cell's place in the band. Animate `shaderParam0` from 0 to have the picture materialise out of characters; `band` 0 (the default) shows all of it. Measured in the window, every image revealed with the same values shares one front, as they move.
+
 ## svg
 
-An SVG, from a file or from markup, drawn as vectors at every scale; `tint` recolors it.
+An SVG, from a file or from markup, drawn as vectors at every scale; `tint` recolors it. In a box of other proportions than its own it is drawn whole and centred, keeping them (SVG's default `preserveAspectRatio`), so a wide mark in a square box is not squeezed.
 
 | Option | Type | Default | |
 | --- | --- | --- | --- |
@@ -126,7 +130,12 @@ return ui.column {
 		items = "center",
 		ui.image { src = "photo.png", w = 48, h = 48, fit = "cover", rounded = 8, label = "Avatar" },
 		ui.svg { src = "icon.svg", w = 20, h = 20, tint = "#5ea5ff" },
-		ui.svg { code = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 2'><rect width='2' height='2'/></svg>", w = 12, h = 12, tint = "#e5534b" },
+		ui.svg {
+			code = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 2'><rect width='2' height='2'/></svg>",
+			w = 12,
+			h = 12,
+			tint = "#e5534b",
+		},
 	},
 	ui.canvas {
 		w = 180,

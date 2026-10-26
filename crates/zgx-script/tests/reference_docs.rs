@@ -1,5 +1,5 @@
-//! Every example in `docs/reference`, `docs/getting-started.md` and the
-//! README runs as the page says. Each ```lua
+//! Every example in `docs/reference`, `docs/getting-started.md`,
+//! `docs/coming-from-react.md` and the README runs as the page says. Each ```lua
 //! block is a script: it loads headless with no error, runs a few frames,
 //! and passes `zgx check` in strict mode when luau-lsp is installed.
 //! Blocks that start with `-- file: <path>` (and ```json file=.luaurc
@@ -38,7 +38,11 @@ fn examples() -> Vec<Example> {
         .collect();
     pages.sort();
     // The guide and the README run as the reference does.
-    for page in ["../getting-started.md", "../../README.md"] {
+    for page in [
+        "../getting-started.md",
+        "../coming-from-react.md",
+        "../../README.md",
+    ] {
         pages.push(Path::new(DOCS).join(page));
     }
     // `ZGX_REFERENCE_PAGE=text.md` runs one page's.

@@ -1,0 +1,49 @@
+{
+  "name": "zgx-website",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync": "node scripts/sync-docs.mjs",
+    "dev": "node scripts/sync-docs.mjs && astro dev",
+    "build": "node scripts/sync-docs.mjs && astro build && node scripts/check-links.mjs",
+    "preview": "astro preview",
+    "check": "node scripts/sync-docs.mjs && astro sync && tsc --noEmit"
+  },
+  "dependencies": {
+    "@astrojs/markdown-remark": "^7.3.4",
+    "@astrojs/mdx": "^8.1.1",
+    "@astrojs/react": "^7.1.1",
+    "@astrojs/sitemap": "^3.7.4",
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "astro": "^7.4.2",
+    "fumadocs-core": "^16.17.8",
+    "fumadocs-ui": "npm:@fumadocs/base-ui@^16.17.8",
+    "lucide-react": "^1.61.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "sharp": "^0.35.5",
+    "tailwindcss": "^4.3.3",
+    "takumi-js": "^2.18.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@shikijs/transformers": "^4.5.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "github-slugger": "^2.0.0",
+    "hast-util-to-html": "^9.0.5",
+    "hast-util-to-string": "^3.0.1",
+    "mdast-util-to-string": "^4.0.0",
+    "rehype-stringify": "^10.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "remark-rehype": "^11.1.2",
+    "remark-stringify": "^11.0.0",
+    "shiki": "^4.5.0",
+    "typescript": "^7.0.2",
+    "unified": "^11.0.5",
+    "unist-util-visit": "^5.2.0"
+  }
+}

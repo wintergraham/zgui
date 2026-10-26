@@ -73,6 +73,21 @@ impl Assets {
         let version = self.hosted(&src, runtime);
         version.update(|v| *v = v.wrapping_add(1));
     }
+    /// Whether the host set image `host:<name>`.
+    pub(crate) fn is_hosted(&self, name: &str) -> bool {
+        self.images.borrow().contains_key(&format!("host:{name}"))
+    }
+    /// Forget image `host:<name>` and its version, for good (what showed it
+    /// keeps its picture).
+    fn forget_hosted(&self, name: &str) {
+        let src = format!("host:{name}");
+        if let Ok(mut images) = self.images.try_borrow_mut() {
+            images.remove(&src);
+        }
+        if let Ok(mut hosted) = self.hosted.try_borrow_mut() {
+            hosted.remove(&src);
+        }
+    }
     pub(crate) fn connect(
         &self,
         timers: Rc<crate::timers::Timers>,
@@ -182,9 +197,28 @@ fn decorated(view: View, node: &Rc<Node>, vm: &Rc<Vm>, low: &Rc<Lowering>) -> Vi
         ) => tooltip(view, tip, low),
         _ => view,
     };
-    match &node.theme {
+    let view = match &node.theme {
         None => view,
         Some(spec) => themed(spec, vm, view),
+    };
+    match &node.provide {
+        None => view,
+        // Its values over what its ancestors were given, for the
+        // components and rows built under it (`ui.use_context`).
+        Some(own) => {
+            let own = own.clone();
+            zgx::compose::provide_with(
+                move |cx| {
+                    let mut all = cx
+                        .try_service::<crate::node::Provided>()
+                        .map(|above| above.0.clone())
+                        .unwrap_or_default();
+                    all.extend(own.iter().cloned());
+                    crate::node::Provided(all)
+                },
+                view,
+            )
+        }
     }
 }
 
@@ -303,8 +337,11 @@ pub(crate) fn bridge<T: PartialEq + Clone + 'static>(
 
 /// A controlled input's text (`value = function`): what the function shows
 /// while the input isn't focused; focused, what is being typed, each edit
-/// told to `on_change`. Enter, or leaving it changed, tells `on_commit`, and
-/// it shows the function's text again. With the listener that does that.
+/// told to `on_change` (the function's answer to an edit, a number
+/// formatted, waits until it is left). A change from elsewhere while it is
+/// focused (a send clearing the draft) shows at once. Enter, or leaving it
+/// changed, tells `on_commit`, and it shows the function's text again. With
+/// the listener that does that.
 fn controlled_input(
     cx: &mut Context,
     shown: &Source,
@@ -321,12 +358,16 @@ fn controlled_input(
     // The function's latest text, and whether the input is being edited.
     let latest: Rc<std::cell::RefCell<String>> = Rc::default();
     let editing: Rc<std::cell::Cell<bool>> = Rc::default();
+    // An edit was told to `on_change`: the function's next change is its
+    // answer, not a change from elsewhere.
+    let echo: Rc<std::cell::Cell<bool>> = Rc::default();
     let (source, svm) = (resolve_owned(shown), vm.clone());
-    let (t, l, e) = (text.clone(), latest.clone(), editing.clone());
+    let (t, l, e, o) = (text.clone(), latest.clone(), editing.clone(), echo.clone());
     cx.retain(runtime.effect(move || {
         let now = resolve_value(&source, &svm).to_string();
+        let changed = *l.borrow() != now;
         *l.borrow_mut() = now.clone();
-        if !e.get() {
+        if !e.get() || (!o.replace(false) && changed) {
             t.set(now);
         }
     }));
@@ -342,6 +383,7 @@ fn controlled_input(
         cx.retain(runtime.effect(move || {
             let now = t.get();
             if e.get() && now != *l.borrow() {
+                echo.set(true);
                 quiet.untracked(|| run(&change, &vm, &actions, now));
             }
         }));
@@ -871,7 +913,10 @@ pub(crate) fn build_scoped(
     f: &mlua::Function,
     args: impl mlua::IntoLuaMulti,
 ) -> View {
-    let scope = Rc::new(Scope::default());
+    let scope = Rc::new(Scope {
+        provided: cx.try_service::<crate::node::Provided>(),
+        ..Scope::default()
+    });
     let previous = vm
         .lua
         .app_data_ref::<crate::node::Env>()
@@ -1058,8 +1103,12 @@ fn kind_view(
             }
         }
         Kind::Text(text) => lower_text(text, vm),
+        Kind::Markdown { text, options } => {
+            let (text, vm) = (copy_text(text), vm.clone());
+            crate::markdown::view::view(move || render_text(&text, &vm), options.clone())
+        }
         Kind::Rich(spans) => lower_rich(spans, vm, low),
-        Kind::Image { .. } => lower_image(&node.kind, vm, low),
+        Kind::Image { .. } => lower_image(node, vm, low),
         Kind::Svg { label, src } => {
             let (src, vm2, low2) = (resolve_owned(src), vm.clone(), low.clone());
             let theme = cx.as_deref().map(Context::theme);
@@ -1930,7 +1979,15 @@ fn styled(
             node.shader_tokens,
         )
     });
-    if !dynamic.is_empty() || element.is_some() || bg_image.is_some() || shader.is_some() {
+    // Parameters with no fill of their own: an image's (its `characters`
+    // reveal), set on its node all the same.
+    let params_only = node.shader_params.filter(|_| node.shader.is_none());
+    if !dynamic.is_empty()
+        || element.is_some()
+        || bg_image.is_some()
+        || shader.is_some()
+        || params_only.is_some()
+    {
         let vm = vm.clone();
         let element = element.clone();
         view = view.reactive_style(move || {
@@ -1974,7 +2031,15 @@ fn styled(
                     }
                     styles.bg_shader(fill.clone()).shader_uniforms(uniforms)
                 }
-                None => styles,
+                None => match params_only {
+                    Some(params) => styles.shader_uniforms(
+                        element
+                            .as_ref()
+                            .and_then(|e| e.animated.borrow().shader)
+                            .unwrap_or(zgx::decoration::ShaderUniforms { time: 0., params }),
+                    ),
+                    None => styles,
+                },
             }
         });
     }
@@ -2712,12 +2777,16 @@ fn remote_status(vm: &Rc<Vm>, low: &Lowering, src: &str, svg: bool) -> u8 {
         )));
         return ready.get();
     };
-    let future = fetch(crate::calls::Request {
-        url: src.to_owned(),
-        method: "GET".into(),
-        headers: Vec::new(),
-        body: None,
-    });
+    let body = crate::calls::Body::kept();
+    let future = fetch(
+        crate::calls::Request {
+            url: src.to_owned(),
+            method: "GET".into(),
+            headers: Vec::new(),
+            body: None,
+        },
+        body.clone(),
+    );
     let (assets, vm, src, runtime) = (
         low.assets.clone(),
         Rc::downgrade(vm),
@@ -2727,7 +2796,7 @@ fn remote_status(vm: &Rc<Vm>, low: &Lowering, src: &str, svg: bool) -> u8 {
     let arriving = ready.clone();
     timers.spawn(async move {
         let bytes = match future.await {
-            Ok(response) if (200..300).contains(&response.status) => Ok(response.body),
+            Ok(response) if (200..300).contains(&response.status) => Ok(body.whole(response.body)),
             Ok(response) => Err(format!("HTTP {}", response.status)),
             Err(error) => Err(error),
         };
@@ -3097,10 +3166,18 @@ fn with_drag(
     }
     if let Some(preview) = events.drag_preview.clone() {
         let (vm, low) = (vm.clone(), low.clone());
-        view = view.drag_preview(move |payload: &Value| {
+        let build = move |payload: &Value| {
             let result = vm.call::<mlua::Value>(&preview, payload.clone());
             built(&vm, result, &low)
-        });
+        };
+        view = match (events.drag_preview_anchor, events.drag_preview_offset) {
+            (None, None) => view.drag_preview(build),
+            (anchor, offset) => view.drag_preview_anchored(
+                anchor.unwrap_or_default(),
+                offset.unwrap_or_default(),
+                build,
+            ),
+        };
     }
     if let Some(end) = events.drag_end.clone() {
         let vm = vm.clone();
@@ -3150,13 +3227,14 @@ fn with_drag(
             })
         });
     }
-    let (drop, accept, over, leave) = (
+    let (drop, accept, over, leave, spring) = (
         events.drop.clone(),
         events.drop_when.clone(),
         events.drag_over.clone(),
         events.drag_leave.clone(),
+        events.drag_spring.clone(),
     );
-    if drop.is_none() && over.is_none() && leave.is_none() {
+    if drop.is_none() && over.is_none() && leave.is_none() && spring.is_none() {
         return view;
     }
     let vm = vm.clone();
@@ -3209,6 +3287,18 @@ fn with_drag(
                 }
                 cx.prevent_default();
                 cx.stop_propagation();
+            }
+            // Sprang open unless it returned `false`.
+            DragPhase::Spring if !cx.default_prevented() && accepts() => {
+                if let Some(f) = &spring
+                    && !matches!(
+                        call(&vm, f, payload.clone()),
+                        Some(mlua::Value::Boolean(false))
+                    )
+                {
+                    cx.prevent_default();
+                    cx.stop_propagation();
+                }
             }
             _ => {}
         }
@@ -3473,6 +3563,53 @@ fn code_editor(
     }
     view
 }
+/// What a computed colour returned: a colour parsed from its text while
+/// the text is still on the Lua stack (no string made of it), or any
+/// other value (a token, `currentcolor`, text that isn't UTF-8, a
+/// number) to convert as before.
+enum ComputedColor {
+    Parsed(Option<zgx::scene::Color>),
+    Other(mlua::Value),
+}
+impl ComputedColor {
+    fn parse(text: &str) -> Option<Self> {
+        (!text.starts_with('$') && !text.eq_ignore_ascii_case("currentcolor"))
+            .then(|| Self::Parsed(crate::node::parse_color(text)))
+    }
+}
+impl mlua::FromLua for ComputedColor {
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        if let mlua::Value::String(s) = &value
+            && let Ok(text) = s.to_str()
+            && let Some(parsed) = Self::parse(&text)
+        {
+            return Ok(parsed);
+        }
+        Ok(Self::Other(value))
+    }
+    unsafe fn from_stack(idx: std::ffi::c_int, lua: &mlua::state::RawLua) -> mlua::Result<Self> {
+        use mlua::ffi;
+        let state = lua.state();
+        // SAFETY: mlua converts a result at `idx` while it is on this
+        // stack. A string's type is checked first, so `lua_tolstring`
+        // converts nothing and allocates nothing (the collector does not
+        // run); its bytes stay where they are, held by the stack, while
+        // they are parsed. Parsing runs no Lua and keeps no borrow.
+        unsafe {
+            if ffi::lua_type(state, idx) == ffi::LUA_TSTRING {
+                let mut len = 0;
+                let bytes = ffi::lua_tolstring(state, idx, &mut len);
+                let bytes = std::slice::from_raw_parts(bytes.cast::<u8>(), len);
+                if let Ok(text) = std::str::from_utf8(bytes)
+                    && let Some(parsed) = Self::parse(text)
+                {
+                    return Ok(parsed);
+                }
+            }
+            Ok(Self::Other(mlua::Value::from_stack(idx, lua)?))
+        }
+    }
+}
 fn resolve(source: &Owned, ty: Ty, scalar: Option<&Signal<f32>>, vm: &Vm) -> Option<Lit> {
     match source {
         Owned::Lit(l) => Some(l.clone()),
@@ -3485,21 +3622,17 @@ fn resolve(source: &Owned, ty: Ty, scalar: Option<&Signal<f32>>, vm: &Vm) -> Opt
         // A colour or a number (most computed styles): read from what the
         // function returned as it is, without making a `Value` of it first.
         Owned::Computed(f) if matches!(ty, Ty::Color | Ty::Num) => {
-            match vm.call::<mlua::Value>(f, ()) {
-                Ok(mlua::Value::Number(n)) => lit(&Value::Num(n), ty),
-                Ok(mlua::Value::Integer(n)) => lit(&Value::Num(n as f64), ty),
-                Ok(mlua::Value::String(s))
-                    if matches!(ty, Ty::Color)
-                        && s.to_str().is_ok_and(|text| {
-                            !text.starts_with('$') && !text.eq_ignore_ascii_case("currentcolor")
-                        }) =>
-                {
-                    s.to_str()
-                        .ok()
-                        .and_then(|text| crate::node::parse_color(&text))
-                        .map(Lit::Color)
-                }
-                Ok(other) => crate::value::convert(other, None)
+            // A colour's text is parsed where it lies (`ComputedColor`).
+            let result = if matches!(ty, Ty::Color) {
+                vm.call::<ComputedColor>(f, ())
+            } else {
+                vm.call::<mlua::Value>(f, ()).map(ComputedColor::Other)
+            };
+            match result {
+                Ok(ComputedColor::Parsed(color)) => color.map(Lit::Color),
+                Ok(ComputedColor::Other(mlua::Value::Number(n))) => lit(&Value::Num(n), ty),
+                Ok(ComputedColor::Other(mlua::Value::Integer(n))) => lit(&Value::Num(n as f64), ty),
+                Ok(ComputedColor::Other(other)) => crate::value::convert(other, None)
                     .map_err(|e| vm.report(e))
                     .ok()
                     .and_then(|v| lit(&v, ty)),
@@ -3610,6 +3743,22 @@ fn render_text(text: &Text, vm: &Vm) -> String {
         },
     }
 }
+/// `text`, owned: what a closure that renders it keeps.
+fn copy_text(text: &Text) -> Text {
+    match text {
+        Text::Literal(s) => Text::Literal(s.clone()),
+        Text::Template(segments) => Text::Template(
+            segments
+                .iter()
+                .map(|s| match s {
+                    Segment::Literal(l) => Segment::Literal(l.clone()),
+                    Segment::State(s, path) => Segment::State(s.clone(), path.clone()),
+                })
+                .collect(),
+        ),
+        Text::Computed(f) => Text::Computed(f.clone()),
+    }
+}
 fn lower_text(text: &Text, vm: &Rc<Vm>) -> View {
     match text {
         Text::Literal(s) => zgx::compose::text(s.clone()),
@@ -3662,28 +3811,65 @@ fn picture_of(src: &Owned, vm: &Vm) -> Option<Picture> {
     }
 }
 
+/// A picture a script took (`el:snapshot`, `term:snapshot`), as `host:<name>`
+/// while it is held: forgotten as it drops (its element's node goes, its
+/// terminal closes), so pictures of what is gone are not kept.
+pub(crate) struct HostedPicture(pub std::rc::Weak<Assets>, pub String);
+impl Drop for HostedPicture {
+    fn drop(&mut self) {
+        if let Some(assets) = self.0.upgrade() {
+            assets.forget_hosted(&self.1);
+        }
+    }
+}
+
 /// A `ui.image` (out of `build`, as `lower_list` is).
 #[inline(never)]
-fn lower_image(kind: &Kind, vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
+fn lower_image(node: &Node, vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
     let Kind::Image {
         label,
         src,
         fallback,
-    } = kind
+    } = &node.kind
     else {
         unreachable!("lower_image takes images")
     };
+    // Dithered in dots, or characters in font pixels, this many points
+    // square (`ImageData::dithered`, `ImageData::characters`): state or
+    // computed, the picture follows them as it does its `src`.
+    let prop = |prop: Prop| {
+        node.props
+            .iter()
+            .find(|(p, _)| *p == prop)
+            .map(|(_, source)| resolve_owned(source))
+    };
+    let (dither, characters) = (prop(Prop::Dither), prop(Prop::Characters));
     // The picture, as a view (made again each time it shows).
     let picture = {
         let (src, vm2, low2, label) = (resolve_owned(src), vm.clone(), low.clone(), label.clone());
         move || {
             let (src, vm2, low2) = (src.clone(), vm2.clone(), low2.clone());
-            image_signal(label.clone(), move || match picture_of(&src, &vm2) {
-                Some(Picture::Image(image)) => image,
-                Some(Picture::Path(path)) => {
-                    load_image(&vm2, &low2, &path).unwrap_or_else(placeholder)
+            let (dither, characters) = (dither.clone(), characters.clone());
+            image_signal(label.clone(), move || {
+                let image = match picture_of(&src, &vm2) {
+                    Some(Picture::Image(image)) => image,
+                    Some(Picture::Path(path)) => {
+                        load_image(&vm2, &low2, &path).unwrap_or_else(placeholder)
+                    }
+                    None => placeholder(),
+                };
+                let size = |source: &Option<Owned>| match source
+                    .as_ref()
+                    .and_then(|source| resolve(source, Ty::Num, None, &vm2))
+                {
+                    Some(Lit::Num(size)) if size > 0. => Some(size),
+                    _ => None,
+                };
+                match (size(&dither), size(&characters)) {
+                    (_, Some(pixel)) => Arc::new(image.characters(pixel)),
+                    (Some(dot), None) => Arc::new(image.dithered(dot)),
+                    (None, None) => image,
                 }
-                None => placeholder(),
             })
         }
     };
@@ -3920,6 +4106,7 @@ fn canvas_options(
 fn lower_list(kind: &Kind, vm: &Rc<Vm>, low: &Rc<Lowering>, cx: &mut Option<&mut Context>) -> View {
     let Kind::List {
         count,
+        items,
         height,
         heights,
         sticky,
@@ -3937,6 +4124,9 @@ fn lower_list(kind: &Kind, vm: &Rc<Vm>, low: &Rc<Lowering>, cx: &mut Option<&mut
     else {
         unreachable!("lower_list takes lists")
     };
+    if let Some(items) = items {
+        return lower_item_list(kind, items, vm, low, cx);
+    }
     // Keyed rows follow their items: built once a key, given the key and
     // their index as a state that follows where the row is.
     let keyed = key.clone().map(|key| (key, vm.clone()));
@@ -3950,6 +4140,15 @@ fn lower_list(kind: &Kind, vm: &Rc<Vm>, low: &Rc<Lowering>, cx: &mut Option<&mut
                     ListKey::Index(index)
                 }
             },
+        }
+    };
+    // A row of a list with no `key`, keyed by its place: a `usize` the
+    // list hashes inline, not a `ListKey` (a list scrolls by looking up
+    // every row in view).
+    let plain_row = {
+        let (builder, vm, low) = (builder.clone(), vm.clone(), low.clone());
+        move |index: Signal<usize>, _: usize, cx: &mut Context| -> View {
+            build_scoped(&vm, cx, &low, &builder, index.with_untracked(|i| *i) + 1)
         }
     };
     let row = {
@@ -4026,7 +4225,7 @@ fn lower_list(kind: &Kind, vm: &Rc<Vm>, low: &Rc<Lowering>, cx: &mut Option<&mut
                 cx.retain(cx.runtime().effect(move || {
                     let _ = r.resize(count());
                 }));
-                measured_virtual_list(offset, rows, *overscan, list_key, row)
+                measured_virtual_list(offset, rows, *overscan, |i| i, plain_row)
             }
             // Heights by key, kept as rows move: every row's key, read in
             // one Luau loop.
@@ -4063,9 +4262,16 @@ fn lower_list(kind: &Kind, vm: &Rc<Vm>, low: &Rc<Lowering>, cx: &mut Option<&mut
             });
             let _ = r.replace(values);
         }));
-        let list = variable_virtual_list(offset.clone(), rows.clone(), *overscan, list_key, row)
-            .keyboard_navigation(keyboard)
-            .row_text(copy);
+        let list = match key {
+            None => {
+                variable_virtual_list(offset.clone(), rows.clone(), *overscan, |i| i, plain_row)
+            }
+            Some(_) => {
+                variable_virtual_list(offset.clone(), rows.clone(), *overscan, list_key, row)
+            }
+        }
+        .keyboard_navigation(keyboard)
+        .row_text(copy);
         match sticky {
             None => list,
             Some(sticky) => sticky_list(
@@ -4081,14 +4287,280 @@ fn lower_list(kind: &Kind, vm: &Rc<Vm>, low: &Rc<Lowering>, cx: &mut Option<&mut
             ),
         }
     } else {
-        virtual_list(
-            offset, *height, *overscan, count, list_key,
-            // Each row owns what it makes, as `each` rows do.
-            row,
-        )
+        // Each row owns what it makes, as `each` rows do.
+        match key {
+            None => virtual_list(offset, *height, *overscan, count, |i| i, plain_row),
+            Some(_) => virtual_list(offset, *height, *overscan, count, list_key, row),
+        }
         .keyboard_navigation(keyboard)
         .row_text(copy)
     }
+}
+
+/// Whether a row's item `now` is the one it shows, `was`: the same table
+/// (kept by a write elsewhere in the list), or an equal value.
+fn same_item(was: &Value, now: &Value) -> bool {
+    let at = crate::value::identity(was);
+    (at != 0 && at == crate::value::identity(now)) || was == now
+}
+
+/// Keys of a list's items by the item (its table's address), each item
+/// kept so an address names it alone: a list written in one row (a token
+/// streaming in) asks `key` of that row's item alone.
+#[derive(Default)]
+struct KeptKeys(HashMap<usize, (Value, ListKey)>);
+impl KeptKeys {
+    fn get(&self, item: &Value) -> Option<ListKey> {
+        let at = crate::value::identity(item);
+        (at != 0)
+            .then(|| self.0.get(&at).map(|(_, k)| k.clone()))
+            .flatten()
+    }
+    fn keep(&mut self, item: &Value, key: &ListKey) {
+        let at = crate::value::identity(item);
+        if at != 0 {
+            self.0.insert(at, (item.clone(), key.clone()));
+        }
+    }
+}
+
+/// `key(item)` as a list key: a number, string or boolean, else (or if it
+/// fails) the item's index.
+fn item_key(vm: &Vm, key: &mlua::Function, item: &Value, index: usize) -> ListKey {
+    match vm.call::<Value>(key, item.clone()) {
+        Ok(value) => ListKey::of(&value).unwrap_or(ListKey::Index(index)),
+        Err(e) => {
+            vm.report(e);
+            ListKey::Index(index)
+        }
+    }
+}
+
+/// The keys of `items`, `key(item)` asked only of the items not kept from
+/// the last pass (in one Luau loop when there are many, as `list_keys`
+/// asks them); `kept` then holds this pass's.
+fn item_keys(vm: &Vm, key: &mlua::Function, items: &Value, kept: &mut KeptKeys) -> Vec<ListKey> {
+    const LOOP: &str = "zgx_item_keys";
+    let list = items.list();
+    let mut keys: Vec<Option<ListKey>> = list.iter().map(|item| kept.get(item)).collect();
+    let missing: Vec<usize> = (0..list.len()).filter(|&i| keys[i].is_none()).collect();
+    if missing.len() <= 8 {
+        for &i in &missing {
+            keys[i] = Some(item_key(vm, key, &list[i], i));
+        }
+    } else {
+        let lua = &vm.lua;
+        let all = lua
+            .named_registry_value::<mlua::Function>(LOOP)
+            .or_else(|_| {
+                let all: mlua::Function = lua
+                    .load(
+                        "local key, items = ...\n\
+                     local keys = table.create(#items)\n\
+                     for i, item in items do keys[i] = key(item) end\n\
+                     return keys",
+                    )
+                    .set_name("=ui.list keys")
+                    .into_function()?;
+                lua.set_named_registry_value(LOOP, &all)?;
+                Ok::<_, mlua::Error>(all)
+            });
+        let asked = Value::List(
+            missing
+                .iter()
+                .map(|&i| list[i].clone())
+                .collect::<Vec<_>>()
+                .into(),
+        );
+        match all.and_then(|all| vm.call::<mlua::Table>(&all, (key, asked))) {
+            Ok(table) => {
+                for (n, &i) in missing.iter().enumerate() {
+                    let key = match table.raw_get::<mlua::Value>(n + 1) {
+                        Ok(mlua::Value::Number(v)) => ListKey::of(&Value::Num(v)),
+                        Ok(mlua::Value::Integer(v)) => ListKey::of(&Value::Num(v as f64)),
+                        Ok(mlua::Value::Boolean(b)) => Some(ListKey::Bool(b)),
+                        Ok(mlua::Value::String(s)) => {
+                            Some(ListKey::Str(Rc::from(&*s.to_string_lossy())))
+                        }
+                        _ => None,
+                    };
+                    keys[i] = Some(key.unwrap_or(ListKey::Index(i)));
+                }
+            }
+            Err(e) => {
+                vm.report(e);
+                return (0..list.len()).map(ListKey::Index).collect();
+            }
+        }
+    }
+    let keys: Vec<ListKey> = keys.into_iter().map(|k| k.unwrap()).collect();
+    kept.0.clear();
+    for (item, key) in list.iter().zip(&keys) {
+        kept.keep(item, key);
+    }
+    keys
+}
+
+/// A `ui.list` of `data` (a list state), whose rows are built from their
+/// items as `ui.each`'s are: `row(item, index)`, built again when the item
+/// changes, or `row(item, index, row)` built once, `row` its item as a
+/// state kept current (a reply streaming in updates its own row alone).
+/// `index` is a state, following the row as the list changes; with `key`
+/// (given an item) rows follow their items.
+fn lower_item_list(
+    kind: &Kind,
+    items: &Signal<Value>,
+    vm: &Rc<Vm>,
+    low: &Rc<Lowering>,
+    cx: &mut Option<&mut Context>,
+) -> View {
+    let Kind::List {
+        height,
+        overscan,
+        build: builder,
+        key,
+        measured,
+        row_text,
+        follow,
+        offset,
+        keyboard,
+        ..
+    } = kind
+    else {
+        unreachable!("lower_item_list takes lists")
+    };
+    let live = builder.info().num_params >= 3;
+    let row = {
+        let (items, builder, vm, low) = (items.clone(), builder.clone(), vm.clone(), low.clone());
+        move |index: Signal<usize>, _: ListKey, cx: &mut Context| -> View {
+            let at = |list: &Value, i: usize| list.list().get(i).cloned().unwrap_or(Value::Nil);
+            let runtime = cx.runtime();
+            let first = index.with_untracked(|i| *i);
+            let item = runtime.signal(items.with_untracked(|l| at(l, first)));
+            let shown = runtime.signal(Value::Num((first + 1) as f64));
+            // Bumped as the item changes: a two-parameter row is built again.
+            let changes = runtime.signal(0_u64);
+            {
+                let (items, item, shown, changes) =
+                    (items.clone(), item.clone(), shown.clone(), changes.clone());
+                let mut was = first;
+                cx.retain(runtime.effect(move || {
+                    let i = index.get();
+                    let now = items.with(|l| at(l, i));
+                    if i != was {
+                        was = i;
+                        shown.set(Value::Num((i + 1) as f64));
+                    }
+                    if !item.with_untracked(|was| same_item(was, &now)) {
+                        item.set(now);
+                        changes.update(|n| *n += 1);
+                    }
+                }));
+            }
+            let index = crate::value::State(shown, None);
+            if live {
+                let value = item.with_untracked(Clone::clone);
+                let row = crate::value::State(item, None);
+                return build_scoped(&vm, cx, &low, &builder, (value, index, row));
+            }
+            let (builder, vm, low) = (builder.clone(), vm.clone(), low.clone());
+            switch(
+                move || changes.get(),
+                move |_, cx| {
+                    let value = item.with_untracked(Clone::clone);
+                    build_scoped(&vm, cx, &low, &builder, (value, index.clone()))
+                },
+            )
+            .contents()
+        }
+    };
+    let keyboard = *keyboard;
+    let mut cx = cx.as_deref_mut();
+    let offset = match offset {
+        Some(offset) => bridge(need(&mut cx), offset, number, |x| Value::Num(x as f64)),
+        None => need(&mut cx).state(0_f32),
+    };
+    let count = {
+        let items = items.clone();
+        move || items.with(|l| l.list().len())
+    };
+    let list_key = {
+        let (items, key, vm) = (items.clone(), key.clone(), vm.clone());
+        let kept = std::cell::RefCell::new(KeptKeys::default());
+        move |index: usize| -> ListKey {
+            let Some(key) = &key else {
+                return ListKey::Index(index);
+            };
+            let item = items.with(|l| l.list().get(index).cloned().unwrap_or(Value::Nil));
+            if let Some(known) = kept.borrow().get(&item) {
+                return known;
+            }
+            let found = item_key(&vm, key, &item, index);
+            let mut kept = kept.borrow_mut();
+            // The items gone since stop being kept as the list's length.
+            if kept.0.len() > 4 * items.with_untracked(|l| l.list().len()) + 64 {
+                kept.0.clear();
+            }
+            kept.keep(&item, &found);
+            found
+        }
+    };
+    // A row the list has not mounted copies as `row_text` says (given its
+    // index), or as its row would show.
+    let copy = {
+        let (items, builder, vm, explicit) =
+            (items.clone(), builder.clone(), vm.clone(), row_text.clone());
+        let runtime = need(&mut cx).runtime();
+        move |index: usize| -> Option<String> {
+            let item = items.with_untracked(|l| l.list().get(index).cloned())?;
+            if let Some(text) = &explicit {
+                return Some(match vm.call::<Value>(text, index + 1) {
+                    Ok(Value::Nil) => String::new(),
+                    Ok(value) => value.to_string(),
+                    Err(e) => {
+                        vm.report(e);
+                        String::new()
+                    }
+                });
+            }
+            let shown = crate::value::State(runtime.signal(Value::Num((index + 1) as f64)), None);
+            let node = if live {
+                let row = crate::value::State(runtime.signal(item.clone()), None);
+                described(&vm, &builder, (item, shown, row))
+            } else {
+                described(&vm, &builder, (item, shown))
+            };
+            Some(node.map_or_else(String::new, |node| node_text(&node, &vm)))
+        }
+    };
+    if *measured {
+        let cx = need(&mut cx);
+        let mut rows = zgx::compose::VariableHeights::new(&cx.runtime(), 0, *height);
+        if *follow {
+            rows = rows.anchor_end();
+        }
+        let list = match key {
+            None => {
+                let r = rows.clone();
+                cx.retain(cx.runtime().effect(move || {
+                    let _ = r.resize(count());
+                }));
+                measured_virtual_list(offset, rows, *overscan, list_key, row)
+            }
+            // Heights by key, kept as rows move.
+            Some(key) => {
+                let (key, vm, items) = (key.clone(), vm.clone(), items.clone());
+                let mut kept = KeptKeys::default();
+                let keys = move || items.with(|l| item_keys(&vm, &key, l, &mut kept));
+                let estimate = |_: &[ListKey], _: usize| f32::NAN;
+                measured_rows(offset, rows, *overscan, keys, estimate, row)
+            }
+        };
+        return list.keyboard_navigation(keyboard).row_text(copy);
+    }
+    virtual_list(offset, *height, *overscan, count, list_key, row)
+        .keyboard_navigation(keyboard)
+        .row_text(copy)
 }
 
 /// A variable list with sticky rows: the list, and over it the sticky row
@@ -4619,6 +5091,8 @@ fn apply<S: Styled>(s: S, prop: Prop, lit: &Lit) -> S {
         (ClipInset, Lit::Corners(c)) => {
             s.clip_inset(c.top_left, c.top_right, c.bottom_right, c.bottom_left)
         }
+        // Points inside its rounded clip that its content fades out over.
+        (ClipFeather, Lit::Num(v)) => s.clip_feather(*v),
         // `{ top, right, bottom, left }`; 0 keeps an edge sharp.
         (FadeSides, Lit::Corners(c)) => {
             s.fade_sides(c.top_left, c.top_right, c.bottom_right, c.bottom_left)

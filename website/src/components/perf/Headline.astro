@@ -1,0 +1,24 @@
+---
+import { headline, verdict, date, commit, repo } from '@/lib/perf';
+const h = headline();
+---
+
+<div class="perf-headline not-prose">
+  <p class="perf-verdict">{verdict}</p>
+  <p class="perf-meta">
+    macOS · {date} · zgx at <a href={`${repo}/commit/${commit}`}><code>{commit.slice(0, 7)}</code></a> · lower is better throughout
+  </p>
+  <dl class="perf-cards">
+    {
+      h.cards.map((card) => (
+        <div class="perf-card">
+          <dt>{card.label}</dt>
+          <dd class="perf-big">{card.value}</dd>
+          <dd class="perf-detail">
+            {card.detail.map((d) => (d.name === 'rivals' ? <span>GPUI Fast, MyGo and Rune: {d.text}</span> : <span>{d.name} {d.text}</span>))}
+          </dd>
+        </div>
+      ))
+    }
+  </dl>
+</div>

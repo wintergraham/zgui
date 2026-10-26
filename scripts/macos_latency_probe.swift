@@ -9,11 +9,28 @@ import ScreenCaptureKit
 // by its display time: input to composition (scan-out adds up to a refresh).
 // --hid posts through the HID tap, as a keyboard does, and only while the app is
 // frontmost (so a key never lands elsewhere); otherwise keys go to the process alone.
-// --tab presses Tab first to focus the field. Needs Accessibility and Screen Recording.
-//   swiftc -O scripts/macos_latency_probe.swift -o /tmp/zgx-latency-probe
-//   swiftc -O scripts/macos_native_field.swift -o /tmp/zgx-native-field   # AppKit baseline
+// --tab presses Tab first to focus the field.
+//
+// Permissions. macOS grants them to the app the probe is launched from (the
+// terminal, or the app hosting an agent's shell), not to the probe binary:
+// that app needs Accessibility (to post keys and clicks) and Screen &
+// System Audio Recording (to capture the window), each switched on by hand
+// in System Settings > Privacy & Security. Never script those prompts or
+// panes. Without Accessibility macOS drops the posted events silently: no
+// dialog, and the probe reports {"samples":0,...}; that result means the
+// permission is missing, not that zgx failed to draw.
+//
+// Running it (staged outside ~/Documents, as every probe here; run from /tmp):
+//   mkdir -p ~/zgx-bench
+//   swiftc -O scripts/macos_latency_probe.swift -o ~/zgx-bench/zgx-latency-probe
+//   swiftc -O scripts/macos_native_field.swift -o ~/zgx-bench/zgx-native-field   # AppKit baseline
 //   cargo build --release -p zgx-desktop --example input_latency
-//   target/release/examples/input_latency & /tmp/zgx-latency-probe $! 60 64 72 24 52 520 40 --hid --tab
+//   cp target/release/examples/input_latency ~/zgx-bench/
+//   cd /tmp && ~/zgx-bench/input_latency & ~/zgx-bench/zgx-latency-probe $! 60 64 72 24 52 520 40 --hid --tab
+// It prints {"samples":N,"median_ms":...,"p90_ms":...,"min_ms":...,"max_ms":...}; N
+// should equal the samples asked for. --hid needs the app frontmost while it
+// types (it checks, and skips a key otherwise); without --hid keys go to the
+// process alone, which macOS also drops without Accessibility.
 _ = NSApplication.shared  // a window-server connection for AppKit and CGEvent
 let a = CommandLine.arguments
 let pid = pid_t(a[1])!, samples = Int(a[2])!

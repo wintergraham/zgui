@@ -1,0 +1,46 @@
+---
+// Every member of `ui` and `anime`, as zgx.d.luau declares it.
+import { luauApi, referenceFor } from '@/lib/luau-api';
+
+const api = luauApi();
+const reference = referenceFor();
+const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// Comments mark code with backticks.
+const prose = (s: string) => escape(s).replace(/`([^`]+)`/g, '<code>$1</code>');
+const groups = [
+  { global: 'ui', members: api.filter((m) => m.group === 'ui') },
+  { global: 'anime', members: api.filter((m) => m.group === 'anime') },
+];
+---
+
+{
+  groups.map((g) => (
+    <section>
+      <h2 id={g.global}>
+        <code>{g.global}</code>
+      </h2>
+      <dl class="api-list not-prose">
+        {g.members.map((m) => {
+          const href = reference(m);
+          return (
+            <div class="api-item" id={`${g.global}-${m.name}`}>
+              <dt>
+                {href ? (
+                  <a href={href}>
+                    <code>{`${g.global}.${m.name}`}</code>
+                  </a>
+                ) : (
+                  <code>{`${g.global}.${m.name}`}</code>
+                )}
+              </dt>
+              <dd class="api-type">
+                <code>{m.type}</code>
+              </dd>
+              {m.doc && <dd class="api-doc" set:html={prose(m.doc)} />}
+            </div>
+          );
+        })}
+      </dl>
+    </section>
+  ))
+}

@@ -61,7 +61,7 @@ Effects on ordinary nodes apply per primitive. `Scene::set_isolated(node, true)`
 
 Targeted damage computes effective clips by looking up ancestors; its worst-case depth cost is quadratic because clipped ancestors also need their world translations. Deep trees are therefore less efficient than the ordinary shallow demo. Recursive layout, removal, and subtree damage are not designed for adversarially deep trees. Damage merging has bounded but nonlinear rectangle bookkeeping. The renderer culls whole subtrees against damage but does not keep a spatial index, so a single container with very many direct children is still scanned child by child. Nodes store absolute bounds, so moving a subtree (for example content below a growing fold) updates every descendant. Virtualization bounds that work for the list demo.
 
-`cargo run -p zgx --release --example core_bench` measures invalidation and range costs with assertions about bounded work. It includes 1,002 retained nodes for idle and text workloads. These are CPU-only microbenchmarks, not a substitute for windowed end-to-end comparisons. See [benchmarking.md](benchmarking.md) for the shared workload and measurement protocol.
+`cargo run -p zgx --release --example core_bench` measures invalidation and range costs with assertions about bounded work. It includes 1,002 retained nodes for idle and text workloads. These are CPU-only microbenchmarks, not a substitute for windowed end-to-end comparisons. See [benchmarking](benchmarking.md) for the shared workload and measurement protocol.
 
 ## Component composition and future template lowering
 

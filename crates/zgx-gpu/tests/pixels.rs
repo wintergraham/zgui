@@ -339,6 +339,10 @@ fn thousand_streaming_frames_keep_caches_bounded_and_reuse_vertices() {
         gpu.render(&scene, &d).unwrap();
     }
     let initial = gpu.debug_cache_stats().vertex_buffer_bytes;
+    // Vertices written in place (unified memory, Direct3D 12) go round a
+    // ring of up to four buffers in flight; a staging copy keeps one. Each
+    // stays within the one buffer's bound.
+    let buffer = initial / gpu.debug_cache_stats().vertex_buffers.max(1);
     scene.set_transform(stable, Transform { x: 1., y: 0. });
     let d = scene.flush().damage;
     let stats = gpu.render(&scene, &d).unwrap();
@@ -378,7 +382,17 @@ fn thousand_streaming_frames_keep_caches_bounded_and_reuse_vertices() {
         assert!(c.shaped_bytes <= 8 * 1024 * 1024);
         assert_eq!(c.swash_images, 0);
         assert_eq!(c.swash_outlines, 0);
-        assert!(c.vertex_buffer_bytes <= initial.max(8192));
+        assert!(
+            c.vertex_buffers <= 4,
+            "frame {frame}: {} vertex buffers",
+            c.vertex_buffers
+        );
+        assert!(
+            c.vertex_buffer_bytes <= c.vertex_buffers * buffer.max(8192),
+            "frame {frame}: {} bytes in {} buffers",
+            c.vertex_buffer_bytes,
+            c.vertex_buffers
+        );
         assert!(c.atlas_entries < 5000);
     }
     gpu.readback().unwrap();
@@ -387,6 +401,55 @@ fn thousand_streaming_frames_keep_caches_bounded_and_reuse_vertices() {
     let d = scene.flush().damage;
     gpu.render(&scene, &d).unwrap();
     assert_eq!(gpu.debug_cache_stats().shaped_nodes, 0);
+}
+
+#[test]
+fn frames_in_flight_never_share_a_vertex_buffer_being_read() {
+    let _gpu_fixture = gpu_fixture();
+    // Frames submitted back to back, never waited for, go round the ring of
+    // vertex buffers many times while earlier ones are still in flight. Each
+    // draws one new mark and leaves the others: a buffer rewritten before
+    // the GPU read it would draw an earlier frame's mark where a later one
+    // goes, and leave its own place empty.
+    let mut gpu = GpuRenderer::new(256, 64).unwrap();
+    let mut scene = Scene::new(256., 64.);
+    scene.set_kind(scene.root(), NodeKind::Container(Layout::Overlay));
+    scene.append(
+        scene.root(),
+        NodeKind::Rect(Color(0, 0, 0, 255)),
+        fixed(256., 64.),
+    );
+    let d = scene.flush().damage;
+    gpu.render(&scene, &d).unwrap();
+    let place = |frame: u32| ((frame % 32) * 8, (frame / 32) * 32);
+    for frame in 0..64 {
+        let mark = scene.append(
+            scene.root(),
+            NodeKind::Rect(Color(255, frame as u8 * 4, 0, 255)),
+            fixed(4., 4.),
+        );
+        let (x, y) = place(frame);
+        scene.set_transform(
+            mark,
+            Transform {
+                x: x as f32,
+                y: y as f32,
+            },
+        );
+        let d = scene.flush().damage;
+        gpu.render(&scene, &d).unwrap();
+        assert!(gpu.debug_cache_stats().vertex_buffers <= 4);
+    }
+    let pixels = gpu.readback().unwrap();
+    for frame in 0..64 {
+        let (x, y) = place(frame);
+        let at = (((y + 2) * 256 + x + 2) * 4) as usize;
+        assert_eq!(
+            &pixels[at..at + 4],
+            &[255, frame as u8 * 4, 0, 255],
+            "frame {frame}'s mark"
+        );
+    }
 }
 
 #[test]
@@ -4864,6 +4927,66 @@ fn scroll_copies_match_a_fresh_render_and_decline_when_inexact() {
     }
 }
 
+/// A trackpad's fractional offsets, with the scene on the device-pixel grid
+/// (`Scene::set_pixel_scale`, as a window sets it): the content moves by whole
+/// pixels, so each move copies, and the frames match a fresh render.
+#[test]
+fn fractional_scrolls_on_the_pixel_grid_copy_and_match_a_fresh_render() {
+    let _gpu_fixture = gpu_fixture();
+    use zgx::{compose::prelude::*, widgets::Ui};
+    let mut gpu = GpuRenderer::new(160, 120).unwrap();
+    let mut ui = Ui::new(160., 120.);
+    ui.scene.borrow_mut().set_pixel_scale(1.);
+    let offset = ui.signal(0_f32);
+    ui.mount(
+        overlay().w(160.).h(120.).bg(rgb(0x000000)).child(
+            virtual_list(
+                offset.clone(),
+                24.,
+                2,
+                || 1000,
+                |i| i,
+                |_, key, _| {
+                    div()
+                        .size(144., 24.)
+                        .bg(if key % 2 == 0 {
+                            rgb(0x223344)
+                        } else {
+                            rgb(0x334455)
+                        })
+                        .child(div().size(144., 1.).bg(rgb(0xffffff)))
+                },
+            )
+            .w(160.)
+            .h(100.)
+            .p(8.)
+            .bg(rgb(0x101820)),
+        ),
+    );
+    let mut copies = 0;
+    for scroll in [0., 14.3, 28.6, 31.45, 60.2] {
+        offset.set(scroll);
+        ui.prepare_frame();
+        let damage = ui.scene.borrow_mut().flush().damage;
+        copies += gpu
+            .render(&ui.scene.borrow(), &damage)
+            .unwrap()
+            .scroll_copies;
+        let mut fresh = GpuRenderer::new(160, 120).unwrap();
+        fresh
+            .render(&ui.scene.borrow(), &[Rect::new(0., 0., 160., 120.)])
+            .unwrap();
+        assert_eq!(
+            gpu.readback().unwrap(),
+            fresh.readback().unwrap(),
+            "scroll {scroll}"
+        );
+    }
+    // Texture blits cost Apple GPUs graphics memory; macOS repaints.
+    let expected = if cfg!(target_os = "macos") { 0 } else { 4 };
+    assert_eq!(copies, expected);
+}
+
 /// A chat transcript: a measured, end-anchored virtual list of wrapped text
 /// rows with estimated heights, fading edges and a scrollbar. Scrolling in
 /// uneven steps mounts, measures and unmounts rows; every partial frame must
@@ -5153,6 +5276,23 @@ fn split_shading_matches_the_full_shader() {
                     .children((0..5).map(|i| text(format!("faded row {i}")).text_size(11.))),
             )
             .child(text("rotated").text_size(12.).opacity(0.6))
+            // A text's glyphs alone draw with one shading: faded at its
+            // edges, in a rounded clip, or underlined, each as the full
+            // shader draws it.
+            .child(
+                row()
+                    .gap(6.)
+                    .child(text("edge faded").text_size(12.).edge_fade(5.))
+                    .child(
+                        div()
+                            .w(70.)
+                            .h(16.)
+                            .rounded(7.)
+                            .overflow_hidden()
+                            .child(text("in a rounded clip").text_size(12.)),
+                    )
+                    .child(text("underlined").text_size(12.).text_underline(true)),
+            )
     };
     let render = |split: bool| {
         let mut gpu = GpuRenderer::new(600, 520).unwrap();

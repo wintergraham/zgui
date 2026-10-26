@@ -241,6 +241,23 @@ function M.commit_slot(): boolean
 	end
 	return true
 end
+-- Move `tab`'s panes into `into`, beside its focused pane: `tab` goes.
+function M.join_tab(tab: string, into: string)
+	local other, root = M.root_of(tab), M.root_of(into)
+	local target = (focus:peek())[into]
+	if tab == into or not other or not root or not target then
+		return
+	end
+	state.tabs:remove(M.tab_index(tab) or 0)
+	focus:set_key(tab, nil)
+	if state.lifted:peek() == tab then
+		state.lifted:set("")
+	end
+	M.set_root(into, layout.attach(root, target, "row", other, M.fresh("s"), false))
+	zoom:set_key(into, nil)
+	M.activate(into)
+	M.focus_pane(into, target)
+end
 -- Move `pane` into `tab`, beside its focused pane.
 function M.move_pane_to_tab(pane: string, tab: string)
 	local target = (focus:peek())[tab]

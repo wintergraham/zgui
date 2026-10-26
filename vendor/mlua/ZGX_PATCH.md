@@ -88,3 +88,13 @@ comparison of its own, `mount_bench` ran 0.35% more instructions.
 
 Checked: `the_interrupt_is_set_by_the_memory_alarm` (zgx-script), and the
 memory-limit tests listed above, in debug and release builds.
+
+## Luau held to 740 (zgx-mlua 0.12.3)
+
+mlua-sys 0.13.0 builds Luau from `luau0-src` 0.22, and 0.22.1 (Luau 744,
+2026-10-24) fails mlua 0.12.2's setup as a Lua state is made: "Error
+configuring Luau: attempt to load a text chunk (mode is 'b')". zgx's
+lockfile held 0.22.0, so only an app resolving afresh met it, and every
+Luau app panicked at start. The `luau` feature now depends on
+`luau0-src = "=0.22.0"` (unused as code: it holds the one 0.22 version a
+build may have). Drop it once mlua works with Luau 744.

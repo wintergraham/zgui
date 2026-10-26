@@ -395,8 +395,9 @@ export type Cursor =
 	| "zoom-out"
 
 -- A key into a state's table, an index into its list (from 1), or a path
--- of them: `{ "tabs", 3, "title" }`.
-export type StatePath = string | number | { string | number }
+-- of them: `{ "tabs", 3, "title" }`. A table step picks a list's first
+-- item with those fields: `{ "c1", { id = "m5" }, "text" }`.
+export type StatePath = string | number | { string | number | { [string]: any } }
 
 ---------------------------------------------------------------------------
 -- State.
@@ -421,6 +422,9 @@ export type State<T> = {
 	-- nil removes the key. The value's type depends on the path, which Luau
 	-- cannot follow: it is not checked.
 	set_key: (self: State<T>, path: StatePath, value: any) -> (),
+	-- Adds `text` to the string at `path` (or puts it there), in Rust: a
+	-- reply's token, without the text so far copied into the script.
+	append: (self: State<T>, path: StatePath, text: string) -> (),
 	-- A shallow merge into the table.
 	patch: (self: State<T>, fields: Partial<T>) -> (),
 	-- Sets `not value` (a boolean).
@@ -500,7 +504,15 @@ export type FetchOptions = {
 	headers: { [string]: string }?,
 	-- Text, or data sent as JSON (with its content type).
 	body: unknown?,
+	-- The body's text as it arrives (a reply streaming), in whole
+	-- characters; the response's `body` is then empty unless it failed.
+	on_chunk: ((text: string) -> ())?,
+	-- Each server-sent event (`text/event-stream`) as it ends: `event`
+	-- ("message" unless named), `data` (its lines joined), `id`.
+	on_event: ((event: ServerEvent) -> ())?,
 }
+-- One server-sent event (`ui.fetch`'s `on_event`).
+export type ServerEvent = { event: string, data: string, id: string? }
 -- What `ui.fetch` settles with (a promise's `value`).
 export type Response = {
 	status: number,
@@ -542,6 +554,9 @@ export type Promise<T = unknown> = {
 	-- Inside `ui.task`: wait for it, and return its value (or raise its
 	-- error, the host's message as it wrote it).
 	await: (self: Promise<T>) -> T,
+	-- Reject it with "cancelled" (reported nowhere), stopping a fetch's
+	-- request; an action's work goes on, its answer unheard.
+	cancel: (self: Promise<T>) -> (),
 }
 
 -- `ui.form`'s spec: each field's first value, its checks (a message, or
@@ -582,8 +597,18 @@ export type Form = {
 	submit: () -> (),
 	-- Back to the first values (or `values`), nothing shown wrong.
 	reset: (values: { [string]: any }?) -> (),
+	-- Stop a submit under way (a Cancel button): not `pending` any more,
+	-- and what it awaits is not heard. A form gone cancels its own.
+	cancel: () -> (),
 	-- The values now, as a table.
 	snapshot: () -> { [string]: any },
+}
+
+-- A task (`ui.task`): `cancel()` stops it at the await it is at, never to
+-- go on (what it awaits still settles, unheard).
+export type Task = {
+	cancel: (self: Task) -> (),
+	cancelled: boolean,
 }
 
 -- `ui.resource`'s data loaded in a task, and how its loading goes.
@@ -642,6 +667,11 @@ declare extern type Element with
 	-- The selection replaced by `text`, as typing it would (one step of
 	-- undo): a search's Replace.
 	function replace_selection(self, text: string): boolean
+	-- A picture of it as the window last showed it, at most `max_width`
+	-- pixels wide (480 if not given): the `src` of an image showing it,
+	-- replaced on each call. Nil if it is not laid out or the host takes
+	-- none; native views in it show as what is under them.
+	function snapshot(self, max_width: number?): string?
 	-- Clear keyboard focus if it is on the element or inside it.
 	function blur(self): ()
 end
@@ -714,7 +744,22 @@ export type MarkdownOptions = {
 	-- Repository paths (`src/main.rs:12`) are files: runs with `f`.
 	paths: boolean?,
 }
-export type MarkdownBlock = { t: string, [string]: any }
+-- A run of a block's text: `x`, and whether it is bold (`b`), italic
+-- (`i`), code (`c`), struck (`s`), a link (`a`, where to) or a repository
+-- file (`f`, with `paths`).
+export type MarkdownRun = { x: string, b: boolean?, i: boolean?, c: boolean?, s: boolean?, a: string?, f: string? }
+-- A block of `ui.markdown`'s, by its `t`: refine on it (`if b.t == "code"`)
+-- and its fields are typed.
+export type MarkdownBlock =
+	{ t: "p", s: { MarkdownRun }, tight: boolean? }
+	| { t: "h", l: number, s: { MarkdownRun } }
+	| { t: "code", lang: string, text: string, [string]: any }
+	| { t: "ul", items: { { MarkdownBlock } } }
+	| { t: "ol", start: number, items: { { MarkdownBlock } } }
+	| { t: "quote", b: { MarkdownBlock } }
+	| { t: "hr" }
+	| { t: "table", head: { { MarkdownRun } }, rows: { { { MarkdownRun } } } }
+	| { t: "img", src: string, alt: string }
 
 export type StrokeOptions = Merge<LineOptions, { draw: Pair? }>
 -- What a canvas's `draw(c, w, h)` paints with.
@@ -825,6 +870,10 @@ declare extern type Term with
 	function binding(self, action: string): ()
 	-- Whether closing would end something other than an idle shell.
 	function needs_confirm(self): boolean
+	-- A picture of what it shows now, at most `max_width` pixels wide (480
+	-- if not given): the `src` of a `ui.image` showing it, replaced on each
+	-- call; nil before it shows, or where the platform takes none.
+	function snapshot(self, max_width: number?): string?
 	-- End the session (its process is hung up).
 	function close(self): ()
 end
@@ -1085,9 +1134,24 @@ export type Styles = {
 	-- Lay its edges on whole points (crisp borders where percentages leave fractions).
 	snap: boolean?,
 	clip_inset: Sides?,
+	-- Where it clips (overflow = "hidden"), its content fades out over this
+	-- many points inside its rounded edge instead of being cut: with a large
+	-- `rounded` and an animated clip inset, a soft oval that opens.
+	clip_feather: number?,
 	layer: boolean?,
 	fit: Fit?,
 	tint: Color?,
+	-- An image drawn dithered as Zeron dithers wallpapers, in dots this many
+	-- points square: each lit to its colour's full value or dimmed to 8% by a
+	-- 4x4 Bayer threshold, on the GPU as it draws (it follows the image as it
+	-- moves and scales).
+	dither: number?,
+	-- An image drawn as characters, as an ASCII art generator draws a photo:
+	-- cells of a 5 by 7 pixel font (each pixel this many points), a glyph each
+	-- by the brightness there, lit in its colour over the image. Its
+	-- `shader_params` reveal it cell by cell from the window's middle (see the
+	-- reference): animate `shaderParam0` (the front) to have it materialise.
+	characters: number?,
 	cursor: Cursor?,
 	-- Text.
 	text_size: Num?,
@@ -1226,9 +1290,12 @@ export type StyleProps = {
 	fade_overflow: Reactive<boolean>?,
 	snap: Reactive<boolean>?,
 	clip_inset: Reactive<Sides>?,
+	clip_feather: Reactive<number>?,
 	layer: Reactive<boolean>?,
 	fit: Reactive<Fit>?,
 	tint: Reactive<Color>?,
+	dither: number?,
+	characters: number?,
 	cursor: Reactive<Cursor>?,
 	-- Text.
 	text_size: Reactive<Num>?,
@@ -1279,6 +1346,7 @@ export type AriaRole =
 	| "dialog"
 	| "img"
 	| "tabpanel"
+	| "article"
 	| "radiogroup"
 	| "radio"
 	| "switch"
@@ -1298,6 +1366,10 @@ export type NodeProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Reactive<ThemeSpec>?,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: { [string]: any }?,
 	-- Identity, for selectors, refs and animations.
 	id: string?,
 	-- Space-separated class names.
@@ -1424,6 +1496,13 @@ export type NodeProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: (() -> any)?,
 	drag_preview: ((payload: any) -> Node)?,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: { number }?,
+	drag_preview_offset: { number }?,
 	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -1440,6 +1519,10 @@ export type NodeProps = {
 	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
 	on_drag_leave: ((payload: any) -> ...unknown)?,
 	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: ((payload: any) -> boolean?)?,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -1464,6 +1547,10 @@ export type Props = Merge<Merge<StyleProps, NodeProps>, { [number]: never }>
 -- column, row, div, overlay, grid, button: and children.
 export type ContainerProps = Merge<Props, {
 	[number]: Child,
+	-- A button's look where its own styles don't say: "primary" (the
+	-- accent), "ghost" (no background until hovered), "danger", "default".
+	-- Other containers don't take it.
+	variant: ("primary" | "ghost" | "danger" | "default")?,
 	-- The name assistive technology reads for it, instead of its text: a
 	-- switch, a button showing only an icon. A state or function is
 	-- followed: a list row's name made from what it shows now.
@@ -1479,10 +1566,24 @@ export type ScrollProps = Merge<ContainerProps, {
 }>
 -- `ui.text { "Count: {count}", text_size = 18 }`: the text first.
 export type TextProps = Merge<Props, {
-	[number]: Text,
+	-- The text: a string or template, a number, a function, or a state
+	-- (its value, followed as a template's is).
+	[number]: Text | Readable<any>,
 	-- Show a string as it is, braces and all, not as a template: for data
 	-- (code, titles, messages) that might hold `{name}`.
 	literal: boolean?,
+}>
+-- `ui.markdown_view`'s: the markdown first (a string, a template, a state's
+-- text or a function), the rest a column's styles.
+export type MarkdownViewProps = Merge<Props, {
+	[number]: Text,
+	literal: boolean?,
+	-- Single newlines break lines, as people's messages show them.
+	breaks: boolean?,
+	-- Repository paths (`src/main.rs:12`) are files.
+	paths: boolean?,
+	-- A Copy button on code blocks (true).
+	copy: boolean?,
 }>
 -- `ui.span`'s options are plain values.
 export type SpanProps = {
@@ -1906,14 +2007,22 @@ export type ListProps = Merge<Props, {
 	-- Its rows are one Tab stop, and the arrows, Page Up and Down, Home and
 	-- End move focus through every row (mounting it), as a list box's do.
 	keyboard: boolean?,
+	-- The list its rows show, as `ui.each`'s (not with `count` or
+	-- `heights`): `key` is given an item, and `row` an item and its index
+	-- as a state; built again when the item changes, or, taking a third
+	-- parameter, its item as a state kept current (it updates in place).
+	data: Readable<{ any }>?,
 	-- Builds row `index` (from 1); with `key`, the row of item `key`, given
-	-- its index as a state that follows where the row is.
-	row: ((index: number) -> Node) | ((key: any, index: State<number>) -> Node),
+	-- its index as a state that follows where the row is. With `data`,
+	-- the row of an item.
+	row: ((index: number) -> Node)
+		| ((key: any, index: State<number>) -> Node)
+		| ((item: any, index: State<number>, row: State<any>) -> Node),
 	-- Each row's item's key (a number, string or boolean), as a function of
-	-- its index: a row follows its item as the list changes, moved rather
-	-- than written again (rows a removal or an insertion shifts keep their
-	-- nodes, text and layout).
-	key: ((index: number) -> any)?,
+	-- its index (with `data`, of its item): a row follows its item as the
+	-- list changes, moved rather than written again (rows a removal or an
+	-- insertion shifts keep their nodes, text and layout).
+	key: (((index: number) -> any) | ((item: any) -> any))?,
 	-- Every row's height in points (28 by default); with `measured`, the
 	-- estimate for rows not yet measured.
 	height: number?,
@@ -2261,6 +2370,12 @@ declare ui: {
 	-- reply's id), text growing under it parses only its new end, and its
 	-- earlier blocks are the same tables as before.
 	markdown: (text: string, opts: MarkdownOptions?) -> { MarkdownBlock },
+	-- Markdown drawn: paragraphs, headings, lists, quotes, tables, and code
+	-- blocks with a Copy button, in the theme's colours and sizes,
+	-- selectable. As its text changes it parses only what changed and
+	-- builds only the blocks that did: a reply streaming in grows by its
+	-- last block.
+	markdown_view: (props: MarkdownViewProps) -> Node,
 	effect: (f: () -> ...unknown) -> (),
 	-- One update for many writes; returns what `f` returns.
 	batch: <R...>(f: () -> R...) -> R...,
@@ -2284,6 +2399,9 @@ declare ui: {
 	-- Runs `f` when what is being built goes away: a component unmounting,
 	-- an effect running again, the script reloading.
 	on_cleanup: (f: () -> ()) -> (),
+	-- In a component's, row's or presence's build: what the nearest
+	-- `provide = { [name] = … }` above it gave, else `default`.
+	use_context: (name: string, default: any?) -> any,
 	-- Milliseconds since the epoch, to the microsecond (`os.time` counts
 	-- whole seconds). Not tracked.
 	now: () -> number,
@@ -2298,8 +2416,12 @@ declare ui: {
 	-- plain action settles at once with nil): a promise of what it returns.
 	call: (name: string, arg: unknown?) -> Promise,
 	-- Run `f(...)` as a task: `p:await()` inside it waits for a promise
-	-- without blocking anything else.
-	task: <A...>(f: (A...) -> (), A...) -> (),
+	-- without blocking anything else. Its handle cancels it.
+	task: <A...>(f: (A...) -> (), A...) -> Task,
+	-- `f(...)`'s value and nil, or nil and what it raised, as a string a
+	-- person reads (an error's text, no traceback): `pcall` with its error
+	-- typed. Awaits inside `f` work in a task, as through `pcall`.
+	try: <T, A...>(f: (A...) -> ...T, A...) -> (T?, string?),
 	-- What `load` returns, loaded in a task (it may await), as states:
 	-- `data`, `loading`, `error` and `status`. It loads again on `reload()`
 	-- and when a state it read before its first await changes; only the

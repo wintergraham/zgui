@@ -1065,3 +1065,22 @@ fn a_loop_no_one_can_see_waits_until_it_shows() {
     assert!(h.x("spin") != x, "open, it moves: {}", h.x("spin"));
     assert_eq!(h.clock.demanded_rate(120.), Some(30.));
 }
+
+#[test]
+fn a_delayed_animation_takes_over_where_an_earlier_one_left_its_property() {
+    // Made together: the second, delayed, starts from where the first left
+    // `x`, not from where `x` was when both were made (anime.js v4's replace).
+    let mut h = Harness::inline(&script(
+        r##"anime.animate("#box", { x = { 0, 100 }, duration = 1000, ease = "linear" })
+        anime.animate("#box", { x = 300, delay = 1500, duration = 1000, ease = "linear" })"##,
+    ));
+    h.frame();
+    h.run_ms(500.);
+    close(h.x("box"), 50., "the first half way");
+    h.run_ms(500.);
+    close(h.x("box"), 100., "the first done");
+    h.run_ms(500.);
+    close(h.x("box"), 100., "held until the second starts");
+    h.run_ms(500.);
+    close(h.x("box"), 200., "the second half way, from 100");
+}

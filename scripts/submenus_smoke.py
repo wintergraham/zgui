@@ -32,7 +32,8 @@ def main():
         with (args.output / "openbox.log").open("w") as log:
             wm = subprocess.Popen(["openbox"], env=env, stdout=log, stderr=log)
         wait_for_wm(env)
-        app = subprocess.Popen([str(args.binary.resolve()), "--smoke-test"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        log_path = args.output / "submenus.log"
+        app = subprocess.Popen([str(args.binary.resolve()), "--smoke-test"], env=env, stdout=log_path.open("w"), stderr=subprocess.STDOUT, text=True)
 
         def xdo(*args):
             return subprocess.check_output(["xdotool", *map(str, args)], env=env, text=True).strip()
@@ -62,6 +63,15 @@ def main():
         def key(*keys):
             xdo("key","--clearmodifiers",*keys)
             time.sleep(.15)
+        def acted(line):
+            """Until the app printed `line`: a chosen item flashes (100 ms
+            of timers) before its menu closes and its action runs, longer
+            than a key's pause on a loaded machine."""
+            deadline = time.monotonic() + 5
+            while line not in log_path.read_text():
+                if time.monotonic() > deadline:
+                    raise AssertionError(f"no {line!r}: " + log_path.read_text())
+                time.sleep(.05)
         def report(stage):
             key("r")
             ImageGrab.grab(xdisplay=display).save(args.output/f"submenus-{stage}.png")
@@ -85,11 +95,13 @@ def main():
         click(300,170)
         report(7)
         key("Return")
+        acted("ACTION ")
         report(8)
         click(300,84)
         click(300,170)
         report(9)
         click(300,130)  # A parent item receives the same click across child scope.
+        acted("PARENT_ACTION ")
         report(10)
         click(300,84)
         click(300,170)
@@ -99,8 +111,8 @@ def main():
         # Closed as a user closes it (Openbox's Alt+F4), not by the app's
         # own timer, which a quick run would wait past.
         xdo("windowactivate", "--sync", window, "key", "alt+F4")
-        output, _ = app.communicate(timeout=15)
-        (args.output / "submenus.log").write_text(output)
+        app.wait(timeout=15)
+        output = log_path.read_text()
         if app.returncode:
             raise RuntimeError(output)
         required=[

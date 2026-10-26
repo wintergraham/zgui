@@ -63,8 +63,12 @@ tell application "System Events"
 end tell
 set AppleScript's text item delimiters to linefeed
 found as text''' % ', '.join(f'"{n}"' for n in DIALOGS)
-    out = subprocess.run(['osascript', '-e', script], capture_output=True, text=True).stdout
-    return [line.strip() for line in out.splitlines() if line.strip()]
+    done = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+    if done.returncode != 0:
+        # Unread is not none: a check that cannot see dialogs (System Events
+        # not allowed to this terminal) counts as one on screen.
+        return [f'the dialog check failed (allow System Events for this terminal): {done.stderr.strip()[:200]}']
+    return [line.strip() for line in done.stdout.splitlines() if line.strip()]
 
 
 def cpu_times():

@@ -90,6 +90,7 @@ The types: `Color` is `"#rgb"`, `"#rrggbb"`, `"#rrggbbaa"`, `"rgb(…)"`, `"rgba
 | `layer` | `boolean` | `false` | paint the subtree into its own layer |
 | `fit` | `"fill" \| "contain" \| "cover" \| "none" \| "scale_down"` | `"fill"` | how an image fills its box |
 | `tint` | `Color` | | recolors an SVG (a state or function re-tints it) |
+| `dither` | `number` | | draws an image dithered in dots this many points square (see [Images and canvas](media.md)) |
 | `cursor` | `Cursor` | `"default"` | `"pointer"`, `"text"`, `"vertical_text"`, `"crosshair"`, `"move"`, `"grab"`, `"grabbing"`, `"not_allowed"`, `"wait"`, `"progress"`, `"help"`, `"context_menu"`, `"copy"`, `"alias"`, `"no_drop"`, `"all_scroll"`, `"col_resize"`, `"row_resize"`, `"ew_resize"`, `"ns_resize"`, `"nesw_resize"`, `"nwse_resize"`, `"zoom_in"`, `"zoom_out"`; CSS's spellings (`"nwse-resize"`) too |
 
 ## Background images, masks, shader fills, clip insets
@@ -102,6 +103,7 @@ The types: `Color` is `"#rgb"`, `"#rrggbb"`, `"#rrggbbaa"`, `"rgb(…)"`, `"rgba
 | `bg_shader` | `Shader` | | `ui.shader(wgsl, { fps })` fills the box per pixel (see [Images and canvas](media.md)) |
 | `shader_params` | `{ Color \| { number } }` | zeros | up to four vec4s: colors (0 to 1) or lists of numbers; animate `shaderTime`, `shaderParam0` to `shaderParam15` |
 | `clip_inset` | `Sides` | | paints only inside the box shrunk by `{ top, right, bottom, left }` (CSS `clip-path: inset()`); animate `clipTop`, `clipRight`, `clipBottom`, `clipLeft` |
+| `clip_feather` | `number` | `0` | where it clips (`overflow = "hidden"`), its content fades out over this many points inside its rounded edge rather than being cut there, in the fragment shader quads already run (no layer, no mask). Its corners follow its clip inset, held to half the inset box: with `rounded = 9999` and the clip inset animated from the middle out, a soft circle opens, compositing alone |
 
 ## Size and position animation
 
@@ -149,6 +151,7 @@ The types: `Color` is `"#rgb"`, `"#rrggbb"`, `"#rrggbbaa"`, `"rgb(…)"`, `"rgba
 | `selected_text_color` | `Color \| Readable<Color> \| (() -> Color)` | `$selection.text` | the selected glyphs' colour (CSS `::selection { color }`); transparent keeps their own |
 | `window_drag` | `boolean` | `false` | a press on it, or on what inside takes no input, moves the window; a double click zooms it (CSS `-webkit-app-region: drag`) |
 | `tooltip` | `string` or a node | none | shown over it while the pointer rests on it: after 300 ms, at once within a second of another tooltip; gone when the pointer leaves or presses, or a key is pressed anywhere (as a browser's and the system's do). Text takes the theme's look (an overlay card, small text); a node is the app's own content. It fades in over 140 ms and out over 100 ms, at once when it takes over from another; one shows at a time. It takes no focus and lets the pointer through |
+| `provide` | `{ [string]: any }` | none | values the components and rows built in its subtree read with `ui.use_context(name)`, as React's context gives them ([components](state.md#components)) |
 | `tooltip_placement` | `Placement` | above, centred, 6 points off | where the tooltip sits (as a popover's `placement`) |
 | `tooltip_delay` | `number` | `300` | milliseconds the pointer rests before it shows. Keyboard focus shows it too (not a click's), and a text tip describes the node to assistive technology, which doesn't see the tip itself |
 | `tooltip_interactive` | `boolean` | `false` | a hover card the pointer can move into and click in: it stays while the pointer is over the node or the card (a moment's grace to cross between them); typing goes to its fields, and Escape closes it |
@@ -165,7 +168,7 @@ What assistive technology (VoiceOver, Narrator, Orca) reads for a node beyond wh
 | Property | Type | Default | |
 | --- | --- | --- | --- |
 | `label` | `string \| state \| function` | its text | the name read for a box (ARIA's `aria-label`): an icon button, a group. A state or function is followed, for a recycled list row's name made from what it shows now (`"Unread, Grace Hopper, Lunch?, Oct 28"`). Widgets take their own `label` |
-| `role` | `AriaRole`: `"group"`, `"button"`, `"link"`, `"heading"`, `"list"`, `"listitem"`, `"listbox"`, `"option"`, `"toolbar"`, `"status"`, `"tablist"`, `"tab"`, `"tabpanel"`, `"dialog"`, `"img"`, `"radiogroup"`, `"radio"`, `"switch"`, `"checkbox"`, `"spinbutton"`, `"combobox"`, `"tree"`, `"treeitem"`, `"grid"`, `"row"`, `"gridcell"`, `"columnheader"`, `"alert"`, `"menu"`, `"menuitem"` | what it is | what it is taken for (ARIA's `role`), keeping what it does: a clickable row as an `"option"` in a `"listbox"`, a row of buttons as a `"toolbar"`. Options, tabs, list items and headings are named by their text |
+| `role` | `AriaRole`: `"group"`, `"button"`, `"link"`, `"heading"`, `"list"`, `"listitem"`, `"listbox"`, `"option"`, `"toolbar"`, `"status"`, `"tablist"`, `"tab"`, `"tabpanel"`, `"article"` (a message, a post), `"dialog"`, `"img"`, `"radiogroup"`, `"radio"`, `"switch"`, `"checkbox"`, `"spinbutton"`, `"combobox"`, `"tree"`, `"treeitem"`, `"grid"`, `"row"`, `"gridcell"`, `"columnheader"`, `"alert"`, `"menu"`, `"menuitem"` | what it is | what it is taken for (ARIA's `role`), keeping what it does: a clickable row as an `"option"` in a `"listbox"`, a row of buttons as a `"toolbar"`. Options, tabs, list items and headings are named by their text |
 | `checked`, `expanded` | `boolean \| Readable<boolean> \| (() -> boolean)` | none | what a control of the app's own says of its state: a switch's or a radio's `checked` (`aria-checked`, a checked radio is where Tab lands in its group), what it opens `expanded` (`aria-expanded`) |
 | `heading` | `number` | | a section title of that level, 1 to 6 (`h1`…`h6`): screen readers list headings and move between them (VoiceOver's rotor) |
 | `selected` | `boolean \| state \| function` | | whether an option, tab or item is the chosen one (`aria-selected`), followed |

@@ -29,9 +29,10 @@ The content fills the viewport's width (`scroll`) or height (`scroll_x`) and is 
 
 | Option | Type | Default | |
 | --- | --- | --- | --- |
-| `count` | `Reactive<number>` | required without `heights` | how many rows |
-| `row` | `(index: number) -> Node`, or with `key` `(key, index: State<number>) -> Node` | required | builds row `index`, from 1; with `key`, the row of item `key`, given its index as a state that follows the row |
-| `key` | `(index: number) -> number \| string \| boolean` | none | each row's item's key: a row follows its item as the list changes, moved rather than built or written again. Without it, rows are by position: a removal or an insertion writes every row after it with the item now there (its text, layout and paint done again). Keys are unique; not with `sticky` |
+| `count` | `Reactive<number>` | required without `heights` or `data` | how many rows |
+| `data` | `Readable<{ any }>` | none | the list its rows show, as `ui.each`'s (not with `count` or `heights`): `key` is given an item, `row` the item and its index (a state). A two-parameter `row` is built again when its item changes; one taking a third parameter, `function(item, index, row)`, is built once and gets `row`, its item as a state kept current, so the row's functions update in place: a reply streaming into a transcript runs its own row alone |
+| `row` | `(index: number) -> Node`, or with `key` `(key, index: State<number>) -> Node`, or with `data` `(item, index: State<number>, row: State<any>?) -> Node` | required | builds row `index`, from 1; with `key`, the row of item `key`, given its index as a state that follows the row; with `data`, the row of an item |
+| `key` | `(index: number) -> number \| string \| boolean` | none | each row's item's key (with `data`, a function of the item): a row follows its item as the list changes, moved rather than built or written again. Without it, rows are by position: a removal or an insertion writes every row after it with the item now there (its text, layout and paint done again). Keys are unique; not with `sticky` |
 | `height` | `number` | `28` | every row's height, in points (positive); with `measured`, the estimate for a row not yet measured |
 | `measured` | `boolean` | `false` | rows take their content's height (wrapped text, images), measured as they mount; not with `heights` |
 | `follow` | `boolean` | `false` | with `measured` or `heights`: resting at the end, it stays at the end as rows are added and measured (a chat); scrolled away, it stays where it is |
@@ -151,7 +152,7 @@ return ui.row {
 		},
 		ui.button {
 			on_click = function()
-				messages:push({ from = "Ada", text = `Message {messages:len() + 1}` })
+				messages:push { from = "Ada", text = `Message {messages:len() + 1}` }
 			end,
 			"Send",
 		},

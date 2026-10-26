@@ -105,6 +105,44 @@ impl Ime {
         self.inner.is_destroyed
     }
 
+    /// zgx patch: whether the input method's server has gone, its
+    /// selection (`@server=name`) owned by no one, though libX11 has not
+    /// yet run `xim_destroy_callback` for it. libX11 learns of it from the
+    /// server window's `DestroyNotify`, which only filtering an event
+    /// handles: a synchronous call meanwhile (`XSetICFocus` reaching
+    /// `XGetICValues`, `XSetICValues`) waits in `_XimRead` for a reply that
+    /// never comes, and the event loop with it (zgx#564: ibus-x11 gone as
+    /// a window closed). Gone, the input method counts as destroyed: its
+    /// resources are not touched again, as the callback has it.
+    fn server_gone(&mut self) -> bool {
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xproto::ConnectionExt;
+        if self.inner.is_destroyed || self.inner.is_fallback {
+            return self.inner.is_destroyed;
+        }
+        let Some(name) = self.inner.im.as_ref().and_then(|im| im.server_name()) else {
+            return false;
+        };
+        let conn = self.xconn.xcb_connection();
+        let atom = conn
+            .intern_atom(true, format!("@server={name}").as_bytes())
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .map(|reply| reply.atom)
+            .filter(|&atom| atom != x11rb::NONE);
+        let gone = atom.is_some_and(|atom| {
+            conn.get_selection_owner(atom)
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+                .is_some_and(|reply| reply.owner == x11rb::NONE)
+        });
+        let _ = conn.flush();
+        if gone {
+            self.inner.is_destroyed = true;
+        }
+        gone
+    }
+
     // This pattern is used for various methods here:
     // Ok(_) indicates that nothing went wrong internally
     // Ok(true) indicates that the action was actually performed
@@ -164,7 +202,7 @@ impl Ime {
     }
 
     pub fn focus(&mut self, window: ffi::Window) -> Result<bool, XError> {
-        if self.is_destroyed() {
+        if self.server_gone() {
             return Ok(false);
         }
         if let Some(&mut Some(ref mut context)) = self.inner.contexts.get_mut(&window) {
@@ -175,7 +213,7 @@ impl Ime {
     }
 
     pub fn unfocus(&mut self, window: ffi::Window) -> Result<bool, XError> {
-        if self.is_destroyed() {
+        if self.server_gone() {
             return Ok(false);
         }
         if let Some(&mut Some(ref mut context)) = self.inner.contexts.get_mut(&window) {
@@ -186,7 +224,7 @@ impl Ime {
     }
 
     pub fn send_xim_spot(&mut self, window: ffi::Window, x: i16, y: i16) {
-        if self.is_destroyed() {
+        if self.server_gone() {
             return;
         }
         if let Some(&mut Some(ref mut context)) = self.inner.contexts.get_mut(&window) {

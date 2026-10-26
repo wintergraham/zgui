@@ -84,6 +84,18 @@ python3 scripts/run_macos_comparison.py --scene heavy --quick   # ~10 min, zgx v
 The comparison waits for the preflight, hides Zeron, and records both in
 its audit; see `docs/benchmarking.md`.
 
+## Changes A/B'd in windows: `cells.py`
+
+```sh
+python3 scripts/perf/cells.py build cells.json   # base + PR heads merged, per cell
+python3 scripts/perf/cells.py run cells.json     # first frame after idle, animate, scroll
+python3 scripts/perf/cells.py report
+```
+
+Cells are candidate changes (and toggles) rather than frameworks. The wheel
+tapes the gestures play are in `tapes/`. See "Changes to zgx, A/B on a Mac:
+cells" in `docs/benchmarking.md`.
+
 ## The window server
 
 `scripts/windowserver_pair.py` and `scripts/windowserver_alternate.py`

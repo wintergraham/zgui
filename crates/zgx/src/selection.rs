@@ -83,6 +83,8 @@ impl Hit {
     }
 }
 
+/// Two places: a unit's edges, or a selection's anchor and focus.
+type Edges = (TextPoint, TextPoint);
 /// What a drag extends by: the unit its press selected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Unit {
@@ -188,6 +190,10 @@ pub(crate) struct State {
     root: Option<NodeId>,
     anchor: Option<TextPoint>,
     focus: Option<TextPoint>,
+    /// The words or paragraphs the last presses selected by (their first
+    /// unit), and the selection they made: a shift-press extending it, while
+    /// it stands, goes by those units too.
+    units: Option<(Unit, Edges, Edges)>,
     shown: Vec<Shown>,
     layouts: Vec<Shaped>,
     gesture: Option<Gesture>,
@@ -196,6 +202,10 @@ pub(crate) struct State {
     /// held the press: the region takes the pointer from it at the next
     /// move, so it hears a cancel and never activates.
     take_from: Option<NodeId>,
+    /// A press on the selection in a region, and where: moved far enough it
+    /// drags the selected text (as browsers drag a selection); let go, it
+    /// is a click.
+    text_press: Option<(NodeId, f32, f32)>,
     /// The region last pressed in: what select-all selects.
     active_root: Option<NodeId>,
     /// The window is in the background: highlights take the inactive colour.
@@ -489,8 +499,35 @@ pub(crate) fn mount_root(ui: &mut Ui, root: NodeId, mut style: SelectionStyle) {
                     return;
                 }
                 let modifiers = cx.pointer_modifiers();
+                if !modifiers.shift && cx.click_count() <= 1 && ui.on_selection(root, x, y) {
+                    ui.selection_state().borrow_mut().text_press = Some((root, x, y));
+                    cx.capture_pointer();
+                    return;
+                }
                 if ui.press_selection(root, x, y, cx.click_count().max(1), modifiers) {
                     cx.capture_pointer();
+                }
+            }
+            InputEvent::PointerMove { x, y }
+                if ui
+                    .selection_state()
+                    .borrow()
+                    .text_press
+                    .is_some_and(|(at, ..)| at == root) =>
+            {
+                let (_, px, py) = ui.selection_state().borrow().text_press.unwrap();
+                if (x - px).hypot(y - py) > cx.drag_threshold() {
+                    ui.selection_state().borrow_mut().text_press = None;
+                    let text = ui.selected_text();
+                    cx.start_drag_from(crate::input::DraggedText::new(text), px, py);
+                }
+            }
+            // Out of the region: other apps take it as text.
+            InputEvent::Drag(ref drag)
+                if drag.phase == crate::input::DragPhase::Start && drag.source == root =>
+            {
+                if let Some(text) = drag.payload.downcast_ref::<crate::input::DraggedText>() {
+                    cx.set_drag_export(vec![crate::input::DragItem::Text(text.text().to_owned())]);
                 }
             }
             InputEvent::PointerMove { x, y } => {
@@ -520,10 +557,20 @@ pub(crate) fn mount_root(ui: &mut Ui, root: NodeId, mut style: SelectionStyle) {
                 }
             }
             InputEvent::PointerUp {
+                x,
+                y,
                 button: PointerButton::Primary,
-                ..
             } => {
                 ui.selection_state().borrow_mut().pending = None;
+                // Pressed on the selection and let go: a click there.
+                let pressed = ui
+                    .selection_state()
+                    .borrow_mut()
+                    .text_press
+                    .take_if(|(at, ..)| *at == root);
+                if pressed.is_some() {
+                    ui.press_selection(root, x, y, 1, Modifiers::default());
+                }
                 // A press that selected (dragged) does not also click.
                 if ui.end_selection_gesture(root) {
                     cx.prevent_default();
@@ -532,6 +579,7 @@ pub(crate) fn mount_root(ui: &mut Ui, root: NodeId, mut style: SelectionStyle) {
             // Cancelled under it (another press took the pointer), or here.
             InputEvent::PointerCancel if cx.target == root => {
                 ui.selection_state().borrow_mut().pending = None;
+                ui.selection_state().borrow_mut().text_press = None;
                 ui.end_selection_gesture(root);
             }
             _ => {}
@@ -563,6 +611,34 @@ impl Ui {
             .find_map(|id| semantics.get(id).map(|node| node.role))
             .is_some_and(|role| matches!(role, Role::Link | Role::Button))
     }
+    /// Whether `x`, `y` in `root` falls inside its selection, not at an edge.
+    fn on_selection(&self, root: NodeId, x: f32, y: f32) -> bool {
+        let (anchor, focus) = {
+            let state = self.selection_state().borrow();
+            if state.root != Some(root) {
+                return false;
+            }
+            match (state.anchor, state.focus) {
+                (Some(anchor), Some(focus)) if anchor != focus => (anchor, focus),
+                _ => return false,
+            }
+        };
+        let Some(hit) = self.point_at(root, x, y) else {
+            return false;
+        };
+        let scene = self.scene.borrow();
+        // An end recycled with its row (a virtual list's): a press begins
+        // a selection, as it would.
+        if !scene.contains(anchor.node) || !scene.contains(focus.node) {
+            return false;
+        }
+        let (start, end) = if order(&scene, anchor, focus).is_le() {
+            (anchor, focus)
+        } else {
+            (focus, anchor)
+        };
+        order(&scene, start, hit.point).is_lt() && order(&scene, hit.point, end).is_lt()
+    }
     /// A primary press at `x`, `y` in `root`: begin a selection. Returns
     /// whether a gesture began (the pointer is wanted).
     fn press_selection(
@@ -582,6 +658,21 @@ impl Ui {
             return false;
         };
         let extend = modifiers.shift && state.root == Some(root) && state.anchor.is_some();
+        // A shift-press extending words or paragraphs selected: by those.
+        let units = state.units.filter(|(_, _, made)| {
+            extend && Some(made.0) == state.anchor && Some(made.1) == state.focus
+        });
+        if let Some((unit, edges, _)) = units {
+            state.gesture = Some(Gesture {
+                root,
+                unit,
+                edges,
+                dragged: false,
+                pointer: (x, y),
+            });
+            drop(state);
+            return self.drag_selection(root, x, y);
+        }
         let unit = match count {
             _ if extend => Unit::Character,
             2 => Unit::Word,
@@ -601,6 +692,7 @@ impl Ui {
             dragged: false,
             pointer: (x, y),
         });
+        state.units = (unit != Unit::Character).then_some((unit, edges, (anchor, edges.1)));
         drop(state);
         self.set_selection(Some(root), Some(anchor), Some(edges.1));
         true
@@ -642,6 +734,10 @@ impl Ui {
                 edges
             }
         };
+        if unit != Unit::Character {
+            let mut state = self.selection_state().borrow_mut();
+            state.units = Some((unit, edges, (anchor, focus)));
+        }
         self.set_selection(Some(root), Some(anchor), Some(focus));
         self.arm_selection_scroll();
         true
@@ -1954,9 +2050,23 @@ pub(crate) fn context_menu(
         {
             return Vec::new();
         }
-        let (copy, all) = (weak.clone(), weak.clone());
+        let (copy, all, look) = (weak.clone(), weak.clone(), weak.clone());
         let platform = platform.clone();
-        vec![
+        // Look Up first, as AppKit's text menus have it, where the
+        // platform looks words up.
+        let mut items = Vec::new();
+        if let Some(platform) = platform.clone().filter(|p| p.0.looks_up()) {
+            items.push(
+                crate::compose::menu_item(look_up_label(&ui.selected_text()))
+                    .id("selection-look-up")
+                    .on_click(move || {
+                        if let Some(ui) = look.upgrade() {
+                            ui.look_up_selection(&platform);
+                        }
+                    }),
+            );
+        }
+        items.extend([
             crate::compose::menu_item("Copy")
                 .id("selection-copy")
                 .on_click(move || {
@@ -1973,8 +2083,50 @@ pub(crate) fn context_menu(
                         ui.select_all_text(root);
                     }
                 }),
-        ]
+        ]);
+        items
     })
+}
+
+/// A Look Up item's label, as AppKit's: the text looked up, in quotes, cut
+/// short.
+pub(crate) fn look_up_label(text: &str) -> String {
+    let text = text.trim();
+    let mut shown: String = text.chars().take(24).collect();
+    if shown.len() < text.len() {
+        shown.push('…');
+    }
+    format!("Look Up “{shown}”")
+}
+
+impl Ui {
+    /// Show the platform's definition of the selected display text over it
+    /// (Look Up, ⌃⌘D on macOS); whether it did.
+    pub fn look_up_selection(&self, platform: &crate::platform::PlatformService) -> bool {
+        let text = self.selected_text();
+        if text.trim().is_empty() {
+            return false;
+        }
+        let start = {
+            let state = self.selection_state().borrow();
+            let (Some(anchor), Some(focus)) = (state.anchor, state.focus) else {
+                return false;
+            };
+            let scene = self.scene.borrow();
+            if !scene.contains(anchor.node) || !scene.contains(focus.node) {
+                return false;
+            }
+            if order(&scene, anchor, focus).is_le() {
+                anchor
+            } else {
+                focus
+            }
+        };
+        let Some((at, size)) = self.scene.borrow().text_baseline(start.node, start.offset) else {
+            return false;
+        };
+        platform.0.look_up(&text, at, size)
+    }
 }
 
 /// What `Ui`'s dispatch looks for after the document has had an event.

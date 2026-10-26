@@ -14,17 +14,24 @@ use std::sync::Arc;
 /// the cache gives them (`ShapeRunCache::intern`), not whole: every word
 /// looked up compared its key's attributes (a family name among them), and
 /// a word shaped cloned them. `default_attrs` is what `default_attrs_id`
-/// stands for, kept to see when a run's attributes change.
+/// stands for, kept to see when a run's attributes change. Its spans'
+/// attributes go by id too: a rich text's every word cloned, hashed and
+/// compared them.
 #[derive(Clone, Debug)]
 pub struct ShapeRunKey {
     pub text: String,
     pub default_attrs: Arc<AttrsOwned>,
     pub default_attrs_id: u32,
-    pub attrs_spans: Vec<(Range<usize>, AttrsOwned)>,
+    pub attrs_spans: Vec<(Range<usize>, u32)>,
     /// zgx patch: shaped right to left. The same text shapes differently
     /// in each direction; without it in the key, a word kept from one
     /// direction was served for the other.
     pub rtl: bool,
+    /// zgx patch: the cache (`ShapeRunCache::generation`) whose table
+    /// `default_attrs_id` is from. A key kept across a cache replaced (a
+    /// renderer at rest drops its words) held an id the new table could give
+    /// other attributes; not compared or hashed.
+    pub generation: u64,
 }
 
 impl ShapeRunKey {
@@ -36,12 +43,14 @@ impl ShapeRunKey {
             default_attrs: Arc::new(default_attrs),
             attrs_spans: Vec::new(),
             rtl: false,
+            generation: cache.generation,
         }
     }
     /// Set the default attributes, and their id with them.
     pub fn set_defaults(&mut self, default_attrs: AttrsOwned, cache: &mut ShapeRunCache) {
         self.default_attrs_id = cache.intern(&default_attrs);
         self.default_attrs = Arc::new(default_attrs);
+        self.generation = cache.generation;
     }
 }
 
@@ -68,14 +77,43 @@ impl core::hash::Hash for ShapeRunKey {
 /// Ages between sweeps of the cache (see `ShapeRunCache::trim`).
 const TRIM_PERIOD: u64 = 8;
 
+/// zgx patch: the generations caches are made in (`ShapeRunCache::generation`).
+static GENERATIONS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
+
 /// A helper structure for caching shape runs.
-#[derive(Clone, Default)]
 pub struct ShapeRunCache {
+    /// zgx patch: this cache's own, from every other's: its table's ids
+    /// mean nothing in another (`ShapeRunKey::generation`).
+    pub(crate) generation: u64,
     age: u64,
     cache: HashMap<ShapeRunKey, (u64, Vec<ShapeGlyph>)>,
     /// zgx patch: the ids of the default attributes keys have held (see
     /// `ShapeRunKey`): a few, kept for good.
     ids: HashMap<AttrsOwned, u32>,
+}
+
+/// zgx patch: a copy is a cache of its own, its table diverging from the
+/// original's, so it takes a generation of its own.
+impl Clone for ShapeRunCache {
+    fn clone(&self) -> Self {
+        Self {
+            generation: GENERATIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
+            age: self.age,
+            cache: self.cache.clone(),
+            ids: self.ids.clone(),
+        }
+    }
+}
+
+impl Default for ShapeRunCache {
+    fn default() -> Self {
+        Self {
+            generation: GENERATIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
+            age: 0,
+            cache: HashMap::default(),
+            ids: HashMap::default(),
+        }
+    }
 }
 
 impl ShapeRunCache {

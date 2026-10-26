@@ -7,7 +7,10 @@
 //! directly; each buffer is remapped once the GPU has finished reading it.
 //! On macOS the buffers are shared memory the CPU writes in place, never
 //! mapped through wgpu: mapping and unmapping one each frame cost more than
-//! writing it.
+//! writing it. Direct3D 12 does the same with its upload heap, which may stay
+//! mapped while the GPU reads it: each buffer is mapped once, for good (a
+//! frame's Map, Unmap and wgpu's transitions out of and back into mapping
+//! cost NVIDIA's driver and wgpu some 40 K cycles).
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -20,8 +23,8 @@ const MIN_BYTES: u64 = 4096;
 struct Slot {
     buffer: wgpu::Buffer,
     capacity: u64,
-    /// The CPU may write the buffer: mapped, or (macOS) the GPU has finished
-    /// the submission that read it.
+    /// The CPU may write the buffer: mapped, or (written in place) the GPU
+    /// has finished the submission that read it.
     mapped: Arc<AtomicBool>,
     /// Written for the coming submission; released once it completes.
     remap: bool,
@@ -31,11 +34,25 @@ struct Slot {
     /// macOS: the buffer itself, for frames encoded with Metal directly.
     #[cfg(target_os = "macos")]
     metal: objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLBuffer>>,
+    /// Windows: the buffer's upload-heap memory, mapped for good and written
+    /// in place; None off Direct3D 12, mapped through wgpu each frame.
+    #[cfg(windows)]
+    contents: Option<std::ptr::NonNull<u8>>,
+}
+impl Slot {
+    /// The buffer's memory when written in place, mapped for good.
+    fn in_place(&self) -> Option<std::ptr::NonNull<u8>> {
+        #[cfg(target_os = "macos")]
+        return Some(self.contents);
+        #[cfg(windows)]
+        return self.contents;
+        #[cfg(not(any(target_os = "macos", windows)))]
+        None
+    }
 }
 
 pub(crate) struct MappedRing {
     device: wgpu::Device,
-    #[cfg(target_os = "macos")]
     queue: wgpu::Queue,
     slots: Vec<Slot>,
     /// The slot `write` filled last.
@@ -43,10 +60,9 @@ pub(crate) struct MappedRing {
     last: usize,
 }
 impl MappedRing {
-    pub(crate) fn new(device: &wgpu::Device, #[allow(unused)] queue: &wgpu::Queue) -> Self {
+    pub(crate) fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         Self {
             device: device.clone(),
-            #[cfg(target_os = "macos")]
             queue: queue.clone(),
             slots: Vec::new(),
             #[cfg(target_os = "macos")]
@@ -87,27 +103,25 @@ impl MappedRing {
             }
         };
         let slot = &mut self.slots[index];
-        #[cfg(target_os = "macos")]
-        {
+        if let Some(contents) = slot.in_place() {
             let mut at = 0;
             for part in parts {
-                // SAFETY: `contents` is the shared buffer's memory, alive with
-                // `slot.metal`, `capacity` bytes, at least `len`, so every part
-                // fits from `at`; Rust holds no other reference into it. The
-                // slot is ready: no submission still reads it (`submitted`,
-                // or `completed` after a direct frame was waited for).
+                // SAFETY: `contents` is the buffer's mapped memory, alive with
+                // the buffer (on macOS, with `slot.metal`), `capacity` bytes,
+                // at least `len`, so every part fits from `at`; Rust holds no
+                // other reference into it. The slot is ready: no submission
+                // still reads it (`submitted`, or `completed` after a direct
+                // frame was waited for).
                 unsafe {
                     std::ptr::copy_nonoverlapping(
                         part.as_ptr(),
-                        slot.contents.as_ptr().add(at),
+                        contents.as_ptr().add(at),
                         part.len(),
                     )
                 };
                 at += part.len();
             }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
+        } else {
             if len > 0 {
                 let mut range = slot.buffer.slice(..len).get_mapped_range_mut();
                 let mut at = 0;
@@ -183,59 +197,66 @@ impl MappedRing {
     }
     #[cfg(not(target_os = "macos"))]
     fn slot(&self, capacity: u64) -> Slot {
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mapped frame vertices"),
+            size: capacity,
+            usage: wgpu::BufferUsages::MAP_WRITE
+                | wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: true,
+        });
+        #[cfg(windows)]
+        let contents = map_for_good(&self.device, &buffer, capacity);
+        // Direct3D counts a resource's maps: unmapped through wgpu (which
+        // takes the whole buffer as written), it stays mapped by the above.
+        #[cfg(windows)]
+        if contents.is_some() {
+            buffer.unmap();
+        }
         Slot {
-            buffer: self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("mapped frame vertices"),
-                size: capacity,
-                usage: wgpu::BufferUsages::MAP_WRITE
-                    | wgpu::BufferUsages::VERTEX
-                    | wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: true,
-            }),
+            buffer,
             capacity,
             mapped: Arc::new(AtomicBool::new(true)),
             remap: false,
+            #[cfg(windows)]
+            contents,
         }
     }
     /// Call after every submission: buffers written for it become writable
     /// again once the GPU completes it.
     pub(crate) fn submitted(&mut self) {
-        #[cfg(target_os = "macos")]
-        {
-            let written: Vec<_> = self
-                .slots
-                .iter_mut()
-                .filter(|slot| slot.remap)
-                .map(|slot| {
-                    slot.remap = false;
-                    slot.mapped.clone()
-                })
-                .collect();
-            if !written.is_empty() {
-                self.queue.on_submitted_work_done(move || {
-                    for ready in written {
-                        ready.store(true, Ordering::Release);
-                    }
-                });
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
+        let mut written = Vec::new();
         for slot in self.slots.iter_mut().filter(|slot| slot.remap) {
             slot.remap = false;
             let mapped = slot.mapped.clone();
-            slot.buffer
-                .slice(..)
-                .map_async(wgpu::MapMode::Write, move |result| {
-                    if result.is_ok() {
-                        mapped.store(true, Ordering::Release);
-                    }
-                });
+            if slot.in_place().is_some() {
+                written.push(mapped);
+            } else {
+                slot.buffer
+                    .slice(..)
+                    .map_async(wgpu::MapMode::Write, move |result| {
+                        if result.is_ok() {
+                            mapped.store(true, Ordering::Release);
+                        }
+                    });
+            }
+        }
+        if !written.is_empty() {
+            self.queue.on_submitted_work_done(move || {
+                for ready in written {
+                    ready.store(true, Ordering::Release);
+                }
+            });
         }
     }
     /// Drop buffers not in flight; in-flight ones are reused as usual.
     pub(crate) fn trim(&mut self) {
         self.slots
             .retain(|slot| !slot.mapped.load(Ordering::Acquire));
+    }
+    /// Buffers held.
+    pub(crate) fn len(&self) -> usize {
+        self.slots.len()
     }
     pub(crate) fn bytes(&self) -> usize {
         self.slots.iter().map(|slot| slot.capacity as usize).sum()
@@ -248,6 +269,27 @@ impl MappedRing {
             .min_by_key(|(_, slot)| slot.capacity)
             .map(|(index, _)| index)
     }
+}
+
+/// Windows: map `buffer` (`capacity` bytes, mapped by wgpu at creation) once
+/// more through Direct3D 12, for as long as it lives; None off Direct3D 12.
+#[cfg(windows)]
+fn map_for_good(
+    device: &wgpu::Device,
+    buffer: &wgpu::Buffer,
+    capacity: u64,
+) -> Option<std::ptr::NonNull<u8>> {
+    use wgpu::hal::Device as _;
+    // SAFETY: The raw device and buffer only map the buffer; nothing destroys
+    // either, and the guards are dropped before wgpu is called again.
+    let hal_device = unsafe { device.as_hal::<wgpu::hal::api::Dx12>() }?;
+    let hal_buffer = unsafe { buffer.as_hal::<wgpu::hal::api::Dx12>() }?;
+    // SAFETY: A MAP_WRITE buffer lives in the upload heap, which may stay
+    // mapped while the GPU reads it; mapped whole, and never unmapped: the
+    // mapping ends with the buffer.
+    unsafe { hal_device.map_buffer(&hal_buffer, 0..capacity) }
+        .ok()
+        .map(|mapping| mapping.ptr)
 }
 
 /// A small buffer filled at creation. Mapped adapters write it directly;

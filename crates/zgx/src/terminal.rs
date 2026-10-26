@@ -218,6 +218,12 @@ pub trait TerminalBackend {
     fn needs_confirm_close(&self) -> bool {
         false
     }
+    /// A picture of what it shows now (its last drawn frame), at most
+    /// `max_width` pixels wide and its height in proportion, if the platform
+    /// can take one.
+    fn snapshot(&self, _max_width: u32) -> Option<std::sync::Arc<crate::image::ImageData>> {
+        None
+    }
     /// The backend as `Any`, for the host to downcast to its own type.
     fn as_any(&self) -> &dyn Any;
 }
@@ -413,6 +419,13 @@ impl Terminal {
     pub fn needs_confirm_close(&self) -> bool {
         let backend = self.0.backend.borrow().clone();
         backend.is_some_and(|backend| backend.needs_confirm_close())
+    }
+    /// A picture of what the terminal shows now, at most `max_width` pixels
+    /// wide (a thumbnail of it, say, in a dragged tab's preview); `None`
+    /// before a platform terminal shows it, or where the platform takes none.
+    pub fn snapshot(&self, max_width: u32) -> Option<std::sync::Arc<crate::image::ImageData>> {
+        let backend = self.0.backend.borrow().clone();
+        backend.and_then(|backend| backend.snapshot(max_width.max(1)))
     }
     /// Call `listener` with each platform event, until the subscription drops.
     pub fn on_event(&self, listener: impl FnMut(&TerminalEvent) + 'static) -> TerminalSubscription {

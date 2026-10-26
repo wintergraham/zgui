@@ -44,6 +44,7 @@ fn rounded_overflow_clips_reach_descendants_innermost_first() {
     let card = RoundRect {
         rect: zgx::scene::Rect::new(0., 0., 200., 100.),
         radii: [16.; 4],
+        feather: zgx::scene::Feather::NONE,
     };
     // The caption is inside the card alone.
     assert_eq!(items_rounded(&ui, "caption", &view), [Some(card), None]);
@@ -52,6 +53,7 @@ fn rounded_overflow_clips_reach_descendants_innermost_first() {
     let thumb = RoundRect {
         rect: zgx::scene::Rect::new(0., 0., 60., 40.),
         radii: [20., 0., 6., 0.],
+        feather: zgx::scene::Feather::NONE,
     };
     assert_eq!(
         items_rounded(&ui, "photo", &view),
@@ -223,6 +225,37 @@ fn bg_shader_and_uniforms_reach_the_scene() {
             if matches!(quad.decoration.as_deref().and_then(|d| d.background.as_ref()),
                 Some(Background::Shader(s)) if s.id() == shader.id())));
     assert_eq!(scene.shader_uniforms(node), uniforms);
+}
+
+/// An image draws with the uniforms of the box it alone fills, and its own
+/// cached layer repaints as they change; its own, once set, are its own.
+#[test]
+fn an_image_borrows_its_boxs_uniforms_and_its_layer_follows_them() {
+    use zgx::decoration::ShaderUniforms;
+    let at = |front: f32| ShaderUniforms {
+        time: 0.,
+        params: [[front, 0., 0., 0.], [0.; 4], [0.; 4], [0.; 4]],
+    };
+    let mut ui = Ui::new(400., 300.);
+    let picture = std::sync::Arc::new(zgx::image::ImageData::new(2, 1, vec![255; 8]).unwrap());
+    let view = ui.mount(div().id("box").child(image("pic", picture).w(40.).h(20.)));
+    ui.prepare_frame();
+    let wrapper = view.find("box").unwrap();
+    let mut scene = ui.scene.borrow_mut();
+    let mut pic = wrapper;
+    while !matches!(scene.kind(pic), zgx::scene::NodeKind::Image(_)) {
+        pic = scene.children(pic)[0];
+    }
+    scene.set_isolated(pic, true);
+    scene.flush();
+    let revision = scene.layer_revision(pic);
+    scene.set_shader_uniforms(wrapper, at(0.5));
+    assert_eq!(scene.shader_uniforms(pic), at(0.5));
+    assert_ne!(scene.layer_revision(pic), revision, "its layer repaints");
+    // Its own, the same as the box's: kept apart from the box's later ones.
+    scene.set_shader_uniforms(pic, at(0.5));
+    scene.set_shader_uniforms(wrapper, at(0.75));
+    assert_eq!(scene.shader_uniforms(pic), at(0.5));
 }
 
 #[test]
@@ -415,4 +448,35 @@ fn fade_overflow_measures_a_scroll_views_content() {
     assert_eq!(bands(&mut ui), Some([0., 0., 18., 0.]));
     offset.set(5.);
     assert_eq!(bands(&mut ui), Some([5., 0., 18., 0.]));
+}
+
+#[test]
+fn a_feathered_clip_reaches_descendants_and_rounds_its_inset_box() {
+    let mut ui = Ui::new(400., 300.);
+    let view = ui.mount(
+        column().child(
+            div()
+                .w(200.)
+                .h(100.)
+                .overflow_hidden()
+                .rounded(9999.)
+                .clip_feather(24.)
+                .clip_inset(30., 60., 30., 60.)
+                .child(div().id("scene").w(200.).h(100.)),
+        ),
+    );
+    ui.prepare_frame();
+    // The inset box (80 by 40 in the middle) is the clip, a capsule: its
+    // corners held to half its height, not the box's, and the feather kept.
+    assert_eq!(
+        items_rounded(&ui, "scene", &view),
+        [
+            Some(RoundRect {
+                rect: zgx::scene::Rect::new(60., 30., 80., 40.),
+                radii: [20.; 4],
+                feather: zgx::scene::Feather::new(24.),
+            }),
+            None
+        ]
+    );
 }

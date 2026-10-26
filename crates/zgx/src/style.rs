@@ -336,6 +336,8 @@ pub(crate) struct RareStyles {
     pub(crate) shadows: Option<Option<std::sync::Arc<[BoxShadow]>>>,
     /// `Styled::inset_shadows`.
     pub(crate) inset_shadows: Option<Option<std::sync::Arc<[BoxShadow]>>>,
+    /// `Styled::clip_feather`.
+    pub(crate) clip_feather: Option<f32>,
     pub(crate) shadow: Option<Option<BoxShadow>>,
     pub(crate) letter_spacing: Option<crate::text_layout::LetterSpacing>,
     /// `Styled::text_underline`, `underline_offset`.
@@ -372,6 +374,7 @@ impl RareStyles {
         shader_uniforms: None,
         shadows: None,
         inset_shadows: None,
+        clip_feather: None,
         shadow: None,
         letter_spacing: None,
         underline: None,
@@ -438,6 +441,9 @@ impl RareStyles {
         }
         if other.inset_shadows.is_some() {
             self.inset_shadows = other.inset_shadows.clone();
+        }
+        if other.clip_feather.is_some() {
+            self.clip_feather = other.clip_feather;
         }
         if other.shadow.is_some() {
             self.shadow = other.shadow;
@@ -1489,6 +1495,15 @@ pub trait Styled: Sized {
     /// Shadows under the box, in order (CSS `box-shadow`); replaces `shadow`.
     fn shadows(mut self, shadows: impl Into<std::sync::Arc<[BoxShadow]>>) -> Self {
         self.styles_mut().rare_mut().shadows = Some(Some(shadows.into()));
+        self
+    }
+    /// Where it clips, fade its descendants out over `px` points inside its
+    /// rounded edge instead of cutting them there (see
+    /// `Decoration::clip_feather`): with a large radius and an animated
+    /// clip inset, a soft oval that opens.
+    fn clip_feather(mut self, px: f32) -> Self {
+        self.styles_mut().rare_mut().clip_feather =
+            Some(if px.is_finite() { px.max(0.) } else { 0. });
         self
     }
     /// Shadows inside the box (CSS's `inset`): see `Decoration::inset_shadows`.

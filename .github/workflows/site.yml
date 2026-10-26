@@ -1,0 +1,114 @@
+name: Site
+# zgx.zeron.sh: built from website/ and the repository's docs, deployed to
+# Cloudflare Pages. The deploy steps wait for the Cloudflare secrets: without
+# them the site still builds, so a broken page fails here first.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - "docs/**"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "Cargo.toml"
+      - "site/data.json"
+      - "site/micro.jsonl"
+      - "scripts/build_site.py"
+      - "scripts/perf/README.md"
+      - "crates/zgx-script/src/bin/zgx.rs"
+      - "crates/zgx-script/src/lint.rs"
+      - "crates/zgx-script/types/zgx.d.luau"
+      - "crates/zgx-run/src/main.rs"
+      - ".github/workflows/site.yml"
+  pull_request:
+    paths:
+      - "website/**"
+      - "docs/**"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+      - name: Deploy to Cloudflare Pages
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: website
+          # The project, once: after the first run this says it already exists.
+          preCommands: wrangler pages project create zgx-site --production-branch main || echo "zgx-site exists"
+          command: pages deploy dist --project-name zgx-site --branch main --commit-dirty=true
+      - name: Attach zgx.zeron.sh
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        run: |
+          answer=$(curl -sS -X POST \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/zgx-site/domains" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{"name":"zgx.zeron.sh"}')
+          echo "$answer" | jq -c '{success, errors}'
+          if echo "$answer" | jq -e '.success' >/dev/null; then exit 0; fi
+          # Added by an earlier run: nothing to do.
+          echo "$answer" | grep -qiE 'already (exists|added)|8000018' && exit 0
+          exit 1
+      # A proxied CNAME zgx → zgx-site.pages.dev in the zeron.sh zone, made
+      # once; a record already there is left as it is (and said, if it points
+      # elsewhere). Then the domain's status, validation retried while pending.
+      - name: Point zgx.zeron.sh at Pages
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        run: |
+          api=https://api.cloudflare.com/client/v4
+          cf() { curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" "$@"; }
+          zone=$(cf "$api/zones?name=zeron.sh" | jq -r '.result[0].id // empty')
+          if [ -z "$zone" ]; then
+            echo "::error::No zone zeron.sh for this token (it needs DNS Edit on zeron.sh)"
+            exit 1
+          fi
+          records=$(cf "$api/zones/$zone/dns_records?name=zgx.zeron.sh")
+          if [ "$(echo "$records" | jq '.result | length')" -gt 0 ]; then
+            echo "$records" | jq -c '.result[] | {type, name, content, proxied}'
+            echo "$records" | jq -e '.result[] | select(.type == "CNAME" and .content == "zgx-site.pages.dev")' >/dev/null \
+              || echo "::warning::zgx.zeron.sh has a DNS record that is not a CNAME to zgx-site.pages.dev; left as it is"
+          else
+            cf -X POST "$api/zones/$zone/dns_records" --data '{"type":"CNAME","name":"zgx","content":"zgx-site.pages.dev","proxied":true,"comment":"Cloudflare Pages zgx-site (.github/workflows/site.yml)"}' \
+              | jq -c '{success, errors, record: (.result // {} | {name, content, proxied})}'
+          fi
+          domain="$api/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/zgx-site/domains/zgx.zeron.sh"
+          status=$(cf "$domain" | jq -r '.result.status // "unknown"')
+          if [ "$status" != active ]; then
+            status=$(cf -X PATCH "$domain" | jq -r '.result.status // "unknown"')
+          fi
+          echo "zgx.zeron.sh on Pages: $status"
+          [ "$status" = active ] || echo "::notice::zgx.zeron.sh is $status; Pages validates the new record within minutes, and the next deploy says again."
+      - name: Check the site answers
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        run: |
+          for url in https://zgx-site.pages.dev/ https://zgx-site.pages.dev/performance https://zgx.zeron.sh/; do
+            echo "$url: $(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$url")"
+          done
+      - name: No Cloudflare secrets
+        if: github.event_name != 'pull_request' && (env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_ACCOUNT_ID == '')
+        run: echo "::notice::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are not set; the site was built but not deployed."

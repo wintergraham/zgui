@@ -246,11 +246,54 @@ fn a_bordered_clip_cuts_at_its_padding_box_leaving_the_border_whole() {
         // so blue as CSS draws it; the clip at the border box (radius 12)
         // let the red cover it.
         let [r, _, b, _] = pixel(&p, 51, 57);
-        assert!(b > 150 && r < 100, "direct {direct}: {:?}", pixel(&p, 51, 57));
+        assert!(
+            b > 150 && r < 100,
+            "direct {direct}: {:?}",
+            pixel(&p, 51, 57)
+        );
         // The straight edges and the middle are as before.
         assert_eq!(pixel(&p, 50, 100), [0, 0, 255, 255], "direct {direct}");
         assert_eq!(pixel(&p, 51, 100), [255, 0, 0, 255], "direct {direct}");
         assert_eq!(pixel(&p, 100, 100), [255, 0, 0, 255], "direct {direct}");
         assert_eq!(pixel(&p, 52, 52), CLEAR, "direct {direct}");
+    }
+}
+
+#[test]
+fn feathered_clips_fade_in_from_their_edge_and_round_their_inset() {
+    let _gpu_fixture = gpu_fixture();
+    for (direct, mut gpu) in renderers() {
+        let mut scene = scene();
+        let root = scene.root();
+        // A circle (its corners held to half the box), fading in over 20.
+        let clipping = card(&mut scene, root, (50., 50.), 100., Corners::all(1000.));
+        if let NodeKind::Panel { layout, mut quad } = scene.kind(clipping).clone() {
+            let mut detail = quad.decoration.as_deref().cloned().unwrap_or_default();
+            detail.clip_feather = 20.;
+            quad.decoration = Some(Arc::new(detail));
+            scene.set_kind(clipping, NodeKind::Panel { layout, quad });
+        }
+        rect(&mut scene, clipping, (0., 0.), (100., 100.), RED);
+        let (_, p) = render(&mut gpu, &mut scene);
+        // Its middle whole; 45 from the centre, 5 inside the edge, faint;
+        // past the edge and in the box's corner, nothing.
+        assert_eq!(pixel(&p, 100, 100), [255, 0, 0, 255], "direct {direct}");
+        assert_eq!(
+            pixel(&p, 100, 72)[3],
+            255,
+            "22 inside the edge is past the feather"
+        );
+        let faint = pixel(&p, 100, 55)[3];
+        assert!(faint > 10 && faint < 120, "direct {direct}: {faint}");
+        assert_eq!(pixel(&p, 100, 49)[3], 0, "outside the circle");
+        assert_eq!(pixel(&p, 53, 53), CLEAR);
+        // Inset to its middle 50: still a circle, of radius 25 (its corners
+        // held to half the inset box), the feather inside it.
+        scene.set_clip_inset(clipping, Some(ClipInset::px(25., 25., 25., 25.)));
+        let (_, p) = render(&mut gpu, &mut scene);
+        assert_eq!(pixel(&p, 100, 100), [255, 0, 0, 255], "direct {direct}");
+        assert_eq!(pixel(&p, 77, 77), CLEAR, "the inset box's corner is cut");
+        let faint = pixel(&p, 100, 78)[3];
+        assert!(faint > 0 && faint < 80, "direct {direct}: {faint}");
     }
 }

@@ -28,7 +28,6 @@ WebView2 set it. 0.35.1 and upstream main still leave it out.
    check boxes, links, menu items and radio buttons, so a zgx grid's cells,
    whose text is a child, had no UIA Name: Narrator's table navigation read
    them as blank. Tested by `src/tests/cell_name.rs`.
-
 4. A form field's error (`aria-invalid`, `aria-errormessage`), from the
    vendored accesskit_consumer (vendor/accesskit_consumer/ZGX_PATCH.md):
    `IsDataValidForForm` is false while the field is invalid; its error
@@ -40,6 +39,24 @@ WebView2 set it. 0.35.1 and upstream main still leave it out.
    `aria-errormessage`: Narrator reads an edit's `ControllerFor` as a
    suggestion list ("Suggestions available"). The crate's `accesskit_consumer` dependency
    is the vendored one (`path`), so it builds alone too.
+5. Events a client listens for, and no others. UIA tells a fragment root
+   which events clients add handlers for (`IRawElementProviderAdviseEvents`,
+   in `src/node.rs`), and the context counts them (`Context::advise`).
+   After a tree update, events no client listens for are dropped
+   (`Context::wanted`; text changes before their elements are made).
+   - Focus changes are always raised: legacy WinEvent clients follow them.
+   - Everything is raised while a screen reader runs (`SPI_GETSCREENREADER`):
+     it may take events through the MSAA bridge, where no handler is advised.
+   - Why: the touch keyboard's host (TextInputHost) attaches to the focused
+     window, listening for focus, structure, selection, menus and a few
+     properties, but not text or name changes. A dashboard's live labels
+     raised about 1,200 text changes and 830 name changes a second anyway,
+     and UIA called back into the provider about ten times for each: about
+     18,000 calls and 30 ms of the UI thread a second, for no one. Chromium
+     does the same through `AdviseEventAdded`.
+   - Tested by `context::tests`. A client that subscribes later receives
+     what it subscribed to: a native one counting name changes on that
+     dashboard received 2458 in 3 s, against 2489 before the patch.
 
 Run the crate's tests on Windows with
 `cargo test --manifest-path vendor/accesskit_windows/Cargo.toml --locked`.

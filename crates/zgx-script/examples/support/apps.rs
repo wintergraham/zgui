@@ -1,20 +1,23 @@
 //! The example apps' common interactions, each to its frame (and drawn, if
 //! there is a drawing): mail (opening a message, a search keystroke,
 //! archiving), the dashboard (a feed tick, sorting, a filter keystroke),
-//! Sketch (dragging a shape, panning, zooming) and the code editor (a
-//! keystroke, scrolling a page, a find-all keystroke). Each prints its time
+//! Sketch (dragging a shape, panning, zooming), the code editor (a
+//! keystroke, scrolling a page, a find-all keystroke) and chat (a token of
+//! a reply streaming in, a composer keystroke, switching conversations). Each prints its time
 //! and instructions retired (macOS) per interaction and, with
 //! `ZGX_PROFILE=1`, where they went. `apps_bench` runs them drawn on a GPU
 //! with text shaped; CI's instruction gate runs them inside
 //! `list_state_bench` (no new binary to link), small and undrawn but for
 //! their canvases' CPU work.
 //!
-//! `APP=mail` (`dashboard`, `sketch`, `code`) runs one app; `REPS` sets the
+//! `APP=mail` (`dashboard`, `sketch`, `code`, `chat`) runs one app; `REPS` sets the
 //! interactions measured (20); `ROWS` the dashboard's rows (100,000),
 //! `SHAPES` Sketch's shapes (500), `LINES` the code editor's file (100,000).
 //! `ONLY=name` measures the interactions whose names hold it, `SKIP=name`
 //! the others.
 use crate::bench_limits;
+#[path = "chat_server.rs"]
+mod chat_server;
 use std::time::Instant;
 use zgx::{
     input::{InputEvent, Key, PointerButton},
@@ -97,11 +100,24 @@ impl Bench {
         make: MakeDrawing,
         setup: impl FnOnce(&mut TestApp),
     ) -> Self {
+        Self::hosted(script, size, args, make, |_| {}, setup)
+    }
+    /// `with`, the host given to `host` before it loads (a server).
+    fn hosted(
+        script: &str,
+        size: (f32, f32),
+        args: &[String],
+        make: MakeDrawing,
+        host: impl FnOnce(&ScriptHost),
+        setup: impl FnOnce(&mut TestApp),
+    ) -> Self {
         let path = format!("{}/{script}/app.luau", examples());
         let mut app = TestApp::with_desktop(|runtime| {
-            ScriptHost::new(runtime, path)
+            let made = ScriptHost::new(runtime, path)
                 .limits(bench_limits::limits())
-                .args(args.iter().cloned())
+                .args(args.iter().cloned());
+            host(&made);
+            made
         });
         app.ui.scene.borrow_mut().resize(size.0, size.1);
         // As a desktop window with no screen reader on: names and values
@@ -164,7 +180,7 @@ impl Bench {
         if !phases.is_empty() {
             let counted: u64 = phases.iter().map(|p| p.1).sum();
             for (phase, count, _) in &phases {
-                if *count > 0 && !matches!(phase, Phase::Submit | Phase::Present) {
+                if *count > 0 && !matches!(phase, Phase::Submit | Phase::Present | Phase::Wait) {
                     line += &format!(" | {} {:.2}", phase.name(), *count as f64 / 1e6 / reps);
                 }
             }
@@ -396,6 +412,51 @@ fn code(make: MakeDrawing) {
     let _ = std::fs::remove_file(&path);
 }
 
+fn chat(make: MakeDrawing) {
+    let server = chat_server::ChatServer::manual();
+    let mut b = Bench::hosted(
+        "chat",
+        (1100., 760.),
+        &[],
+        make,
+        |host| server.serve(host),
+        |_| {},
+    );
+    // A long reply under way, as a model writes one: a token a frame.
+    let reply: Vec<String> =
+        chat_server::ChatServer::tokens(&chat_server::ChatServer::reply(0).repeat(8))
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+    b.app.type_text("composer", "Write me a function");
+    b.app.key(Key::Enter);
+    assert!(b.app.wait_until(|_| server.streaming()));
+    for token in &reply[..40] {
+        server.write(token);
+        b.frame();
+    }
+    b.measure("chat: a streamed token", |b, k| {
+        server.write(&reply[(40 + k) % reply.len()]);
+        let _ = b;
+    });
+    server.finish();
+    assert!(b.app.wait_until(|h| h.find("send").is_some()));
+    b.frames(3);
+    b.measure("chat: composer keystroke", |b, k| {
+        if k % 2 == 0 {
+            b.app.type_text("composer", "a");
+        } else {
+            b.app.key(Key::Backspace);
+        }
+    });
+    assert!(b.app.host.run_command("new"));
+    b.frames(3);
+    b.measure("chat: switch conversation", |b, k| {
+        let to = if k % 2 == 0 { "previous" } else { "next" };
+        assert!(b.app.host.run_command(to));
+    });
+}
+
 /// The apps `APP` names (all of them if none), drawn by what `make` makes.
 pub fn run(make: MakeDrawing) {
     let only = std::env::var("APP").ok();
@@ -404,6 +465,7 @@ pub fn run(make: MakeDrawing) {
         ("dashboard", dashboard),
         ("sketch", sketch),
         ("code", code),
+        ("chat", chat),
     ] {
         if only.as_deref().is_none_or(|only| only == name) {
             run(make);

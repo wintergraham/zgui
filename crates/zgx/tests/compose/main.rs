@@ -56,3 +56,5 @@ fn every_test_file_is_listed() {
          as `#[path = \"../name.rs\"] mod name;` (see AGENTS.md)"
     );
 }
+#[path = "../snapshot.rs"]
+mod snapshot;

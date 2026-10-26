@@ -96,12 +96,16 @@ impl Clipboard {
         Ok(())
     }
 
-    /// Whether images go through it: arboard's clipboards do, which a
-    /// worker thread reaches with one of its own (`read_image`), while this
-    /// one, kept for the app's life, keeps X11's selection served. Not yet
-    /// Wayland's data worker.
-    pub(crate) fn takes_images(&self) -> bool {
-        matches!(self.backend, Backend::Native(_))
+    /// Where a worker thread reads and writes its images (`read_image`,
+    /// `write_image`): arboard's clipboards, each its own, while this one,
+    /// kept for the app's life, keeps X11's selection served; on Wayland
+    /// the data worker, as PNG.
+    pub(crate) fn images(&self) -> Images {
+        match &self.backend {
+            Backend::Native(_) => Images::Native,
+            #[cfg(target_os = "linux")]
+            Backend::Wayland(clipboard) => Images::Wayland(clipboard.clone()),
+        }
     }
 
     /// The primary selection (X11, Wayland): the text last selected
@@ -137,11 +141,27 @@ impl Clipboard {
     }
 }
 
+/// How a worker thread reaches a clipboard's images (`Clipboard::images`).
+pub(crate) enum Images {
+    Native,
+    #[cfg(target_os = "linux")]
+    Wayland(crate::wayland_data::WaylandClipboard),
+}
+
 /// The clipboard's image, decoded on the calling thread (a worker's: a
 /// large one takes tens of milliseconds) from what the platform's apps put
 /// there: on Windows a PNG, else a DIB (what Paint, browsers and
-/// screenshots copy).
-pub(crate) fn read_image() -> Result<zgx::image::ImageData> {
+/// screenshots copy); on Wayland its `image/png`.
+pub(crate) fn read_image(images: &Images) -> Result<zgx::image::ImageData> {
+    #[cfg(target_os = "linux")]
+    if let Images::Wayland(clipboard) = images {
+        let png = clipboard.load_image()?;
+        let image =
+            image::load_from_memory_with_format(&png, image::ImageFormat::Png)?.into_rgba8();
+        let (width, height) = image.dimensions();
+        return Ok(zgx::image::ImageData::new(width, height, image.into_raw())?);
+    }
+    let _ = images;
     #[cfg(windows)]
     if let Some(image) = windows_dib() {
         return Ok(image);
@@ -155,8 +175,23 @@ pub(crate) fn read_image() -> Result<zgx::image::ImageData> {
 }
 
 /// Put `image` on the clipboard, encoded on the calling thread: on Windows
-/// as a PNG and a DIB, which apps that take either paste.
-pub(crate) fn write_image(image: &zgx::image::ImageData) -> Result<()> {
+/// as a PNG and a DIB, which apps that take either paste; on Wayland as a
+/// PNG.
+pub(crate) fn write_image(images: &Images, image: &zgx::image::ImageData) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    if let Images::Wayland(clipboard) = images {
+        let mut png = Vec::new();
+        image::write_buffer_with_format(
+            &mut std::io::Cursor::new(&mut png),
+            image.pixels(),
+            image.width(),
+            image.height(),
+            image::ExtendedColorType::Rgba8,
+            image::ImageFormat::Png,
+        )?;
+        return Ok(clipboard.store_image(png)?);
+    }
+    let _ = images;
     arboard::Clipboard::new()?.set_image(arboard::ImageData {
         width: image.width() as usize,
         height: image.height() as usize,

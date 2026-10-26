@@ -1,0 +1,847 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+/* Fumadocs' preset, less the layouts this site doesn't use (flux, notebook,
+   home) and its code block styles (lib/code-frame.mjs has its own). */
+@import 'fumadocs-ui/css/lib/base.css';
+@plugin '../../node_modules/fumadocs-ui/dist/tailwind/typography.js';
+@import 'fumadocs-ui/css/generated/docs.css';
+@import 'fumadocs-ui/css/generated/shared.css';
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
+
+@source '../../content-src/**/*.mdx';
+
+/* zgx's green, the colour its benchmark charts have always given it. */
+@theme {
+  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --color-fd-primary: hsl(146, 45%, 33%);
+  --color-fd-primary-foreground: hsl(0, 0%, 100%);
+  --color-fd-ring: hsl(146, 45%, 40%);
+  /* Fumadocs' neutral grey is 4.2:1 on its cards; this is 5.6:1. */
+  --color-fd-muted-foreground: hsl(0, 0%, 38%);
+  --color-code: #ffffff;
+  --color-zgx: #2f7d4b;
+  --color-zgx-luau: #6aa982;
+}
+
+.dark {
+  --color-fd-primary: hsl(144, 50%, 58%);
+  --color-fd-primary-foreground: hsl(150, 40%, 8%);
+  --color-fd-ring: hsl(144, 50%, 50%);
+  --color-fd-muted-foreground: hsl(0, 0%, 66%);
+  --color-code: hsl(0, 0%, 7%);
+  --color-zgx: #5cbf7e;
+  --color-zgx-luau: #3f8a5b;
+}
+
+html {
+  scrollbar-gutter: stable;
+  -webkit-font-smoothing: antialiased;
+}
+
+html > body[data-scroll-locked] {
+  margin-right: 0px !important;
+  --removed-body-scroll-bar-size: 0px !important;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-fd-primary) 28%, transparent);
+}
+
+/* ---- Code blocks (lib/code-frame.mjs builds them, CodeBlocks.astro runs them). */
+:root {
+  --cb-bg: #ffffff;
+  --cb-head: #f7f7f7;
+  --cb-border: color-mix(in oklab, var(--color-fd-foreground) 11%, transparent);
+  --cb-line-hl: color-mix(in oklab, var(--color-fd-primary) 9%, transparent);
+}
+.dark {
+  --cb-bg: #111111;
+  --cb-head: #161616;
+  --cb-border: color-mix(in oklab, var(--color-fd-foreground) 10%, transparent);
+  --cb-line-hl: color-mix(in oklab, var(--color-fd-primary) 12%, transparent);
+}
+.cb {
+  position: relative;
+  margin: 1.5rem 0;
+  border: 1px solid var(--cb-border);
+  border-radius: 0.75rem;
+  background: var(--cb-bg);
+  overflow: hidden;
+  font-size: 0.8125rem;
+}
+.cb-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 2.375rem;
+  padding: 0 0.375rem 0 1rem;
+  border-bottom: 1px solid var(--cb-border);
+  background: var(--cb-head);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1;
+  color: var(--color-fd-muted-foreground);
+}
+.cb-title {
+  color: var(--color-fd-foreground);
+  font-weight: 500;
+}
+.cb-lang-end {
+  margin-left: auto;
+}
+.cb-copy {
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-left: auto;
+  border-radius: 0.375rem;
+  color: var(--color-fd-muted-foreground);
+  transition: color 120ms ease, background-color 120ms ease;
+}
+.cb-lang-end + .cb-copy {
+  margin-left: 0;
+}
+.cb-copy:hover {
+  color: var(--color-fd-foreground);
+  background: color-mix(in oklab, var(--color-fd-foreground) 7%, transparent);
+}
+.cb-copy[data-copied] {
+  color: var(--color-fd-primary);
+}
+.cb-copy:focus-visible,
+.cb-tab:focus-visible,
+.cb-pre:focus-visible {
+  outline: 2px solid var(--color-fd-ring);
+  outline-offset: -2px;
+}
+.cb-tabs {
+  display: flex;
+  align-self: stretch;
+  gap: 1rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.cb-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 0 0.125rem;
+  white-space: nowrap;
+  color: var(--color-fd-muted-foreground);
+  font: inherit;
+  transition: color 120ms ease;
+}
+.cb-tab:hover,
+.cb-tab[aria-selected='true'] {
+  color: var(--color-fd-foreground);
+}
+.cb-tab[aria-selected='true']::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 -1px;
+  height: 1.5px;
+  background: var(--color-fd-foreground);
+}
+.cb-pre,
+.prose .cb-pre {
+  margin: 0;
+  padding: 0.95rem 0;
+  overflow-x: auto;
+  background: transparent !important;
+  border: 0;
+  border-radius: 0;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.65;
+  tab-size: 4;
+  font-variant-ligatures: none;
+  font-feature-settings: 'liga' 0, 'calt' 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--cb-border) transparent;
+}
+.cb-pre code {
+  display: grid;
+  width: max-content;
+  min-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: inherit;
+  white-space: pre;
+}
+.cb-pre .line {
+  position: relative;
+  padding: 0 1.125rem;
+  min-height: 1lh;
+}
+.cb-pre .line.highlighted {
+  background: var(--cb-line-hl);
+  box-shadow: inset 2px 0 var(--color-fd-primary);
+}
+.cb-pre .line.diff.add {
+  background: color-mix(in oklab, #2ea043 14%, transparent);
+}
+.cb-pre .line.diff.remove {
+  background: color-mix(in oklab, #e5534b 13%, transparent);
+  opacity: 0.8;
+}
+.cb-pre .line.diff::before {
+  position: absolute;
+  left: 0.375rem;
+  color: var(--color-fd-muted-foreground);
+}
+.cb-pre .line.diff.add::before {
+  content: '+';
+}
+.cb-pre .line.diff.remove::before {
+  content: '−';
+}
+.cb-pre.has-focused .line:not(.focused) {
+  opacity: 0.45;
+}
+/* The themes' colours: light by default, dark under .dark. */
+.cb-pre span {
+  color: var(--shiki-light);
+}
+.dark .cb-pre span {
+  color: var(--shiki-dark);
+}
+@media (forced-colors: active) {
+  .cb-pre span {
+    color: CanvasText !important;
+  }
+}
+
+/* ---- Docs typography. --------------------------------------------------- */
+#nd-page {
+  max-width: 50rem;
+}
+#nd-page h1 {
+  font-size: clamp(1.875rem, 3vw, 2.25rem);
+  line-height: 1.15;
+  letter-spacing: -0.024em;
+  font-weight: 620;
+  text-wrap: balance;
+}
+#nd-page h1 + p {
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+.prose {
+  font-size: 0.96875rem;
+  line-height: 1.75;
+  color: color-mix(in oklab, var(--color-fd-foreground) 86%, var(--color-fd-background));
+}
+.prose :where(h2, h3, h4) {
+  color: var(--color-fd-foreground);
+  scroll-margin-top: 5.5rem;
+  text-wrap: balance;
+}
+.prose :where(h2) {
+  margin: 2.75em 0 0.8em;
+  font-size: 1.4375rem;
+  line-height: 1.3;
+  letter-spacing: -0.022em;
+  font-weight: 620;
+}
+.prose :where(h3) {
+  margin: 2.1em 0 0.6em;
+  font-size: 1.125rem;
+  line-height: 1.4;
+  letter-spacing: -0.012em;
+  font-weight: 600;
+}
+.prose :where(h4) {
+  margin: 1.8em 0 0.5em;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.prose > :first-child,
+.prose > div > :first-child {
+  margin-top: 0;
+}
+.prose :where(p) {
+  margin: 1.05em 0;
+  text-wrap: pretty;
+}
+.prose :where(strong) {
+  font-weight: 600;
+  color: var(--color-fd-foreground);
+}
+.prose :where(a):not(.heading-anchor) {
+  color: var(--color-fd-foreground);
+  font-weight: 500;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.22em;
+  text-decoration-color: color-mix(in oklab, var(--color-fd-foreground) 28%, transparent);
+  transition: text-decoration-color 120ms ease;
+}
+.prose :where(a):not(.heading-anchor):hover {
+  text-decoration-color: var(--color-fd-primary);
+}
+.prose :where(code):not(pre code) {
+  padding: 0.14em 0.38em;
+  border: 0;
+  border-radius: 0.375rem;
+  background: color-mix(in oklab, var(--color-fd-foreground) 6.5%, transparent);
+  color: var(--color-fd-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.84em;
+  font-weight: 450;
+  font-variant-ligatures: none;
+  overflow-wrap: anywhere;
+}
+.prose :where(a code) {
+  color: inherit;
+}
+.prose :where(ul, ol) {
+  margin: 1em 0;
+  padding-left: 1.4em;
+}
+.prose :where(li) {
+  margin: 0.35em 0;
+  padding-left: 0.2em;
+}
+.prose :where(li)::marker {
+  color: color-mix(in oklab, var(--color-fd-foreground) 40%, transparent);
+}
+.prose :where(hr) {
+  margin: 2.5em 0;
+  border-color: var(--color-fd-border);
+}
+.heading-anchor {
+  margin-left: 0.45rem;
+  color: var(--color-fd-muted-foreground);
+  font-weight: 400;
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+:is(h2, h3):hover > .heading-anchor,
+.heading-anchor:focus-visible {
+  opacity: 1;
+}
+
+/* Sidebar and table of contents: smaller than the page, quiet until active. */
+#nd-sidebar a[data-active] {
+  padding-block: 0.375rem;
+  font-size: 0.875rem;
+  line-height: 1.35;
+}
+#nd-sidebar a[data-active='true'] {
+  font-weight: 550;
+}
+#nd-sidebar p {
+  margin-top: 1.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-fd-foreground);
+}
+#nd-sidebar p:first-child {
+  margin-top: 0.5rem;
+}
+#nd-toc #toc-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-fd-foreground);
+}
+#nd-toc a {
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  padding-block: 0.3rem;
+}
+
+/* Tables: a rounded frame that scrolls sideways when wide. */
+.prose table:not(.perf-table) {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 1.75em 0;
+  border: 1px solid var(--cb-border);
+  border-radius: 0.75rem;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+}
+.prose table:not(.perf-table) :where(th, td) {
+  padding: 0.6rem 0.9rem;
+  border: 0;
+  text-align: left;
+  vertical-align: top;
+}
+.prose table:not(.perf-table) th {
+  background: var(--cb-head);
+  border-bottom: 1px solid var(--cb-border);
+  color: var(--color-fd-foreground);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.prose table:not(.perf-table) tbody tr + tr td {
+  border-top: 1px solid var(--cb-border);
+}
+
+/* Callouts (lib/rehype-prose.mjs). */
+.callout {
+  display: flex;
+  gap: 0.75rem;
+  margin: 1.75em 0;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--callout-border);
+  border-radius: 0.75rem;
+  background: var(--callout-bg);
+  font-size: 0.9375rem;
+  line-height: 1.65;
+}
+.callout[data-kind='note'] {
+  --callout-accent: hsl(212, 80%, 46%);
+  --callout-border: color-mix(in oklab, var(--callout-accent) 28%, transparent);
+  --callout-bg: color-mix(in oklab, var(--callout-accent) 6%, transparent);
+}
+.callout[data-kind='warning'] {
+  --callout-accent: hsl(35, 92%, 38%);
+  --callout-border: color-mix(in oklab, var(--callout-accent) 30%, transparent);
+  --callout-bg: color-mix(in oklab, var(--callout-accent) 6.5%, transparent);
+}
+.dark .callout[data-kind='note'] {
+  --callout-accent: hsl(212, 90%, 66%);
+}
+.dark .callout[data-kind='warning'] {
+  --callout-accent: hsl(38, 92%, 60%);
+}
+.callout-icon {
+  flex: none;
+  margin-top: 0.22rem;
+  color: var(--callout-accent);
+}
+.callout-body {
+  min-width: 0;
+}
+.callout-body > :first-child {
+  margin-top: 0;
+}
+.callout-body > :last-child {
+  margin-bottom: 0;
+}
+
+/* ---- Performance charts (components/perf). ------------------------------ */
+.perf-headline {
+  margin: 0.5rem 0 2rem;
+}
+.perf-verdict {
+  font-size: clamp(1.25rem, 2.4vw, 1.6rem);
+  line-height: 1.3;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+  margin: 0;
+}
+.perf-meta {
+  margin: 0.5rem 0 1.25rem;
+  font-size: 0.85rem;
+  color: var(--color-fd-muted-foreground);
+}
+.perf-meta a {
+  color: inherit;
+}
+.perf-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr));
+  gap: 0.75rem;
+  margin: 0;
+}
+.perf-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--color-fd-border);
+  border-radius: 0.75rem;
+  background: var(--color-fd-card);
+}
+.perf-card dt {
+  order: 2;
+  line-height: 1.35;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--color-fd-foreground);
+}
+.perf-card dd {
+  margin: 0;
+}
+.perf-big {
+  order: 1;
+  font-size: 1.75rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-zgx);
+}
+.perf-detail {
+  order: 3;
+  display: flex;
+  flex-direction: column;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--color-fd-muted-foreground);
+}
+.perf-note {
+  color: var(--color-fd-muted-foreground);
+}
+.perf-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr));
+  gap: 1rem 1.5rem;
+  margin: 1rem 0 2rem;
+}
+.perf-chart {
+  margin: 0;
+}
+.perf-chart table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  table-layout: fixed;
+}
+.perf-chart caption {
+  text-align: left;
+  padding-bottom: 0.5rem;
+}
+.perf-chart-title {
+  display: block;
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--color-fd-foreground);
+}
+.perf-chart-unit {
+  display: block;
+  color: var(--color-fd-muted-foreground);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+.perf-chart tbody {
+  border-top: 1px solid var(--color-fd-border);
+}
+.perf-chart th,
+.perf-chart td {
+  padding: 0.12rem 0;
+  line-height: 1.35;
+  text-align: left;
+  font-weight: 400;
+  vertical-align: middle;
+  border: 0;
+  background: none;
+}
+.perf-col-mode {
+  width: 4.75rem;
+}
+.perf-col-fw {
+  width: 5.5rem;
+}
+.perf-chart .perf-mode {
+  padding-right: 0.5rem;
+  color: var(--color-fd-muted-foreground);
+  vertical-align: top;
+  padding-top: 0.3rem;
+}
+.perf-chart .perf-fw {
+  padding-right: 0.5rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-fd-foreground);
+}
+.perf-chart tr[data-fw^='zgx'] .perf-fw,
+.perf-chart tr[data-fw^='zgx'] .perf-value {
+  font-weight: 600;
+}
+.perf-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.perf-track {
+  position: relative;
+  margin-right: 0.35rem;
+  flex: 1 1 auto;
+  min-width: 2rem;
+  height: 0.7rem;
+  display: block;
+}
+/* The trials' range (or p10–p90): a hairline across the bar's end. */
+.perf-whisker {
+  position: absolute;
+  top: 50%;
+  height: 1px;
+  min-width: 1px;
+  background: var(--color-fd-foreground);
+  opacity: 0.55;
+}
+.perf-whisker::before,
+.perf-whisker::after {
+  content: '';
+  position: absolute;
+  top: -3px;
+  width: 1px;
+  height: 7px;
+  background: inherit;
+}
+.perf-whisker::before {
+  left: 0;
+}
+.perf-whisker::after {
+  right: 0;
+}
+.perf-bar {
+  display: block;
+  height: 100%;
+  border-radius: 0 4px 4px 0;
+  background: color-mix(in oklab, var(--color-fd-muted-foreground) 45%, transparent);
+}
+tr[data-fw='zgx'] .perf-bar {
+  background: var(--color-zgx);
+}
+tr[data-fw='zgx-luau'] .perf-bar {
+  background: var(--color-zgx-luau);
+}
+.perf-value {
+  flex: none;
+  width: 2.9rem;
+  text-align: right;
+  color: var(--color-fd-foreground);
+}
+@media (forced-colors: active) {
+  .perf-bar {
+    background: CanvasText !important;
+  }
+}
+
+/* ---- The Luau API index (components/LuauApi). -------------------------- */
+.api-list {
+  margin: 0 0 2.5rem;
+}
+.api-item {
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--color-fd-border);
+  scroll-margin-top: 5rem;
+}
+.api-item dt code {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-fd-foreground);
+}
+.api-item dt a:hover code {
+  color: var(--color-fd-primary);
+}
+.api-item dd {
+  margin: 0.3rem 0 0;
+}
+.api-type code {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--color-fd-muted-foreground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.api-doc {
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: var(--color-fd-foreground);
+}
+.api-doc code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+/* Skip past the header or sidebar to the page, for the keyboard. */
+.skip {
+  position: fixed;
+  left: -999px;
+  top: 0.5rem;
+  z-index: 100;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--color-fd-primary);
+  color: var(--color-fd-primary-foreground);
+  font-weight: 550;
+}
+.skip:focus {
+  left: 0.5rem;
+}
+
+/* ---- The home page's benchmark chart (components/home/BenchDots). ------- */
+:root {
+  --dot-gpui-fast: #2f6fd6;
+  --dot-mygo: #c26a12;
+  --dot-rune: #8b46c9;
+}
+.dark {
+  --dot-gpui-fast: #4a8bf0;
+  --dot-mygo: #c97d26;
+  --dot-rune: #a578f0;
+}
+.dots {
+  --dots-label: 11.5rem;
+  --dots-value: 4.5rem;
+}
+.dots-axis,
+.dots-row {
+  display: grid;
+  grid-template-columns: var(--dots-label) minmax(0, 1fr) var(--dots-value);
+  align-items: center;
+  column-gap: 1rem;
+}
+.dots-axis {
+  height: 1.5rem;
+  margin-bottom: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--color-fd-muted-foreground);
+}
+.dots-axis-label {
+  font-size: 0.75rem;
+}
+.dots-ticks {
+  position: relative;
+  height: 100%;
+}
+.dots-ticks span {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.dots-axis-end {
+  text-align: right;
+  font-family: var(--font-mono);
+  color: var(--color-zgx);
+  font-weight: 600;
+}
+.dots-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dots-row {
+  height: 2.6rem;
+  border-top: 1px solid color-mix(in oklab, var(--color-fd-foreground) 7%, transparent);
+}
+.dots-label {
+  font-size: 0.875rem;
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dots-mode {
+  font-weight: 400;
+  color: var(--color-fd-muted-foreground);
+}
+.dots-track {
+  position: relative;
+  height: 100%;
+}
+.dots-grid,
+.dots-one {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in oklab, var(--color-fd-foreground) 8%, transparent);
+}
+.dots-one {
+  width: 2px;
+  margin-left: -1px;
+  background: var(--color-zgx);
+}
+.dots-value {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fd-foreground);
+}
+.dot {
+  position: absolute;
+  top: 50%;
+  width: 0.7rem;
+  height: 0.7rem;
+  transform: translate(-50%, -50%);
+  border: 2px solid var(--cb-bg, var(--color-fd-background));
+  box-sizing: content-box;
+}
+.dot-gpui-fast {
+  border-radius: 50%;
+  background: var(--dot-gpui-fast);
+}
+.dot-mygo {
+  border-radius: 2px;
+  background: var(--dot-mygo);
+}
+.dot-rune {
+  background: var(--dot-rune);
+  border-radius: 1px;
+  transform: translate(-50%, -50%) rotate(45deg) scale(0.92);
+}
+.legend .dot-rune {
+  transform: rotate(45deg) scale(0.92);
+}
+@media (max-width: 640px) {
+  .dots {
+    --dots-label: 6.5rem;
+    --dots-value: 3.4rem;
+  }
+  .dots-mode {
+    display: block;
+    font-size: 0.75rem;
+  }
+  .dots-row {
+    height: 3rem;
+  }
+  .dots-axis-label {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Luau's tabs at half the width: a phone's column is narrow. */
+  .cb-pre {
+    tab-size: 2;
+  }
+  .cb-pre .line {
+    padding-inline: 0.875rem;
+  }
+  /* Under the mobile header and its table-of-contents bar. */
+  .prose :where(h2, h3, h4) {
+    scroll-margin-top: 7.5rem;
+  }
+}
+
+/* "Edit on GitHub": a quiet link under the page, not a bar across it. */
+#nd-page a[href*='/edit/main/'] {
+  align-self: flex-start;
+  margin-top: 1.5rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--color-fd-muted-foreground);
+}
+#nd-page a[href*='/edit/main/']:hover {
+  background: none;
+  color: var(--color-fd-foreground);
+}

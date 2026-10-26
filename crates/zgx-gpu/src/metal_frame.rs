@@ -53,9 +53,15 @@ pub(crate) struct MetalFrame {
     effects: std::cell::OnceCell<Option<Effects>>,
     /// Shader fills' pipelines by shader id (`None`: it did not compile).
     fills: std::cell::RefCell<std::collections::HashMap<u64, Option<Pipeline>>>,
+    /// The image effects' pipeline (image_effects.wgsl), with the first
+    /// image drawn with one (`None`: it did not compile).
+    image_effects: std::cell::OnceCell<Option<Pipeline>>,
     /// Polyline strokes' library and pipelines, compiled with the first
     /// (None: not here).
     polyline: std::cell::OnceCell<Option<Polylines>>,
+    /// The 1×1 texture `warm` clears, made with the first (`None`: Metal
+    /// made none).
+    warm: std::cell::OnceCell<Option<Texture>>,
 }
 
 /// Polyline strokes' pipeline (polyline.wgsl).
@@ -127,8 +133,8 @@ impl MetalFrame {
             hal_queue.as_raw().retain()
         };
         drop(hal_queue);
-        let draw = Library::new(&raw, include_str!("draw.wgsl"), Kind::Quads)?;
-        let copy = Library::new(&raw, include_str!("copy_offset.wgsl"), Kind::Copies)?;
+        let draw = Library::translated(&raw, DRAW_MSL, Kind::Quads)?;
+        let copy = Library::translated(&raw, COPY_MSL, Kind::Copies)?;
         let pipeline = |library: &Library, vertex: &str, fragment: &str, blend: Blend| {
             library.pipeline(&raw, vertex, fragment, MTLPixelFormat::BGRA8Unorm, blend)
         };
@@ -143,8 +149,45 @@ impl MetalFrame {
             blur: std::cell::OnceCell::new(),
             effects: std::cell::OnceCell::new(),
             fills: Default::default(),
+            image_effects: std::cell::OnceCell::new(),
             polyline: std::cell::OnceCell::new(),
+            warm: std::cell::OnceCell::new(),
         })
+    }
+
+    /// Wake the GPU: a pass clearing a 1×1 private texture, committed without
+    /// waiting (an empty command buffer may wake nothing). Nothing if Metal
+    /// refuses any of it (a lost device): the frame that follows reports that.
+    pub(crate) fn warm(&self) {
+        let target = self.warm.get_or_init(|| {
+            use objc2_metal::{MTLStorageMode, MTLTextureDescriptor, MTLTextureUsage};
+            // SAFETY: A plain 2D texture descriptor of one texel.
+            let descriptor = unsafe {
+                MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                    MTLPixelFormat::BGRA8Unorm,
+                    1,
+                    1,
+                    false,
+                )
+            };
+            descriptor.setUsage(MTLTextureUsage::RenderTarget);
+            descriptor.setStorageMode(MTLStorageMode::Private);
+            self.device.newTextureWithDescriptor(&descriptor)
+        });
+        let (Some(target), Some(buffer)) = (target, self.queue.commandBuffer()) else {
+            return;
+        };
+        let pass = MTLRenderPassDescriptor::new();
+        // SAFETY: Index 0 of a render pass descriptor's colour attachments.
+        let color = unsafe { pass.colorAttachments().objectAtIndexedSubscript(0) };
+        color.setTexture(Some(target));
+        color.setLoadAction(MTLLoadAction::Clear);
+        color.setStoreAction(MTLStoreAction::Store);
+        let Some(encoder) = buffer.renderCommandEncoderWithDescriptor(&pass) else {
+            return;
+        };
+        encoder.endEncoding();
+        buffer.commit();
     }
 
     /// Whether polyline strokes can be drawn here: their pipeline, compiled
@@ -191,6 +234,26 @@ impl MetalFrame {
         let ready = pipeline.is_some();
         self.fills.borrow_mut().insert(shader.id(), pipeline);
         ready
+    }
+
+    /// Whether images can be drawn with effects here: their pipeline,
+    /// compiled now from the same module as wgpu's
+    /// (`crate::image_effect_source`) if new.
+    pub(crate) fn image_effects(&self) -> bool {
+        self.image_effects
+            .get_or_init(|| {
+                Library::new(&self.device, &crate::image_effect_source(), Kind::Quads)
+                    .ok()?
+                    .pipeline(
+                        &self.device,
+                        "vs",
+                        "zgx_image_effect",
+                        MTLPixelFormat::BGRA8Unorm,
+                        Blend::Over,
+                    )
+                    .ok()
+            })
+            .is_some()
     }
 
     /// Whether layer effects can be drawn here: their pipelines, compiled
@@ -352,6 +415,12 @@ impl MetalFrame {
                 .fills
                 .borrow()
                 .get(&id)
+                .cloned()
+                .flatten()
+                .unwrap_or_else(|| self.full.clone()),
+            Shading::ImageEffect => self
+                .image_effects
+                .get()
                 .cloned()
                 .flatten()
                 .unwrap_or_else(|| self.full.clone()),
@@ -621,7 +690,9 @@ impl Frame {
         instances: std::ops::Range<u32>,
     ) {
         let bound = match (shading, clear) {
-            (Shading::Full | Shading::Fill(_) | Shading::Polyline, true) => Bound::FullClear,
+            (Shading::Full | Shading::Fill(_) | Shading::ImageEffect | Shading::Polyline, true) => {
+                Bound::FullClear
+            }
             (Shading::Basic | Shading::Opaque, true) => Bound::Quads(Shading::Opaque),
             (shading, false) => Bound::Quads(shading),
         };
@@ -695,148 +766,198 @@ impl Library {
         source: &str,
         kind: Kind,
     ) -> Result<Self, GpuError> {
-        let failed = |what: String| GpuError(format!("direct Metal shaders: {what}"));
-        let module = naga::front::wgsl::parse_str(source).map_err(|e| failed(e.to_string()))?;
-        let info = naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::DUAL_SOURCE_BLENDING,
-        )
-        .validate(&module)
-        .map_err(|e| failed(e.to_string()))?;
-        let binding = |group, binding| naga::ResourceBinding { group, binding };
-        let mut resources = naga::back::msl::BindingMap::new();
-        let texture = |slot| naga::back::msl::BindTarget {
-            texture: Some(slot),
-            ..Default::default()
-        };
-        let buffer = |slot| naga::back::msl::BindTarget {
-            buffer: Some(slot),
-            ..Default::default()
-        };
-        if kind == Kind::Blur {
-            resources.insert(binding(0, 0), texture(BLUR_SOURCE as u8));
-            resources.insert(binding(0, 1), texture(BLUR_SOURCE as u8 + 1));
-            resources.insert(binding(0, 2), buffer(BLUR_RECORDS as u8));
-            resources.insert(binding(0, 3), buffer(BLUR_RECORDS as u8 + 1));
-            resources.insert(
-                binding(0, 4),
-                naga::back::msl::BindTarget {
-                    sampler: Some(naga::back::msl::BindSamplerTarget::Inline(0)),
-                    ..Default::default()
-                },
-            );
-        } else if kind == Kind::Effects {
-            resources.insert(binding(0, 1), texture(0));
-            resources.insert(
-                binding(0, 2),
-                naga::back::msl::BindTarget {
-                    sampler: Some(naga::back::msl::BindSamplerTarget::Inline(0)),
-                    ..Default::default()
-                },
-            );
-            resources.insert(binding(1, 0), texture(1));
-        } else if kind == Kind::Quads {
-            resources.insert(
-                binding(1, 0),
-                naga::back::msl::BindTarget {
-                    buffer: Some(0),
-                    ..Default::default()
-                },
-            );
-            resources.insert(binding(1, 1), buffer(REGIONS as u8));
-            resources.insert(binding(2, 0), buffer(POINTS as u8));
-            resources.insert(
-                binding(0, 1),
-                naga::back::msl::BindTarget {
-                    texture: Some(0),
-                    ..Default::default()
-                },
-            );
-            resources.insert(
-                binding(0, 2),
-                naga::back::msl::BindTarget {
-                    sampler: Some(naga::back::msl::BindSamplerTarget::Inline(0)),
-                    ..Default::default()
-                },
-            );
-        } else {
-            resources.insert(
-                binding(0, 0),
-                naga::back::msl::BindTarget {
-                    texture: Some(0),
-                    ..Default::default()
-                },
-            );
-        }
-        let per_entry_point_map = module
-            .entry_points
-            .iter()
-            .map(|entry| {
-                (
-                    entry.name.clone(),
-                    naga::back::msl::EntryPointResources {
-                        resources: resources.clone(),
-                        sizes_buffer: match kind {
-                            Kind::Blur => Some(BLUR_SIZES as u8),
-                            Kind::Quads => Some(REGION_SIZES as u8),
-                            _ => None,
-                        },
-                        ..Default::default()
-                    },
-                )
-            })
+        let (msl, names) = translate(source, kind)?;
+        Self::compile(device, &msl, names, kind)
+    }
+
+    /// The library of a module translated ahead (`translated`).
+    fn translated(
+        device: &ProtocolObject<dyn MTLDevice>,
+        translated: &str,
+        kind: Kind,
+    ) -> Result<Self, GpuError> {
+        let names = translated
+            .lines()
+            .next()
+            .and_then(|line| line.strip_prefix(ENTRY_POINTS))
+            .unwrap_or_default()
+            .split_whitespace()
+            .filter_map(|pair| pair.split_once('='))
+            .map(|(entry, name)| (entry.to_owned(), name.to_owned()))
             .collect();
-        let (version, lang_version) = msl_version();
-        let options = naga::back::msl::Options {
-            lang_version,
-            per_entry_point_map,
-            inline_samplers: vec![naga::back::msl::sampler::InlineSampler {
-                coord: naga::back::msl::sampler::Coord::Normalized,
-                address: [naga::back::msl::sampler::Address::ClampToEdge; 3],
-                border_color: naga::back::msl::sampler::BorderColor::TransparentBlack,
-                mag_filter: naga::back::msl::sampler::Filter::Linear,
-                min_filter: naga::back::msl::sampler::Filter::Linear,
-                mip_filter: None,
-                lod_clamp: None,
-                max_anisotropy: None,
-                compare_func: naga::back::msl::sampler::CompareFunc::Never,
-            }],
-            fake_missing_bindings: false,
-            zero_initialize_workgroup_memory: false,
-            ..Default::default()
-        };
-        let pipeline_options = naga::back::msl::PipelineOptions {
-            entry_point: None,
-            allow_and_force_point_size: false,
-            vertex_pulling_transform: false,
-            vertex_buffer_mappings: Vec::new(),
-        };
-        let (msl, translated) =
-            naga::back::msl::write_string(&module, &info, &options, &pipeline_options)
-                .map_err(|e| failed(e.to_string()))?;
-        let names = module
-            .entry_points
-            .iter()
-            .zip(translated.entry_point_names)
-            .filter_map(|(entry, name)| Some((entry.name.clone(), name.ok()?)))
-            .collect();
+        Self::compile(device, translated, names, kind)
+    }
+
+    fn compile(
+        device: &ProtocolObject<dyn MTLDevice>,
+        msl: &str,
+        names: std::collections::HashMap<String, String>,
+        kind: Kind,
+    ) -> Result<Self, GpuError> {
         // Compiled as wgpu compiles the same module, so both paths draw the
         // same bytes.
         let compile = MTLCompileOptions::new();
-        compile.setLanguageVersion(version);
+        compile.setLanguageVersion(msl_version().0);
         if objc2::available!(macos = 11.0) {
             compile.setPreserveInvariance(true);
         }
         let library = device
-            .newLibraryWithSource_options_error(&NSString::from_str(&msl), Some(&compile))
-            .map_err(|e| failed(e.to_string()))?;
+            .newLibraryWithSource_options_error(&NSString::from_str(msl), Some(&compile))
+            .map_err(|e| GpuError(format!("direct Metal shaders: {e}")))?;
         Ok(Self {
             library,
             names,
             kind,
         })
     }
+}
 
+/// The first line of a module translated ahead: its entry points' names in
+/// MSL (`entry=name`, separated by spaces).
+const ENTRY_POINTS: &str = "// zgx entry points:";
+
+/// `draw.wgsl` and `copy_offset.wgsl` as `translate` writes them, behind
+/// their entry points' names (`ENTRY_POINTS`): every window's first frame
+/// needs both, and naga's translation was about 10 M of its instructions.
+/// `translated_shaders_match` keeps them current
+/// (`ZGX_BLESS=1 cargo test -p zgx-gpu --lib translated_shaders`).
+const DRAW_MSL: &str = include_str!("draw.metal");
+const COPY_MSL: &str = include_str!("copy_offset.metal");
+
+/// A WGSL module in MSL with zgx's fixed slots (`Kind`) and any sampler
+/// inline, and its entry points' names there.
+fn translate(
+    source: &str,
+    kind: Kind,
+) -> Result<(String, std::collections::HashMap<String, String>), GpuError> {
+    let failed = |what: String| GpuError(format!("direct Metal shaders: {what}"));
+    let module = naga::front::wgsl::parse_str(source).map_err(|e| failed(e.to_string()))?;
+    let info = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::DUAL_SOURCE_BLENDING,
+    )
+    .validate(&module)
+    .map_err(|e| failed(e.to_string()))?;
+    let binding = |group, binding| naga::ResourceBinding { group, binding };
+    let mut resources = naga::back::msl::BindingMap::new();
+    let texture = |slot| naga::back::msl::BindTarget {
+        texture: Some(slot),
+        ..Default::default()
+    };
+    let buffer = |slot| naga::back::msl::BindTarget {
+        buffer: Some(slot),
+        ..Default::default()
+    };
+    if kind == Kind::Blur {
+        resources.insert(binding(0, 0), texture(BLUR_SOURCE as u8));
+        resources.insert(binding(0, 1), texture(BLUR_SOURCE as u8 + 1));
+        resources.insert(binding(0, 2), buffer(BLUR_RECORDS as u8));
+        resources.insert(binding(0, 3), buffer(BLUR_RECORDS as u8 + 1));
+        resources.insert(
+            binding(0, 4),
+            naga::back::msl::BindTarget {
+                sampler: Some(naga::back::msl::BindSamplerTarget::Inline(0)),
+                ..Default::default()
+            },
+        );
+    } else if kind == Kind::Effects {
+        resources.insert(binding(0, 1), texture(0));
+        resources.insert(
+            binding(0, 2),
+            naga::back::msl::BindTarget {
+                sampler: Some(naga::back::msl::BindSamplerTarget::Inline(0)),
+                ..Default::default()
+            },
+        );
+        resources.insert(binding(1, 0), texture(1));
+    } else if kind == Kind::Quads {
+        resources.insert(
+            binding(1, 0),
+            naga::back::msl::BindTarget {
+                buffer: Some(0),
+                ..Default::default()
+            },
+        );
+        resources.insert(binding(1, 1), buffer(REGIONS as u8));
+        resources.insert(binding(2, 0), buffer(POINTS as u8));
+        resources.insert(
+            binding(0, 1),
+            naga::back::msl::BindTarget {
+                texture: Some(0),
+                ..Default::default()
+            },
+        );
+        resources.insert(
+            binding(0, 2),
+            naga::back::msl::BindTarget {
+                sampler: Some(naga::back::msl::BindSamplerTarget::Inline(0)),
+                ..Default::default()
+            },
+        );
+    } else {
+        resources.insert(
+            binding(0, 0),
+            naga::back::msl::BindTarget {
+                texture: Some(0),
+                ..Default::default()
+            },
+        );
+    }
+    let per_entry_point_map = module
+        .entry_points
+        .iter()
+        .map(|entry| {
+            (
+                entry.name.clone(),
+                naga::back::msl::EntryPointResources {
+                    resources: resources.clone(),
+                    sizes_buffer: match kind {
+                        Kind::Blur => Some(BLUR_SIZES as u8),
+                        Kind::Quads => Some(REGION_SIZES as u8),
+                        _ => None,
+                    },
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+    let options = naga::back::msl::Options {
+        lang_version: msl_version().1,
+        per_entry_point_map,
+        inline_samplers: vec![naga::back::msl::sampler::InlineSampler {
+            coord: naga::back::msl::sampler::Coord::Normalized,
+            address: [naga::back::msl::sampler::Address::ClampToEdge; 3],
+            border_color: naga::back::msl::sampler::BorderColor::TransparentBlack,
+            mag_filter: naga::back::msl::sampler::Filter::Linear,
+            min_filter: naga::back::msl::sampler::Filter::Linear,
+            mip_filter: None,
+            lod_clamp: None,
+            max_anisotropy: None,
+            compare_func: naga::back::msl::sampler::CompareFunc::Never,
+        }],
+        fake_missing_bindings: false,
+        zero_initialize_workgroup_memory: false,
+        ..Default::default()
+    };
+    let pipeline_options = naga::back::msl::PipelineOptions {
+        entry_point: None,
+        allow_and_force_point_size: false,
+        vertex_pulling_transform: false,
+        vertex_buffer_mappings: Vec::new(),
+    };
+    let (msl, translated) =
+        naga::back::msl::write_string(&module, &info, &options, &pipeline_options)
+            .map_err(|e| failed(e.to_string()))?;
+    let names = module
+        .entry_points
+        .iter()
+        .zip(translated.entry_point_names)
+        .filter_map(|(entry, name)| Some((entry.name.clone(), name.ok()?)))
+        .collect();
+    Ok((msl, names))
+}
+
+impl Library {
     fn pipeline(
         &self,
         device: &ProtocolObject<dyn MTLDevice>,
@@ -902,6 +1023,54 @@ impl Library {
         device
             .newRenderPipelineStateWithDescriptor_error(&descriptor)
             .map_err(|e| GpuError(format!("direct Metal pipeline: {e}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A module as `DRAW_MSL` and `COPY_MSL` hold it.
+    fn ahead(source: &str, kind: Kind) -> String {
+        let (msl, names) = translate(source, kind).unwrap();
+        let mut names: Vec<_> = names.into_iter().collect();
+        names.sort();
+        let names: String = names
+            .iter()
+            .map(|(entry, name)| format!(" {entry}={name}"))
+            .collect();
+        format!("{ENTRY_POINTS}{names}\n{msl}")
+    }
+
+    #[test]
+    fn translated_shaders_match() {
+        let bless = std::env::var_os("ZGX_BLESS").is_some_and(|v| v != "0");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for (wgsl, kind, msl, file) in [
+            (
+                include_str!("draw.wgsl"),
+                Kind::Quads,
+                DRAW_MSL,
+                "draw.metal",
+            ),
+            (
+                include_str!("copy_offset.wgsl"),
+                Kind::Copies,
+                COPY_MSL,
+                "copy_offset.metal",
+            ),
+        ] {
+            let now = ahead(wgsl, kind);
+            if bless {
+                std::fs::write(dir.join(file), &now).unwrap();
+            } else {
+                assert!(
+                    now == msl,
+                    "src/{file} is not its WGSL's translation: \
+                     `ZGX_BLESS=1 cargo test -p zgx-gpu --lib translated_shaders`"
+                );
+            }
+        }
     }
 }
 

@@ -46,6 +46,40 @@ pub enum DisplaySelector {
     /// The display with this name.
     Name(String),
 }
+/// Where a window stands among windows (`WindowOptions::level`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WindowLevel {
+    /// Among ordinary windows.
+    #[default]
+    Normal,
+    /// Over every app's ordinary windows (macOS's floating level; Windows'
+    /// topmost; where X11's window manager honours it).
+    AlwaysOnTop,
+}
+impl WindowLevel {
+    pub(crate) fn winit(self) -> winit::window::WindowLevel {
+        match self {
+            Self::Normal => winit::window::WindowLevel::Normal,
+            Self::AlwaysOnTop => winit::window::WindowLevel::AlwaysOnTop,
+        }
+    }
+}
+/// Show or drop `window`'s shadow (`WindowOptions::shadow`): macOS's, and
+/// Windows' around a frameless window; elsewhere the compositor's call.
+pub(crate) fn set_shadow(window: &winit::window::Window, shadow: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::WindowExtMacOS;
+        window.set_has_shadow(shadow);
+    }
+    #[cfg(windows)]
+    {
+        use winit::platform::windows::WindowExtWindows;
+        window.set_undecorated_shadow(shadow);
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let _ = (window, shadow);
+}
 /// A display's geometry and scale, as the platform reports it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DisplayInfo {
@@ -209,7 +243,13 @@ pub(crate) fn attributes(
         .with_resizable(options.resizable)
         .with_transparent(options.is_transparent())
         .with_decorations(options.decorations)
+        .with_window_level(options.level.winit())
         .with_visible(false);
+    #[cfg(target_os = "macos")]
+    if !options.shadow {
+        use winit::platform::macos::WindowAttributesExtMacOS;
+        attrs = attrs.with_has_shadow(false);
+    }
     // An X screen of 16 or 30 bits: a visual drivers present to.
     #[cfg(target_os = "linux")]
     if !options.is_transparent()
@@ -246,7 +286,11 @@ pub(crate) fn attributes(
     {
         use winit::platform::windows::WindowAttributesExtWindows;
         if options.titlebar != crate::Titlebar::Standard {
-            attrs = attrs.with_decorations(false).with_undecorated_shadow(true);
+            attrs = attrs
+                .with_decorations(false)
+                .with_undecorated_shadow(options.shadow);
+        } else if !options.decorations {
+            attrs = attrs.with_undecorated_shadow(options.shadow);
         }
         // Frames show through a DirectComposition visual (`zgx_gpu`), not
         // a surface Windows keeps for the window, which would sit under the
@@ -272,6 +316,19 @@ pub(crate) fn attributes(
         if let Some((x, y)) = bounds.position {
             attrs = attrs.with_position(winit::dpi::PhysicalPosition::new(x, y));
         }
+    }
+    // Over the whole of its display: its frame, in physical pixels.
+    if options.covers_display {
+        let monitor = match &options.display {
+            Some(selector) => select_monitor(event_loop, selector),
+            None => event_loop
+                .primary_monitor()
+                .or_else(|| event_loop.available_monitors().next()),
+        }
+        .ok_or_else(|| "no display to cover".to_owned())?;
+        attrs = attrs
+            .with_inner_size(monitor.size())
+            .with_position(monitor.position());
     }
     Ok(attrs)
 }

@@ -11,7 +11,7 @@ summaries. The headline says only what the numbers show: its verdict and
 figures are worked out from them, never written in. Writes site/index.html
 (charts as text and CSS, no script), site/data.json and site/data.csv.
 """
-import argparse, csv, html, json, math, statistics
+import argparse, shutil, csv, html, json, math, statistics
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -129,6 +129,7 @@ def load(directory):
         'trials': audit['trials'], 'pacing_trials': audit['pacing_trials'], 'protocol': protocol,
         'environment': audit['environment'], 'binaries': audit['binaries'],
         'toolchains': audit.get('toolchains', {}), 'preflight': audit.get('preflight'),
+        'abnormal_exits': audit.get('abnormal_exits'), 'launches': audit.get('launches', {}),
     }
 
 
@@ -153,7 +154,7 @@ def percent_less(ours, theirs):
 def headline(by):
     """The verdict and headline figures, worked out from the numbers."""
     rivals = [f for f in by['heavy']['frameworks'] if not f.startswith('zgx')]
-    named = ' and '.join(NAMES[r] for r in rivals)
+    named = ', '.join(NAMES[r] for r in rivals[:-1]) + f' and {NAMES[rivals[-1]]}' if len(rivals) > 1 else NAMES[rivals[0]]
     active = [(s, m) for s in by.values() for m in s['modes'] if m != 'idle']
     led = {key: sum(all(value(s, 'zgx', m, key) < value(s, r, m, key) for r in rivals if r in s['frameworks'])
                     for s, m in active)
@@ -217,13 +218,92 @@ def chart(scene, metric):
     return '\n'.join(out)
 
 
-def page(by, verdict, cards):
+MICRO_SCENES = {
+    'state': ('State update', 'One counter bound to one text, over a static grid of 1,000 texts: set the counter.'),
+    'vscroll-fixed': ('Scroll step, fixed rows', '10,000 rows of 28 pt: scroll 12 pt.'),
+    'vscroll-variable': ('Scroll step, variable rows', '10,000 of the list scene\'s rows (wrapped text, some images), measured as they mount: scroll 12 pt.'),
+}
+
+
+def load_micro(path):
+    """The microbenchmarks' run (micro.jsonl): frame figures by scene and column."""
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.startswith('{')]
+    frames = {}
+    for row in rows:
+        if row['figure'] != 'frame' or row.get('note'):
+            continue
+        if row['framework'] in ('zgx', 'zgx-luau'):
+            column = row['framework'] + ('' if row.get('render') else '-noencode')
+        elif row['framework'] == 'mygo':
+            column = 'mygo' if row.get('raster') == '0.05x' else 'mygo-1x'
+        else:
+            column = row['framework']
+        frames.setdefault(row['scene'], {})[column] = row
+    return frames
+
+
+def micro_section(frames, e):
+    """Per scene, two like-for-like groups: frames without the GPU's encode
+    (zgx's RENDER=0, GPUI Fast's headless frame) and with it (zgx, Rune, and
+    MyGo, whose frame also rasterizes on the CPU)."""
+    groups = [('Without the GPU encode', [('zgx-noencode', 'zgx'), ('zgx-luau-noencode', 'zgx (Luau)'), ('gpui-fast', 'GPUI Fast')]),
+              ('With the GPU encode', [('zgx', 'zgx'), ('zgx-luau', 'zgx (Luau)'), ('rune', 'Rune'), ('mygo', 'MyGo')])]
+    charts = []
+    for scene, (title, note) in MICRO_SCENES.items():
+        cells = frames.get(scene, {})
+        out = [f'<figure class="chart"><table><caption><span class="title">{e(title)}</span> '
+               f'<span class="unit">µs of CPU per operation</span> '
+               f'<span class="better">lower is better</span><span class="unit"> {e(note)}</span></caption>',
+               '<colgroup><col class="c-mode"><col class="c-fw"><col></colgroup>'
+               '<thead><tr><th scope="col">Frame</th><th scope="col">Framework</th>'
+               '<th scope="col">Median <span class="range-head">(p10–p90)</span></th></tr></thead>']
+        for label, members in groups:
+            present = [(key, name, cells[key]) for key, name in members if key in cells]
+            if not present:
+                continue
+            top = max(row['median_ns'] for _, _, row in present) or 1
+            out.append('<tbody>')
+            for i, (key, name, row) in enumerate(present):
+                fw = 'zgx-luau' if key.startswith('zgx-luau') else 'zgx' if key.startswith('zgx') else key
+                head = f'<th scope="rowgroup" rowspan="{len(present)}" class="mode">{e(label)}</th>' if i == 0 else ''
+                us = lambda ns: fmt(ns / 1000, 1 if row['median_ns'] < 100_000 else 0)
+                out.append(f'<tr class="fw-{fw}">{head}<th scope="row">{e(name)}</th>'
+                           f'<td><span class="track" aria-hidden="true"><span class="bar" style="width:{100 * row["median_ns"] / top:.1f}%"></span></span>'
+                           f'<span class="value">{us(row["median_ns"])}</span> <span class="range">({us(row["p10_ns"])}–{us(row["p90_ns"])})</span></td></tr>')
+            out.append('</tbody>')
+        out.append('</table></figure>')
+        charts.append('\n'.join(out))
+    return (
+        '<section id="micro" aria-labelledby="micro-h"><h2 id="micro-h">Microbenchmarks</h2>'
+        '<p class="scene-note">One state change, and one scroll step of 10,000 rows, timed headless in process CPU per operation '
+        '(the median over batches after a warm-up) from the change through to a frame ready to present. '
+        'Each framework\'s frame is compared with the frames that do the same work: GPUI Fast\'s headless frame stops before the GPU encode, '
+        'so it sits beside zgx\'s frame without one; Rune\'s and MyGo\'s include it (MyGo\'s also rasterizes on the CPU), beside zgx\'s with it. '
+        f'<a href="{REPO}/blob/main/docs/benchmarking.md#microbenchmarks-one-state-change-one-scroll-step">How they are defined</a></p>'
+        f'<div class="charts">{"".join(charts)}</div>'
+        '<ul class="facts">'
+        '<li><strong>The change alone</strong> ("write") is not compared: GPUI Fast, Rune and MyGo store the value and mark the window to draw '
+        '(0.02–0.14 µs), leaving all their work to the frame, where zgx\'s bindings update their nodes as the value is set (about 1–8 µs). '
+        'The frame is the figure that counts, and it includes the write.</li>'
+        '<li><strong>MyGo\'s frame</strong> rasterizes its scene on the CPU, as its headless tester does, where a window would draw on the GPU; '
+        'it is shown at a raster scale of 0.05× (the charts\' MyGo), which leaves its layout and paint and makes the raster almost free (at 1×: '
+        + ', '.join(f"{MICRO_SCENES[sc][0].lower()} {fmt(rows['mygo-1x']['median_ns'] / 1000, 0)} µs" for sc, rows in frames.items() if 'mygo-1x' in rows)
+        + ').</li>'
+        '<li><strong>Most of a frame with the GPU encode is what any Metal frame costs:</strong> a bare Metal frame (a command buffer, one empty render pass, '
+        'commit) takes 44–94 µs of process CPU back to back on this Mac, most of it in Metal\'s own threads; zgx\'s work over it is the few microseconds '
+        'of its frame without the encode and about 33,000 instructions of drawing and presenting.</li>'
+        + ('' if any('zgx-luau' in cells for cells in frames.values()) else '<li><strong>Not yet measured:</strong> zgx through Luau.</li>') +
+        '</ul></section>')
+
+
+def page(by, verdict, cards, micro=None):
     heavy = by['heavy']
     env, protocol, commit = heavy['environment'], heavy['protocol'], heavy['commit']
     date = heavy['started_utc'][:10]
     tools = heavy['toolchains']
     mygo = tools.get('mygo', {})
     rune = tools.get('rune', {})
+    e = html.escape
     has_rune = any('rune' in by[n]['frameworks'] for n in ORDER)
     rune_lede = ' and Rune (Rust, wgpu, Taffy and Parley)' if has_rune else ''
     rune_build = (f"; Rune at <code>{e(rune.get('rune_rev', '?')[:8])}</code> ({e(rune.get('rune_branch', '?'))}, "
@@ -249,6 +329,23 @@ def page(by, verdict, cards):
     runs = ''.join(f'<li><a href="{REPO}/tree/main/{by[n]["run"]}"><code>{by[n]["run"]}</code></a> '
                    f'({by[n]["trials"]} trials, {by[n]["pacing_trials"]} pacing captures)</li>' for n in ORDER)
     luau = 'zgx-luau' in by['vlist']['frameworks']
+    # Apps that exited abnormally (each launched once more), against their
+    # launches: recorded since the run that started counting them.
+    crash_note = ''
+    if all(by[n].get('abnormal_exits') is not None for n in ORDER):
+        exits, launches = {}, {}
+        for n in ORDER:
+            for x in by[n]['abnormal_exits']:
+                exits[x['framework']] = exits.get(x['framework'], 0) + 1
+            for fw, kinds in by[n]['launches'].items():
+                launches[fw] = launches.get(fw, 0) + sum(kinds.values())
+        if exits:
+            listed = ', '.join(f"{NAMES.get(fw, fw)} {count} of {launches.get(fw, 0)} launches" for fw, count in sorted(exits.items()))
+            crash_note = (f'<li>Apps that exited abnormally during the run, each then launched once more: {e(listed)}. '
+                          'GPUI Fast aborts now and then inside AppKit while the window is being captured for frame timing '
+                          '(<code>-[NSWindow _updateButtonsForWindowSharingSession]</code>).</li>')
+        else:
+            crash_note = '<li>No app exited abnormally during the run.</li>'
     # Where GPU power does not clearly favour zgx: a rival lower, or the
     # trials' ranges overlapping.
     close = [f'{SCENES[n][0].lower()} ({MODES[m].lower()}) against {NAMES[r]}'
@@ -266,9 +363,13 @@ def page(by, verdict, cards):
     # Where WindowServer works harder for zgx's window than for a rival's.
     active = [(s, m) for s in by.values() for m in s['modes'] if m != 'idle']
     rivals = [f for f in heavy['frameworks'] if not f.startswith('zgx')]
-    server_more = sum(any(value(s, 'zgx', m, 'windowserver_cpu_percent') > value(s, r, m, 'windowserver_cpu_percent')
-                          for r in rivals if r in s['frameworks']) for s, m in active)
-    nav = ' '.join(f'<a href="#{n}">{SCENES[n][0]}</a>' for n in ORDER)
+    # How far above the cheapest rival's window zgx's costs WindowServer, per test.
+    server_gaps = [value(s, 'zgx', m, 'windowserver_cpu_percent')
+                   - min(value(s, r, m, 'windowserver_cpu_percent') for r in rivals if r in s['frameworks'])
+                   for s, m in active]
+    server_more = sum(gap > 0 for gap in server_gaps)
+    server_gap = max(server_gaps)
+    nav = ' '.join(f'<a href="#{n}">{SCENES[n][0]}</a>' for n in ORDER) + (' <a href="#micro">Microbenchmarks</a>' if micro else '')
     mygo_build = (f"MyGo {e(mygo.get('mygo_version', '?'))} (<code>{e(mygo.get('mygo_commit', '?')[:7])}</code>, "
                   f"{e(mygo.get('mygo_license', '?'))}) built with {e(mygo.get('go', tools.get('go', 'Go')))}, "
                   f"<code>go build {e(mygo.get('flags', ''))}</code>, cgo {'on' if mygo.get('cgo') else 'off'}") + rune_build
@@ -294,6 +395,7 @@ def page(by, verdict, cards):
 </header>
 <main>
 {''.join(sections)}
+{micro_section(micro, e) if micro else ''}
 <section id="method" aria-labelledby="method-h">
 <h2 id="method-h">How this was measured</h2>
 <ul class="facts">
@@ -308,7 +410,7 @@ def page(by, verdict, cards):
 <li><strong>Frame time:</strong> the 99th percentile of the intervals between frames shown on screen; at 60 updates a second, 16.7 ms is on time (8.3 ms for the animation, drawn at 120 Hz). <strong>Long frames</strong> are intervals over 25 ms.</li>
 <li><strong>Unfilled rows</strong> (the list): the window captured 10 times a second for {by['vlist']['protocol'].get('blank_seconds', 8)} s in {' and '.join(MODES[m].lower() for m in by['vlist']['protocol'].get('blank_modes', by['vlist']['modes']))}; a capture counts when a stretch of the rows' padding over 24 points shows the window's background, where no row was drawn.</li>
 <li><strong>Memory:</strong> the process's physical footprint (what Activity Monitor shows: resident memory plus GPU memory it owns), averaged over the sample.</li>
-<li><strong>The list widgets:</strong> zgx's measured virtual list{', the same list from a Luau script (<code>ui.list {{ measured = true }}</code>),' if luau else ''} and GPUI Fast's <code>list</code> measure each row as they lay it out; MyGo's <code>ui.List</code> keeps its place by an anchor row and estimates unmeasured rows at the average height{"; Rune's virtual rows estimate unmeasured rows (28 pt fixed, a three-line row variable) and measure as they mount" if has_rune else ''}.</li>
+<li><strong>The list widgets:</strong> zgx's measured virtual list{', the same list from a Luau script (<code>ui.list { measured = true }</code>),' if luau else ''} and GPUI Fast's <code>list</code> measure each row as they lay it out; MyGo's <code>ui.List</code> keeps its place by an anchor row and estimates unmeasured rows at the average height{"; Rune's virtual rows estimate unmeasured rows (28 pt fixed, a three-line row variable) and measure as they mount" if has_rune else ''}.</li>
 </ul>
 {'<h3>How Rune is driven</h3><ul class="facts">' + rune_notes + '</ul>' if rune_notes else ''}
 <h3>Caveats</h3>
@@ -317,15 +419,16 @@ def page(by, verdict, cards):
 <li>Idle memory is two-level: an idle window settles at one of two levels about 25 MB apart, launch to launch, as the Metal driver returns its startup memory. Which level a launch lands on is the driver's timing, not the app's, so read idle memory with its range.</li>
 <li>MyGo is immediate mode: each frame it draws builds and draws its whole window, which is how MyGo apps work.</li>
 {'' if luau else '<li>zgx through Luau is not in the list scene: zgx-script&#8217;s <code>ui.list</code> does not measure its rows yet.</li>'}
-{f'<li>WindowServer spends more CPU on zgx&#8217;s window than on a rival&#8217;s in {server_more} of {len(active)} tests (its chart follows CPU in each scene): showing zgx&#8217;s frames costs the system more than the others&#8217;, a cost zgx has yet to bring down.</li>' if server_more else ''}
+{f'<li>WindowServer spends more CPU on zgx&#8217;s window than on the cheapest rival&#8217;s in {server_more} of {len(active)} tests, by at most {fmt(server_gap, 1)} points of a core (its chart follows CPU in each scene).</li>' if server_more else ''}
 {power_note}
 <li>Until 2026-10-25 these pages' GPU figure was app GPU time; it is now GPU power, which measures what the GPU spends rather than how long it was held (see How this was measured). In the animation, zgx uses {animate_time} on app GPU time and {animate_power} on power.</li>
+{crash_note}
 <li>Binary size is not compared.</li>
 <li>One machine, one session; a personal Mac in use, other applications kept running (the run waited until the machine was quiet). Windows and Linux are not compared here.</li>
 </ul>
 <h3>Data</h3>
 <ul class="facts">
-<li>This page's numbers: <a href="data.csv">data.csv</a>, <a href="data.json">data.json</a>.</li>
+<li>This page's numbers: <a href="data.csv">data.csv</a>, <a href="data.json">data.json</a>{', and the microbenchmarks&#8217; <a href="micro.jsonl">micro.jsonl</a>' if micro else ''}.</li>
 <li>Every trial, raw:<ul>{runs}</ul></li>
 <li>How the runs are made: <a href="{REPO}/blob/main/docs/benchmarking.md">benchmarking</a>; the adapters: <a href="{REPO}/tree/main/comparisons">comparisons</a>; the code: <a href="{REPO}">github.com/zeronsh/zgx</a>.</li>
 </ul>
@@ -341,6 +444,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('suite', type=Path, help='docs/results/suite-macos-<date>-<commit>')
     parser.add_argument('--output', type=Path, default=ROOT / 'site')
+    parser.add_argument('--micro', type=Path, help='the microbenchmarks\' run (micro.jsonl), shown in its own section')
     args = parser.parse_args()
     suite = args.suite.resolve()
     by = {name: load(suite / name) for name in ORDER}
@@ -366,7 +470,10 @@ def main():
                     if key in c:
                         trials = c['pacing_captures'] if key in PACING_KEYS else 1 if key in BLANK_KEYS else c['repeats']
                         writer.writerow([n, c['mode'], c['framework'], key, c[key]['median'], c[key]['min'], c[key]['max'], trials])
-    (args.output / 'index.html').write_text(page(by, verdict, cards))
+    micro = load_micro(args.micro) if args.micro else None
+    if micro:
+        shutil.copy(args.micro, args.output / 'micro.jsonl')
+    (args.output / 'index.html').write_text(page(by, verdict, cards, micro))
     counts = ', '.join(f"{n} ({by[n]['trials']} trials)" for n in ORDER)
     print(f"Published {counts} at {by['heavy']['commit'][:7]} to {args.output}")
 

@@ -75,8 +75,8 @@ def main():
 
     def launch(name, command, env, **options):
         log = args.output / (name + ".log")
-        processes.append(subprocess.Popen(command, env=env, stdout=log.open("w"), stderr=subprocess.STDOUT,
-                                          **options))
+        stderr = options.pop("stderr", subprocess.STDOUT)
+        processes.append(subprocess.Popen(command, env=env, stdout=log.open("w"), stderr=stderr, **options))
         return processes[-1], log
 
     def until(what, test, seconds=15):
@@ -233,16 +233,25 @@ def main():
 
             # Taller than the output: cut to it by the compositor, the menu
             # is laid out at that height and scrolls to its last item.
-            app, log = launch("sway-tall", [str(args.probe)], dict(env, POPUP_PROBE_ITEMS="60"))
-            until("the tall probe", lambda: "READY" in log.read_text())
+            # Its protocol traffic is kept (sway-tall.trace, not a .log
+            # printed whole on a failure): now and then the menu cut to the
+            # output and shown anew, its frames presented (`popup draw …
+            # Ok(Presented)`), was not on the screen.
+            traced = args.output / "sway-tall.trace"
+            trace = traced.open("w")
+            app, log = launch("sway-tall", [str(args.probe)], dict(env, POPUP_PROBE_ITEMS="60", WAYLAND_DEBUG="client"),
+                              stderr=trace)
+            # Its present log is in the trace, with the protocol.
+            said = lambda: log.read_text() + traced.read_text(errors="replace")
+            until("the tall probe", lambda: "READY" in said())
             content = until("its window", lambda: (lambda b: b if b and b[1] == 0 else None)(box(shot("tall"), CONTENT)))
             click(*FILE)
-            until("the tall menu cut", lambda: "popup cut" in log.read_text())
-            until("it shown anew", lambda: log.read_text().count("popup configured") >= 2)
+            until("the tall menu cut", lambda: "popup cut" in said())
+            until("it shown anew", lambda: said().count("popup configured") >= 2)
             time.sleep(.3)
             menu = box(shot("tall-open"), MENU)
-            cut = re.search(r"popup cut .* to (\d+)x(\d+)", log.read_text())
-            shown = re.findall(r"popup show .* height: ([\d.]+) ", log.read_text())
+            cut = re.search(r"popup cut .* to (\d+)x(\d+)", said())
+            shown = re.findall(r"popup show .* height: ([\d.]+) ", said())
             checks["sway: tall"] = {"menu": menu, "cut": cut.group(0), "shown heights": shown}
             checks["sway: a menu taller than the output is cut to it"] = (
                 cut.groups() == ("200", str(OUTPUT[1])) and float(shown[-1]) == OUTPUT[1]
@@ -254,8 +263,8 @@ def main():
             shot("tall-scrolled")
             # The last item, 5 points of padding above the menu's bottom.
             click(menu[0] - content[0] + 100, menu[3] - content[1] - 5 - 12)
-            until("a choice", lambda: 'CHOSEN "Item' in log.read_text())
-            chosen = [line for line in log.read_text().splitlines() if line.startswith("OPEN")][-1]
+            until("a choice", lambda: 'CHOSEN "Item' in said())
+            chosen = [line for line in said().splitlines() if line.startswith("OPEN")][-1]
             checks["sway: tall menu's choice"] = chosen
             checks["sway: its last item, scrolled to, takes a click"] = 'CHOSEN "Item 60"' in chosen
             stop(app)

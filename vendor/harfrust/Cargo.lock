@@ -233,7 +233,9 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "font-types"
-version = "0.11.0"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b38ad915f6dadd993ced50848a8291a543bd41ca62bc10740d5e64e2ab4cfd7"
 dependencies = [
  "bytemuck",
 ]
@@ -247,18 +249,6 @@ dependencies = [
  "cfg-if",
  "crunchy",
  "zerocopy",
-]
-
-[[package]]
-name = "harfrust"
-version = "0.5.2"
-dependencies = [
- "bitflags",
- "bytemuck",
- "core_maths",
- "criterion",
- "read-fonts",
- "smallvec",
 ]
 
 [[package]]
@@ -404,6 +394,8 @@ dependencies = [
 [[package]]
 name = "read-fonts"
 version = "0.37.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b634fabf032fab15307ffd272149b622260f55974d9fad689292a5d33df02e5"
 dependencies = [
  "bytemuck",
  "core_maths",
@@ -665,6 +657,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "zgx-harfrust"
+version = "0.5.3"
+dependencies = [
+ "bitflags",
+ "bytemuck",
+ "core_maths",
+ "criterion",
+ "read-fonts",
+ "smallvec",
 ]
 
 [[package]]

@@ -1,0 +1,139 @@
+---
+import { Box, FileCode, MonitorSmartphone, SquareTerminal, Gauge } from 'lucide-react';
+import Base from '@/layouts/Base.astro';
+import { sets } from '../../docs.manifest.mjs';
+
+const icons = { Box, FileCode, MonitorSmartphone, SquareTerminal, Gauge } as const;
+---
+
+<Base title="Not found" image="/og/index.png">
+  <main class="nf">
+    <a href="/" class="nf-brand" aria-label="zgx home">
+      <svg width="28" height="28" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="2" y="2" width="20" height="20" rx="6" fill="var(--color-fd-primary)"></rect>
+        <path d="M7.5 8h9l-9 8h9" fill="none" stroke="var(--color-fd-background)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
+      </svg>
+    </a>
+    <p class="nf-code">404</p>
+    <h1>This page isn’t here.</h1>
+    <p class="nf-lede">It may have moved when the doc it came from changed. One of these will have it, or search from any docs page (<kbd>Ctrl</kbd> <kbd>K</kbd>).</p>
+    <ul class="nf-sets">
+      {
+        sets.map((set) => {
+          const Icon = icons[set.icon as keyof typeof icons];
+          return (
+            <li>
+              <a href={`/${set.dir}`}>
+                <span class="nf-icon" aria-hidden="true">
+                  <Icon size={16} strokeWidth={1.8} />
+                </span>
+                <span class="nf-title">{set.title}</span>
+                <span class="nf-desc">{set.description}</span>
+              </a>
+            </li>
+          );
+        })
+      }
+    </ul>
+    <a class="nf-home" href="/">Back to the home page</a>
+  </main>
+</Base>
+
+<style>
+  .nf {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    max-width: 40rem;
+    margin: 0 auto;
+    padding: clamp(4rem, 12vh, 8rem) 1.25rem 4rem;
+    text-align: center;
+  }
+  .nf-code {
+    margin: 2rem 0 0;
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    letter-spacing: 0.08em;
+    color: var(--color-fd-muted-foreground);
+  }
+  h1 {
+    margin: 0.5rem 0 0;
+    font-size: clamp(2rem, 5vw, 2.75rem);
+    letter-spacing: -0.035em;
+    font-weight: 630;
+  }
+  .nf-lede {
+    max-width: 30rem;
+    margin: 1rem 0 0;
+    line-height: 1.6;
+    color: var(--color-fd-muted-foreground);
+  }
+  kbd {
+    padding: 0.05rem 0.35rem;
+    border: 1px solid var(--color-fd-border);
+    border-radius: 0.3rem;
+    font-family: var(--font-mono);
+    font-size: 0.8em;
+  }
+  .nf-sets {
+    width: 100%;
+    margin: 2.5rem 0 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid color-mix(in oklab, var(--color-fd-foreground) 10%, transparent);
+    border-radius: 1rem;
+    text-align: left;
+    overflow: hidden;
+  }
+  .nf-sets li + li {
+    border-top: 1px solid color-mix(in oklab, var(--color-fd-foreground) 8%, transparent);
+  }
+  .nf-sets a {
+    display: grid;
+    grid-template-columns: auto 8rem minmax(0, 1fr);
+    align-items: center;
+    gap: 0.9rem;
+    padding: 0.85rem 1.1rem;
+    transition: background-color 120ms ease;
+  }
+  .nf-sets a:hover {
+    background: color-mix(in oklab, var(--color-fd-foreground) 4%, transparent);
+  }
+  .nf-icon {
+    display: grid;
+    place-items: center;
+    width: 1.9rem;
+    height: 1.9rem;
+    border-radius: 0.5rem;
+    background: color-mix(in oklab, var(--color-fd-primary) 12%, transparent);
+    color: var(--color-fd-primary);
+  }
+  .nf-title {
+    font-weight: 600;
+    font-size: 0.9375rem;
+  }
+  .nf-desc {
+    font-size: 0.8125rem;
+    color: var(--color-fd-muted-foreground);
+  }
+  @media (max-width: 560px) {
+    .nf-sets a {
+      grid-template-columns: auto minmax(0, 1fr);
+    }
+    .nf-desc {
+      grid-column: 2;
+    }
+  }
+  .nf-home {
+    margin-top: 1.75rem;
+    font-size: 0.875rem;
+    font-weight: 550;
+    color: var(--color-fd-primary);
+  }
+  a:focus-visible {
+    outline: 2px solid var(--color-fd-ring);
+    outline-offset: 2px;
+    border-radius: 0.375rem;
+  }
+</style>

@@ -1,0 +1,29 @@
+---
+title: Overview
+description: One app on macOS, Windows and Linux, and what each desktop host does differently.
+---
+
+zgx's core (state, layout, input, editing, accessibility semantics) is platform-independent Rust. `zgx-gpu` draws through wgpu, and `zgx-desktop` hosts native windows through winit, with each platform's IME, clipboard, menus, dialogs and accessibility bridge. Every pull request builds and tests on Linux, macOS and Windows.
+
+| | macOS | Windows | Linux |
+| --- | --- | --- | --- |
+| Graphics | Metal | Direct3D 12 | Vulkan, GL where no Vulkan driver is |
+| Windowing | AppKit | Win32 | Wayland and X11 |
+| Screen reader | VoiceOver | Narrator | Orca (AT-SPI) |
+| Input methods (IME) | the system's | the system's | the system's, on Wayland and X11 |
+| Web views | WebKit | WebView2 (the `webview2` feature) | not yet |
+| Terminals | Ghostty (the `ghostty` feature) | not yet | not yet |
+| Native video surfaces | [CoreVideo](/platforms/native-surfaces) | | |
+| Benchmarked against other frameworks | [yes](/performance) | [harness, not yet published](/performance/methodology#on-windows) | no |
+
+The rest of the platform, the same everywhere, is in the Rust docs: [popups, drags and windows](/rust/multi-window), [dialogs and menus](/rust/platform-services), [drag and drop](/rust/drag-drop), and [window controls](/platforms/window-controls) for title bars, glass and drag regions.
+
+## Per platform
+
+- **macOS.** Menus, drags and windows behave as AppKit's do, past the edges of their window and between windows: see [popups, drags and windows](/rust/multi-window). Frames are paced to the display's refresh, and an idle window does no work.
+- **[Windows](/platforms/windows).** The MSVC toolchain; presentation, title bars, popups, touch and pen, system settings, WebView2, and shipping an app.
+- **[Linux](/platforms/linux).** Wayland and X11: title bars, the caret, fonts, file dialogs, popups, graphics fallbacks, frame pacing, input method candidates and drags.
+
+## How it is verified
+
+Behaviour on each platform is checked by native probes: real windows driven by real input, IME, clipboard and accessibility clients, run in CI. The [validation record](/platforms/validation) says what each check establishes, and what it doesn't.

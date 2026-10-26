@@ -4,10 +4,102 @@ zgx is on crates.io from 0.1.0 (`zgx = "0.1"`); this lists what changed for apps
 
 ## Unreleased
 
-### Changed
+### Fixed
+
+- A `display: none` node's children report a 0x0 box (`Scene::bounds`, `on_resize`, `zgx inspect`), as the node itself did and as CSS gives them: they reported their content's size at no width. They are no longer measured again each time their parent lays out.
+
+## 0.1.2 (2026-10-26)
+
+### Fixed
+
+**A Luau app starts in a new project.** Since luau0-src 0.22.1 (Luau 744, 2026-10-24), an app depending on zgx-script 0.1.0 or 0.1.1 that resolved its dependencies afresh panicked as its first script loaded: "Error configuring Luau … attempt to load a text chunk (mode is 'b')". zgx's own lockfile held 0.22.0, so its tests never met it. `zgx-mlua` 0.12.3 holds Luau at 0.22.0 (Luau 740) until mlua works with 744, and a release now checks that a new app, resolving every dependency afresh, runs a script.
+- *Migrate:* depend on 0.1.2 (`cargo update -p zgx-script`). On 0.1.0 or 0.1.1, `cargo update -p luau0-src --precise 0.22.0+luau740` fixes an app.
+
+Nothing else changed since 0.1.1.
+
+## 0.1.1 (2026-10-26)
+
+A patch: a Luau app runs as before, and Rust code builds as before unless it matches every variant of one of the enums below or writes one of the structs below field by field (each says what to add). Two fixes change what a box looks like, as CSS draws it; each says what to check.
+
+### Changed: new variants and fields
+
+New features add variants to these enums and fields to these structs. Code naming every variant, or every field, adds the new one. `DragPhase`, `profile::Phase` and `zgx_script::Value` are `#[non_exhaustive]` from now on, so a `match` on one ends with `_` once, and a variant added to them later breaks nothing.
+- `zgx::input::DragPhase::Spring` (spring-loading, below): a `match` on a drag's phase ends with `_` (`Spring` before it to handle it).
+- `zgx::profile::Phase::Wait` (waiting for the display, apart from a frame's work): a `match` ends with `_`.
+- `zgx::semantics::Role::Article` (`role = "article"`): a `match` on a role adds `Article`. It comes last, so the other roles keep their values (`as` casts).
+- `zgx_script::Value::Image` (a `Bitmap` in state): a `match` on a script value ends with `_`.
+- `zgx_desktop::WindowOptions` gains `level`, `shadow` and `covers_display`; `zgx::decoration::Decoration` `clip_feather`; `zgx::scene::RoundRect` `feather`; `zgx_gpu::GpuStats` `patched_items`. One written field by field ends with `..Default::default()`.
+- `GpuRenderer::debug_stencil` and `debug_stamped_frames` do nothing and count nothing (deprecated): frames no longer draw through a stencil.
+
+### Fixed
+
+**A rounded box that clips cuts its children at its padding box**, inside its border with each corner's radius less the border, as CSS's `overflow: hidden` does: clipped at its outer edge with its full radius, a child filling a bordered card painted over the border where it curves.
+- *Migrate:* a child meant to reach the box's outer edge, under its border, takes `border_over` on the box: the border then takes no room and paints over the child.
 
 **Rich text shrinks no further than its longest word**, as plain text and CSS's `min-width: auto` do: a `rich_text` (`ui.rich`) squeezed in a row narrowed to a single glyph's width before, one glyph a line.
 - *Migrate:* where a paragraph should break inside its words to fit a narrow row, state `.min_w(0.)` (`min_w = 0`).
+
+- An image's `dither` and `characters` follow a state or computed value, as `src` does, and apply to an image with a `fallback` too (`View::dither` panicked there as the script lowered).
+- An image drawn in a cached layer (its own opacity, `layer = true`) repaints as the box lending it shader uniforms changes them: its characters' reveal no longer freezes.
+- A drag that leaves a destination and comes back waits out the spring delay again (it sprang at once, or never again).
+- A focused controlled input (`value = function`) shows a change made elsewhere at once (a chat's composer cleared on send kept the sent text); its answer to an edit still waits until it is left.
+- A fixed box that shrank grows back when its content outgrows where it stopped.
+- SVGs keep their proportions in a box of others' (SVG's default `preserveAspectRatio`) rather than stretching to it.
+- A window's first layout is at the size it opened at, not the size asked for and again on `Resized`.
+- X11: an app no longer hangs when its input method (ibus-x11) has gone. Wayland: a window left maximized opens maximized from its first frame.
+- `MarkdownBlock` (`ui.markdown`'s blocks) is typed by its `t`: refine on it (`if b.t == "code"`) and its fields are typed. `zgx check` may now point at a field read without refining; nothing changes as it runs.
+
+### Drawing and animation
+
+- Images draw as characters (`characters`: an ASCII-art rendering in a 5 by 7 font in the shader, no glyph texture), revealed from a front measured in the window that every image shares, and dithered (`dither`, a Bayer threshold per dot) ([media](docs/reference/media.md)). The software renderer draws them too.
+- Image effects compile in a pipeline of their own when an image first draws with one: an app that draws none pays nothing for them (about 5 M instructions at start and 3 K a frame, had they been in the quad shader).
+- `clip_feather`: a rounded clip fades its content out over a distance inside its edge, and a clip inset rounds its inset box, so a round box stays round as it closes in.
+- [`agents_intro`](crates/zgx-desktop/examples/agents_intro) is a first-launch intro made of them: a picture materialising out of characters over the desktop, cards flying in. Its agents are placed in percentages of the scene.
+- Windows (`WindowOptions`): `level` (always on top), `shadow` and `covers_display`.
+- anime: a delayed tween of a property another animation holds takes it over when it starts, from where it was left, rather than cancelling it when made.
+- Canvases pan and zoom without drawing again (`View::canvas_view`; `view = state` in scripts), over a grid of dots or lines drawn in Rust (`View::grid_fill`, `bg_grid`). `ui.canvas { each = state, draw_item = … }` draws a list's items one by one, again only those written.
+- An image shows a `Bitmap` (`src = bitmap`, a state or function of one), and images go through the clipboard (`Platform::clipboard_image`, `set_clipboard_image`; `ui.clipboard.read_image` and `write_image` in scripts, off the UI thread), on Wayland too.
+- **Scrolling moves content by whole device pixels**, as Safari's and AppKit's do: box edges and hairlines no longer shimmer as they move, and text no longer drifts from its background by half a pixel (`Scene::set_pixel_scale`).
+
+### Drag and drop
+
+- **A drag resting on a destination springs it open** (`DragPhase::Spring`; `on_drag_spring` in scripts, `false` to decline) after the system's spring-loading delay (macOS's setting, 0.5 s elsewhere), or at Space, once a visit, as Finder's folders and Safari's tabs do.
+- A drag goes on when its source is hidden or removed (a tab switched away from), as in browsers and AppKit; a source disabled or under a modal still cancels it.
+- `drag_preview_anchored` hangs a preview by a fraction of its own size (below the pointer, say). `Ui::snapshot` (`el:snapshot`, `term:snapshot`) pictures a node from the window's last frame, for a tab's preview of its panes (macOS).
+
+### Scripting
+
+- `ui.markdown_view` draws markdown (paragraphs, headings, lists, quotes, tables, code blocks with a Copy button), selectable, in the theme's colours: as its text changes it builds only the blocks that did, and a reply streaming in grows its last block in place.
+- `ui.resource(load, { initial })` loads data in a task as states (`data`, `loading`, `error`, `status`, `reload`), again when what it read changes; `ui.form { fields, validate, submit }` checks fields as they are typed and controls bind with `field = form.fields.email`; `ui.try` gives a value or its error as text; `ui.task` returns a `Task` that cancels.
+- `provide = { name = value }` gives a subtree values that `ui.use_context(name, default)` reads, as React's context does.
+- `ui.list` takes `data` (rows built from their items, as `ui.each`'s), `key` (rows follow their items as the list changes), `measured = true` (wrapped rows measured as they mount) with `follow` (a chat resting at its end), and its element scrolls to a row (`el:scroll_to_row(i, { align })`; `NodeHandle::scroll_to_row` in Rust).
+- `ui.text { count }` takes a state as its text, followed in Rust. `ui.button { variant = "primary" }` (`"ghost"`, `"danger"`). `role = "article"` names a message or post.
+- A state path picks a list's item by its fields (`{ "c1", { id = "m5" }, "text" }`), and `state:append(path, text)` adds text there without copying it into the script. `ui.sorted`'s `filter` takes fields' tests, read in Rust (`{ sector = "Tech", symbol = { contains = "AB" } }`).
+- `ui.fetch` hears a response as it arrives (`on_chunk`, and `on_event` for server-sent events), and a cancelled fetch stops; a host streams with `ScriptHost::streaming_fetcher`.
+- Copying a selection over a Luau list copies its rows not mounted (their text, or `row_text`), and copied HTML keeps headings and links.
+- `zgx lint`: `canvas-view` (a canvas drawing again to pan or zoom), `list-measured` (wrapped text in a list of fixed rows) and `draw-item-state` (a `draw_item` reading state).
+- [The chat example](crates/zgx-script/examples/chat) streams replies as markdown; [the team example](crates/zgx-script/examples/team) loads a list, edits it in a modal form and confirms a removal with the above.
+
+### Devtools for agents
+
+- **`zgx inspect`** drives a running app (`zgx-run --inspect`, or `ZGX_INSPECT_SOCKET=1`) over a socket only its user can open, text by default and `--json`: `tree`, `node` (with the script line that made it), `find`, `state` and `set`, `errors`, `lint`, `frames` (each frame's time by phase, the states written, what ran and why), `snapshot` (a node as the window last drew it, as a PNG), and `click`, `type`, `key`, `scroll`, `command`, `wait`. `record` keeps the gestures a window receives (a trackpad's fingers and momentum) as a text tape, and `replay` plays one back through the window's own input path, answering with its frames: how many, the time between them, those shown late. [Read once](docs/agents/inspect.md). It costs nothing unless built with zgx-script's `inspect` feature.
+- `zgx inspect mcp` serves them as MCP tools on stdio (`zgx_tree` to `zgx_record` and `zgx_replay`): `claude mcp add zgx -- zgx inspect mcp` adds them.
+- `zgx_script::driver` is their vocabulary for tests too: targets (`#id`, `"Send"`, `role:button`, `@12`, `#list row 3`, `a >> b`, `[2]`), actions and a compact tree; `TestApp` takes targets where it took ids (a bare id means what it did) and gains `target`, `tree` and `keys`.
+- `zgx_run::serve_commands(&host, cx)` gives a Rust host making its own window its script's commands as the menu bar and their shortcuts.
+
+### Controls and platforms
+
+- A focused editor's caret blinks at the system's rate, stopping after its timeout (`Ui::set_caret_blink`), and is as thick as Windows' text cursor setting.
+- Windows: a second press doubles a click only inside the system's double-click box; a drag starts past the system's threshold; a window's only tab moves the window; copied lines end in CR LF; a closed window gives back its icons' GDI objects; UI Automation raises only the events a client listens for.
+- Linux: a title bar's double click does what GNOME's setting says; on X11 the session's XSETTINGS interface font comes first, as GTK takes it.
+- Assistive technology hears geometry alone change at most every 100 ms.
+
+### Performance
+
+- Text shapes a variable font's advances and GPOS deltas once for its instance (`zgx-harfrust`, a fork published from this release): heavy with the system font −9%, then −5%. Kept frames patch boxes straight into their places, and retained layout skips unchanged children.
+- `ui.sorted` and list states: the dashboard's filter keystroke 88 → 48 M instructions, its feed tick 43.9 → 23.5 M; mail's archive 26.3 → 13.1 M; a find-all keystroke 13.0 → 7.9 M; a streamed chat token 926 → 597 K. Sketch's pan step 26.5 → 3.1 M. Select-all over a long document 225 → 2 ms.
+- macOS: the window server spends 3–4 points of a core less on a window's frames, and frames at the display's full rate present as its tiles too, with no video layer or CoreMedia thread, one ready early waiting for the refresh the others land on; a start is 7 M instructions sooner. Windows: shaders FXC compiles are kept between launches (first text 330 → 278 ms) and a frame's wake takes one message round.
+- Damage is no longer drawn through a stencil of it (0.1.0's line): windows had stopped using it, and headless frames draw their regions whole again.
 
 ## 0.1.0 (2026-10-25)
 

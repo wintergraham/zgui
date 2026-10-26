@@ -137,6 +137,19 @@ ui.theme.tokens {
 			tile_pad = 5,
 			tile_text = 10.5,
 		},
+		-- A dragged tab: a small window of what it holds, its panes laid out
+		-- as they are, each a picture of what it shows.
+		mini = {
+			width = 260,
+			-- A tall pane's picture is no taller than this.
+			max_h = 200,
+			pad = 6,
+			gap = 6,
+			radius = 12,
+			pane_gap = 4,
+			pane_radius = 6,
+			bg = "{glass.tint}",
+		},
 		-- Claude's colour, whatever the theme.
 		claude = "#d97757",
 	},

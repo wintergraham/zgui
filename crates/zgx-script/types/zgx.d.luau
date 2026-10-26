@@ -395,8 +395,9 @@ export type Cursor =
 	| "zoom-out"
 
 -- A key into a state's table, an index into its list (from 1), or a path
--- of them: `{ "tabs", 3, "title" }`.
-export type StatePath = string | number | { string | number }
+-- of them: `{ "tabs", 3, "title" }`. A table step picks a list's first
+-- item with those fields: `{ "c1", { id = "m5" }, "text" }`.
+export type StatePath = string | number | { string | number | { [string]: any } }
 
 ---------------------------------------------------------------------------
 -- State.
@@ -421,6 +422,9 @@ export type State<T> = {
 	-- nil removes the key. The value's type depends on the path, which Luau
 	-- cannot follow: it is not checked.
 	set_key: (self: State<T>, path: StatePath, value: any) -> (),
+	-- Adds `text` to the string at `path` (or puts it there), in Rust: a
+	-- reply's token, without the text so far copied into the script.
+	append: (self: State<T>, path: StatePath, text: string) -> (),
 	-- A shallow merge into the table.
 	patch: (self: State<T>, fields: Partial<T>) -> (),
 	-- Sets `not value` (a boolean).
@@ -500,7 +504,15 @@ export type FetchOptions = {
 	headers: { [string]: string }?,
 	-- Text, or data sent as JSON (with its content type).
 	body: unknown?,
+	-- The body's text as it arrives (a reply streaming), in whole
+	-- characters; the response's `body` is then empty unless it failed.
+	on_chunk: ((text: string) -> ())?,
+	-- Each server-sent event (`text/event-stream`) as it ends: `event`
+	-- ("message" unless named), `data` (its lines joined), `id`.
+	on_event: ((event: ServerEvent) -> ())?,
 }
+-- One server-sent event (`ui.fetch`'s `on_event`).
+export type ServerEvent = { event: string, data: string, id: string? }
 -- What `ui.fetch` settles with (a promise's `value`).
 export type Response = {
 	status: number,
@@ -542,6 +554,9 @@ export type Promise<T = unknown> = {
 	-- Inside `ui.task`: wait for it, and return its value (or raise its
 	-- error, the host's message as it wrote it).
 	await: (self: Promise<T>) -> T,
+	-- Reject it with "cancelled" (reported nowhere), stopping a fetch's
+	-- request; an action's work goes on, its answer unheard.
+	cancel: (self: Promise<T>) -> (),
 }
 
 -- `ui.form`'s spec: each field's first value, its checks (a message, or
@@ -582,8 +597,18 @@ export type Form = {
 	submit: () -> (),
 	-- Back to the first values (or `values`), nothing shown wrong.
 	reset: (values: { [string]: any }?) -> (),
+	-- Stop a submit under way (a Cancel button): not `pending` any more,
+	-- and what it awaits is not heard. A form gone cancels its own.
+	cancel: () -> (),
 	-- The values now, as a table.
 	snapshot: () -> { [string]: any },
+}
+
+-- A task (`ui.task`): `cancel()` stops it at the await it is at, never to
+-- go on (what it awaits still settles, unheard).
+export type Task = {
+	cancel: (self: Task) -> (),
+	cancelled: boolean,
 }
 
 -- `ui.resource`'s data loaded in a task, and how its loading goes.
@@ -642,6 +667,11 @@ declare extern type Element with
 	-- The selection replaced by `text`, as typing it would (one step of
 	-- undo): a search's Replace.
 	function replace_selection(self, text: string): boolean
+	-- A picture of it as the window last showed it, at most `max_width`
+	-- pixels wide (480 if not given): the `src` of an image showing it,
+	-- replaced on each call. Nil if it is not laid out or the host takes
+	-- none; native views in it show as what is under them.
+	function snapshot(self, max_width: number?): string?
 	-- Clear keyboard focus if it is on the element or inside it.
 	function blur(self): ()
 end
@@ -714,7 +744,22 @@ export type MarkdownOptions = {
 	-- Repository paths (`src/main.rs:12`) are files: runs with `f`.
 	paths: boolean?,
 }
-export type MarkdownBlock = { t: string, [string]: any }
+-- A run of a block's text: `x`, and whether it is bold (`b`), italic
+-- (`i`), code (`c`), struck (`s`), a link (`a`, where to) or a repository
+-- file (`f`, with `paths`).
+export type MarkdownRun = { x: string, b: boolean?, i: boolean?, c: boolean?, s: boolean?, a: string?, f: string? }
+-- A block of `ui.markdown`'s, by its `t`: refine on it (`if b.t == "code"`)
+-- and its fields are typed.
+export type MarkdownBlock =
+	{ t: "p", s: { MarkdownRun }, tight: boolean? }
+	| { t: "h", l: number, s: { MarkdownRun } }
+	| { t: "code", lang: string, text: string, [string]: any }
+	| { t: "ul", items: { { MarkdownBlock } } }
+	| { t: "ol", start: number, items: { { MarkdownBlock } } }
+	| { t: "quote", b: { MarkdownBlock } }
+	| { t: "hr" }
+	| { t: "table", head: { { MarkdownRun } }, rows: { { { MarkdownRun } } } }
+	| { t: "img", src: string, alt: string }
 
 export type StrokeOptions = {
 	cap: LineCap?,
@@ -832,6 +877,10 @@ declare extern type Term with
 	function binding(self, action: string): ()
 	-- Whether closing would end something other than an idle shell.
 	function needs_confirm(self): boolean
+	-- A picture of what it shows now, at most `max_width` pixels wide (480
+	-- if not given): the `src` of a `ui.image` showing it, replaced on each
+	-- call; nil before it shows, or where the platform takes none.
+	function snapshot(self, max_width: number?): string?
 	-- End the session (its process is hung up).
 	function close(self): ()
 end
@@ -1117,9 +1166,24 @@ export type Styles = {
 	-- Lay its edges on whole points (crisp borders where percentages leave fractions).
 	snap: boolean?,
 	clip_inset: Sides?,
+	-- Where it clips (overflow = "hidden"), its content fades out over this
+	-- many points inside its rounded edge instead of being cut: with a large
+	-- `rounded` and an animated clip inset, a soft oval that opens.
+	clip_feather: number?,
 	layer: boolean?,
 	fit: Fit?,
 	tint: Color?,
+	-- An image drawn dithered as Zeron dithers wallpapers, in dots this many
+	-- points square: each lit to its colour's full value or dimmed to 8% by a
+	-- 4x4 Bayer threshold, on the GPU as it draws (it follows the image as it
+	-- moves and scales).
+	dither: number?,
+	-- An image drawn as characters, as an ASCII art generator draws a photo:
+	-- cells of a 5 by 7 pixel font (each pixel this many points), a glyph each
+	-- by the brightness there, lit in its colour over the image. Its
+	-- `shader_params` reveal it cell by cell from the window's middle (see the
+	-- reference): animate `shaderParam0` (the front) to have it materialise.
+	characters: number?,
 	cursor: Cursor?,
 	-- Text.
 	text_size: Num?,
@@ -1258,9 +1322,12 @@ export type StyleProps = {
 	fade_overflow: Reactive<boolean>?,
 	snap: Reactive<boolean>?,
 	clip_inset: Reactive<Sides>?,
+	clip_feather: Reactive<number>?,
 	layer: Reactive<boolean>?,
 	fit: Reactive<Fit>?,
 	tint: Reactive<Color>?,
+	dither: number?,
+	characters: number?,
 	cursor: Reactive<Cursor>?,
 	-- Text.
 	text_size: Reactive<Num>?,
@@ -1311,6 +1378,7 @@ export type AriaRole =
 	| "dialog"
 	| "img"
 	| "tabpanel"
+	| "article"
 	| "radiogroup"
 	| "radio"
 	| "switch"
@@ -1330,6 +1398,10 @@ export type NodeProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Reactive<ThemeSpec>?,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: { [string]: any }?,
 	-- Identity, for selectors, refs and animations.
 	id: string?,
 	-- Space-separated class names.
@@ -1456,6 +1528,13 @@ export type NodeProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: (() -> any)?,
 	drag_preview: ((payload: any) -> Node)?,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: { number }?,
+	drag_preview_offset: { number }?,
 	on_drag_end: ((payload: any, accepted: boolean) -> ...unknown)?,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -1472,6 +1551,10 @@ export type NodeProps = {
 	on_drag_over: ((payload: any, e: DragPoint) -> ...unknown)?,
 	on_drag_leave: ((payload: any) -> ...unknown)?,
 	on_drop: ((payload: any, e: DragPoint) -> ...unknown)?,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: ((payload: any) -> boolean?)?,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -1595,9 +1678,12 @@ export type Props = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -1631,6 +1717,10 @@ export type Props = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -1757,6 +1847,13 @@ export type Props = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -1773,6 +1870,10 @@ export type Props = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -1882,9 +1983,12 @@ export type Props_fade_sides = Reactive<Sides>?
 export type Props_fade_overflow = Reactive<boolean>?
 export type Props_snap = Reactive<boolean>?
 export type Props_clip_inset = Reactive<Sides>?
+export type Props_clip_feather = Reactive<number>?
 export type Props_layer = Reactive<boolean>?
 export type Props_fit = Reactive<Fit>?
 export type Props_tint = Reactive<Color>?
+export type Props_dither = number?
+export type Props_characters = number?
 export type Props_cursor = Reactive<Cursor>?
 export type Props_text_size = Reactive<Num>?
 export type Props_weight = Reactive<Num>?
@@ -1911,6 +2015,7 @@ export type Props_skew_x = Reactive<number>?
 export type Props_skew_y = Reactive<number>?
 export type Props_origin = Reactive<Pair>?
 export type Props_theme = Reactive<ThemeSpec>?
+export type Props_provide = { [string]: any }?
 export type Props_id = string?
 export type Props_class = string?
 export type Props_variants = (Variants | ((choice: any) -> Variants))?
@@ -1966,6 +2071,8 @@ export type Props_on_resize = ((size: Size, element: Element) -> ...unknown)?
 export type Props_on_visible = ((visible: boolean, element: Element) -> ...unknown)?
 export type Props_on_drag = (() -> any)?
 export type Props_drag_preview = ((payload: any) -> Node)?
+export type Props_drag_preview_anchor = { number }?
+export type Props_drag_preview_offset = { number }?
 export type Props_on_drag_end = ((payload: any, accepted: boolean) -> ...unknown)?
 export type Props_drag_export = ((payload: any) -> DragExport?)?
 export type Props_on_drag_outside = ((payload: any, e: { x: number, y: number, grab_x: number, grab_y: number }) -> ...unknown)?
@@ -1974,6 +2081,7 @@ export type Props_drop_when = ((payload: any) -> unknown)?
 export type Props_on_drag_over = ((payload: any, e: DragPoint) -> ...unknown)?
 export type Props_on_drag_leave = ((payload: any) -> ...unknown)?
 export type Props_on_drop = ((payload: any, e: DragPoint) -> ...unknown)?
+export type Props_on_drag_spring = ((payload: any) -> boolean?)?
 export type Props_context_menu = ((e: PointerEvent) -> ...{ Node }?)?
 export type Props_context_menu_style = Styles?
 export type Props_context_menu_below = boolean?
@@ -2081,9 +2189,12 @@ export type ContainerProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -2117,6 +2228,10 @@ export type ContainerProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -2243,6 +2358,13 @@ export type ContainerProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -2259,6 +2381,10 @@ export type ContainerProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -2270,6 +2396,10 @@ export type ContainerProps = {
 	-- rather than at the pointer.
 	context_menu_below: Props_context_menu_below,
 	[number]: Child,
+	-- A button's look where its own styles don't say: "primary" (the
+	-- accent), "ghost" (no background until hovered), "danger", "default".
+	-- Other containers don't take it.
+	variant: ("primary" | "ghost" | "danger" | "default")?,
 	-- The name assistive technology reads for it, instead of its text: a
 	-- switch, a button showing only an icon. A state or function is
 	-- followed: a list row's name made from what it shows now.
@@ -2378,9 +2508,12 @@ export type ScrollProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -2414,6 +2547,10 @@ export type ScrollProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -2540,6 +2677,13 @@ export type ScrollProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -2556,6 +2700,10 @@ export type ScrollProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -2567,6 +2715,10 @@ export type ScrollProps = {
 	-- rather than at the pointer.
 	context_menu_below: Props_context_menu_below,
 	[number]: Child,
+	-- A button's look where its own styles don't say: "primary" (the
+	-- accent), "ghost" (no background until hovered), "danger", "default".
+	-- Other containers don't take it.
+	variant: ("primary" | "ghost" | "danger" | "default")?,
 	-- The name assistive technology reads for it, instead of its text: a
 	-- switch, a button showing only an icon. A state or function is
 	-- followed: a list row's name made from what it shows now.
@@ -2682,9 +2834,12 @@ export type TextProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -2718,6 +2873,10 @@ export type TextProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -2844,6 +3003,13 @@ export type TextProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -2860,6 +3026,319 @@ export type TextProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
+	-- A secondary click (control-click on macOS) shows the returned
+	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
+	-- returning nil (or nothing) shows none.
+	context_menu: Props_context_menu,
+	-- The context menu panel's look: bg, rounded, p, gap, backdrop_blur,
+	-- border, shadow, w, …
+	context_menu_style: Props_context_menu_style,
+	-- Open the context menu under the node, from its left edge (a tab's),
+	-- rather than at the pointer.
+	context_menu_below: Props_context_menu_below,
+	-- The text: a string or template, a number, a function, or a state
+	-- (its value, followed as a template's is).
+	[number]: Text | Readable<any>,
+	-- Show a string as it is, braces and all, not as a template: for data
+	-- (code, titles, messages) that might hold `{name}`.
+	literal: boolean?,
+}
+-- `ui.markdown_view`'s: the markdown first (a string, a template, a state's
+-- text or a function), the rest a column's styles.
+export type MarkdownViewProps = {
+	-- Size and position.
+	w: Props_w,
+	h: Props_h,
+	size: Props_size,
+	min_w: Props_min_w,
+	max_w: Props_max_w,
+	min_h: Props_min_h,
+	max_h: Props_max_h,
+	w_full: Props_w_full,
+	h_full: Props_h_full,
+	aspect: Props_aspect,
+	absolute: Props_absolute,
+	relative: Props_relative,
+	top: Props_top,
+	left: Props_left,
+	inset_start: Props_inset_start,
+	inset_end: Props_inset_end,
+	right: Props_right,
+	bottom: Props_bottom,
+	-- Spacing.
+	p: Props_p,
+	px: Props_px,
+	py: Props_py,
+	pt: Props_pt,
+	pr: Props_pr,
+	pb: Props_pb,
+	pl: Props_pl,
+	ps: Props_ps,
+	pe: Props_pe,
+	m: Props_m,
+	mx: Props_mx,
+	my: Props_my,
+	mt: Props_mt,
+	mr: Props_mr,
+	mb: Props_mb,
+	ml: Props_ml,
+	ms: Props_ms,
+	me: Props_me,
+	gap: Props_gap,
+	gap_x: Props_gap_x,
+	gap_y: Props_gap_y,
+	-- Flex and grid.
+	direction: Props_direction,
+	dir: Props_dir,
+	grow: Props_grow,
+	shrink: Props_shrink,
+	basis: Props_basis,
+	flex_wrap: Props_flex_wrap,
+	wrap_reverse: Props_wrap_reverse,
+	items: Props_items,
+	justify: Props_justify,
+	self: Props_self,
+	content: Props_content,
+	grid: Props_grid,
+	cols: Props_cols,
+	rows: Props_rows,
+	col_start: Props_col_start,
+	row_start: Props_row_start,
+	col_span: Props_col_span,
+	row_span: Props_row_span,
+	col_span_full: Props_col_span_full,
+	row_span_full: Props_row_span_full,
+	overflow: Props_overflow,
+	overflow_x: Props_overflow_x,
+	overflow_y: Props_overflow_y,
+	hidden: Props_hidden,
+	invisible: Props_invisible,
+	-- Paint.
+	bg: Props_bg,
+	gradient: Props_gradient,
+	color: Props_color,
+	bg_image: Props_bg_image,
+	bg_fit: Props_bg_fit,
+	rounded: Props_rounded,
+	corners: Props_corners,
+	rounded_tl: Props_rounded_tl,
+	rounded_tr: Props_rounded_tr,
+	rounded_br: Props_rounded_br,
+	rounded_bl: Props_rounded_bl,
+	border: Props_border,
+	border_sides: Props_border_sides,
+	border_color: Props_border_color,
+	border_over: Props_border_over,
+	-- A function may return nil: a solid border.
+	border_dash: Props_border_dash,
+	outline: Props_outline,
+	outline_color: Props_outline_color,
+	outline_offset: Props_outline_offset,
+	shadow: Props_shadow,
+	inset_shadow: Props_inset_shadow,
+	opacity: Props_opacity,
+	brightness: Props_brightness,
+	contrast: Props_contrast,
+	saturate: Props_saturate,
+	blur: Props_blur,
+	backdrop_blur: Props_backdrop_blur,
+	fade: Props_fade,
+	fade_x: Props_fade_x,
+	fade_sides: Props_fade_sides,
+	fade_overflow: Props_fade_overflow,
+	snap: Props_snap,
+	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
+	layer: Props_layer,
+	fit: Props_fit,
+	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
+	cursor: Props_cursor,
+	-- Text.
+	text_size: Props_text_size,
+	weight: Props_weight,
+	bold: Props_bold,
+	italic: Props_italic,
+	align: Props_align,
+	font: Props_font,
+	wrap: Props_wrap,
+	truncate: Props_truncate,
+	lines: Props_lines,
+	line_height: Props_line_height,
+	letter_spacing: Props_letter_spacing,
+	-- Tabular figures: every digit the same width.
+	tabular: Props_tabular,
+	-- Underlined text (inherited, as CSS's `text-decoration`), and how far
+	-- below the baseline the line sits.
+	underline: Props_underline,
+	underline_offset: Props_underline_offset,
+	-- Transforms: after layout, about `origin` (fractions of the node).
+	x: Props_x,
+	y: Props_y,
+	scale: Props_scale,
+	scale_x: Props_scale_x,
+	scale_y: Props_scale_y,
+	rotate: Props_rotate,
+	skew: Props_skew,
+	skew_x: Props_skew_x,
+	skew_y: Props_skew_y,
+	origin: Props_origin,
+	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
+	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
+	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
+	-- Identity, for selectors, refs and animations.
+	id: Props_id,
+	-- Space-separated class names.
+	class: Props_class,
+	-- Styles chosen from a `ui.variants` definition: `button { tone =
+	-- "ghost" }`, or the recipe itself for its defaults. The element's own
+	-- properties win over them.
+	variants: Props_variants,
+	ref: Props_ref,
+	focusable: Props_focusable,
+	-- What assistive technology takes it for (ARIA's `role`), instead of
+	-- what it is: a clickable row as an "option", a row of buttons as a
+	-- "toolbar". It keeps what it does.
+	role: Props_role,
+	-- A section title of this level, 1 to 6 (`h1`…`h6`): screen readers
+	-- list headings and move between them.
+	heading: Props_heading,
+	-- Whether this option, tab or item is the chosen one (`aria-selected`).
+	selected: Props_selected,
+	-- Whether a switch, checkbox or radio of the app's own is on
+	-- (`aria-checked`), and whether what a control opens shows
+	-- (`aria-expanded`): a custom disclosure's.
+	checked: Props_checked,
+	expanded: Props_expanded,
+	-- Announce changes to the text in it (`aria-live`): a count, a "Sent"
+	-- note, a message arriving.
+	live: Props_live,
+	-- Read after its name, as a hint (`aria-description`).
+	description: Props_description,
+	-- What is wrong with its value (`aria-invalid`), followed: nil while it
+	-- is fine. Assistive technology hears it with the field.
+	error: Props_error,
+	-- Left out of the accessibility tree with what it holds (`aria-hidden`):
+	-- decoration, or what is said elsewhere.
+	aria_hidden: Props_aria_hidden,
+	-- One Tab stop for the focusable things inside; the arrows along this
+	-- axis (and Home, End) move among them, as ARIA's composite widgets
+	-- behave. `role = "listbox"` is vertical, "toolbar" and "tablist"
+	-- horizontal, without asking.
+	focus_group: Props_focus_group,
+	-- A press on it (or on what inside takes no input) moves the window; a
+	-- double click zooms it. Buttons and inputs inside keep their clicks.
+	-- CSS pointer-events: "none" (or false) lets the pointer through to what
+	-- is under the node (presses, hover, the wheel, drops, a native view);
+	-- descendants with handlers still take it. A state or function follows.
+	pointer_events: Props_pointer_events,
+	window_drag: Props_window_drag,
+	-- The pointer selects the text in it and everything it holds, as on a
+	-- web page (CSS `user-select: text`): drag, double/triple press, Shift,
+	-- ⌘A / Ctrl+A, ⌘C / Ctrl+C. `false` keeps a part out. Off unless set.
+	selectable: Props_selectable,
+	-- A selectable node's highlight and selected-text colours (CSS
+	-- `::selection`), over the theme's `$selection` and `$selection.text`
+	-- tokens; a state or function follows.
+	selection_color: Props_selection_color,
+	selected_text_color: Props_selected_text_color,
+	-- Shown over it while the pointer rests on it (after 300 ms; at once
+	-- within a second of another): text in the theme's look, or a node of
+	-- the app's own. Above it, centred, unless `tooltip_placement` says.
+	tooltip: Props_tooltip,
+	tooltip_placement: Props_tooltip_placement,
+	-- A hover card the pointer can move into and click in: it stays while
+	-- the pointer is over the node or the card.
+	tooltip_interactive: Props_tooltip_interactive,
+	-- Milliseconds the pointer rests before it shows (300; once one
+	-- shows, the next shows at once). Keyboard focus shows it too.
+	tooltip_delay: Props_tooltip_delay,
+	-- A condition (true disables), or the styles it shows while disabled.
+	disabled: Props_disabled,
+	hover: Props_hover,
+	active: Props_active,
+	focus: Props_focus,
+	-- Size animation ("height", "width", "size"; `true` is "height") or
+	-- position animation ("position"). A `layout_id` node mounting as
+	-- another with the same id unmounts (or while it is mounted) moves and
+	-- scales from that one's box.
+	layout: Props_layout,
+	layout_id: Props_layout_id,
+	layout_ease: Props_layout_ease,
+	-- Milliseconds.
+	layout_duration: Props_layout_duration,
+	layout_enter: Props_layout_enter,
+	layout_clip: Props_layout_clip,
+	-- The content shows through the bitmap's alpha: `mask = bitmap`, or
+	-- `{ bitmap, w = …, h = …, x = …, y = …, sweep = … }`.
+	mask: Props_mask,
+	bg_shader: Props_bg_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	shader_params: Props_shader_params,
+	-- Events.
+	on_click: Props_on_click,
+	-- Primary pointer down and up.
+	on_press: Props_on_press,
+	on_release: Props_on_release,
+	on_hover: Props_on_hover,
+	on_pointer_move: Props_on_pointer_move,
+	-- Return true to consume the key.
+	on_key: Props_on_key,
+	on_key_up: Props_on_key_up,
+	on_focus: Props_on_focus,
+	on_blur: Props_on_blur,
+	-- Return true to take the gesture from the scroll views around it.
+	on_wheel: Props_on_wheel,
+	on_pinch: Props_on_pinch,
+	on_mount: Props_on_mount,
+	-- When layout gives it a new size, and at its first layout.
+	on_resize: Props_on_resize,
+	-- When any of it comes into view or all of it leaves (inside every
+	-- clip and scroll viewport above it), and at its first layout: for
+	-- building what only matters on screen.
+	on_visible: Props_on_visible,
+	-- Drag and drop within the window. Payloads are what `on_drag`
+	-- returns: the script's own plain values, so they are `any` here.
+	-- A source: `on_drag` returns the payload once the pointer moves 4
+	-- points; `drag_preview` builds what follows the pointer.
+	on_drag: Props_on_drag,
+	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
+	on_drag_end: Props_on_drag_end,
+	-- What the drag carries to other apps as it leaves the window (macOS):
+	-- Finder takes files, Mail text, a browser links.
+	drag_export: Props_drag_export,
+	-- Released outside every window of the app (macOS): a tab torn off its
+	-- window. `grab_x`/`grab_y` are where the source was held.
+	on_drag_outside: Props_on_drag_outside,
+	-- The drag moves its window instead, with no preview (macOS): a
+	-- window's only tab. Dropped on another window's destination it drops
+	-- there; elsewhere the window stays where it was let go.
+	drag_moves_window: Props_drag_moves_window,
+	-- A destination: `drop_when` filters payloads (default: all).
+	drop_when: Props_drop_when,
+	on_drag_over: Props_on_drag_over,
+	on_drag_leave: Props_on_drag_leave,
+	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -2871,9 +3350,13 @@ export type TextProps = {
 	-- rather than at the pointer.
 	context_menu_below: Props_context_menu_below,
 	[number]: Text,
-	-- Show a string as it is, braces and all, not as a template: for data
-	-- (code, titles, messages) that might hold `{name}`.
 	literal: boolean?,
+	-- Single newlines break lines, as people's messages show them.
+	breaks: boolean?,
+	-- Repository paths (`src/main.rs:12`) are files.
+	paths: boolean?,
+	-- A Copy button on code blocks (true).
+	copy: boolean?,
 }
 -- `ui.span`'s options are plain values.
 export type SpanProps = {
@@ -3026,9 +3509,12 @@ export type RichProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -3062,6 +3548,10 @@ export type RichProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -3188,6 +3678,13 @@ export type RichProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -3204,6 +3701,10 @@ export type RichProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -3320,9 +3821,12 @@ export type ImageProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -3356,6 +3860,10 @@ export type ImageProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -3482,6 +3990,13 @@ export type ImageProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -3498,6 +4013,10 @@ export type ImageProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -3624,9 +4143,12 @@ export type SvgProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -3660,6 +4182,10 @@ export type SvgProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -3786,6 +4312,13 @@ export type SvgProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -3802,6 +4335,10 @@ export type SvgProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -3920,9 +4457,12 @@ export type CanvasProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -3956,6 +4496,10 @@ export type CanvasProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -4082,6 +4626,13 @@ export type CanvasProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -4098,6 +4649,10 @@ export type CanvasProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -4246,9 +4801,12 @@ export type CheckboxProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -4282,6 +4840,10 @@ export type CheckboxProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -4408,6 +4970,13 @@ export type CheckboxProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -4424,6 +4993,10 @@ export type CheckboxProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -4548,9 +5121,12 @@ export type InputProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -4584,6 +5160,10 @@ export type InputProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -4710,6 +5290,13 @@ export type InputProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -4726,6 +5313,10 @@ export type InputProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -4906,9 +5497,12 @@ export type ProgressProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -4942,6 +5536,10 @@ export type ProgressProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -5068,6 +5666,13 @@ export type ProgressProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -5084,6 +5689,10 @@ export type ProgressProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -5201,9 +5810,12 @@ export type SliderProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -5237,6 +5849,10 @@ export type SliderProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -5363,6 +5979,13 @@ export type SliderProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -5379,6 +6002,10 @@ export type SliderProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -5509,9 +6136,12 @@ export type SegmentedProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -5545,6 +6175,10 @@ export type SegmentedProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -5671,6 +6305,13 @@ export type SegmentedProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -5687,6 +6328,10 @@ export type SegmentedProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -5813,9 +6458,12 @@ export type StepperProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -5849,6 +6497,10 @@ export type StepperProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -5975,6 +6627,13 @@ export type StepperProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -5991,6 +6650,10 @@ export type StepperProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -6118,9 +6781,12 @@ export type DisclosureProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -6154,6 +6820,10 @@ export type DisclosureProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -6280,6 +6950,13 @@ export type DisclosureProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -6296,6 +6973,10 @@ export type DisclosureProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -6307,6 +6988,10 @@ export type DisclosureProps = {
 	-- rather than at the pointer.
 	context_menu_below: Props_context_menu_below,
 	[number]: Child,
+	-- A button's look where its own styles don't say: "primary" (the
+	-- accent), "ghost" (no background until hovered), "danger", "default".
+	-- Other containers don't take it.
+	variant: ("primary" | "ghost" | "danger" | "default")?,
 	-- The name assistive technology reads for it, instead of its text: a
 	-- switch, a button showing only an icon. A state or function is
 	-- followed: a list row's name made from what it shows now.
@@ -6418,9 +7103,12 @@ export type AccordionProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -6454,6 +7142,10 @@ export type AccordionProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -6580,6 +7272,13 @@ export type AccordionProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -6596,6 +7295,10 @@ export type AccordionProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -6712,9 +7415,12 @@ export type SectionProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -6748,6 +7454,10 @@ export type SectionProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Space-separated class names.
 	class: Props_class,
 	-- Styles chosen from a `ui.variants` definition: `button { tone =
@@ -6872,6 +7582,13 @@ export type SectionProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -6888,6 +7605,10 @@ export type SectionProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -6899,6 +7620,10 @@ export type SectionProps = {
 	-- rather than at the pointer.
 	context_menu_below: Props_context_menu_below,
 	[number]: Child,
+	-- A button's look where its own styles don't say: "primary" (the
+	-- accent), "ghost" (no background until hovered), "danger", "default".
+	-- Other containers don't take it.
+	variant: ("primary" | "ghost" | "danger" | "default")?,
 	-- The name assistive technology reads for it, instead of its text: a
 	-- switch, a button showing only an icon. A state or function is
 	-- followed: a list row's name made from what it shows now.
@@ -7009,9 +7734,12 @@ export type SeparatorProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -7045,6 +7773,10 @@ export type SeparatorProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -7171,6 +7903,13 @@ export type SeparatorProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -7187,6 +7926,10 @@ export type SeparatorProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -7309,9 +8052,12 @@ export type TabsProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -7345,6 +8091,10 @@ export type TabsProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -7471,6 +8221,13 @@ export type TabsProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -7487,6 +8244,10 @@ export type TabsProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -7617,9 +8378,12 @@ export type TreeProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -7653,6 +8417,10 @@ export type TreeProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -7779,6 +8547,13 @@ export type TreeProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -7795,6 +8570,10 @@ export type TreeProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -7935,9 +8714,12 @@ export type DataGridProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -7971,6 +8753,10 @@ export type DataGridProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -8097,6 +8883,13 @@ export type DataGridProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -8113,6 +8906,10 @@ export type DataGridProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -8249,9 +9046,12 @@ export type CalendarProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -8285,6 +9085,10 @@ export type CalendarProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -8411,6 +9215,13 @@ export type CalendarProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -8427,6 +9238,10 @@ export type CalendarProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -8555,9 +9370,12 @@ export type DatePickerProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -8591,6 +9409,10 @@ export type DatePickerProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -8717,6 +9539,13 @@ export type DatePickerProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -8733,6 +9562,10 @@ export type DatePickerProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -8859,9 +9692,12 @@ export type TimeFieldProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -8895,6 +9731,10 @@ export type TimeFieldProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -9021,6 +9861,13 @@ export type TimeFieldProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -9037,6 +9884,10 @@ export type TimeFieldProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -9162,9 +10013,12 @@ export type ComboboxProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -9198,6 +10052,10 @@ export type ComboboxProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -9324,6 +10182,13 @@ export type ComboboxProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -9340,6 +10205,10 @@ export type ComboboxProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -9474,9 +10343,12 @@ export type CommandPaletteProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -9510,6 +10382,10 @@ export type CommandPaletteProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -9636,6 +10512,13 @@ export type CommandPaletteProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -9652,6 +10535,10 @@ export type CommandPaletteProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -9774,9 +10661,12 @@ export type SelectProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -9810,6 +10700,10 @@ export type SelectProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -9936,6 +10830,13 @@ export type SelectProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -9952,6 +10853,10 @@ export type SelectProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -10077,9 +10982,12 @@ export type SplitProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -10113,6 +11021,10 @@ export type SplitProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -10239,6 +11151,13 @@ export type SplitProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -10255,6 +11174,10 @@ export type SplitProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -10266,6 +11189,10 @@ export type SplitProps = {
 	-- rather than at the pointer.
 	context_menu_below: Props_context_menu_below,
 	[number]: Child,
+	-- A button's look where its own styles don't say: "primary" (the
+	-- accent), "ghost" (no background until hovered), "danger", "default".
+	-- Other containers don't take it.
+	variant: ("primary" | "ghost" | "danger" | "default")?,
 	-- The name assistive technology reads for it, instead of its text: a
 	-- switch, a button showing only an icon. A state or function is
 	-- followed: a list row's name made from what it shows now.
@@ -10388,9 +11315,12 @@ export type ListProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -10424,6 +11354,10 @@ export type ListProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -10550,6 +11484,13 @@ export type ListProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -10566,6 +11507,10 @@ export type ListProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -10586,14 +11531,22 @@ export type ListProps = {
 	-- Its rows are one Tab stop, and the arrows, Page Up and Down, Home and
 	-- End move focus through every row (mounting it), as a list box's do.
 	keyboard: boolean?,
+	-- The list its rows show, as `ui.each`'s (not with `count` or
+	-- `heights`): `key` is given an item, and `row` an item and its index
+	-- as a state; built again when the item changes, or, taking a third
+	-- parameter, its item as a state kept current (it updates in place).
+	data: Readable<{ any }>?,
 	-- Builds row `index` (from 1); with `key`, the row of item `key`, given
-	-- its index as a state that follows where the row is.
-	row: ((index: number) -> Node) | ((key: any, index: State<number>) -> Node),
+	-- its index as a state that follows where the row is. With `data`,
+	-- the row of an item.
+	row: ((index: number) -> Node)
+		| ((key: any, index: State<number>) -> Node)
+		| ((item: any, index: State<number>, row: State<any>) -> Node),
 	-- Each row's item's key (a number, string or boolean), as a function of
-	-- its index: a row follows its item as the list changes, moved rather
-	-- than written again (rows a removal or an insertion shifts keep their
-	-- nodes, text and layout).
-	key: ((index: number) -> any)?,
+	-- its index (with `data`, of its item): a row follows its item as the
+	-- list changes, moved rather than written again (rows a removal or an
+	-- insertion shifts keep their nodes, text and layout).
+	key: (((index: number) -> any) | ((item: any) -> any))?,
 	-- Every row's height in points (28 by default); with `measured`, the
 	-- estimate for rows not yet measured.
 	height: number?,
@@ -10734,9 +11687,12 @@ export type LayerProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -10770,6 +11726,10 @@ export type LayerProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -10896,6 +11856,13 @@ export type LayerProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -10912,6 +11879,10 @@ export type LayerProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -10923,6 +11894,10 @@ export type LayerProps = {
 	-- rather than at the pointer.
 	context_menu_below: Props_context_menu_below,
 	[number]: Child,
+	-- A button's look where its own styles don't say: "primary" (the
+	-- accent), "ghost" (no background until hovered), "danger", "default".
+	-- Other containers don't take it.
+	variant: ("primary" | "ghost" | "danger" | "default")?,
 	open: State<boolean>?,
 	label: string?,
 	placement: ModalPlacement?,
@@ -11030,9 +12005,12 @@ export type ModalProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -11066,6 +12044,10 @@ export type ModalProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -11192,6 +12174,13 @@ export type ModalProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -11208,6 +12197,10 @@ export type ModalProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -11219,6 +12212,10 @@ export type ModalProps = {
 	-- rather than at the pointer.
 	context_menu_below: Props_context_menu_below,
 	[number]: Child,
+	-- A button's look where its own styles don't say: "primary" (the
+	-- accent), "ghost" (no background until hovered), "danger", "default".
+	-- Other containers don't take it.
+	variant: ("primary" | "ghost" | "danger" | "default")?,
 	open: State<boolean>,
 	-- Its content, built each time it opens (a form starting from what it
 	-- edits, its state new), and kept while it closes.
@@ -11341,9 +12338,12 @@ export type PopoverProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -11377,6 +12377,10 @@ export type PopoverProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -11503,6 +12507,13 @@ export type PopoverProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -11519,6 +12530,10 @@ export type PopoverProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -11530,6 +12545,10 @@ export type PopoverProps = {
 	-- rather than at the pointer.
 	context_menu_below: Props_context_menu_below,
 	[number]: Child,
+	-- A button's look where its own styles don't say: "primary" (the
+	-- accent), "ghost" (no background until hovered), "danger", "default".
+	-- Other containers don't take it.
+	variant: ("primary" | "ghost" | "danger" | "default")?,
 	open: State<boolean>,
 	-- Its content, built each time it opens, and kept while it closes.
 	build: (() -> Node)?,
@@ -11657,9 +12676,12 @@ export type MenuItemProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -11693,6 +12715,10 @@ export type MenuItemProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -11815,6 +12841,13 @@ export type MenuItemProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -11831,6 +12864,10 @@ export type MenuItemProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -11956,9 +12993,12 @@ export type SubmenuProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -11992,6 +13032,10 @@ export type SubmenuProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -12118,6 +13162,13 @@ export type SubmenuProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -12134,6 +13185,10 @@ export type SubmenuProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -12145,6 +13200,10 @@ export type SubmenuProps = {
 	-- rather than at the pointer.
 	context_menu_below: Props_context_menu_below,
 	[number]: Child,
+	-- A button's look where its own styles don't say: "primary" (the
+	-- accent), "ghost" (no background until hovered), "danger", "default".
+	-- Other containers don't take it.
+	variant: ("primary" | "ghost" | "danger" | "default")?,
 	open: State<boolean>,
 	label: string?,
 	-- Its trigger row, drawn by the app (a `ui.menu_item` with an icon, the
@@ -12549,9 +13608,12 @@ export type WebViewProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -12585,6 +13647,10 @@ export type WebViewProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -12711,6 +13777,13 @@ export type WebViewProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -12727,6 +13800,10 @@ export type WebViewProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -12866,9 +13943,12 @@ export type TerminalProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -12902,6 +13982,10 @@ export type TerminalProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -13028,6 +14112,13 @@ export type TerminalProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -13044,6 +14135,10 @@ export type TerminalProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -13161,9 +14256,12 @@ export type SlotProps = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -13197,6 +14295,10 @@ export type SlotProps = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -13323,6 +14425,13 @@ export type SlotProps = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -13339,6 +14448,10 @@ export type SlotProps = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -13461,9 +14574,12 @@ export type EachOptions = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -13497,6 +14613,10 @@ export type EachOptions = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -13623,6 +14743,13 @@ export type EachOptions = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -13639,6 +14766,10 @@ export type EachOptions = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -13764,9 +14895,12 @@ export type PresenceOptions = {
 	fade_overflow: Props_fade_overflow,
 	snap: Props_snap,
 	clip_inset: Props_clip_inset,
+	clip_feather: Props_clip_feather,
 	layer: Props_layer,
 	fit: Props_fit,
 	tint: Props_tint,
+	dither: Props_dither,
+	characters: Props_characters,
 	cursor: Props_cursor,
 	-- Text.
 	text_size: Props_text_size,
@@ -13800,6 +14934,10 @@ export type PresenceOptions = {
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
 	theme: Props_theme,
+	-- Values the components and rows built in this subtree read with
+	-- `ui.use_context(name)`, as React's context gives them: a state, a
+	-- table, a function. Nearer ones win.
+	provide: Props_provide,
 	-- Identity, for selectors, refs and animations.
 	id: Props_id,
 	-- Space-separated class names.
@@ -13926,6 +15064,13 @@ export type PresenceOptions = {
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
 	drag_preview: Props_drag_preview,
+	-- Where the preview goes: its point `drag_preview_anchor` (fractions
+	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
+	-- points from the pointer. `{ 0.5, 0 }` and `{ 0, 16 }` hang it below
+	-- the pointer, leaving what the drag is over in view; without either,
+	-- it keeps the grab point under the pointer.
+	drag_preview_anchor: Props_drag_preview_anchor,
+	drag_preview_offset: Props_drag_preview_offset,
 	on_drag_end: Props_on_drag_end,
 	-- What the drag carries to other apps as it leaves the window (macOS):
 	-- Finder takes files, Mail text, a browser links.
@@ -13942,6 +15087,10 @@ export type PresenceOptions = {
 	on_drag_over: Props_on_drag_over,
 	on_drag_leave: Props_on_drag_leave,
 	on_drop: Props_on_drop,
+	-- Spring-loading: an accepted drag has rested on it for the system's
+	-- delay (0.5 s by default), or Space was pressed. Open what it stands
+	-- for (show a tab); return `false` to decline. Once per stay.
+	on_drag_spring: Props_on_drag_spring,
 	-- A secondary click (control-click on macOS) shows the returned
 	-- `menu_item`s, `submenu`s and separators as a menu at the pointer;
 	-- returning nil (or nothing) shows none.
@@ -14151,6 +15300,12 @@ declare ui: {
 	-- reply's id), text growing under it parses only its new end, and its
 	-- earlier blocks are the same tables as before.
 	markdown: (text: string, opts: MarkdownOptions?) -> { MarkdownBlock },
+	-- Markdown drawn: paragraphs, headings, lists, quotes, tables, and code
+	-- blocks with a Copy button, in the theme's colours and sizes,
+	-- selectable. As its text changes it parses only what changed and
+	-- builds only the blocks that did: a reply streaming in grows by its
+	-- last block.
+	markdown_view: (props: MarkdownViewProps) -> Node,
 	effect: (f: () -> ...unknown) -> (),
 	-- One update for many writes; returns what `f` returns.
 	batch: <R...>(f: () -> R...) -> R...,
@@ -14174,6 +15329,9 @@ declare ui: {
 	-- Runs `f` when what is being built goes away: a component unmounting,
 	-- an effect running again, the script reloading.
 	on_cleanup: (f: () -> ()) -> (),
+	-- In a component's, row's or presence's build: what the nearest
+	-- `provide = { [name] = … }` above it gave, else `default`.
+	use_context: (name: string, default: any?) -> any,
 	-- Milliseconds since the epoch, to the microsecond (`os.time` counts
 	-- whole seconds). Not tracked.
 	now: () -> number,
@@ -14188,8 +15346,12 @@ declare ui: {
 	-- plain action settles at once with nil): a promise of what it returns.
 	call: (name: string, arg: unknown?) -> Promise,
 	-- Run `f(...)` as a task: `p:await()` inside it waits for a promise
-	-- without blocking anything else.
-	task: <A...>(f: (A...) -> (), A...) -> (),
+	-- without blocking anything else. Its handle cancels it.
+	task: <A...>(f: (A...) -> (), A...) -> Task,
+	-- `f(...)`'s value and nil, or nil and what it raised, as a string a
+	-- person reads (an error's text, no traceback): `pcall` with its error
+	-- typed. Awaits inside `f` work in a task, as through `pcall`.
+	try: <T, A...>(f: (A...) -> ...T, A...) -> (T?, string?),
 	-- What `load` returns, loaded in a task (it may await), as states:
 	-- `data`, `loading`, `error` and `status`. It loads again on `reload()`
 	-- and when a state it read before its first await changes; only the

@@ -178,8 +178,8 @@ press does nothing in an editor, as in GTK's.
 
 The clipboard takes images too: `Platform::clipboard_image` gives the one
 there as an `ImageData` (straight RGBA, ready for `image`) and
-`set_clipboard_image` puts one there, on macOS, Windows and X11 (not yet on
-Wayland). Both finish later (`Pending`): the desktop host decodes and encodes
+`set_clipboard_image` puts one there, on macOS, Windows, X11 and Wayland
+(as `image/png`, which Wayland apps paste). Both finish later (`Pending`): the desktop host decodes and encodes
 on a thread of its own, as a 4K image took 15 to 70 ms to read and 130 ms to
 write on Windows. On Windows an image is copied as a PNG and a DIB with its alpha, and
 pasted from a PNG where one is there, else from the DIB another app copied
@@ -230,6 +230,15 @@ selectable region adds one listener; a press shapes the text it lands on, and
 the layouts a gesture moves over are kept until it ends. Changing the
 selection repaints only where a highlight changed, and an unchanged one
 repaints nothing. Hit testing maps the pointer through local transforms (scale, rotation, skew), as the scene's does.
+
+On macOS, selected text answers the system's text services as AppKit's text
+views do. Its context menu, and an editor's, offers Look Up “…” for the
+selection, and ⌃⌘D looks up a focused field's selection, else the selected
+display text. The menu bar's Services (a translator, Make New Sticky Note,
+Search With…) take the selection as plain text, and a service that returns
+text puts it in place of an editable field's selection. A password field
+offers neither, and elsewhere than macOS nothing changes. Selected text also
+drags, into fields and other apps ([dragging text](drag-drop.md#dragging-text)).
 
 ## Editable text
 

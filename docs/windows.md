@@ -84,32 +84,27 @@ any app on this GPU pays.
 
 ### What a frame costs below zgx
 
-Most of an animating zgx frame's CPU is spent below zgx. Profiled on an RTX
-4090 (NVIDIA 32.0.16.1742, i7-12700KF, 60 Hz), `animation_workload` takes
-2.47 M cycles a frame:
-- 64% is under wgpu's calls: present 27%, submit 20%, finishing the command
-  encoder (where wgpu records the passes) 14%;
-- wgpu's own code is about 6% of that;
-- Direct3D 12, NVIDIA's driver and the kernel take about 57%;
-- zgx, winit and accessibility take 36%.
-
-GPUI Fast's `animate` takes 2.13 M cycles: about 0.9 M in its Direct3D 11
-path, and more of its own code than zgx's. It draws through Direct3D 11 into
-a DirectComposition flip swap chain of three buffers at sync interval 0, as
-zgx presents through wgpu.
+Much of an animating zgx frame's CPU is spent below zgx. On an RTX 4090
+(NVIDIA 32.0.16.1742, i7-12700KF, 60 Hz), with each window in front and
+uncovered, Windows' High performance power plan and medians of alternating
+runs (`scripts/windows_compare.py`), `animation_workload` takes 1.69 M cycles
+a frame and GPUI Fast's `animate` 1.62 M. GPUI Fast draws through Direct3D 11
+into a DirectComposition flip swap chain of three buffers at sync interval 0,
+as zgx presents through wgpu.
 
 What the APIs cost alone, with nothing drawn, is measured by
 `crates/zgx-gpu/examples/d3d_frame_floor.rs`. It uses one 1280x800 window and
 the same kind of swap chain, and clears and presents each compositor frame.
-Medians of 6 runs in rotating order:
+Medians of 6 runs in rotating order, each window in front and uncovered,
+under the High performance plan:
 
 | Path | M cycles a frame, every thread | On the drawing thread (median K cycles) | Private memory added |
 | --- | --- | --- | --- |
-| No device (the message pump and `DwmFlush`) | 0.05 | | |
-| Direct3D 11, the driver's internal threading off | 0.61 | clear 168, present 364 | 52 MiB |
-| Direct3D 11, the driver's default | 1.13 | clear 16, present 201 (the rest on the driver's thread) | 53 MiB |
-| Direct3D 12 | 1.05 | resets 118, recording 103, `ExecuteCommandLists` 240, fence signal 16, present 450 | 95 MiB |
-| Direct3D 12 through wgpu, as zgx sets it up | 1.34 | acquire 84, encode 301, submit 386, present 462 | (not comparable: a plain `request_adapter` opens a device on every adapter) |
+| No device (the message pump and `DwmFlush`) | 0.03 | | |
+| Direct3D 11, the driver's internal threading off | 0.45 | clear 77, present 244 | 52 MiB |
+| Direct3D 11, the driver's default | 0.83 | clear 5, present 97 (the rest on the driver's thread) | 52 MiB |
+| Direct3D 12 | 0.74 | resets 46, recording 47, `ExecuteCommandLists` 145, fence signal 13, present 321 | 96 MiB |
+| Direct3D 12 through wgpu, as zgx sets it up | 0.93 | acquire 31, encode 129, submit 224, present 325 | (not comparable: a plain `request_adapter` opens a device on every adapter) |
 
 ```powershell
 cargo build --release -p zgx-gpu --example d3d_frame_floor
@@ -117,25 +112,40 @@ target\release\examples\d3d_frame_floor.exe d3d12   # or none, d3d11, d3d11-thre
 ```
 
 On this machine:
-- **Direct3D 12's fixed cost is the floor.** A frame costs 0.45 M cycles more
+- **Direct3D 12's fixed cost is the floor.** A frame costs 0.29 M cycles more
   than Direct3D 11 with the driver's threading off, which is how GPUI's renderer runs:
   its profile shows no busy driver thread. Swap chain flags and the feature
   level change nothing, and a Direct3D 12 renderer needs its direct queue.
-- **wgpu adds about 0.3 M cycles a frame,** spread over some 25 functions
+- **wgpu adds about 0.19 M cycles a frame,** spread over some 25 functions
   rather than one to patch.
+- **Below the floors, zgx's frame is the cheaper.** Take each path's floor
+  from its frame: zgx's `animate` spends about 0.76 M cycles above wgpu's,
+  GPUI Fast's about 1.17 M above Direct3D 11's. GPUI Fast's lead in that
+  scene is the API's.
 - **The memory gap is the API's.** Direct3D 12's device, queue and swap chain
-  take 43 MiB more than Direct3D 11's. That is the whole difference between
-  zgx's and GPUI Fast's private memory (about 130 and 87 MiB), so zgx's own
-  memory is about GPUI Fast's.
+  take 44 MiB more than Direct3D 11's. That is most of the difference between
+  zgx's and GPUI Fast's private memory (about 122 and 87 MiB in `animate`).
+- **At rest, Direct3D 12 keeps two of NVIDIA's driver threads busy** (about
+  1.2 M cycles a second, `windows_idle_probe.py`); Direct3D 11 does not.
+
+Release builds give the driver no object names (wgpu's
+`DISCARD_HAL_LABELS`): wgpu would otherwise name every command list it
+opens, five a frame, at about 3 K cycles each. A capture in PIX or RenderDoc
+reads better with them: set `WGPU_DISCARD_HAL_LABELS=0` to keep them in a
+release build. Debug builds keep them.
 
 A direct Direct3D 11 renderer, with the driver's threading off, would save
-about 0.75 M cycles a frame and 43 MiB on this machine; a direct Direct3D 12
-one, about 0.3 M cycles and no memory. These numbers are NVIDIA's alone:
+about 0.48 M cycles a frame, 44 MiB and the driver's threads at rest on this
+machine; a direct Direct3D 12 one, about 0.19 M cycles and no memory. (Measured
+with the windows behind another and Windows' Balanced plan, these read 0.75 M
+and 0.3 M: a covered window presents for less, and a clocked-down processor
+counts more cycles for the same work.) These numbers are NVIDIA's alone:
 AMD's and Intel's drivers price submissions and presents differently, and
 need measuring before they guide a choice. GPU time was not measured; this
-GPU is nearly idle at these loads. Within one session, every mode's
-cycles, the empty loop's too, once doubled together and then came back.
-Compare only modes run in alternation.
+GPU is nearly idle at these loads. Under the Balanced plan, every mode's
+cycles, the empty loop's too, once doubled together and then came back: the
+processor clocked down. Hold High performance, and compare only modes run in
+alternation.
 
 ## Presentation
 
@@ -171,6 +181,16 @@ python scripts/windows_idle_probe.py target/release/examples/gallery.exe
 python scripts/windows_latency_probe.py target/release/examples/input_latency.exe --click 100,44 --region 24,24,520,40 --env ZGX_ANIMATE=1
 python scripts/windows_pacing_probe.py target/release/examples/animation_workload.exe
 ```
+
+The idle probe brings the window to the front, as a user has it, and fails
+if it presents while at rest (`--max-presents`, none by default); it sums
+zgx's own threads apart from the graphics driver's (`--max-own-cycles-per-second`).
+The lab scene at rest, in front: no presents, and no cycles on zgx's own
+threads; the 1.2 M cycles a second left are two of NVIDIA's Direct3D 12
+driver threads, which Direct3D 11 (GPUI Fast's, MyGo's) does not keep busy.
+The compositor redraws nothing of the window then (Desktop Duplication's
+dirty rectangles over six seconds), though its GPU time shows 0.1 ms a
+second while a zgx window is open, against none for theirs.
 
 Resizing shows a frame drawn for each new size as soon as a window drawn
 with GDI does, with no black or stretched frames on the way.
@@ -429,13 +449,13 @@ the workspace's `dist` profile, which an app sets in its own `[profile.release]`
 or a profile like it (thin LTO is 0.7 MiB larger). What else changes it,
 measured on that app:
 - Image formats (zgx-desktop's features, see
-  [images-and-animation.md](images-and-animation.md)): SVG is 0.75 MiB,
+  [image loading](images-and-animation.md)): SVG is 0.75 MiB,
   JPEG 0.22, PNG 0.13. GIF's decoder is linked only into an app that shows a
   GIF.
 - The `vulkan` feature adds 1.1 MiB (see Presentation).
 - `panic = "abort"` saves 3.2 MiB, a quarter. It is the app's choice, not
   zgx's default: zgx contains a panic in an event handler, an effect or a
-  task by unwinding it ([application.md](application.md)), and with abort
+  task by unwinding it ([building an application](application.md)), and with abort
   such a panic ends the app instead.
 - `opt-level = "s"` saves 3.0 MiB; measure the app's own frames before
   shipping it, since zgx's hot paths are measured at `opt-level = 3`.
