@@ -536,6 +536,55 @@ impl WindowFactory {
         handle
     }
 }
+/// The frames a window has shown: how many, and the longest wait between two
+/// since it was last asked. A frame counter reads it on a timer of its own.
+/// Waits of [`PresentStats::IDLE`] or more are the window going still, not a
+/// late frame, and are left out of the longest.
+#[derive(Clone, Default)]
+pub struct PresentStats(Rc<PresentCounts>);
+#[derive(Default)]
+struct PresentCounts {
+    frames: Cell<u64>,
+    last: Cell<Option<std::time::Instant>>,
+    longest: Cell<std::time::Duration>,
+}
+impl PresentStats {
+    /// A wait this long is the window going still.
+    pub const IDLE: std::time::Duration = std::time::Duration::from_millis(100);
+    /// Frames shown since the window opened.
+    pub fn frames(&self) -> u64 {
+        self.0.frames.get()
+    }
+    /// The longest wait between two shown frames since the last call.
+    pub fn take_longest(&self) -> std::time::Duration {
+        self.0.longest.take()
+    }
+    fn presented(&self, at: std::time::Instant) {
+        let c = &self.0;
+        c.frames.set(c.frames.get() + 1);
+        if let Some(last) = c.last.replace(Some(at))
+            && at - last < Self::IDLE
+        {
+            c.longest.set(c.longest.get().max(at - last));
+        }
+    }
+}
+
+/// When a window draws. Every mode but the first is a diagnostic: each frame
+/// is a full repaint.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FrameMode {
+    /// When something changed, paced to the display.
+    #[default]
+    OnChange,
+    /// Every display refresh, changed or not, so frames never stop and start
+    /// again.
+    EveryRefresh,
+    /// As fast as the GPU allows, unpaced: frames past the display's rate are
+    /// drawn but never shown. For measuring what a frame costs.
+    Unlimited,
+}
+
 /// What a window's content is built with: its UI, its native services and
 /// handles to it and the application.
 pub struct WindowContext {
@@ -557,6 +606,11 @@ pub struct WindowContext {
     /// Display-paced animation frames for this window. Components reach it
     /// through `Context::frames`.
     pub frames: FrameClock,
+    /// The frames this window has shown, for a frame counter.
+    pub presents: PresentStats,
+    /// When the window draws (`FrameMode`). Request a redraw after changing
+    /// it so an idle window starts.
+    pub frame_mode: Rc<Cell<FrameMode>>,
     /// The layout inspector (`zgx::inspect`): Ctrl+Option+Cmd+I on macOS,
     /// Ctrl+Alt+Shift+I elsewhere, or `ZGX_INSPECT=1`, toggles it; call
     /// `set_enabled` to turn it on from code. Components reach it as a
@@ -1457,6 +1511,8 @@ impl Host {
             ui,
             viewport,
             frames: frames.clone(),
+            presents: PresentStats::default(),
+            frame_mode: Rc::default(),
             close_requested: None,
             closed: None,
             tasks: TaskSpawner {
@@ -1985,6 +2041,7 @@ impl Host {
                 if status == zgx_gpu::PresentationStatus::Presented {
                     self.present_ready = false;
                     let now = std::time::Instant::now();
+                    self.context.presents.presented(now);
                     self.trim_at = Some(now + TRIM_DELAY);
                     // Startup's garbage (shader compilation, first layout)
                     // is freed once, even if the window never goes idle.
@@ -1994,6 +2051,12 @@ impl Host {
                 }
                 self.presentation
                     .completed(status, std::time::Instant::now());
+                // Unlimited: the next frame starts as this one is handed over.
+                if self.context.frame_mode.get() == FrameMode::Unlimited {
+                    let _ = self
+                        .proxy
+                        .send_event(Event::Redraw(self.context.window.token));
+                }
             }
         }
         // Popups past the window: their own frames, in their own windows
@@ -4087,7 +4150,14 @@ impl Host {
         self.frame_heartbeat = Some(std::time::Instant::now());
         if self.frames_presented() {
             self.frames.deliver(frame);
+            if self.continuous() {
+                self.force = true;
+            }
         }
+    }
+    /// Whether the window draws without waiting for a change (`FrameMode`).
+    fn continuous(&self) -> bool {
+        self.context.frame_mode.get() != FrameMode::OnChange
     }
     fn poll_frame_deadline(&mut self, now: std::time::Instant) {
         if self.frame_deadline.is_some_and(|deadline| now >= deadline) {
@@ -4114,6 +4184,10 @@ impl Host {
     #[cfg(target_os = "macos")]
     fn refresh_grid(&mut self) -> Option<(std::time::Instant, std::time::Duration)> {
         let now = std::time::Instant::now();
+        // Unlimited frames hand over as soon as they are drawn.
+        if self.context.frame_mode.get() == FrameMode::Unlimited {
+            return None;
+        }
         if self
             .resized_at
             .is_some_and(|at| now.duration_since(at) < RESIZE_SETTLE)
@@ -4139,7 +4213,9 @@ impl Host {
     fn sync_frames(&mut self) {
         let now = std::time::Instant::now();
         let scrolling = self.scroll.active(now) || self.touch.flinging();
-        let wanted = (self.frames.wants_frame() || scrolling) && self.frames_presented();
+        let continuous = self.continuous();
+        let wanted =
+            (self.frames.wants_frame() || scrolling || continuous) && self.frames_presented();
         if !wanted {
             self.frame_heartbeat = None;
             self.frame_deadline = None;
@@ -4168,8 +4244,9 @@ impl Host {
             // Scrolling and other input run at the display's full rate: frames
             // paced to a reduced rate (animations that asked for one) would
             // otherwise hold what input changed until their next tick, a drag
-            // shown at 12 fps up to 80 ms late.
-            let inputting = self.input_until.is_some_and(|until| now < until);
+            // shown at 12 fps up to 80 ms late. So does a window drawing
+            // every refresh (`WindowContext::frame_mode`).
+            let inputting = self.input_until.is_some_and(|until| now < until) || continuous;
             let rate = self
                 .frames
                 .demanded_rate(refresh)
@@ -4180,11 +4257,15 @@ impl Host {
             // leave some refreshes without a new frame. Otherwise (slower
             // updates, scrolling) a timer paces them on the grid the link last
             // reported, and the link (a thread spinning to each refresh) runs
-            // again only to resync.
-            let animating = wanted && rate.is_none() && !scrolling;
+            // again only to resync. A window drawing every refresh
+            // (`WindowContext::frame_mode`) keeps the link through scrolls.
+            let animating = wanted && rate.is_none() && (!scrolling || continuous);
+            // Unlimited frames replace one another on the plain layer: the
+            // video layer would queue them, one a refresh.
+            let unlimited = self.context.frame_mode.get() == FrameMode::Unlimited;
             self.link_paced = animating;
             if let Some(renderer) = &mut self.renderer {
-                renderer.set_full_rate(wanted && rate.is_none());
+                renderer.set_full_rate(wanted && rate.is_none() && !unlimited);
             }
             // Once the link has reported the grid, the timer continues it:
             // a scroll starting after a pause, or the grid going stale, keeps
@@ -4245,7 +4326,7 @@ impl Host {
                 let refresh = 1. / self.frame_interval.as_secs_f64();
                 // Scrolling, and frames just after input, run at the
                 // display's full rate.
-                let inputting = self.input_until.is_some_and(|until| now < until);
+                let inputting = self.input_until.is_some_and(|until| now < until) || continuous;
                 let rate = self
                     .frames
                     .demanded_rate(refresh)

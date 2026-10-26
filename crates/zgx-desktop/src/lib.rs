@@ -102,7 +102,8 @@ pub mod accessibility;
 
 pub mod application;
 pub use application::{
-    Application, TaskSpawner, WindowContext, WindowFactory, WindowHandle, WindowOptions,
+    Application, FrameMode, PresentStats, TaskSpawner, WindowContext, WindowFactory, WindowHandle,
+    WindowOptions,
 };
 
 #[cfg(windows)]

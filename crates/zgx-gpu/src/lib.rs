@@ -5544,8 +5544,14 @@ impl GpuRenderer {
             // in the shader.
             let region = region_index(&mut clips, Region::of(&item));
             if region > 0. {
-                for quad in &mut quads[start as usize..] {
-                    quad.mask[0] = region;
+                // Rounded clips alone leave flat fills uncut away from their
+                // corners: there the full shader (which the mask needs)
+                // gives way to the flat one.
+                let unmasked = (item.mask().is_none() && item.color().is_none())
+                    .then(|| unrounded(&item.rounded(), self.scale))
+                    .flatten();
+                for quad in quads.split_off(start as usize) {
+                    push_clipped(&mut quads, quad, region, unmasked);
                 }
             }
             // When the clip only culls whole quads, apply it on the CPU and
@@ -9750,6 +9756,84 @@ fn panel_whole(quad: &Quad, split: bool) -> bool {
         || quad.shape[3] <= 0.5
         || quad.rect != quad.fade
         || quad.rect[2] * quad.rect[3] < PANEL_INTERIOR
+}
+/// Where `rounded`'s corners cut nothing: the rows of its boxes below the
+/// top corners and above the bottom ones, on whole device pixels. There the
+/// clip covers every pixel whose centre lies in its boxes (`rounded` in
+/// draw.wgsl: at least half a pixel inside an edge, full coverage), and
+/// `PaintItem::clip` still cuts at their straight edges.
+fn unrounded(rounded: &zgx::scene::RoundedClip, scale: f32) -> Option<Rect> {
+    let mut out: Option<Rect> = None;
+    for clip in rounded.iter().flatten() {
+        // A feathered clip fades every edge: nothing inside it is uncut.
+        if clip.feather.points() > 0. {
+            return None;
+        }
+        let [tl, tr, br, bl] = clip.radii;
+        let r = clip.rect;
+        let top = r.y + tl.max(tr);
+        let band = Rect::new(r.x, top, r.width, r.y + r.height - br.max(bl) - top);
+        if band.width <= 0. || band.height <= 0. {
+            return None;
+        }
+        out = Some(match out {
+            None => band,
+            Some(o) => o.intersection(band)?,
+        });
+    }
+    let r = out?;
+    let (left, top) = ((r.x * scale).ceil() / scale, (r.y * scale).ceil() / scale);
+    let (right, bottom) = (
+        ((r.x + r.width) * scale).floor() / scale,
+        ((r.y + r.height) * scale).floor() / scale,
+    );
+    (right > left && bottom > top).then(|| Rect::new(left, top, right - left, bottom - top))
+}
+/// Push a quad inside rounded clip region `region`. A flat fill (a panel's
+/// interior, see `push_panel`) reaching into `unmasked` goes as that part
+/// without the mask, so it draws with the flat shader, and the bands around
+/// it with the mask; seams lie on whole device pixels.
+fn push_clipped(quads: &mut Vec<Quad>, quad: Quad, region: f32, unmasked: Option<Rect>) {
+    let mut masked = quad;
+    masked.mask[0] = region;
+    let flat = quad.mask == NO_MASK
+        && quad.options == [0.; 4]
+        && quad.shape == [0.; 4]
+        && quad.border == [0.; 4]
+        && quad.rect == quad.fade
+        && quad.rect[2] > 0.
+        && quad.rect[3] > 0.;
+    let Some(center) = unmasked
+        .filter(|_| flat)
+        .and_then(|safe| quad_rect(&quad).intersection(safe))
+        .filter(|c| c.width * c.height >= PANEL_INTERIOR)
+    else {
+        quads.push(masked);
+        return;
+    };
+    let [x, y, width, height] = quad.rect;
+    let (right, bottom) = (x + width, y + height);
+    let (c_right, c_bottom) = (center.x + center.width, center.y + center.height);
+    for rect in [
+        [x, y, width, center.y - y],
+        [x, c_bottom, width, bottom - c_bottom],
+        [x, center.y, center.x - x, center.height],
+        [c_right, center.y, right - c_right, center.height],
+    ] {
+        if rect[2] > 0. && rect[3] > 0. {
+            quads.push(Quad {
+                rect,
+                fade: rect,
+                ..masked
+            });
+        }
+    }
+    let rect = [center.x, center.y, center.width, center.height];
+    quads.push(Quad {
+        rect,
+        fade: rect,
+        ..quad
+    });
 }
 /// Nodes `shaped_like` remembers at most by what they show: past it, it
 /// starts again.

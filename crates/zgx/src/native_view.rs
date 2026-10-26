@@ -769,7 +769,11 @@ impl Walk<'_> {
                 if clip.is_none_or(|clip| frame.intersection(clip).is_some()) {
                     let scale = axis_scales(context.matrix).map_or(0., |(sx, sy)| sx.min(sy));
                     let radii = corner_radii(item.kind, item.bounds).map(|radius| radius * scale);
-                    let own = RoundRect { rect: frame, radii };
+                    let own = RoundRect {
+                        rect: frame,
+                        radii,
+                        feather: Default::default(),
+                    };
                     self.split.overlay_boxes.push((item.id, own, clip));
                 }
                 self.split.overlay_bounds = Some(match self.split.overlay_bounds {
