@@ -521,6 +521,19 @@ pub struct NodeInput {
     /// (where `pass_through` stops at the first listener) and nothing in it
     /// takes focus: a closed panel left mounted to fade out.
     pub inert: bool,
+    /// A box laid out around content that may be put away: while nothing
+    /// it holds is displayed (`display: none` or invisible), the pointer
+    /// passes through it as through `pass_through` (a presence's box over a
+    /// page whose content is hidden).
+    pub hollow: bool,
+}
+impl NodeInput {
+    /// Whether the pointer passes through `id`, which takes input as these
+    /// options say, to what is under it: `pass_through`, or `hollow` with
+    /// nothing in it displayed.
+    pub fn passes(&self, scene: &Scene, id: NodeId) -> bool {
+        self.pass_through || (self.hollow && !scene.displays_content(id))
+    }
 }
 type Callback = Rc<RefCell<dyn FnMut(&mut EventContext)>>;
 /// Whether the pointer can target `node`: neither it nor an ancestor is inert.
@@ -2024,7 +2037,7 @@ impl InputDispatcher {
             let mut node = Some(hit);
             while let Some(id) = node {
                 let options = self.options(id);
-                if options.is_some_and(|options| options.pass_through) {
+                if options.is_some_and(|options| options.passes(scene, id)) {
                     continue 'hits;
                 }
                 if options.is_some_and(|options| options.disabled) {

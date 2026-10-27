@@ -3060,6 +3060,69 @@ fn native_views_come_from_the_host_by_key_and_survive_reloads() {
 }
 
 #[test]
+fn a_web_page_under_a_hidden_kept_page_takes_the_pointer_again() {
+    use std::any::Any;
+    use zgx::native_view::{NativeContent, NativeViews, PlaneSplit, PointerRoute};
+    // A browser shell: the web page's view stays mounted, hidden while an
+    // app page shows; Settings, once shown, is kept mounted in a presence's
+    // full-size box over it, hidden while the web page shows.
+    for hide in ["hidden", "invisible"] {
+        let natives = NativeViews::new();
+        natives.set_supported(true);
+        let provided = natives.clone();
+        let code = format!(
+            r##"local page = ui.state("page", "web")
+            ui.command {{ id = "settings", run = function() page:set("settings") end }}
+            ui.command {{ id = "web", run = function() page:set("web") end }}
+            local built = false
+            -- The shell hears presses (a press anywhere closes a menu).
+            return ui.overlay {{ w_full = true, h_full = true, on_press = function() end,
+                ui.native {{ id = "page", key = "page", grow = 1, w_full = true, h_full = true,
+                    {hide} = function() return page:get() ~= "web" end }},
+                ui.presence(function()
+                    built = built or page:get() == "settings"
+                    return if built then "settings" else nil
+                end, function()
+                    return ui.column {{ id = "settings_page", w_full = true, h_full = true,
+                        {hide} = function() return page:get() ~= "settings" end,
+                        ui.text {{ "Settings" }} }}
+                end, {{ absolute = true, top = 0, left = 0, right = 0, bottom = 0 }}),
+            }}"##
+        );
+        let mut h = Harness::wrapped(
+            move |runtime| zgx_script::ScriptHost::inline(runtime, "app", &code),
+            move |view| zgx::compose::provide(provided, view),
+        );
+        let view: Rc<dyn Any> = Rc::new("page view");
+        h.host.native("page", NativeContent::Platform(view));
+        h.frame();
+        let route = |h: &mut Harness| {
+            h.frame();
+            let (split, _) = {
+                let scene = h.ui.scene.borrow();
+                PlaneSplit::compute(&scene, &natives.nodes(), &PlaneSplit::default())
+            };
+            let scene = h.ui.scene.borrow();
+            split.route(&scene, &h.ui.input, 200., 150.)
+        };
+        let page = h.find("page").unwrap();
+        assert_eq!(route(&mut h), PointerRoute::Native(page), "{hide}");
+        // Settings over it: the pointer is Settings'.
+        assert!(h.host.run_command("settings"));
+        assert_eq!(route(&mut h), PointerRoute::Ui, "{hide}");
+        // Back on the web page, laid out at its size again, and its input.
+        assert!(h.host.run_command("web"));
+        assert_eq!(route(&mut h), PointerRoute::Native(page), "{hide}");
+        assert_eq!(
+            (h.bounds("page").width, h.bounds("page").height),
+            (400., 300.),
+            "{hide}"
+        );
+        assert_eq!(h.error(), None);
+    }
+}
+
+#[test]
 fn a_controlled_input_keeps_its_typing_and_shows_changes_from_elsewhere() {
     let mut h = Harness::inline(
         r##"local name = ui.state("name", "")

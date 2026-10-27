@@ -362,6 +362,9 @@ pub(crate) struct Rare {
     inert: Option<Box<dyn FnMut() -> bool>>,
     /// Pressing the view leaves focus where it is (`keeps_focus`).
     keeps_focus: bool,
+    /// The pointer passes through it while nothing it holds is displayed
+    /// (`hollow`).
+    hollow: bool,
     scrollbar: Option<bool>,
     follow_end: Option<bool>,
     animation: Option<animation::Animated>,
@@ -450,6 +453,7 @@ impl Rare {
             inner.inert = self.inert;
         }
         inner.keeps_focus |= self.keeps_focus;
+        inner.hollow |= self.hollow;
         if self.read_only.is_some() {
             inner.read_only = self.read_only;
         }
@@ -896,6 +900,15 @@ impl View {
     /// `pointer_events`, followed: it changes as what `enabled` reads does.
     pub fn pointer_events_when(mut self, enabled: impl FnMut() -> bool + 'static) -> Self {
         self.rare_mut().pointer_events = Some(Box::new(enabled));
+        self
+    }
+    /// A box laid out around content that may be put away: while nothing
+    /// it holds is displayed (`hidden` or `invisible`), the pointer passes
+    /// through it as `pointer_events(false)` lets it, to what is under it.
+    /// A presence's full-size box over a web page, holding a page kept
+    /// mounted but hidden, would otherwise take every press meant for it.
+    pub fn hollow(mut self) -> Self {
+        self.rare_mut().hollow = true;
         self
     }
     /// HTML's `inert`: the view and everything in it, listeners included,
@@ -3191,6 +3204,7 @@ struct Opened {
     pointer_events: Option<Box<dyn FnMut() -> bool>>,
     inert: Option<Box<dyn FnMut() -> bool>>,
     keeps_focus: bool,
+    hollow: bool,
     accessible_label: Option<String>,
     accessibility: Option<Box<Accessibility>>,
     mounted: Vec<Box<dyn FnOnce(NodeHandle)>>,
@@ -4266,6 +4280,7 @@ fn open_element(
         pointer_events: rare.as_deref_mut().and_then(|r| r.pointer_events.take()),
         inert: rare.as_deref_mut().and_then(|r| r.inert.take()),
         keeps_focus: rare.as_deref().is_some_and(|r| r.keeps_focus),
+        hollow: rare.as_deref().is_some_and(|r| r.hollow),
         accessible_label: rare.as_deref_mut().and_then(|r| r.accessible_label.take()),
         accessibility: rare.and_then(|r| r.accessibility.take()),
         mounted: view.mounted,
@@ -4295,6 +4310,7 @@ fn close_element(ui: &mut Ui, opened: Opened) -> NodeId {
         pointer_events,
         inert,
         keeps_focus,
+        hollow,
         accessible_label,
         accessibility,
         mounted,
@@ -4352,7 +4368,8 @@ fn close_element(ui: &mut Ui, opened: Opened) -> NodeId {
     let mut options = ui.input.options(root).unwrap_or_default();
     options.focusable = focusable;
     options.keeps_focus |= keeps_focus;
-    if focusable_set || keeps_focus || ui.input.options(root).is_some() {
+    options.hollow |= hollow;
+    if focusable_set || keeps_focus || hollow || ui.input.options(root).is_some() {
         ui.input.set_options(root, options);
     }
     if let Some(mut inert) = inert {

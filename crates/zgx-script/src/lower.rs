@@ -5513,8 +5513,9 @@ fn presence(
     if boxed {
         // Its content fills it, in both directions, unless it sizes itself.
         // Showing nothing, the box is not there for the pointer (a sheet's
-        // full-window box over the panes while it is put away).
-        cell().pointer_events_when(showing).child(region)
+        // full-window box over the panes while it is put away), nor while
+        // what it shows is hidden (a page kept mounted over a web view).
+        cell().pointer_events_when(showing).hollow().child(region)
     } else {
         region
     }

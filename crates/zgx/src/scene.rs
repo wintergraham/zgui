@@ -5100,6 +5100,20 @@ impl Scene {
         let pad = (font_size * 0.3).max(2.);
         Rect::new(x - pad, bounds.y - pad, width + 2. * pad, height + 2. * pad)
     }
+    /// Whether anything `id` holds is displayed: a child neither
+    /// `display: none` nor invisible, looking into a contents child (which
+    /// has no box of its own) for what it holds.
+    pub fn displays_content(&self, id: NodeId) -> bool {
+        self.node(id).children.iter().any(|&child| {
+            let node = self.node(child);
+            if node.contents {
+                let own = self.contents_styles.get(&child).unwrap_or(&node.style);
+                own_visible(own) && self.displays_content(child)
+            } else {
+                own_visible(&node.style)
+            }
+        })
+    }
     /// Whether `id` and its ancestors are displayed: a hidden node paints
     /// nothing, so its changes damage nothing. Hiding one damages what it
     /// painted before the change.
