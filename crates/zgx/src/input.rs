@@ -500,19 +500,6 @@ pub struct NodeInput {
     /// Its place in Tab order, as HTML's `tabindex`: positive indices first,
     /// in order, then 0s in document order; negative leaves Tab order.
     pub tab_index: i32,
-    /// A box laid out around content that may be put away: while nothing
-    /// it holds is displayed (`display: none` or invisible), the pointer
-    /// passes through it as through `pass_through` (a presence's box over a
-    /// page whose content is hidden).
-    pub hollow: bool,
-}
-impl NodeInput {
-    /// Whether the pointer passes through `id`, which takes input as these
-    /// options say, to what is under it: `pass_through`, or `hollow` with
-    /// nothing in it displayed.
-    pub fn passes(&self, scene: &Scene, id: NodeId) -> bool {
-        self.pass_through || (self.hollow && !scene.displays_content(id))
-    }
 }
 type Callback = Rc<RefCell<dyn FnMut(&mut EventContext)>>;
 struct Entry {
@@ -621,6 +608,11 @@ struct State {
     unfocused_keys: Vec<NodeId>,
     entries: crate::scene::NodeMap<Vec<Entry>>,
     options: crate::scene::NodeMap<NodeInput>,
+    /// Boxes the pointer passes through while nothing they hold is displayed
+    /// (`View::hollow`): a presence's box over a page kept mounted but hidden.
+    /// A few at most: a list, not a map (a map's instance shared with another
+    /// set's outlined that one's insert).
+    hollow: Vec<NodeId>,
     disabled_observers: crate::scene::NodeMap<Signal<bool>>,
     next: u64,
     focused: Option<NodeId>,
@@ -707,7 +699,10 @@ impl Drop for InputBinding {
             let mut disabled_observer = None;
             if s.entries.get(&self.node).is_some_and(Vec::is_empty) {
                 s.entries.remove(&self.node);
-                s.options.remove(&self.node);
+                // A hollow node has options: only one removed can be.
+                if s.options.remove(&self.node).is_some() && !s.hollow.is_empty() {
+                    s.hollow.retain(|node| *node != self.node);
+                }
                 disabled_observer = s.disabled_observers.get(&self.node).cloned();
                 if s.focused == Some(self.node) {
                     s.focused = None;
@@ -1141,6 +1136,33 @@ impl InputDispatcher {
     pub fn options(&self, node: NodeId) -> Option<NodeInput> {
         self.state.borrow().options.get(&node).copied()
     }
+    /// Mark `node` (registered: `set_options`) as hollow: the pointer passes
+    /// through it while nothing it holds is displayed.
+    pub(crate) fn set_hollow(&self, node: NodeId) {
+        let mut state = self.state.borrow_mut();
+        if !state.hollow.contains(&node) {
+            state.hollow.push(node);
+        }
+    }
+    /// Whether the pointer passes through `node`, which takes input as
+    /// `options` say, to what is under it: `pass_through`, or hollow with
+    /// nothing in it displayed (`Scene::displays_content`).
+    pub(crate) fn passes(&self, scene: &Scene, node: NodeId, options: &NodeInput) -> bool {
+        options.pass_through
+            || self
+                .state
+                .try_borrow()
+                .is_ok_and(|state| !state.hollow.is_empty() && state.hollow.contains(&node))
+                && !scene.displays_content(node)
+    }
+    /// `options`, and whether `node` is hollow, in one look at the state:
+    /// for the pointer's walk, which asks for every node it passes.
+    fn options_hollow(&self, node: NodeId) -> (Option<NodeInput>, bool) {
+        let state = self.state.borrow();
+        let options = state.options.get(&node).copied();
+        let hollow = options.is_some() && !state.hollow.is_empty() && state.hollow.contains(&node);
+        (options, hollow)
+    }
     /// Disconnect a removed node, including metadata-only container state.
     pub fn unregister(&self, node: NodeId) {
         let mut s = self.state.borrow_mut();
@@ -1153,7 +1175,10 @@ impl InputDispatcher {
             s.drag_orphans.extend(callbacks);
         }
         let observer = s.disabled_observers.remove(&node);
-        s.options.remove(&node);
+        // A hollow node has options: only one removed can be.
+        if s.options.remove(&node).is_some() && !s.hollow.is_empty() {
+            s.hollow.retain(|hollow| *hollow != node);
+        }
         s.groups.remove(&node);
         if removed.is_some() {
             crate::shrink_sparse(&mut s.entries);
@@ -1983,8 +2008,10 @@ impl InputDispatcher {
         'hits: for hit in scene.hit_test_all(x, y) {
             let mut node = Some(hit);
             while let Some(id) = node {
-                let options = self.options(id);
-                if options.is_some_and(|options| options.passes(scene, id)) {
+                let (options, hollow) = self.options_hollow(id);
+                if options.is_some_and(|options| options.pass_through)
+                    || (hollow && !scene.displays_content(id))
+                {
                     continue 'hits;
                 }
                 if options.is_some_and(|options| options.disabled) {

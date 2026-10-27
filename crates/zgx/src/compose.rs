@@ -358,9 +358,6 @@ pub(crate) struct Rare {
     pub(crate) context_menu_below: Option<bool>,
     /// Whether the pointer stops at the view (`pointer_events`), followed.
     pointer_events: Option<Box<dyn FnMut() -> bool>>,
-    /// The pointer passes through it while nothing it holds is displayed
-    /// (`hollow`).
-    hollow: bool,
     scrollbar: Option<bool>,
     follow_end: Option<bool>,
     animation: Option<animation::Animated>,
@@ -395,7 +392,9 @@ pub(crate) struct Rare {
     line_numbers: Option<bool>,
     /// What a code editor adds to a text area (`View::highlighter`, …).
     code: Option<Box<CodeOptions>>,
-    window_drag: bool,
+    /// `WINDOW_DRAG` (`View::window_drag`) and `HOLLOW` (`View::hollow`):
+    /// rare, tested together as the element mounts.
+    mount_flags: u8,
     /// `View::selectable`.
     selectable: Option<bool>,
     /// `View::selection_color`, `selected_text_color`: few views have them.
@@ -445,7 +444,6 @@ impl Rare {
         if self.pointer_events.is_some() {
             inner.pointer_events = self.pointer_events;
         }
-        inner.hollow |= self.hollow;
         if self.read_only.is_some() {
             inner.read_only = self.read_only;
         }
@@ -486,7 +484,7 @@ impl Rare {
             inner.row_text = self.row_text;
         }
         inner.keymap.extend(self.keymap);
-        inner.window_drag |= self.window_drag;
+        inner.mount_flags |= self.mount_flags;
         inner.conditional.extend(self.conditional);
     }
 }
@@ -900,7 +898,7 @@ impl View {
     /// A presence's full-size box holding a page kept mounted but hidden
     /// would otherwise take every press meant for what is under it.
     pub fn hollow(mut self) -> Self {
-        self.rare_mut().hollow = true;
+        self.rare_mut().mount_flags |= HOLLOW;
         self
     }
     /// Override whether this root accepts focus and participates in Tab traversal.
@@ -1216,7 +1214,7 @@ impl View {
     /// descendants keep their presses. The desktop host performs it (see
     /// `Ui::take_window_gesture`).
     pub fn window_drag(mut self) -> Self {
-        self.rare_mut().window_drag = true;
+        self.rare_mut().mount_flags |= WINDOW_DRAG;
         self
     }
     /// Let the pointer select the text in this view and everything it holds,
@@ -3284,7 +3282,6 @@ struct Opened {
     conditional: Vec<RegionBuilder>,
     row_text: Option<crate::selection::RowText>,
     pointer_events: Option<Box<dyn FnMut() -> bool>>,
-    hollow: bool,
     accessible_label: Option<String>,
     accessibility: Option<Box<Accessibility>>,
     mounted: Vec<Box<dyn FnOnce(NodeHandle)>>,
@@ -3757,8 +3754,10 @@ fn open_element(
         let binding = ui.input.listen_first(root, callback);
         ui.retain(root, binding);
     }
-    if rare.as_deref().is_some_and(|r| r.window_drag) {
-        mount_window_drag(ui, root);
+    if let Some(r) = rare.as_deref()
+        && r.mount_flags != 0
+    {
+        mount_drag_or_hollow(ui, root, r.mount_flags);
     }
     if let Some(rare) = rare.as_deref_mut()
         && (!rare.keymap.bindings.is_empty()
@@ -4359,7 +4358,6 @@ fn open_element(
             .unwrap_or_default(),
         row_text: rare.as_deref_mut().and_then(|r| r.row_text.take()),
         pointer_events: rare.as_deref_mut().and_then(|r| r.pointer_events.take()),
-        hollow: rare.as_deref().is_some_and(|r| r.hollow),
         accessible_label: rare.as_deref_mut().and_then(|r| r.accessible_label.take()),
         accessibility: rare.and_then(|r| r.accessibility.take()),
         mounted: view.mounted,
@@ -4387,7 +4385,6 @@ fn close_element(ui: &mut Ui, opened: Opened) -> NodeId {
         conditional,
         mut row_text,
         pointer_events,
-        hollow,
         accessible_label,
         accessibility,
         mounted,
@@ -4447,8 +4444,7 @@ fn close_element(ui: &mut Ui, opened: Opened) -> NodeId {
     }
     let mut options = ui.input.options(root).unwrap_or_default();
     options.focusable = focusable;
-    options.hollow |= hollow;
-    if focusable_set || hollow || ui.input.options(root).is_some() {
+    if focusable_set || ui.input.options(root).is_some() {
         ui.input.set_options(root, options);
     }
     if let Some(mut enabled) = pointer_events {
@@ -4501,6 +4497,26 @@ fn close_element(ui: &mut Ui, opened: Opened) -> NodeId {
         });
     }
     root
+}
+/// `Rare::mount_flags`: the region drags the window.
+const WINDOW_DRAG: u8 = 1;
+/// `Rare::mount_flags`: the pointer passes through it while nothing it holds
+/// is displayed.
+const HOLLOW: u8 = 2;
+/// `View::window_drag` and `View::hollow`, rare: apart from the element's
+/// common path.
+#[cold]
+#[inline(never)]
+fn mount_drag_or_hollow(ui: &mut Ui, root: NodeId, flags: u8) {
+    if flags & WINDOW_DRAG != 0 {
+        mount_window_drag(ui, root);
+    }
+    // Registered, so the pointer's walk looks at it, and marked.
+    if flags & HOLLOW != 0 {
+        ui.input
+            .set_options(root, ui.input.options(root).unwrap_or_default());
+        ui.input.set_hollow(root);
+    }
 }
 /// `View::window_drag`: a primary press on `region`, or on a descendant
 /// that takes no input itself, asks the host to move the window (or, the

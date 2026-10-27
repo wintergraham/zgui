@@ -495,7 +495,7 @@ impl InputDispatcher {
                 // `pointer_events = "none"`: drops land on what is under it.
                 if self
                     .options(id)
-                    .is_some_and(|options| options.passes(scene, id))
+                    .is_some_and(|options| self.passes(scene, id, &options))
                 {
                     continue 'hits;
                 }

@@ -6674,7 +6674,7 @@ impl Scene {
     /// Whether anything `id` holds is displayed: a child neither
     /// `display: none` nor invisible, looking into a contents child (which
     /// has no box of its own) for what it holds.
-    pub fn displays_content(&self, id: NodeId) -> bool {
+    pub(crate) fn displays_content(&self, id: NodeId) -> bool {
         self.children(id).iter().any(|&child| {
             let node = self.node(child);
             if node.contents() {

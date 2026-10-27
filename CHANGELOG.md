@@ -2,6 +2,12 @@
 
 zgx is on crates.io from 0.1.0 (`zgx = "0.1"`); this lists what changed for apps, newest first.
 
+## Unreleased
+
+### Added
+
+- `View::hollow()`: the pointer passes through a box while nothing it holds is displayed (`hidden` or `invisible`). A Luau `presence` box uses it: a page kept mounted but hidden no longer takes the presses meant for what is under it (a web page, the panes).
+
 ## 0.1.4 (2026-10-27)
 
 A patch: Rust and Luau code builds as before (every API change since 0.1.3 is an addition, and zgx-desktop and zgx-gpu 0.1.3 build against this zgx), unless it writes a `zgx_gpu::GpuStats` field by field (below). A few editor keys and clicks change, each below with what to check.
