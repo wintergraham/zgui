@@ -311,3 +311,52 @@ return ui.row {
     h.settle();
     assert_eq!(h.text("dropped"), "card", "the empty box is not in the way");
 }
+
+#[test]
+fn a_presence_box_whose_content_is_hidden_lets_the_pointer_through() {
+    // A page kept mounted once built, in a presence box over a button:
+    // while the page is hidden or invisible, presses reach the
+    // button; shown, they are the page's.
+    for hide in ["hidden", "invisible"] {
+        let mut h = Harness::inline(&format!(
+            r#"
+local shown = ui.state("shown", false)
+local presses = ui.state("presses", 0)
+local built = false
+return ui.overlay {{
+    w_full = true,
+    h_full = true,
+    -- The window hears presses (one anywhere closes a menu), under the box.
+    on_press = function() end,
+    ui.column {{
+        ui.button {{ id = "under", w = 80, h = 40,
+            on_click = function() presses:update(function(n) return n + 1 end) end }},
+        ui.button {{ id = "toggle", w = 80, h = 40,
+            on_click = function() shown:update(function(v) return not v end) end }},
+        ui.text {{ "{{presses}}", id = "presses" }},
+    }},
+    ui.presence(function()
+        built = built or shown:get()
+        return if built then "page" else nil
+    end, function()
+        return ui.column {{ id = "page", w_full = true, h_full = true,
+            {hide} = function() return not shown:get() end }}
+    end, {{ absolute = true, top = 0, left = 0, w = 80, h = 40 }}),
+}}
+"#
+        ));
+        h.click("under");
+        assert_eq!(h.text("presses"), "1", "{hide}: nothing built yet");
+        h.click("toggle");
+        h.click("under");
+        assert_eq!(h.text("presses"), "1", "{hide}: the page shown takes it");
+        h.click("toggle");
+        h.click("under");
+        assert_eq!(
+            h.text("presses"),
+            "2",
+            "{hide}: the page hidden lets it through"
+        );
+        assert_eq!(h.error(), None);
+    }
+}

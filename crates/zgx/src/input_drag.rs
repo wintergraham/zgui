@@ -493,7 +493,10 @@ impl InputDispatcher {
             let mut node = Some(hit);
             while let Some(id) = node {
                 // `pointer_events = "none"`: drops land on what is under it.
-                if self.options(id).is_some_and(|options| options.pass_through) {
+                if self
+                    .options(id)
+                    .is_some_and(|options| options.passes(scene, id))
+                {
                     continue 'hits;
                 }
                 if !self.enabled(scene, id) {

@@ -358,6 +358,9 @@ pub(crate) struct Rare {
     pub(crate) context_menu_below: Option<bool>,
     /// Whether the pointer stops at the view (`pointer_events`), followed.
     pointer_events: Option<Box<dyn FnMut() -> bool>>,
+    /// The pointer passes through it while nothing it holds is displayed
+    /// (`hollow`).
+    hollow: bool,
     scrollbar: Option<bool>,
     follow_end: Option<bool>,
     animation: Option<animation::Animated>,
@@ -442,6 +445,7 @@ impl Rare {
         if self.pointer_events.is_some() {
             inner.pointer_events = self.pointer_events;
         }
+        inner.hollow |= self.hollow;
         if self.read_only.is_some() {
             inner.read_only = self.read_only;
         }
@@ -888,6 +892,15 @@ impl View {
     /// `pointer_events`, followed: it changes as what `enabled` reads does.
     pub fn pointer_events_when(mut self, enabled: impl FnMut() -> bool + 'static) -> Self {
         self.rare_mut().pointer_events = Some(Box::new(enabled));
+        self
+    }
+    /// A box laid out around content that may be put away: while nothing
+    /// it holds is displayed (`hidden` or `invisible`), the pointer passes
+    /// through it as `pointer_events(false)` lets it, to what is under it.
+    /// A presence's full-size box holding a page kept mounted but hidden
+    /// would otherwise take every press meant for what is under it.
+    pub fn hollow(mut self) -> Self {
+        self.rare_mut().hollow = true;
         self
     }
     /// Override whether this root accepts focus and participates in Tab traversal.
@@ -3271,6 +3284,7 @@ struct Opened {
     conditional: Vec<RegionBuilder>,
     row_text: Option<crate::selection::RowText>,
     pointer_events: Option<Box<dyn FnMut() -> bool>>,
+    hollow: bool,
     accessible_label: Option<String>,
     accessibility: Option<Box<Accessibility>>,
     mounted: Vec<Box<dyn FnOnce(NodeHandle)>>,
@@ -4345,6 +4359,7 @@ fn open_element(
             .unwrap_or_default(),
         row_text: rare.as_deref_mut().and_then(|r| r.row_text.take()),
         pointer_events: rare.as_deref_mut().and_then(|r| r.pointer_events.take()),
+        hollow: rare.as_deref().is_some_and(|r| r.hollow),
         accessible_label: rare.as_deref_mut().and_then(|r| r.accessible_label.take()),
         accessibility: rare.and_then(|r| r.accessibility.take()),
         mounted: view.mounted,
@@ -4372,6 +4387,7 @@ fn close_element(ui: &mut Ui, opened: Opened) -> NodeId {
         conditional,
         mut row_text,
         pointer_events,
+        hollow,
         accessible_label,
         accessibility,
         mounted,
@@ -4431,7 +4447,8 @@ fn close_element(ui: &mut Ui, opened: Opened) -> NodeId {
     }
     let mut options = ui.input.options(root).unwrap_or_default();
     options.focusable = focusable;
-    if focusable_set || ui.input.options(root).is_some() {
+    options.hollow |= hollow;
+    if focusable_set || hollow || ui.input.options(root).is_some() {
         ui.input.set_options(root, options);
     }
     if let Some(mut enabled) = pointer_events {

@@ -583,3 +583,61 @@ fn closing_a_page_drops_its_platform_page_while_handles_remain() {
     assert!(!kept.is_attached());
     assert!(backend.0.borrow().is_empty() && again.0.borrow().is_empty());
 }
+
+#[test]
+fn a_hollow_box_over_a_page_takes_the_pointer_only_while_it_shows_something() {
+    use zgx::native_view::NativeContent;
+    // A full-size box holding a page kept mounted (an app's settings) over
+    // a web page: while what it holds is hidden or invisible, the web page
+    // takes the pointer; shown, it does (it has no listeners of its own).
+    let mut ui = Ui::new(800., 600.);
+    let natives = supported();
+    // 0: hidden, 1: invisible, 2: shown.
+    let shown = ui.signal(0_u8);
+    let mode = shown.clone();
+    let view = ui.mount(provide(
+        natives.clone(),
+        overlay()
+            .w(800.)
+            .h(600.)
+            .child(
+                zgx::web_view::native_view(NativeContent::Platform(Rc::new(())))
+                    .id("page")
+                    .w_full()
+                    .h_full(),
+            )
+            .child(
+                column()
+                    .absolute()
+                    .left(0.)
+                    .top(0.)
+                    .w(800.)
+                    .h(600.)
+                    .hollow()
+                    .child(column().w_full().h_full().bg(rgb(0x202020)).reactive_style(
+                        move || match mode.get() {
+                            0 => Styles::new().hidden(),
+                            1 => Styles::new().invisible(),
+                            _ => Styles::new(),
+                        },
+                    )),
+            ),
+    ));
+    let page = view.find("page").unwrap();
+    let at = |ui: &Ui| {
+        ui.prepare_frame();
+        let (split, _) = split(ui, &natives, &PlaneSplit::default());
+        let scene = ui.scene.borrow();
+        split.route(&scene, &ui.input, 400., 300.)
+    };
+    assert_eq!(at(&ui), PointerRoute::Native(page), "hidden");
+    for (mode, route) in [
+        (2, PointerRoute::Ui),
+        (1, PointerRoute::Native(page)),
+        (2, PointerRoute::Ui),
+        (0, PointerRoute::Native(page)),
+    ] {
+        shown.set(mode);
+        assert_eq!(at(&ui), route, "mode {mode}");
+    }
+}

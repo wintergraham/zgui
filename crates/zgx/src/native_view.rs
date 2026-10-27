@@ -1058,7 +1058,7 @@ impl PlaneSplit {
             while let Some(id) = node {
                 match input.try_options(id) {
                     None => return PointerRoute::Ui,
-                    Some(Some(options)) if options.pass_through => continue 'hits,
+                    Some(Some(options)) if options.passes(scene, id) => continue 'hits,
                     _ => {}
                 }
                 if id == root || self.native_nodes.contains(&id) {
