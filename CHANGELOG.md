@@ -6,6 +6,8 @@ zgx is on crates.io from 0.1.0 (`zgx = "0.1"`); this lists what changed for apps
 
 ### Added
 
+- Menu bar: a menu labelled `AppMenu::APPLICATION` ("Application") puts its items at the head of macOS's application menu (About, Check for Updates…, Settings…), above Services, Hide and Quit; elsewhere it is an ordinary menu. An app's own "Window" menu keeps Minimize and Zoom above its items and Bring All to Front below, and an app's "Help" menu is AppKit's help menu, which holds its menu search. `StandardItem::ToggleFullScreen` is AppKit's Enter Full Screen item (⌃⌘F, retitled Exit Full Screen while the window is).
+  - *Migrate:* a `match` naming every `StandardItem` adds `ToggleFullScreen`.
 - Luau `on_aux_click`: the middle button (or another extra one) pressed and released on a node, as the DOM's `auxclick`, with `{ button, x, y, local_x, local_y, … }` (`button` is `"middle"` or the platform's number). The innermost node with one takes it, as with `on_click`: a tab strip closes a tab on it, a link list opens one in the background.
 
 ### Fixed

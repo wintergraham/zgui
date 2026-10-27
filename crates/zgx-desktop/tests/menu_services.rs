@@ -21,6 +21,31 @@ fn main() {
             );
         }
         println!("menu_services: AppKit fills the menu bar's Services submenu");
+        // The app's own application-menu items lead it, above Services; its
+        // Window and Help menus, and the full screen item, are made too.
+        let own = [
+            AppMenu::new(
+                AppMenu::APPLICATION,
+                [
+                    AppMenuEntry::item("About", "about"),
+                    AppMenuEntry::Separator,
+                    AppMenuEntry::item("Settings…", "settings"),
+                ],
+            ),
+            AppMenu::new(
+                "View",
+                [AppMenuEntry::Standard(
+                    zgx_desktop::app_menu::StandardItem::ToggleFullScreen,
+                )],
+            ),
+            AppMenu::new("Window", [AppMenuEntry::item("Downloads", "downloads")]),
+            AppMenu::new("Help", [AppMenuEntry::item("Help", "help")]),
+        ];
+        assert!(
+            debug_menu_bar_services_filled(&own).unwrap(),
+            "with the app's own items first, AppKit fills another Services menu"
+        );
+        println!("menu_services: the app's items lead the application menu");
 
         let chosen = Arc::new(Mutex::new(Vec::new()));
         muda::MenuEvent::set_event_handler(Some({
