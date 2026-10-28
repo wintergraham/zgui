@@ -95,8 +95,8 @@ pub struct WindowOptions {
     /// and frameless, a layer over the desktop and the windows on it.
     pub covers_display: bool,
     /// The window server's blur of what lies behind the window where it is
-    /// transparent, as a radius (macOS; 0 none). Unlike `glass`, it isn't
-    /// cut to the window's rounded corners, and it takes any strength. Kept
+    /// transparent, as a radius (macOS; 0 none). Unlike `glass`, it takes
+    /// any strength; it's cut to the window's rounded corners too. Kept
     /// through fullscreen and Space changes.
     pub background_blur: u32,
 }
