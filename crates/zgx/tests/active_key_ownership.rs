@@ -51,7 +51,8 @@ fn activation_style_tracks_latest_nonrepeat_key_and_preserves_pointer_press() {
         active,
         "unrelated Space release preserves newer Enter press"
     );
-    assert_eq!(clicks.get(), 0);
+    // Enter activated as it went down, as a browser's button takes it.
+    assert_eq!(clicks.get(), 1);
     key(&mut ui, Key::Character("a".into()), false, false);
     assert_eq!(color(&ui, view.node()), active);
     key(&mut ui, Key::Space, true, true);
@@ -90,4 +91,43 @@ fn activation_style_tracks_latest_nonrepeat_key_and_preserves_pointer_press() {
     ui.input.focus(&ui.scene, None);
     ui.prepare_frame();
     assert_eq!(color(&ui, view.node()), base);
+}
+
+#[test]
+fn a_button_takes_enter_as_it_goes_down_and_a_checkbox_space_alone() {
+    let mut ui = Ui::new(300., 200.);
+    let clicks = Rc::new(Cell::new(0));
+    let count = clicks.clone();
+    let checked = ui.signal(false);
+    let view = ui.mount(
+        column()
+            .child(
+                button()
+                    .id("button")
+                    .size(100., 40.)
+                    .on_click(move || count.set(count.get() + 1)),
+            )
+            .child(checkbox("Check", checked.clone()).id("check")),
+    );
+    ui.prepare_frame();
+    ui.input.focus(&ui.scene, view.find("button"));
+    key(&mut ui, Key::Enter, true, false);
+    assert_eq!(clicks.get(), 1, "Enter activates as it goes down");
+    key(&mut ui, Key::Enter, true, true);
+    key(&mut ui, Key::Enter, false, false);
+    assert_eq!(clicks.get(), 1, "once: not on repeat, nor on release");
+    key(&mut ui, Key::Space, true, false);
+    assert_eq!(clicks.get(), 1, "Space waits for its release");
+    key(&mut ui, Key::Space, false, false);
+    assert_eq!(clicks.get(), 2);
+    ui.input.focus(&ui.scene, view.find("check"));
+    key(&mut ui, Key::Enter, true, false);
+    key(&mut ui, Key::Enter, false, false);
+    assert!(
+        !checked.get(),
+        "Enter goes on to the form, toggling nothing"
+    );
+    key(&mut ui, Key::Space, true, false);
+    key(&mut ui, Key::Space, false, false);
+    assert!(checked.get(), "Space toggles it");
 }

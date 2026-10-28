@@ -15,6 +15,8 @@ Checks that:
   hears it not accepted;
 - over a target that refuses it (and hears it move), let go there, nothing
   is dropped, not accepted;
+- a text field's selected words, pressed on and dragged out onto the
+  target, arrive there as text, as a browser's selection drags;
 - a tab, carrying nothing to other apps, goes by the compositor's drag
   too: onto the other window's strip it drops there, accepted; let go on the
   bare desktop it is torn off;
@@ -151,6 +153,28 @@ def main():
             checks["refused: heard it move"] = "MOTION" in refuses_log.read_text()
             checks["refused: nothing dropped"] = "RECEIVED" not in refuses_log.read_text()
             checks["refused: not accepted"] = app_log.read_text().count("DRAG_END accepted=false") == 2
+
+            # A field's selected words (focused, it selects them all), pressed
+            # on and dragged out onto the taking target: it takes them as
+            # text, as a browser's selection drags.
+            field = (10 + 40, 104 + 15)
+            pointer.move_to(*field, *OUTPUT)
+            time.sleep(.2)
+            pointer.click()
+            # Past the double-click time: a press of its own, on the selection.
+            time.sleep(1)
+            press = (field[0] + 10, field[1])
+            pointer.move_to(*press, *OUTPUT)
+            time.sleep(.2)
+            pointer.button(True)
+            time.sleep(.05)
+            glide(press, TAKES)
+            time.sleep(.3)
+            pointer.button(False)
+            until("the words dropped", lambda: takes_log.read_text().count("RECEIVED") == 2, 5)
+            texts = re.findall(r"^RECEIVED (\S+) '(.*)'$", takes_log.read_text(), re.M)
+            checks["selected words: received"] = texts[-1] if texts else None
+            checks["the target takes a field's selected words"] = bool(texts) and texts[-1][1] == "drag these words"
             # A tab, which carries nothing to other apps, goes between the
             # app's windows by the compositor's drag too: onto the Other
             # window's strip it drops there; let go on the bare desktop, it

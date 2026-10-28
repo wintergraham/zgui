@@ -222,3 +222,61 @@ fn disabled_opt_in_cleanup_and_invalid_view_validation() {
         .is_err()
     );
 }
+
+#[test]
+fn typing_jumps_to_a_row_by_its_text_even_one_not_mounted() {
+    let mut ui = Ui::new(400., 300.);
+    let offset = ui.signal(0.);
+    let builds = Rc::new(Cell::new(0));
+    let count = builds.clone();
+    let name = |n: usize| match n {
+        7_000 => "Zebra".to_string(),
+        7_001 => "Zebu".to_string(),
+        n => format!("Row {n}"),
+    };
+    let view = ui.mount(
+        virtual_list(
+            offset.clone(),
+            20.,
+            1,
+            || 10_000,
+            |n| n,
+            move |_, n, _| {
+                count.set(count.get() + 1);
+                text(name(n))
+            },
+        )
+        .row_text(move |n| (n < 10_000).then(|| name(n)))
+        .w(200.)
+        .h(100.)
+        .keyboard_navigation(true),
+    );
+    ui.prepare_frame();
+    ui.input.focus(&ui.scene, Some(view.node()));
+    key(&mut ui, Key::Home);
+    let built = builds.get();
+    key(&mut ui, Key::Character("z".into()));
+    ui.prepare_frame();
+    assert_eq!(
+        position(&ui),
+        Some(7_001),
+        "Zebra, row 7000, not mounted till now"
+    );
+    key(&mut ui, Key::Character("e".into()));
+    key(&mut ui, Key::Character("b".into()));
+    key(&mut ui, Key::Character("u".into()));
+    ui.prepare_frame();
+    assert_eq!(position(&ui), Some(7_002), "zebu");
+    assert!(builds.get() - built < 30, "only the rows shown were built");
+    // A modified letter is a shortcut, not typing.
+    ui.dispatch(InputEvent::KeyDown {
+        key: Key::Character("r".into()),
+        modifiers: Modifiers {
+            meta: true,
+            control: true,
+            ..Default::default()
+        },
+        repeat: false,
+    });
+    assert_eq!(position(&ui), Some(7_002));
+}

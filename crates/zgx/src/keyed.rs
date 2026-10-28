@@ -80,7 +80,7 @@ pub struct KeyedChildren<K: Eq + Hash> {
     runtime: Runtime,
     scene: Rc<RefCell<Scene>>,
     container: ViewScope,
-    entries: HashMap<K, ViewScope>,
+    entries: HashMap<K, ViewScope, crate::KeyHasher>,
     order: Vec<K>,
 }
 impl<K: Eq + Hash + Clone> KeyedChildren<K> {
@@ -97,7 +97,7 @@ impl<K: Eq + Hash + Clone> KeyedChildren<K> {
             runtime: runtime.clone(),
             container: ViewScope::mount(runtime, scene.clone(), parent, layout, style),
             scene,
-            entries: HashMap::new(),
+            entries: HashMap::with_hasher(crate::key_hasher()),
             order: Vec::new(),
         }
     }
@@ -134,7 +134,7 @@ impl<K: Eq + Hash + Clone> KeyedChildren<K> {
         mut initialize: impl FnMut(&K, &mut ViewScope),
     ) -> Result<ReconcileReport, ReconcileError> {
         let keys: Vec<K> = keys.into_iter().collect();
-        let mut unique = HashSet::with_capacity(keys.len());
+        let mut unique = HashSet::with_capacity_and_hasher(keys.len(), crate::key_hasher());
         for (index, key) in keys.iter().enumerate() {
             if !unique.insert(key) {
                 return Err(ReconcileError::DuplicateKey { index });
@@ -161,7 +161,7 @@ impl<K: Eq + Hash + Clone> KeyedChildren<K> {
         // Keep committed entries untouched until every initializer succeeds.
         // Both the current scope and earlier staged scopes own their cleanup
         // during unwinding, including subscriptions and retained resources.
-        let mut staged = HashMap::new();
+        let mut staged = Vec::new();
         for key in &keys {
             if self
                 .entries
@@ -180,16 +180,33 @@ impl<K: Eq + Hash + Clone> KeyedChildren<K> {
             );
             *scope.services_mut() = self.container.services().child();
             initialize(key, &mut scope);
-            staged.insert(key.clone(), scope);
+            staged.push((key.clone(), scope));
             report.inserted += 1;
         }
-        self.entries.retain(|key, scope| {
-            let retain = unique.contains(key) && self.scene.borrow().contains(scope.root());
-            if !retain {
-                report.removed += 1;
+        // Every entry still shown and mounted is retained: only more left.
+        if self.entries.len() > report.retained {
+            // Gone in the order they were in, the same every run (a map's
+            // iteration is not): what their removal repaints follows it.
+            for key in &self.order {
+                let kept = unique.contains(key)
+                    && self
+                        .entries
+                        .get(key)
+                        .is_some_and(|scope| self.scene.borrow().contains(scope.root()));
+                if !kept && let Some(scope) = self.entries.remove(key) {
+                    report.removed += 1;
+                    drop(scope);
+                }
             }
-            retain
-        });
+            // Any not in the last order (left by a pass that did not finish).
+            self.entries.retain(|key, scope| {
+                let retain = unique.contains(key) && self.scene.borrow().contains(scope.root());
+                if !retain {
+                    report.removed += 1;
+                }
+                retain
+            });
+        }
         self.entries.extend(staged);
         let nodes: Vec<_> = keys.iter().map(|key| self.entries[key].root()).collect();
         assert!(
@@ -260,6 +277,25 @@ mod tests {
         assert_ne!(old, new);
         assert!(damage.iter().any(|rect| rect.intersects(old)));
         assert!(damage.iter().any(|rect| rect.intersects(new)));
+    }
+    /// Rows whose keys go are removed in the order they were in, the same
+    /// every run: what their removal repaints follows it.
+    #[test]
+    fn rows_go_in_the_order_they_were_in() {
+        struct Gone(u32, Rc<RefCell<Vec<u32>>>);
+        impl Drop for Gone {
+            fn drop(&mut self) {
+                self.1.borrow_mut().push(self.0);
+            }
+        }
+        let (_, _, mut keyed) = fixture();
+        let gone: Rc<RefCell<Vec<u32>>> = Rc::default();
+        keyed
+            .reconcile(0..12, |key, scope| scope.retain(Gone(*key, gone.clone())))
+            .unwrap();
+        let report = keyed.reconcile([9, 4, 1], initialize).unwrap();
+        assert_eq!(report.removed, 9);
+        assert_eq!(*gone.borrow(), [0, 2, 3, 5, 6, 7, 8, 10, 11]);
     }
     #[test]
     fn removal_and_drop_dispose_subscriptions_and_subtrees() {

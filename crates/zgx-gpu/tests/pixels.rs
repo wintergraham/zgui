@@ -5703,3 +5703,43 @@ fn a_long_text_draws_only_the_lines_in_its_clip() {
     let (_, huge) = render(100_000, true);
     assert!(huge < 2_000, "{huge} quads for a 100,000-line document");
 }
+
+#[test]
+fn find_marks_are_rounded_whichever_shader_draws_the_text() {
+    let _gpu_fixture = gpu_fixture();
+    let draw = |split| {
+        let mut gpu = GpuRenderer::new(80, 40).unwrap();
+        gpu.debug_split_shading(split);
+        let mut scene = Scene::new(80., 40.);
+        scene.set_kind(scene.root(), NodeKind::Container(Layout::Overlay));
+        let node = scene.append(
+            scene.root(),
+            NodeKind::Text {
+                text: "x".into(),
+                font_size: 13.,
+                color: Color(255, 255, 255, 255),
+            },
+            fixed(60., 28.),
+        );
+        scene.set_text_marks(
+            node,
+            vec![TextMark {
+                rect: Rect::new(24., 4., 20., 16.),
+                color: Color(255, 180, 20, 255),
+            }],
+        );
+        let damage = scene.flush().damage;
+        gpu.render(&scene, &damage).unwrap();
+        gpu.readback().unwrap()
+    };
+    let full = draw(false);
+    let split = draw(true);
+    let changed = full
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(split.as_chunks::<4>().0)
+        .filter(|(a, b)| a != b)
+        .count();
+    assert_eq!(changed, 0, "find marks differ from the full shader's");
+}

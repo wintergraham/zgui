@@ -1464,7 +1464,7 @@ fn menu_focus(styles: &Styles) -> fn() -> Styles {
     }
 }
 fn bordered(styles: &Styles) -> bool {
-    styles.border_width.is_some_and(|width| width > 0.)
+    styles.border_width.get().is_some_and(|width| width > 0.)
         || styles.border_edges.is_some_and(|edges| edges.is_some())
 }
 /// A scroll view's size when nothing else sizes it (`Style::intrinsic_width`).
@@ -1677,6 +1677,77 @@ pub fn menu_item(label: impl Into<String>) -> View {
 pub fn button() -> View {
     View::new(Kind::Button)
 }
+/// A radio button: chooses `value` for `selected` when clicked or pressed
+/// (Space), and is checked while `selected` holds it. Its circle is drawn as
+/// the platform draws one, beside `label` (also its accessible name). In a
+/// [`radio_group`] its group is one Tab stop, landing on the checked radio,
+/// and the arrows move and choose, wrapping at the ends, as a browser's and
+/// AppKit's radio buttons do.
+pub fn radio<T: PartialEq + Clone + 'static>(
+    label: impl Into<String>,
+    selected: Signal<T>,
+    value: T,
+) -> View {
+    use crate::theme::tok;
+    let label = label.into();
+    let on = {
+        let (selected, value) = (selected.clone(), value.clone());
+        move || selected.with(|s| *s == value)
+    };
+    let (ring, dot, checked) = (on.clone(), on.clone(), on);
+    let circle = div()
+        .w(crate::compose_checkbox::SIZE)
+        .h(crate::compose_checkbox::SIZE)
+        .shrink_0()
+        .rounded(crate::compose_checkbox::SIZE / 2.)
+        .items_center()
+        .justify_center()
+        .reactive_style(move || {
+            if ring() {
+                Styles::new()
+                    .bg(tok::ACCENT)
+                    .border(1.)
+                    .border_color(tok::ACCENT)
+            } else {
+                Styles::new()
+                    .bg(tok::INPUT_BG)
+                    .border(1.)
+                    .border_color(tok::BORDER_STRONG)
+            }
+        })
+        .child(div().w(6.).h(6.).rounded(3.).reactive_style(move || {
+            if dot() {
+                Styles::new().bg(tok::ACCENT_TEXT)
+            } else {
+                Styles::new().bg(crate::scene::Color(0, 0, 0, 0))
+            }
+        }));
+    button()
+        .role(Role::RadioButton)
+        .accessible_label(label.clone())
+        .checked_when(checked)
+        .gap(6.)
+        .items_center()
+        .px(4.)
+        .py(4.)
+        .bg(crate::scene::Color(0, 0, 0, 0))
+        .border(0.)
+        .on_click(move || {
+            if !selected.with_untracked(|s| *s == value) {
+                selected.set(value.clone());
+            }
+        })
+        .child(circle)
+        .child(text(label))
+}
+/// Radio buttons ([`radio`]) of one choice, `label` its accessible name:
+/// one Tab stop, the arrows moving and choosing (`Role::RadioGroup`).
+pub fn radio_group(label: impl Into<String>) -> View {
+    column()
+        .role(Role::RadioGroup)
+        .accessible_label(label)
+        .gap(2.)
+}
 /// A checkbox bound bidirectionally to `value`.
 /// `label` supplies both its visible text and accessible name. The control owns
 /// its indicator and label; additional `.child`/`.children` are rejected at mount.
@@ -1867,7 +1938,8 @@ pub fn keyed<K: Eq + std::hash::Hash + Clone + 'static>(
     View::new(Kind::Region(Box::new(move |ui, root, environment| {
         let weak = ui.downgrade();
         let runtime = ui.runtime.clone();
-        let mut entries: HashMap<K, NodeId> = HashMap::new();
+        let mut entries: HashMap<K, NodeId, crate::KeyHasher> =
+            HashMap::with_hasher(crate::key_hasher());
         // The last pass's keys and their children, in order.
         let mut last: (Vec<K>, Vec<NodeId>) = (Vec::new(), Vec::new());
         ui.bind(root, move || {
@@ -1883,7 +1955,11 @@ pub fn keyed<K: Eq + std::hash::Hash + Clone + 'static>(
                     return;
                 }
             }
-            let unique: std::collections::HashSet<_> = keys.iter().collect();
+            let mut unique = std::collections::HashSet::with_capacity_and_hasher(
+                keys.len(),
+                crate::key_hasher(),
+            );
+            unique.extend(keys.iter());
             assert_eq!(unique.len(), keys.len(), "duplicate component child key");
             let Some(mut ui) = weak.upgrade() else {
                 return;
@@ -1911,14 +1987,28 @@ pub fn keyed<K: Eq + std::hash::Hash + Clone + 'static>(
                     added.push((key.clone(), node));
                 }
                 entries.extend(added);
-                entries.retain(|key, node| {
-                    if unique.contains(key) {
-                        true
-                    } else {
-                        ui.remove(*node);
-                        false
+                // Every key shown now is held: only more than that left.
+                // Those go in the order they were in, the same every run (a
+                // map's iteration is not), as what their removal repaints
+                // follows it.
+                if entries.len() > unique.len() {
+                    for key in &last.0 {
+                        if !unique.contains(key)
+                            && let Some(node) = entries.remove(key)
+                        {
+                            ui.remove(node);
+                        }
                     }
-                });
+                    // Any not in the last order (left by a pass that did not finish).
+                    entries.retain(|key, node| {
+                        if unique.contains(key) {
+                            true
+                        } else {
+                            ui.remove(*node);
+                            false
+                        }
+                    });
+                }
                 let order: Vec<_> = keys.iter().map(|key| entries[key]).collect();
                 assert!(ui.scene.borrow_mut().reorder_children(root, &order));
                 transaction.commit();
@@ -2043,16 +2133,26 @@ impl RowAlign {
 pub(crate) type RowReveal = (u64, usize, RowAlign);
 /// The list at `root` takes scroll-to-row requests (`NodeHandle::scroll_to_row`)
 /// on the signal this returns, while it is mounted.
-pub(crate) fn list_reveal(ui: &mut Ui, root: NodeId) -> Signal<RowReveal> {
+/// `row_index`: a mounted row's index from its place down the list's
+/// content (find in page tells its rows apart by it).
+pub(crate) fn list_reveal(
+    ui: &mut Ui,
+    root: NodeId,
+    row_index: crate::find::RowIndex,
+) -> Signal<RowReveal> {
     let reveal = ui.signal((0_u64, 0_usize, RowAlign::Nearest));
     ui.list_reveals().borrow_mut().insert(root, reveal.clone());
+    ui.storage.list_rows.borrow_mut().insert(root, row_index);
     struct Forget(WeakUi, NodeId);
     impl Drop for Forget {
         fn drop(&mut self) {
-            if let Some(ui) = self.0.upgrade()
-                && let Ok(mut reveals) = ui.list_reveals().try_borrow_mut()
-            {
-                reveals.remove(&self.1);
+            if let Some(ui) = self.0.upgrade() {
+                if let Ok(mut reveals) = ui.list_reveals().try_borrow_mut() {
+                    reveals.remove(&self.1);
+                }
+                if let Ok(mut rows) = ui.storage.list_rows.try_borrow_mut() {
+                    rows.remove(&self.1);
+                }
             }
         }
     }
@@ -2116,7 +2216,8 @@ pub fn virtual_list<K: Eq + std::hash::Hash + Clone + 'static>(
                     return;
                 }
                 if let InputEvent::Scroll { delta_y, .. } = cx.event {
-                    if !delta_y.is_finite() {
+                    // A Control-wheel zooms the window instead.
+                    if !delta_y.is_finite() || crate::zoom::wheel_zooms() {
                         return;
                     }
                     let before = wheel_offset.get();
@@ -2151,7 +2252,11 @@ pub fn virtual_list<K: Eq + std::hash::Hash + Clone + 'static>(
             let (mut keys, mut order) = (Vec::new(), Vec::new());
             let mut handled_request = 0;
             // Scroll-to-row requests (`NodeHandle::scroll_to_row`).
-            let reveal = list_reveal(ui, root);
+            let reveal = list_reveal(
+                ui,
+                root,
+                Rc::new(move |y: f32| Some((y / row_height).round().max(0.) as usize)),
+            );
             let mut handled_reveal = 0;
             ui.bind(root, move || {
                 let length = count();
@@ -3898,7 +4003,7 @@ fn open_element(
                 if let Some(value) = span.styles.font_weight {
                     font.weight = value;
                 }
-                if let Some(value) = span.styles.italic {
+                if let Some(value) = span.styles.overflow().italic {
                     font.italic = value;
                 }
                 if let Some(value) = span.styles.line_height {
@@ -3916,6 +4021,7 @@ fn open_element(
                 let font_size = span
                     .styles
                     .text_size
+                    .get()
                     .unwrap_or_else(|| base.size_in(Some(&theme)));
                 let color = span
                     .styles
@@ -4689,7 +4795,8 @@ fn mount_scroll(
             delta_x, delta_y, ..
         } = cx.event
         {
-            if cx.default_prevented() {
+            // A Control-wheel zooms the window instead.
+            if cx.default_prevented() || crate::zoom::wheel_zooms() {
                 return;
             }
             let delta = if horizontal { delta_x } else { delta_y };
@@ -5324,10 +5431,15 @@ fn apply_accessibility(ui: &mut Ui, root: NodeId, accessibility: Accessibility, 
     let focus_group = focus_group.or(match role {
         Some(Role::ListBox) => Some(crate::input::FocusGroup::Vertical),
         Some(Role::TabList | Role::Toolbar) => Some(crate::input::FocusGroup::Horizontal),
+        // Every arrow, as a browser's radio buttons take them.
+        Some(Role::RadioGroup) => Some(crate::input::FocusGroup::Both),
         _ => None,
     });
     if let Some(axis) = focus_group {
         ui.input.set_focus_group(root, Some(axis));
+        // A radio group's arrows choose the radio they move to.
+        ui.input
+            .set_group_chooses(root, role == Some(Role::RadioGroup));
         // Its children mounted first: one already selected is its stop.
         let selected = {
             let scene = ui.scene.borrow();
@@ -5349,6 +5461,9 @@ fn apply_accessibility(ui: &mut Ui, root: NodeId, accessibility: Accessibility, 
         if let Some(member) = selected {
             ui.input.set_group_current(&ui.scene.borrow(), member);
         }
+    }
+    if role == Some(Role::ListBox) {
+        crate::typeahead::mount_list_box(ui, root);
     }
     {
         let mut semantics = ui.semantics.borrow_mut();
@@ -5896,9 +6011,9 @@ pub mod prelude {
     pub use super::{
         Context, Slot, VariableHeights, View, button, checkbox, column, component, div, image,
         image_signal, keyed, measured_rows, measured_virtual_list, menu, menu_item, modal, overlay,
-        popover, progress, provide, provide_with, row, scroll, scroll_x, scrollbar, slider,
-        submenu, switch, text, text_area, text_area_value, text_input, text_input_value,
-        text_signal, variable_virtual_list, virtual_list,
+        popover, progress, provide, provide_with, radio, radio_group, row, scroll, scroll_x,
+        scrollbar, slider, submenu, switch, text, text_area, text_area_value, text_input,
+        text_input_value, text_signal, variable_virtual_list, virtual_list,
     };
     pub use super::{RichTextView, TextSpan, rich_text, rich_text_signal, text_span};
     pub use super::{SplitOptions, split};

@@ -67,13 +67,9 @@ pub(crate) struct Node {
     /// `mask = { bitmap, w, h, x, y }`: the content shows through the
     /// bitmap's alpha, drawn at `w`×`h` from (`x`, `y`).
     pub mask: Option<Mask>,
-    /// `bg_shader = ui.shader(...)`: the box is filled by a WGSL function.
-    pub shader: Option<Arc<zgx::decoration::FillShader>>,
-    /// `shader_params`: the shader's sixteen values, as four vec4s.
-    pub shader_params: Option<[[f32; 4]; 4]>,
-    /// Parameters given as theme colours (`"$accent"`): resolved where the
-    /// node is styled, and again when the theme changes.
-    pub shader_tokens: [Option<zgx::theme::TokenId>; 4],
+    /// `bg_shader`, `shader_params`, `layer_shader` and `layer_params`
+    /// (boxed: few nodes have any).
+    pub shaders: Option<Box<Shaders>>,
     /// `window_drag = true`: a press on it moves the window.
     pub window_drag: bool,
     /// `selectable = true`: the pointer selects the text in it (`false`
@@ -380,7 +376,81 @@ fn web_options(table: &Table) -> mlua::Result<zgx::web_view::WebViewOptions> {
 #[derive(Clone)]
 pub(crate) struct ShaderUd(pub Arc<zgx::decoration::FillShader>);
 impl UserData for ShaderUd {}
+/// A node's shaders and their literal parameters.
+#[derive(Clone, Default)]
+pub(crate) struct Shaders {
+    /// `bg_shader = ui.shader(...)`: the box is filled by a WGSL function.
+    pub fill: Option<Arc<zgx::decoration::FillShader>>,
+    /// `shader_params`: the fill's sixteen values, as four vec4s.
+    pub params: Option<[[f32; 4]; 4]>,
+    /// Parameters given as theme colours (`"$accent"`): resolved where the
+    /// node is styled, and again when the theme changes.
+    pub tokens: [Option<zgx::theme::TokenId>; 4],
+    /// `layer_shader = ui.layer_shader(...)`: the subtree composites
+    /// through a WGSL function.
+    pub layer: Option<Arc<zgx::decoration::FillShader>>,
+    /// `layer_params`: the layer shader's sixteen values, as four vec4s.
+    pub layer_params: Option<[[f32; 4]; 4]>,
+}
+/// `ui.layer_shader(source, opts)`: a compiled layer shader, for
+/// `layer_shader` (see `zgx::scene::LayerShader`).
+pub(crate) struct LayerShaderUd(pub Arc<zgx::decoration::FillShader>);
+impl UserData for LayerShaderUd {}
 
+/// `shader_params` and `layer_params`: up to four vec4s, lists of numbers
+/// or colors (0 to 1); theme colours (`"$accent"`) bind to `tokens`' slots
+/// where it has them.
+fn shader_params(
+    lua: &Lua,
+    value: &mlua::Value,
+    name: &str,
+    mut tokens: Option<&mut [Option<zgx::theme::TokenId>; 4]>,
+) -> mlua::Result<[[f32; 4]; 4]> {
+    let mlua::Value::Table(list) = value else {
+        return Err(mlua::Error::runtime(format!(
+            "`{name}` takes a list of up to four vec4s"
+        )));
+    };
+    let mut params = [[0.; 4]; 4];
+    for (i, entry) in list.sequence_values::<mlua::Value>().enumerate().take(4) {
+        params[i] = match entry? {
+            mlua::Value::Table(v) => {
+                let mut out = [0.; 4];
+                for (j, n) in v.sequence_values::<f32>().enumerate().take(4) {
+                    out[j] = n?;
+                }
+                out
+            }
+            mlua::Value::String(token)
+                if token
+                    .to_str()
+                    .is_ok_and(|t| t.starts_with('$') && t.len() > 1) =>
+            {
+                let Some(tokens) = tokens.as_deref_mut() else {
+                    return Err(mlua::Error::runtime(format!(
+                        "`{name}` takes numbers or colors, not theme tokens"
+                    )));
+                };
+                let token = token.to_string_lossy();
+                tokens[i] = Some(zgx::theme::token(&token[1..]));
+                [0.; 4]
+            }
+            other => {
+                let value: Value = lua.unpack(other)?;
+                let c = color_of(&value).ok_or_else(|| {
+                    mlua::Error::runtime("a shader parameter is a list of numbers or a color")
+                })?;
+                [
+                    c.0 as f32 / 255.,
+                    c.1 as f32 / 255.,
+                    c.2 as f32 / 255.,
+                    c.3 as f32 / 255.,
+                ]
+            }
+        };
+    }
+    Ok(params)
+}
 /// `ui.bitmap(w, h, fn)`: pixels made by a script, for masks.
 #[derive(Clone)]
 pub(crate) struct BitmapUd(pub Arc<zgx::image::ImageData>);
@@ -428,9 +498,7 @@ impl Node {
             layout: None,
             layout_id: None,
             mask: None,
-            shader: None,
-            shader_params: None,
-            shader_tokens: [None; 4],
+            shaders: None,
             window_drag: false,
             selectable: None,
             selection_colors: None,
@@ -622,6 +690,9 @@ pub(crate) struct Events {
     /// `context_menu_below = true`: the menu opens under the node (a tab's),
     /// not at the pointer.
     pub context_menu_below: bool,
+    /// Whether any input handler is set (`any_input`): set with them, so
+    /// every node reads one flag rather than a dozen handlers.
+    pub input: bool,
 }
 impl Kind {
     /// Regions that become a box of any number of children, laid out as
@@ -664,19 +735,10 @@ impl Events {
         context_menu: None,
         context_menu_style: None,
         context_menu_below: false,
+        input: false,
     };
     pub fn any_input(&self) -> bool {
-        self.press.is_some()
-            || self.release.is_some()
-            || self.aux_click.is_some()
-            || self.hover.is_some()
-            || self.pointer_move.is_some()
-            || self.key.is_some()
-            || self.key_up.is_some()
-            || self.focus.is_some()
-            || self.blur.is_some()
-            || self.wheel.is_some()
-            || self.pinch.is_some()
+        self.input
     }
     pub fn any_drag(&self) -> bool {
         self.drag.is_some()
@@ -1255,6 +1317,7 @@ props! {
     "border_over" => BorderOver: Bool, "border_dash" => BorderDash: Pair,
     "shadow" => Shadow: Shadow, "inset_shadow" => InsetShadow: Shadow, "opacity" => Opacity: Num,
     "brightness" => Brightness: Num, "contrast" => Contrast: Num, "saturate" => Saturate: Num, "blur" => Blur: Num, "backdrop_blur" => BackdropBlur: Num,
+    "blend" => Blend: Str,
     "fade" => Fade: Pair, "fade_x" => FadeX: Pair, "fade_sides" => FadeSides: Corners,
     "fade_overflow" => FadeOverflow: Bool, "snap" => Snap: Bool,
     "clip_inset" => ClipInset: Corners, "clip_feather" => ClipFeather: Num, "layer" => Layer: Bool, "fit" => Fit: Str, "tint" => Tint: Color, "dither" => Dither: Num, "characters" => Characters: Num,
@@ -1268,6 +1331,7 @@ props! {
     "x" => X: Num, "y" => Y: Num,
     "scale" => Scale: Num, "scale_x" => ScaleX: Num, "scale_y" => ScaleY: Num,
     "rotate" => Rotate: Num, "skew" => Skew: Num, "skew_x" => SkewX: Num, "skew_y" => SkewY: Num,
+    "rotate_x" => RotateX: Num, "rotate_y" => RotateY: Num, "perspective" => Perspective: Num,
     "origin" => Origin: Pair,
 }
 
@@ -1426,7 +1490,13 @@ pub(crate) fn expect_node(value: mlua::Value, what: &str) -> mlua::Result<Rc<Nod
 }
 
 pub(crate) fn parse_color(text: &str) -> Option<Color> {
-    crate::anime::value::parse_color(text).map(crate::anime::target::v_to_color)
+    let text = text.trim();
+    if let Some(hex) = text.strip_prefix('#') {
+        let [r, g, b, a] = crate::anime::value::parse_hex_color(hex)?;
+        Some(Color(r, g, b, a))
+    } else {
+        crate::anime::value::parse_non_hex_color(text).map(crate::anime::target::v_to_color)
+    }
 }
 /// A colour or a theme token (`"$text.secondary"`).
 pub(crate) fn themed_color(value: &Value) -> Option<Themed<Color>> {
@@ -1819,8 +1889,8 @@ impl Child {
     }
 }
 
-/// `array_items`, each entry a `Child`.
-fn child_items(table: &Table) -> mlua::Result<Vec<Child>> {
+/// A table's indexed children, sorted when they are consumed.
+fn child_items(table: &Table) -> mlua::Result<Vec<(i64, Child)>> {
     let mut items = Vec::with_capacity(table.raw_len());
     table.for_each_borrowed(|key, value| {
         if let mlua::Value::Integer(i) = key.to_value()?
@@ -1830,7 +1900,7 @@ fn child_items(table: &Table) -> mlua::Result<Vec<Child>> {
         }
         Ok(())
     })?;
-    Ok(in_order(items))
+    Ok(items)
 }
 
 /// Appends children from a table's array part: nodes, strings (text),
@@ -1838,10 +1908,13 @@ fn child_items(table: &Table) -> mlua::Result<Vec<Child>> {
 fn children(
     lua: &Lua,
     owner: &Weak<Vm>,
-    items: Vec<Child>,
+    mut items: Vec<(i64, Child)>,
     out: &mut Vec<Rc<Node>>,
 ) -> mlua::Result<()> {
-    for child in items {
+    if !items.is_sorted_by_key(|(i, _)| *i) {
+        items.sort_unstable_by_key(|(i, _)| *i);
+    }
+    for (_, child) in items {
         let child = match child {
             Child::Node(node) => {
                 out.push(node);
@@ -2219,6 +2292,8 @@ fn set_handler(
         _ => return Ok(Some(value)),
     };
     *slot = Some(handler(value)?);
+    // Every slot but `on_click`'s is an input handler.
+    events.input |= key != "on_click";
     Ok(None)
 }
 
@@ -2262,6 +2337,28 @@ struct TextArgs {
     content: mlua::Value,
     literal: Option<bool>,
 }
+/// A numeric literal read without making either intermediate value enum.
+struct StackNumber(Option<f64>);
+impl FromLua for StackNumber {
+    fn from_lua(value: mlua::Value, _: &Lua) -> mlua::Result<Self> {
+        Ok(Self(match value {
+            mlua::Value::Integer(n) => Some(n as f64),
+            mlua::Value::Number(n) => Some(n),
+            _ => None,
+        }))
+    }
+    unsafe fn from_stack(idx: std::ffi::c_int, lua: &mlua::state::RawLua) -> mlua::Result<Self> {
+        use mlua::ffi;
+        let state = lua.state();
+        // SAFETY: the borrowed pair holds this slot during conversion.
+        // Reading a checked number neither allocates nor calls script.
+        let number = unsafe {
+            (ffi::lua_type(state, idx) == ffi::LUA_TNUMBER)
+                .then(|| ffi::lua_tonumberx(state, idx, std::ptr::null_mut()))
+        };
+        Ok(Self(number))
+    }
+}
 /// As `fill`, in place (a node is large to move), keeping a text's own
 /// fields in `text`.
 fn fill_from(
@@ -2296,16 +2393,26 @@ fn fill_from(
             .as_ref()
             .and_then(|keys| keys.0.borrow().get(&address).map(|(_, prop)| *prop));
         if let Some(prop) = known {
-            // A colour written out, the commonest string a style takes, is
-            // read where it lies (as `source_linted` reads it).
-            let written = (prop.ty() == Ty::Color)
-                .then(|| value.as_str())
-                .flatten()
-                .filter(|s| !s.starts_with('$'))
-                .and_then(parse_color);
+            // Literal colours and numbers are read where they lie, without
+            // making intermediate values. Everything else uses the general
+            // conversion and its errors, as an unfamiliar key does.
+            let written = match prop.ty() {
+                Ty::Color => value
+                    .as_str()
+                    .filter(|s| !s.starts_with('$'))
+                    .and_then(parse_color)
+                    .map(Lit::Color),
+                ty @ (Ty::Num | Ty::Len | Ty::Pair) => value.get::<StackNumber>()?.0.map(|n| {
+                    match ty {
+                        Ty::Num => Lit::Num(n as f32),
+                        Ty::Len => Lit::Len(Length::Px(n as f32)),
+                        _ => Lit::Pair(n as f32, n as f32),
+                    }
+                }),
+                _ => None,
+            };
             let source = match written {
-                Some(color) => {
-                    let lit = Lit::Color(color);
+                Some(lit) => {
                     lint_literal(lua, prop.name(), &lit, lint)?;
                     Source::Lit(lit)
                 }
@@ -2406,51 +2513,30 @@ fn fill_from(
                 let mlua::Value::UserData(ud) = &value else {
                     return Err(mlua::Error::runtime("`bg_shader` takes a ui.shader"));
                 };
-                node.shader = Some(ud.borrow::<ShaderUd>()?.0.clone());
+                node.shaders.get_or_insert_default().fill =
+                    Some(ud.borrow::<ShaderUd>()?.0.clone());
             }
             "shader_params" => {
-                // Up to four vec4s: lists of numbers, or colors (0 to 1).
-                let mlua::Value::Table(list) = &value else {
+                let shaders = node.shaders.get_or_insert_default();
+                shaders.params = Some(shader_params(
+                    lua,
+                    &value,
+                    "shader_params",
+                    Some(&mut shaders.tokens),
+                )?);
+            }
+            "layer_shader" => {
+                let mlua::Value::UserData(ud) = &value else {
                     return Err(mlua::Error::runtime(
-                        "`shader_params` takes a list of up to four vec4s",
+                        "`layer_shader` takes a ui.layer_shader",
                     ));
                 };
-                let mut params = [[0.; 4]; 4];
-                for (i, entry) in list.sequence_values::<mlua::Value>().enumerate().take(4) {
-                    params[i] = match entry? {
-                        mlua::Value::Table(v) => {
-                            let mut out = [0.; 4];
-                            for (j, n) in v.sequence_values::<f32>().enumerate().take(4) {
-                                out[j] = n?;
-                            }
-                            out
-                        }
-                        mlua::Value::String(token)
-                            if token
-                                .to_str()
-                                .is_ok_and(|t| t.starts_with('$') && t.len() > 1) =>
-                        {
-                            let name = token.to_string_lossy();
-                            node.shader_tokens[i] = Some(zgx::theme::token(&name[1..]));
-                            [0.; 4]
-                        }
-                        other => {
-                            let value: Value = lua.unpack(other)?;
-                            let c = color_of(&value).ok_or_else(|| {
-                                mlua::Error::runtime(
-                                    "a shader parameter is a list of numbers or a color",
-                                )
-                            })?;
-                            [
-                                c.0 as f32 / 255.,
-                                c.1 as f32 / 255.,
-                                c.2 as f32 / 255.,
-                                c.3 as f32 / 255.,
-                            ]
-                        }
-                    };
-                }
-                node.shader_params = Some(params);
+                node.shaders.get_or_insert_default().layer =
+                    Some(ud.borrow::<LayerShaderUd>()?.0.clone());
+            }
+            "layer_params" => {
+                node.shaders.get_or_insert_default().layer_params =
+                    Some(shader_params(lua, &value, "layer_params", None)?);
             }
             "mask" => {
                 let (bitmap, t) = match &value {
@@ -2796,7 +2882,7 @@ fn fill_from(
     // border_sides = …` keeps the per-side widths `border` would reset.
     node.props.sort_by_key(|(prop, _)| specificity(*prop));
     let mut kids = Vec::with_capacity(items.len());
-    children(lua, &node.owner, in_order(items), &mut kids)?;
+    children(lua, &node.owner, items, &mut kids)?;
     if !kids.is_empty() && !node.kind.takes_children() {
         return Err(mlua::Error::runtime(format!(
             "`{}` does not take children",
@@ -4196,6 +4282,35 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     ui.set(
+        "layer_shader",
+        lua.create_function(|_, (source, opts): (String, Option<Table>)| {
+            let fps = match &opts {
+                Some(t) => t.get::<Option<f32>>("fps")?,
+                None => None,
+            };
+            // One shader per source and rate: rebuilding a view does not
+            // compile it again.
+            type Shaders =
+                std::collections::HashMap<(String, Option<u32>), Arc<zgx::decoration::FillShader>>;
+            thread_local! {
+                static LAYER_SHADERS: RefCell<Shaders> = RefCell::default();
+            }
+            // A shader that does not compile is the script's error, shown
+            // with its line, not a layer composited as painted.
+            zgx_gpu::check_layer_shader(&source)
+                .map_err(|e| mlua::Error::runtime(format!("ui.layer_shader: {e}")))?;
+            let key = (source, fps.map(f32::to_bits));
+            let shader = LAYER_SHADERS.with(|shaders| {
+                shaders
+                    .borrow_mut()
+                    .entry(key.clone())
+                    .or_insert_with(|| zgx::decoration::FillShader::new(key.0.clone(), fps))
+                    .clone()
+            });
+            Ok(LayerShaderUd(shader))
+        })?,
+    )?;
+    ui.set(
         "bitmap",
         lua.create_function(|_, (w, h, f): (u32, u32, Function)| {
             if w == 0 || h == 0 || w > 4096 || h > 4096 {
@@ -4652,6 +4767,94 @@ pub(crate) fn retain(env: &Env, resource: Box<dyn Any>) {
 
 #[cfg(test)]
 mod tests {
+    /// A known style key keeps the same numeric bits and fallback errors
+    /// as a key read for the first time.
+    #[test]
+    fn cached_numeric_style_keys_keep_values_and_errors() {
+        use super::{Kind, Lit, Node, Prop, Source, StyleKeys, fill_from};
+        fn read(lua: &mlua::Lua, table: &mlua::Table) -> Result<Vec<u32>, String> {
+            let mut node = Node::new(Default::default(), Kind::Div);
+            fill_from(lua, &mut node, table, None, crate::DesignLint::Off)
+                .map_err(|e| e.to_string())?;
+            let Source::Lit(lit) = &node.props[0].1 else {
+                panic!("expected a literal");
+            };
+            Ok(match lit {
+                Lit::Num(n) | Lit::Len(zgx::layout::Length::Px(n)) => vec![n.to_bits()],
+                Lit::Pair(a, b) => vec![a.to_bits(), b.to_bits()],
+                Lit::Len(zgx::layout::Length::Percent(n)) => vec![1, n.to_bits()],
+                Lit::Len(zgx::layout::Length::Auto) => vec![2],
+                other => panic!("unexpected literal: {other:?}"),
+            })
+        }
+        let lua = mlua::Lua::new();
+        let mut values: Vec<mlua::Value> = [
+            0.,
+            -0.,
+            1.5,
+            -3.25,
+            f64::MIN_POSITIVE,
+            f64::MAX,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::from_bits(0x7ff8_1234_5678_0000),
+            (1_u64 << 53) as f64,
+        ]
+        .into_iter()
+        .map(mlua::Value::Number)
+        .collect();
+        values.extend([mlua::Value::Boolean(false), mlua::Value::Boolean(true)]);
+        for text in ["12", "25%", "auto", "not a number"] {
+            values.push(mlua::Value::String(lua.create_string(text).unwrap()));
+        }
+        values.push(mlua::Value::Table(
+            lua.create_sequence_from([2., 3.]).unwrap(),
+        ));
+        for prop in [Prop::W, Prop::Opacity, Prop::Origin] {
+            for value in &values {
+                lua.set_app_data(StyleKeys::default());
+                let table = lua.create_table().unwrap();
+                table.raw_set(prop.name(), value.clone()).unwrap();
+                let first = read(&lua, &table);
+                let cached = read(&lua, &table);
+                assert_eq!(cached, first, "{} = {value:?}", prop.name());
+            }
+        }
+    }
+    /// A hex colour read as bytes is the colour its animation value
+    /// (channels as `f64`, alpha a fraction) rounds back to, in each form
+    /// and at every channel value; and what is not hex is no colour.
+    #[test]
+    fn hex_colours_as_bytes_match_their_animation_values() {
+        let animated = |text: &str| {
+            crate::anime::value::parse_color(text).map(crate::anime::target::v_to_color)
+        };
+        for v in 0..=255_u8 {
+            let d = v >> 4;
+            for text in [
+                format!("#{v:02x}{:02x}{:02X}{:02x}", 255 - v, v / 3, v ^ 0x5a),
+                format!("#{v:02x}{:02x}{:02x}", 255 - v, v / 7),
+                format!("#{d:x}{:x}{:X}{:x}", 15 - d, d / 2, d ^ 5),
+                format!("#{d:x}{:x}{:x}", 15 - d, d / 3),
+                format!("  #{v:02x}{v:02x}{v:02x}  "),
+            ] {
+                assert_eq!(super::parse_color(&text), animated(&text), "{text}");
+                assert!(super::parse_color(&text).is_some(), "{text}");
+            }
+        }
+        for text in [
+            "#",
+            "#12",
+            "#12345",
+            "#1234567",
+            "#123456789",
+            "#12g",
+            "#１２３",
+        ] {
+            assert_eq!(super::parse_color(text), None, "{text}");
+            assert_eq!(animated(text), None, "{text}");
+        }
+    }
     /// A walk's borrowed key and value (`for_each_borrowed`, as `fill_from`
     /// reads properties) read the same from a callback nested in the walk's,
     /// whose stack frame holds other values at the pair's indices.

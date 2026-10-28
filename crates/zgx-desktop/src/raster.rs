@@ -2,7 +2,7 @@
 //! reference and headless tests.
 use fontdue::{Font, FontSettings, Metrics};
 use std::collections::HashMap;
-use zgx::scene::{Color, Effects, NodeKind, Rect, Scene};
+use zgx::scene::{BlendMode, Color, Effects, NodeKind, Rect, Scene};
 
 type StyledGlyphKey = (String, u32, u32, u32, zgx::text_layout::FontStyle);
 type RichGlyphImages = (
@@ -157,6 +157,21 @@ impl Raster {
                     };
                     if item.effects.blur_radius > 0. {
                         self.blur(visible, item.effects.blur_radius.ceil().min(64.) as usize);
+                    }
+                    // Find's marks, under the selection.
+                    for mark in scene.text_marks(item.id) {
+                        let rect = Rect::new(
+                            item.bounds.x + mark.rect.x,
+                            item.bounds.y + mark.rect.y,
+                            mark.rect.width,
+                            mark.rect.height,
+                        );
+                        let style = zgx::scene::QuadStyle {
+                            fill: tint(mark.color, item.color()),
+                            radius: 2.,
+                            ..Default::default()
+                        };
+                        self.quad(item.id, rect, clip, style, item.effects);
                     }
                     // A text selection, under the glyphs, and what recolours them.
                     if let Some(highlight) = scene.text_highlight(item.id) {
@@ -394,13 +409,16 @@ impl Raster {
             width as f32,
             height as f32,
         );
+        // Mixed with the pixels under it by its blend mode.
+        let mode = scene.blend(item.id);
         // A transformed layer samples back through its matrix (from this
         // target's origin), nearest texel, as transformed images do.
-        let matrix = item.matrix().map(|matrix| {
+        let matrix = item.projective().map(|matrix| {
+            use zgx::affine::{Affine, Projective};
             let (x, y) = self.origin;
-            zgx::affine::Affine::translation(x, y)
+            Projective::from(Affine::translation(x, y))
                 .then(matrix)
-                .then(zgx::affine::Affine::translation(-x, -y))
+                .then(Projective::from(Affine::translation(-x, -y)))
         });
         let inverse = match matrix.map(|matrix| matrix.inverse()) {
             Some(None) => return,
@@ -426,7 +444,8 @@ impl Raster {
                     Some(inverse) => {
                         let (x, y) = inverse.point(px as f32 + 0.5, py as f32 + 0.5);
                         let (sx, sy) = (x - output.x, y - output.y);
-                        if sx < 0. || sy < 0. || sx >= width as f32 || sy >= height as f32 {
+                        // (Behind the eye, in perspective, it is no point.)
+                        if !(sx >= 0. && sy >= 0. && sx < width as f32 && sy < height as f32) {
                             continue;
                         }
                         (sx as usize, sy as usize, y)
@@ -442,13 +461,14 @@ impl Raster {
                     ((((b >> shift) & 255) * 255 + alpha as u32 / 2) / alpha as u32).min(255) as u8
                 };
                 let color = Color(channel(16), channel(8), channel(0), alpha as u8);
-                blend(
-                    &mut self.pixels[py * self.width + px],
-                    color,
-                    item.effects.opacity
-                        * edge_alpha(fade_y, item.bounds, item.effects.edge_fade)
-                        * masked(sx as f32 + 0.5, sy as f32 + 0.5),
-                );
+                let pixel = &mut self.pixels[py * self.width + px];
+                let opacity = item.effects.opacity
+                    * edge_alpha(fade_y, item.bounds, item.effects.edge_fade)
+                    * masked(sx as f32 + 0.5, sy as f32 + 0.5);
+                match mode {
+                    BlendMode::Normal => blend(pixel, color, opacity),
+                    mode => blend_mixed(pixel, color, opacity, mode),
+                }
             }
         }
     }
@@ -1229,6 +1249,17 @@ fn blend(pixel: &mut u32, c: Color, opacity: f32) {
     let b = (c.2 as u32 * a + (*pixel & 255) * inv + 127) / 255;
     *pixel = (r << 16) | (g << 8) | b;
 }
+/// `blend` by `mode`: `c` mixed with the (opaque) pixel by the mode's
+/// formula, then over it.
+fn blend_mixed(pixel: &mut u32, c: Color, opacity: f32, mode: BlendMode) {
+    let channel = |shift: u32| ((*pixel >> shift) & 255) as f32 / 255.;
+    let cb = [channel(16), channel(8), channel(0)];
+    let cs = [c.0, c.1, c.2].map(|v| v as f32 / 255.);
+    let mixed = mode.mix(cb, cs);
+    let a = c.3 as f32 / 255. * opacity.clamp(0., 1.);
+    let [r, g, b] = [0, 1, 2].map(|i| ((cb[i] * (1. - a) + mixed[i] * a) * 255.).round() as u32);
+    *pixel = (r << 16) | (g << 8) | b;
+}
 fn intersect(a: Rect, b: Rect) -> Option<Rect> {
     let x = a.x.max(b.x);
     let y = a.y.max(b.y);
@@ -1706,6 +1737,40 @@ mod tests {
         // (y 10..40), but out of its corners.
         assert_eq!(raster.pixels[6 * 100 + 50], 0xff0000);
         assert_eq!(raster.pixels[12 * 100 + 37], 0x10141c);
+        let incremental = raster.pixels.clone();
+        raster.render(&s, &[s.bounds(background)]);
+        assert_eq!(incremental, raster.pixels);
+    }
+    #[test]
+    fn blended_and_tilted_layers_render_as_the_gpu_does() {
+        let mut s = scene();
+        let background = s.root();
+        let square = rectangle(&mut s, 35., Color(230, 102, 26, 255));
+        s.set_blend(square, BlendMode::Screen);
+        let mut raster = Raster::new(100, 80);
+        let damage = s.flush().damage;
+        raster.render(&s, &damage);
+        let [r, g, b] = BlendMode::Screen
+            .mix(
+                [16., 20., 28.].map(|v| v / 255.),
+                [230., 102., 26.].map(|v| v / 255.),
+            )
+            .map(|v| (v * 255.).round() as u32);
+        assert_eq!(raster.pixels[25 * 100 + 50], (r << 16) | (g << 8) | b);
+        // Tilted in perspective: the nearer (left) side reaches further up.
+        s.set_blend(square, BlendMode::Normal);
+        s.set_local_transform(
+            square,
+            zgx::scene::LocalTransform {
+                rotate_y: 0.6,
+                perspective: 120.,
+                ..Default::default()
+            },
+        );
+        let damage = s.flush().damage;
+        raster.render(&s, &damage);
+        let top = |x: usize| (0..80).find(|y| raster.pixels[y * 100 + x] == 0xe6661a);
+        assert!(top(42) < top(58), "{:?} {:?}", top(42), top(58));
         let incremental = raster.pixels.clone();
         raster.render(&s, &[s.bounds(background)]);
         assert_eq!(incremental, raster.pixels);

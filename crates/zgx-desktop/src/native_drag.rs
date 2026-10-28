@@ -86,13 +86,25 @@ pub(crate) struct Handoff {
     active: bool,
     deactivated: bool,
 }
+thread_local! {
+    /// How many windows' drags the platform has.
+    static HANDED_OFF: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+/// Whether the platform has a drag of the app's: over the app's windows it
+/// is the host's to carry (`WindowManager::native_drag`), not another app's
+/// (`text_drop`).
+pub(crate) fn handed_off() -> bool {
+    HANDED_OFF.with(|count| count.get() > 0)
+}
 impl Handoff {
     /// Whether the platform has the drag.
     pub(crate) fn active(&self) -> bool {
         self.active
     }
     pub(crate) fn begun(&mut self) {
-        self.active = true;
+        if !std::mem::replace(&mut self.active, true) {
+            HANDED_OFF.with(|count| count.set(count.get() + 1));
+        }
     }
     /// The window lost focus: whether it deactivates now (not while the
     /// platform has its drag).
@@ -107,8 +119,15 @@ impl Handoff {
     /// The platform's drag ended: whether the window's deactivation, held
     /// back meanwhile, is due now.
     pub(crate) fn ended(&mut self) -> bool {
-        self.active = false;
+        if std::mem::take(&mut self.active) {
+            HANDED_OFF.with(|count| count.set(count.get() - 1));
+        }
         std::mem::take(&mut self.deactivated)
+    }
+}
+impl Drop for Handoff {
+    fn drop(&mut self) {
+        self.ended();
     }
 }
 

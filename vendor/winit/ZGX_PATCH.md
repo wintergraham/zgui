@@ -139,3 +139,39 @@ acted on zgx's text.
     it), kept on the main thread; winit's view answers the three messages
     from it for plain text, and passes any other request to `NSView`
     (`view.rs`).
+
+## Text dragged in from other apps
+
+A browser's or an editor's selection dragged over a window carries text, and
+an app's text fields take it where it is let go. winit hears only drags
+carrying files (`WindowEvent::DroppedFile`): with no position while one
+moves, and no way to say whether the window takes it there, so the pointer
+shows no copy badge and every release would look taken.
+
+11. `platform::text_drop::TextDrops` and `set_text_drops`: an app's answers,
+    kept on the main thread, to a drag carrying text and no files: whether
+    it would drop at a point (physical pixels in the content, as
+    `CursorMoved`'s), that it left, and its text let go of at a point,
+    whether it was taken. The answer is the platform's: the pointer's badge,
+    and whether a release drops at all. The text is read once, as it drops.
+    - macOS (`window_delegate.rs`): the window also registers
+      `NSPasteboardTypeString`; `draggingEntered:` and a new
+      `draggingUpdated:` answer a copy where the app would take the text,
+      `performDragOperation:` hands it over, `draggingExited:` says it
+      left. A drag of the app's own (it has a `draggingSource`) is the
+      app's already, and is refused.
+    - X11 (`dnd.rs`, `event_processor.rs`): XDND's `text/plain;charset=utf-8`,
+      `UTF8_STRING` or `text/plain` (in that order) when no `text/uri-list`
+      is offered: each `XdndPosition`, translated to the window, is asked
+      and answered in `XdndStatus` (`XdndActionCopy`), not reset when
+      refused; the text is converted once accepted, and `XdndDrop` drops
+      it once it arrives (or as it does), `XdndFinished` saying whether it
+      was taken.
+    - Windows (`drop_handler.rs`): a data object with `CF_UNICODETEXT` and
+      no `CF_HDROP`: `DragEnter` and `DragOver` answer `DROPEFFECT_COPY`
+      where the app would take it (the point through `ScreenToClient`),
+      `Drop` reads the text (`GlobalLock`, `Win32_System_Memory`) and
+      answers whether it was taken, `DragLeave` says it left. The point
+      `DragEnter`, `DragOver` and `Drop` get is a `POINTL` by value, as COM
+      passes it (`definitions.rs` declared a pointer, never read before).
+    Wayland's drags reach zgx's own data device, not winit.

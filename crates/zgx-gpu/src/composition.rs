@@ -66,6 +66,7 @@ impl GpuRenderer {
             size.height,
             context,
             true,
+            false,
         )?;
         target.commit();
         renderer.composition = Some(target);
@@ -84,7 +85,7 @@ impl GpuRenderer {
     ) -> Result<Self, GpuError> {
         let target = Target { visual, device };
         let surface = target.surface(&context.inner.instance)?;
-        let mut renderer = Self::create_on(None, Some(surface), 1, 1, context, true)?;
+        let mut renderer = Self::create_on(None, Some(surface), 1, 1, context, true, false)?;
         target.commit();
         renderer.composition = Some(target);
         renderer.set_scale_factor(scale);

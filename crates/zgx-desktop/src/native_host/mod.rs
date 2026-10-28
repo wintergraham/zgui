@@ -56,6 +56,13 @@ pub(crate) struct NativeHost {
     /// Shared with the window's context (`WindowContext::native_diagnostics`).
     pub diagnostics: NativeDiagnosticsHandle,
     split: Rc<PlaneSplit>,
+    /// `split` in the zoomed window's points, where the platform places its
+    /// views (`PlaneSplit::zoomed`); `split` itself at 100%.
+    #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+    placed: Rc<PlaneSplit>,
+    /// The window's zoom (`Ui::zoom`) at the last plan.
+    #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+    zoom: f32,
     /// The window's DirectComposition tree, made with its renderer.
     #[cfg(all(windows, feature = "webview2"))]
     composition: Option<Rc<dcomp::Composition>>,
@@ -112,6 +119,10 @@ impl NativeHost {
             natives,
             diagnostics: Default::default(),
             split: Rc::new(PlaneSplit::default()),
+            #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+            placed: Rc::new(PlaneSplit::default()),
+            #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+            zoom: 1.,
             #[cfg(all(windows, feature = "webview2"))]
             composition: None,
             #[cfg(any(target_os = "macos", windows))]
@@ -243,6 +254,10 @@ impl NativeHost {
             self.composition = None;
         }
         self.split = Rc::new(PlaneSplit::default());
+        #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+        {
+            self.placed = self.split.clone();
+        }
         self.natives.set_split(self.split.clone());
     }
 }
@@ -250,14 +265,17 @@ impl NativeHost {
 #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
 impl NativeHost {
     /// After the scene's flush: split this frame's paint around native views
-    /// and give each plane's renderer its part. Returns damage the split adds
-    /// (paint that moved between planes repaints on both).
+    /// and give each plane's renderer its part, at content `scale` in a
+    /// window at `zoom` (`Ui::zoom`; native views are placed in its points).
+    /// Returns damage the split adds (paint that moved between planes
+    /// repaints on both).
     pub fn plan(
         &mut self,
         scene: &Scene,
         window: &winit::window::Window,
         renderer: &mut zgx_gpu::GpuRenderer,
         scale: f32,
+        zoom: f32,
     ) -> Result<Vec<Rect>, zgx_gpu::GpuError> {
         // Frames go with native geometry, in one transaction, while there is any.
         renderer.present_with_native_views(self.active());
@@ -273,6 +291,7 @@ impl NativeHost {
                 pointer: Default::default(),
                 #[cfg(target_os = "macos")]
                 unheard: Default::default(),
+                zoom: std::cell::Cell::new(1.),
             };
             #[cfg(target_os = "macos")]
             let surfaces = macos::Surfaces::new(window, router);
@@ -297,7 +316,14 @@ impl NativeHost {
         let (split, damage) = PlaneSplit::compute(scene, &self.natives.nodes(), &self.split);
         let split = Rc::new(split);
         let surfaces = self.surfaces.as_mut().expect("made above");
-        if surfaces.differs(&split, &self.split) {
+        // A new zoom moves every view without the split changing.
+        let rezoomed = self.zoom != zoom;
+        if rezoomed {
+            self.zoom = zoom;
+            surfaces.set_zoom(zoom);
+        }
+        let moved = surfaces.differs(&split, &self.split) || rezoomed;
+        if moved {
             self.pending = true;
             #[cfg(target_os = "macos")]
             renderer.present_plain_for(SYNCED);
@@ -322,7 +348,8 @@ impl NativeHost {
             self.overlay_scale = scale;
             #[cfg(target_os = "macos")]
             let overlay = zgx_gpu::GpuRenderer::for_overlay_layer(
-                surfaces.overlay_host(scale),
+                // Its layer's pixels to a point: the display's.
+                surfaces.overlay_host(scale / zoom),
                 &renderer.context(),
                 scale,
             )?;
@@ -340,6 +367,15 @@ impl NativeHost {
                     overlay.repaint_all();
                 }
             }
+        }
+        // Zoomed again only when something native moved: the platform
+        // reads only native views and backdrops (`differs`), and copying the
+        // whole split every frame of a zoomed window cost its sets' and maps'
+        // allocations for nothing.
+        if zoom == 1. {
+            self.placed = split.clone();
+        } else if moved {
+            self.placed = Rc::new(split.zoomed(zoom));
         }
         self.split = split.clone();
         self.natives.set_split(split);
@@ -390,7 +426,11 @@ impl NativeHost {
             zgx_gpu::present_log::log(|| {
                 format!("overlay show rect={rect:?} drawn={}", self.overlay_drawn)
             });
-            surfaces.show_overlay(rect);
+            // In the window's points: the zoom's times the plane's.
+            let zoom = self.zoom;
+            surfaces.show_overlay(
+                rect.map(|r| Rect::new(r.x * zoom, r.y * zoom, r.width * zoom, r.height * zoom)),
+            );
         }
         if self.overlay_live
             && !live
@@ -407,7 +447,7 @@ impl NativeHost {
     /// this frame's placements.
     pub fn apply(&mut self) {
         if let Some(surfaces) = &mut self.surfaces {
-            surfaces.apply(&self.natives, &self.split);
+            surfaces.apply(&self.natives, &self.placed);
         }
         self.pending = false;
     }
@@ -584,6 +624,7 @@ impl NativeHost {
         _: &Scene,
         _: &winit::window::Window,
         _: &mut zgx_gpu::GpuRenderer,
+        _: f32,
         _: f32,
     ) -> Result<Vec<Rect>, zgx_gpu::GpuError> {
         Ok(Vec::new())

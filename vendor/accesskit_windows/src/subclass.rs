@@ -68,6 +68,19 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
         WM_NCDESTROY => {
             r#impl.window_destroyed.set(true);
         }
+        // zgx patch: a client read past the placeholder.
+        message if message == crate::activation_message() => {
+            let mut state = r#impl.state.borrow_mut();
+            let state_mut = &mut *state;
+            let events = state_mut
+                .adapter
+                .activate(&mut *state_mut.activation_handler);
+            drop(state);
+            if let Some(events) = events {
+                events.raise();
+            }
+            return LRESULT(0);
+        }
         _ => (),
     }
     unsafe { CallWindowProcW(r#impl.prev_wnd_proc, window, message, wparam, lparam) }

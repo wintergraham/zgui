@@ -31,6 +31,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if event.phase==EventPhase::Capture&&matches!(&event.event,InputEvent::KeyDown{key:Key::Character(key),repeat:false,..}if key=="r"){
                     r.set(r.get()+1);let s=semantics.borrow();let position=s.get(event.target).and_then(|n|n.position_in_set);
                     println!("SNAPSHOT {} offset={:.0} position={position:?} live={} built={}",r.get(),v.get(),l.get(),b.get());
+                    // The probe's key alone: the list takes no typing from it.
+                    event.prevent_default();
+                    event.stop_propagation();
                 }
             });
             cx.on_closed(move||println!("VIRTUAL_KEYBOARD offset={:.0} live={} built={} reports={}",offset.get(),live.get(),built.get(),reports.get()));

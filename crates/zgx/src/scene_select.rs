@@ -33,6 +33,16 @@ impl TextHighlight {
     }
 }
 
+/// A mark behind a text node's glyphs, apart from its selection: a find
+/// match's (`Scene::set_text_marks`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextMark {
+    /// Its rectangle, from the text box's origin.
+    pub rect: Rect,
+    /// Its fill.
+    pub color: Color,
+}
+
 #[derive(Default)]
 pub(super) struct Selectable {
     /// `Scene::set_user_select`'s settings.
@@ -40,6 +50,7 @@ pub(super) struct Selectable {
     /// How many of them allow selection: none keeps cursors as they were.
     allowed: usize,
     highlights: HashMap<NodeId, TextHighlight>,
+    marks: HashMap<NodeId, Vec<TextMark>>,
 }
 impl Selectable {
     /// Whether anything allows selection.
@@ -53,6 +64,9 @@ impl Selectable {
         }
         if !self.highlights.is_empty() {
             self.highlights.remove(&id);
+        }
+        if !self.marks.is_empty() {
+            self.marks.remove(&id);
         }
     }
 }
@@ -159,12 +173,56 @@ impl Scene {
         }
         self.selectable.highlights.get(&id)
     }
+    /// Show `marks` behind text node `id`'s glyphs, under its selection (none:
+    /// no more). Repaints only where they changed; nothing is laid out.
+    pub fn set_text_marks(&mut self, id: NodeId, marks: Vec<TextMark>) {
+        let old = self
+            .selectable
+            .marks
+            .get(&id)
+            .map_or(&[][..], Vec::as_slice);
+        if !self.contains(id) || old == marks.as_slice() {
+            return;
+        }
+        let changed: Vec<Rect> = old
+            .iter()
+            .filter(|m| !marks.contains(m))
+            .chain(marks.iter().filter(|m| !old.contains(m)))
+            .map(|m| m.rect)
+            .collect();
+        if marks.is_empty() {
+            self.selectable.marks.remove(&id);
+        } else {
+            self.selectable.marks.insert(id, marks);
+        }
+        self.damage_text_rects(id, &changed);
+        self.invalidate(id, PAINTED);
+    }
+    /// The marks shown behind text node `id`'s glyphs.
+    pub fn text_marks(&self, id: NodeId) -> &[TextMark] {
+        if self.selectable.marks.is_empty() {
+            return &[];
+        }
+        self.selectable.marks.get(&id).map_or(&[], Vec::as_slice)
+    }
+    /// The text nodes showing marks.
+    pub fn marked_text(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.selectable.marks.keys().copied()
+    }
     /// Whether any text shows a selection: renderers look no further if not.
     pub fn has_text_highlights(&self) -> bool {
         !self.selectable.highlights.is_empty()
     }
     /// What a highlight adds to a text node's ink.
     pub(super) fn highlight_ink(&self, id: NodeId, bounds: Rect, ink: Rect) -> Rect {
+        let origin = Transform {
+            x: bounds.x,
+            y: bounds.y,
+        };
+        let ink = self
+            .text_marks(id)
+            .iter()
+            .fold(ink, |ink, m| ink.union(m.rect.translated(origin)));
         match self.text_highlight(id) {
             Some(highlight) => highlight.rects.iter().fold(ink, |ink, r| {
                 ink.union(r.translated(Transform {
@@ -301,7 +359,7 @@ impl Scene {
                 let bounds = node.bounds.translated(translation);
                 point = node
                     .local()
-                    .matrix(bounds)
+                    .projective(bounds)
                     .inverse()?
                     .point(point.0, point.1);
             }

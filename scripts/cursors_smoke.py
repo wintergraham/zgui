@@ -70,6 +70,12 @@ try:
     subprocess.run(['xdotool', 'mousemove', '--window', window, '80', '220', 'click', '1'], check=True)
     shapes['wait'] = cursor_at(window, 450, 125)
     assert shapes['wait']['sha256'] != shapes['crosshair']['sha256'], shapes
+    # Chrome's and AppKit's defaults: the arrow over a button, the hand
+    # over a link (the button's right, past the row's gap).
+    shapes['button'] = cursor_at(window, 80, 220)
+    assert shapes['button']['name'] == 'default', shapes
+    shapes['link'] = cursor_at(window, 175, 222)
+    assert shapes['link']['name'] == 'pointer', shapes
     shapes['restored'] = cursor_at(window, 590, 310)
     (a.output / 'cursor-observations.json').write_text(json.dumps(shapes, indent=2))
     # winit's initial Default inherits the X server cursor until a named
@@ -81,7 +87,7 @@ try:
     subprocess.run(['import', '-window', window, str(a.output / 'window.png')], check=True)
     (a.output / 'result.json').write_text(json.dumps(dict(passed=True, cursors=shapes,
         binary_sha256=hashlib.sha256(a.binary.read_bytes()).hexdigest()), indent=2) + '\n')
-    print('Native default, move, disabled, crosshair, reactive wait and restoration PASS')
+    print('Native default, move, disabled, crosshair, reactive wait, button arrow, link hand and restoration PASS')
 finally:
     x11.XCloseDisplay(display)
     if app.poll() is None:

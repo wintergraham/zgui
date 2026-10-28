@@ -1,12 +1,13 @@
 ---
-title: Results
-description: zgx against GPUI Fast, MyGo and Rune on one Mac, in one session, the same four scenes built from the same workload code.
+title: macOS
+description: zgx against GPUI Fast, MyGo and Rune on an Apple M5 Max, in one session, the same four scenes built from the same workload code.
 ---
 
 import Headline from '@/components/perf/Headline.astro';
 import BenchOverview from '@/components/home/BenchOverview.astro';
 import SceneCharts from '@/components/perf/SceneCharts.astro';
 import Method from '@/components/perf/Method.astro';
+import Startup from '@/components/perf/Startup.astro';
 
 <Headline />
 
@@ -14,7 +15,13 @@ import Method from '@/components/perf/Method.astro';
   <BenchOverview />
 </div>
 
+These are macOS's figures; Windows is measured on its own, in its own metrics, on [the Windows page](/performance/windows).
+
 **GPUI Fast** is Zed's GPUI with its fast-path optimizations, as apps ship it. **MyGo** is a Go desktop framework, measured through its GPU-drawn native UI. **Rune** is built on Rust, wgpu, Taffy and Parley. Every figure on this page is read at build time from the run that [`scripts/build_site.py`](https://github.com/zeronsh/zgx/blob/main/scripts/build_site.py) accepted, after it recomputed each median and range from the trials and checked them against the run's summaries.
+
+## Startup
+
+<Startup />
 
 ## Heavy dashboard
 

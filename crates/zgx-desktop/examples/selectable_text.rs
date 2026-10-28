@@ -14,6 +14,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // pasteboard back (its types and the HTML and plain text), print them
     // and quit. Reading what it wrote itself asks no one's permission.
     let pasteboard = std::env::args().any(|arg| arg == "--pasteboard-probe");
+    // Find in page (Command-F) driven from outside: its status as it
+    // changes, and the transcript's scroll (`find_in_page_smoke.py`).
+    let find_probe = std::env::args().any(|arg| arg == "--find-probe");
     Application::new()
         .window(WindowOptions {
             title: "zgx selectable text".into(),
@@ -24,6 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .run(move |cx| {
             let clicks = cx.ui.signal(0_u32);
             let transcript = cx.ui.signal(0_f32);
+            let transcript_offset = transcript.clone();
             let (count, link) = (clicks.clone(), clicks.clone());
             let item = |text: &str| {
                 row()
@@ -164,6 +168,64 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     window.close();
                 });
             }
+            if find_probe {
+                let ui = cx.ui.downgrade();
+                let offset = transcript_offset.clone();
+                cx.tasks.spawn(async move {
+                    let mut last = String::new();
+                    loop {
+                        let Some(ui) = ui.upgrade() else { return };
+                        let s = ui.find_status();
+                        // Text showing find's current mark, and any mark.
+                        let current = ui.theme_scope().color_untracked(tok::FIND_CURRENT);
+                        let (current_marks, marks) = {
+                            let scene = ui.scene.borrow();
+                            let marked: Vec<_> = scene.marked_text().collect();
+                            let current = marked
+                                .iter()
+                                .filter(|id| scene.text_marks(**id).iter().any(|m| m.color == current))
+                                .count();
+                            (current, marked.len())
+                        };
+                        let line = format!(
+                            "FIND open={} query={:?} count={} done={} current={:?} offset={:.0} marked={marks} current_marked={current_marks} selected={:?}",
+                            s.open,
+                            s.query,
+                            s.count,
+                            s.done,
+                            s.current,
+                            offset.get(),
+                            ui.selected_text()
+                        );
+                        if line != last {
+                            println!("{line}");
+                            last = line;
+                        }
+                        drop(ui);
+                        zgx::timer::sleep(std::time::Duration::from_millis(50)).await;
+                    }
+                });
+                // macOS: the keys as the keyboard sends them, to this
+                // window alone (`scripts/macos_find_probe.py`).
+                #[cfg(target_os = "macos")]
+                cx.tasks.spawn(async {
+                    use std::time::Duration;
+                    zgx::timer::sleep(Duration::from_millis(1500)).await;
+                    keys::press("f", 3, true);
+                    zgx::timer::sleep(Duration::from_millis(300)).await;
+                    for c in "line 7777)".chars() {
+                        keys::press(&c.to_string(), 0, false);
+                        zgx::timer::sleep(Duration::from_millis(30)).await;
+                    }
+                    zgx::timer::sleep(Duration::from_millis(1500)).await;
+                    keys::press("\r", 36, false);
+                    zgx::timer::sleep(Duration::from_millis(300)).await;
+                    keys::press("\u{1b}", 53, false);
+                    zgx::timer::sleep(Duration::from_millis(500)).await;
+                    println!("FIND_PROBE_DONE");
+                    std::process::exit(0);
+                });
+            }
             if smoke {
                 let ui = cx.ui.downgrade();
                 let window = cx.window.clone();
@@ -235,4 +297,41 @@ fn report_pasteboard(text: &str, html: &str) {
 #[cfg(not(target_os = "macos"))]
 fn report_pasteboard(_: &str, _: &str) {
     println!("PASTEBOARD unsupported: macOS only");
+}
+
+#[cfg(target_os = "macos")]
+mod keys {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSEvent, NSEventModifierFlags, NSEventType};
+    use objc2_foundation::{NSPoint, NSString};
+    /// `characters` (key code `code`) pressed and released, with Command
+    /// if `command`, sent to this app's key window as AppKit delivers a
+    /// key: the user's keyboard and other apps hear nothing.
+    pub fn press(characters: &str, code: u16, command: bool) {
+        let app = NSApplication::sharedApplication(MainThreadMarker::new().unwrap());
+        let Some(window) = app.keyWindow() else {
+            return;
+        };
+        let flags = if command {
+            NSEventModifierFlags::Command
+        } else {
+            NSEventModifierFlags::empty()
+        };
+        for kind in [NSEventType::KeyDown, NSEventType::KeyUp] {
+            let event = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+                kind,
+                NSPoint::new(0., 0.),
+                flags,
+                0.,
+                window.windowNumber(),
+                None,
+                &NSString::from_str(characters),
+                &NSString::from_str(characters),
+                false,
+                code,
+            )
+            .unwrap();
+            app.sendEvent(&event);
+        }
+    }
 }

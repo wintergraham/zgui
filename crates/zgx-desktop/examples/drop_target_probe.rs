@@ -7,6 +7,11 @@
 //! it shows the drag's image over itself (`IDropTargetHelper`), and like
 //! Explorer it describes the drop under that image ("Copy to …",
 //! `CFSTR_DROPDESCRIPTION`), printing `DESCRIBED` once it has.
+//!
+//! With `--source=TEXT` it is another app's drag source instead, for probes
+//! of text dropped into zgx: a press in it drags TEXT (`CF_UNICODETEXT`, in
+//! Shell's data object), as a browser's selection drags, and it prints
+//! `SOURCE_END dropped=… effect=…` as each drag ends.
 #[cfg(windows)]
 fn main() -> windows::core::Result<()> {
     target::run()
@@ -27,7 +32,10 @@ mod target {
     };
     use windows::{
         Win32::{
-            Foundation::{HWND, LPARAM, LRESULT, POINT, POINTL, RECT, WPARAM},
+            Foundation::{
+                DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, GlobalFree, HWND,
+                LPARAM, LRESULT, POINT, POINTL, RECT, S_OK, WPARAM,
+            },
             Graphics::Gdi::{
                 BeginPaint, CreateSolidBrush, EndPaint, FillRect, HBRUSH, PAINTSTRUCT,
             },
@@ -40,10 +48,11 @@ mod target {
                 LibraryLoader::GetModuleHandleW,
                 Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock},
                 Ole::{
-                    CF_HDROP, CF_UNICODETEXT, DROPEFFECT, DROPEFFECT_COPY, IDropTarget,
-                    IDropTarget_Impl, OleInitialize, RegisterDragDrop, ReleaseStgMedium,
+                    CF_HDROP, CF_UNICODETEXT, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
+                    DoDragDrop, IDropSource, IDropSource_Impl, IDropTarget, IDropTarget_Impl,
+                    OleInitialize, RegisterDragDrop, ReleaseStgMedium,
                 },
-                SystemServices::MODIFIERKEYS_FLAGS,
+                SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS},
             },
             UI::{
                 HiDpi::{
@@ -51,18 +60,88 @@ mod target {
                 },
                 Shell::{
                     CLSID_DragDropHelper, DROPDESCRIPTION, DROPIMAGE_COPY, DragQueryFileW, HDROP,
-                    IDropTargetHelper,
+                    IDropTargetHelper, SHCreateDataObject,
                 },
                 WindowsAndMessaging::{
                     CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW,
                     GetWindowRect, MSG, PostQuitMessage, RegisterClassExW, SendMessageW,
-                    TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY, WM_PAINT, WM_USER, WNDCLASSEXW,
-                    WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+                    TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY, WM_LBUTTONDOWN, WM_PAINT,
+                    WM_USER, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
                 },
             },
         },
-        core::{Ref, implement, w},
+        core::{BOOL, HRESULT, Ref, implement, w},
     };
+
+    thread_local! {
+        /// `--source=TEXT`: the text a press drags.
+        static SOURCE: RefCell<Option<String>> = const { RefCell::new(None) };
+    }
+
+    /// The source's drag: dropped as the button is let go, cancelled by
+    /// Escape.
+    #[implement(IDropSource)]
+    struct Source;
+    impl IDropSource_Impl for Source_Impl {
+        fn QueryContinueDrag(&self, escape: BOOL, keys: MODIFIERKEYS_FLAGS) -> HRESULT {
+            if escape.as_bool() {
+                DRAGDROP_S_CANCEL
+            } else if keys.0 & MK_LBUTTON.0 != 0 {
+                S_OK
+            } else {
+                DRAGDROP_S_DROP
+            }
+        }
+        fn GiveFeedback(&self, _: DROPEFFECT) -> HRESULT {
+            DRAGDROP_S_USEDEFAULTCURSORS
+        }
+    }
+
+    /// Drag `text` as another app's selection drags, until it ends.
+    fn drag_text(text: &str) {
+        let units: Vec<u8> = text
+            .encode_utf16()
+            .chain([0])
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        // SAFETY: Shell's own data object, given a block holding the text
+        // (`fRelease`: it owns it then); DoDragDrop on this, OLE's thread,
+        // with our source, both alive across it.
+        unsafe {
+            let Ok(data) = SHCreateDataObject::<_, IDataObject>(None, None, None) else {
+                return;
+            };
+            let Ok(handle) = GlobalAlloc(GMEM_MOVEABLE, units.len()) else {
+                return;
+            };
+            let at = GlobalLock(handle);
+            if at.is_null() {
+                let _ = GlobalFree(Some(handle));
+                return;
+            }
+            std::ptr::copy_nonoverlapping(units.as_ptr(), at.cast::<u8>(), units.len());
+            let _ = GlobalUnlock(handle);
+            let medium = STGMEDIUM {
+                tymed: TYMED_HGLOBAL.0 as u32,
+                u: STGMEDIUM_0 { hGlobal: handle },
+                pUnkForRelease: ManuallyDrop::new(None),
+            };
+            if data
+                .SetData(&format(CF_UNICODETEXT.0), &medium, true)
+                .is_err()
+            {
+                return;
+            }
+            let source: IDropSource = Source.into();
+            let mut effect = DROPEFFECT_NONE;
+            let result = DoDragDrop(&data, &source, DROPEFFECT_COPY, &mut effect);
+            say(&format!(
+                "SOURCE_END dropped={} effect={}",
+                result == DRAGDROP_S_DROP,
+                effect.0
+            ));
+        }
+    }
 
     #[implement(IDropTarget)]
     struct Target {
@@ -294,6 +373,12 @@ mod target {
                 }
                 LRESULT(0)
             }
+            WM_LBUTTONDOWN => {
+                if let Some(text) = SOURCE.with(|source| source.borrow().clone()) {
+                    drag_text(&text);
+                }
+                LRESULT(0)
+            }
             WM_DESTROY => {
                 // SAFETY: ends this thread's message loop.
                 unsafe { PostQuitMessage(0) };
@@ -339,6 +424,10 @@ mod target {
                 Some(instance.into()),
                 None,
             )?;
+            let text =
+                std::env::args().find_map(|arg| Some(arg.strip_prefix("--source=")?.to_owned()));
+            let source = text.is_some();
+            SOURCE.with(|cell| *cell.borrow_mut() = text);
             let helper = CoCreateInstance(&CLSID_DragDropHelper, None, CLSCTX_INPROC_SERVER).ok();
             let target: IDropTarget = Target {
                 hwnd,
@@ -346,7 +435,9 @@ mod target {
                 describing: RefCell::new(None),
             }
             .into();
-            RegisterDragDrop(hwnd, &target)?;
+            if !source {
+                RegisterDragDrop(hwnd, &target)?;
+            }
             let mut rect = RECT::default();
             GetWindowRect(hwnd, &mut rect)?;
             say(&format!(

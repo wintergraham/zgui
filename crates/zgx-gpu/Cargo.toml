@@ -31,12 +31,12 @@ vulkan = ["wgpu/vulkan"]
 
 [dependencies]
 smallvec = "1.16"
-zgx = { path = "../zgx", version = "0.1.2" }
+zgx = { path = "../zgx", version = "0.1.3" }
 # wgpu's defaults less WebGPU (the browser's), and Vulkan and GL, which only
 # Linux and its kind always build (below).
 wgpu = { version = "29.0.4", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "wgsl"] }
 winit = "0.30.13"
-cosmic-text = { package = "zgx-cosmic-text", version = "0.19.1", path = "../../vendor/cosmic-text", features = ["shape-run-cache"] }
+cosmic-text = { package = "zgx-cosmic-text", version = "0.19.2", path = "../../vendor/cosmic-text", features = ["shape-run-cache"] }
 pollster = "0.4"
 bytemuck = { version = "1.25", features = ["derive"] }
 image = { version = "0.25.10", default-features = false }
@@ -59,7 +59,7 @@ wgpu = { version = "29.0.4", default-features = false, features = ["vulkan"] }
 
 # DXGI frame statistics for ZGX_PRESENT_LOG (dxgi.rs); the version wgpu-hal uses.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", default-features = false, features = ["Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Dwm", "Win32_System_Performance"] }
+windows = { version = "0.62", default-features = false, features = ["Win32_Foundation", "Win32_Graphics_Direct3D12", "Win32_Graphics_DirectComposition", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Dwm", "Win32_System_Performance", "Win32_System_Threading"] }
 # wgpu's own (`wgpu::hal`), named so build.rs reads whether it is the
 # repository's (its `links` metadata: `preferred_dx12_adapter`).
 wgpu-hal = { version = "29.0.4", default-features = false }

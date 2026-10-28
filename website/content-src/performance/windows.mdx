@@ -1,0 +1,43 @@
+---
+title: Windows
+description: zgx against GPUI Fast, MyGo and Rune on a Windows 11 PC, in its own metrics, never ranked against macOS.
+---
+
+import WinFacts from '@/components/perf/WinFacts.astro';
+import WinScene from '@/components/perf/WinScene.astro';
+import Startup from '@/components/perf/Startup.astro';
+import WinBehind from '@/components/perf/WinBehind.astro';
+
+<WinFacts />
+
+## Where zgx is furthest behind
+
+<WinBehind />
+
+## Startup
+
+<Startup platform="windows" />
+
+## Heavy dashboard
+
+<WinScene scene="heavy" />
+
+## Text and a 100,000-row list
+
+<WinScene scene="lab" />
+
+## Animation
+
+<WinScene scene="animate" />
+
+## Variable-height list
+
+<WinScene scene="vlist">
+
+> **Why zgx's fling shows long frames here.** zgx scrolls in whole device pixels, as Chrome and Windows' own lists do, so text stays crisp. The fling ends slowly: its last ticks move the list less than a pixel each (160 px a tick, decaying to 0.6), so on some refreshes nothing moves on screen, and the capture counts those as long frames. zgx still presented on every refresh, its GPU work done within 0.2 ms of each present; scrolling a steady 12 or 3 px a tick, it shows none. Rune draws at fractional positions, so its pixels change on every tick.
+
+</WinScene>
+
+## Data
+
+Every trial is under [docs/results](https://github.com/zeronsh/zgx/tree/main/docs/results); this page's numbers are [site/windows/data.json](https://github.com/zeronsh/zgx/blob/main/site/windows/data.json). How the Windows runs are made: [methodology, on Windows](/performance/methodology#on-windows).

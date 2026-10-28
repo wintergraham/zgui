@@ -95,6 +95,10 @@ atom_manager! {
     XdndFinished,
     XdndTypeList,
     TextUriList: b"text/uri-list",
+    // zgx patch: text dragged in (`platform::text_drop`).
+    XdndActionCopy,
+    TextPlainUtf8: b"text/plain;charset=utf-8",
+    TextPlain: b"text/plain",
     None: b"None",
 
     // Miscellaneous Atoms

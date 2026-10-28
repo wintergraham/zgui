@@ -4,6 +4,11 @@ import { environment as env, toolchains as tools, protocol as p, commit, repo , 
 const displays = env.displays as { name: string; resolution: string; main: boolean }[];
 const display = `${displays.length} × ${displays[0].name} (${displays[0].resolution})`;
 const mygo = tools.mygo;
+// Since 2026-10-26 a trial's sample starts from its window being ready, not
+// its launch (scripts/build_site.py says the same).
+const ready = 'sampling_anchor' in p;
+const anchor = ready ? 'after its window was ready (frontmost and uncovered)' : 'after launch';
+const anchorShort = ready ? 'after its window was ready' : 'after launch';
 const rune = tools.rune;
 ---
 
@@ -14,8 +19,15 @@ const rune = tools.rune;
     <strong>Builds:</strong> zgx and GPUI Fast with their <code>dist</code> profile ({tools.rust_profile}), {tools.rust}; MyGo {mygo.mygo_version} ({mygo.mygo_commit.slice(0, 7)}, {mygo.mygo_license}) built with {mygo.go}, <code>go build {mygo.flags}</code>, cgo {mygo.cgo ? 'on' : 'off'}; Rune at {rune.rune_rev.slice(0, 8)} ({rune.rune_branch}, {rune.rune_license}), profile {rune.profile}, and a 14-line patch exposing its wheel path. Every framework uses the system allocator. zgx at <a href={`${repo}/commit/${commit}`}><code>{commit.slice(0, 7)}</code></a>.
   </li>
   <li>
-    <strong>Trials:</strong> each a fresh launch, the first {p.warmup_seconds} s discarded and the next {p.sampled_seconds} s sampled every {Math.round(p.interval_seconds * 1000)} ms; {p.repeats} trials of each mode, in alternating order, and {p.extra_trials} more of any whose CPU or GPU spread past {Math.round(p.spread_for_extra_trials * 100)}% of its median; idle {p.idle_repeats} times in the dashboard, {p.idle_window_seconds[0]}–{p.idle_window_seconds[1]} s after launch. Every trial had to run as long as asked, at 60 updates a second. Medians are shown, the trials' range beside them. Frame timing is {p.pacing_repeats} separate {p.pacing_seconds} s captures of each mode.
+    <strong>Trials:</strong> each a fresh launch, the first {p.warmup_seconds} s {anchor} discarded and the next {p.sampled_seconds} s sampled every {Math.round(p.interval_seconds * 1000)} ms; {p.repeats} trials of each mode, in alternating order, and {p.extra_trials} more of any whose CPU or GPU spread past {Math.round(p.spread_for_extra_trials * 100)}% of its median; idle {p.idle_repeats} times in the dashboard, {p.idle_window_seconds[0]}–{p.idle_window_seconds[1]} s {anchorShort}. Every trial had to run as long as asked, at 60 updates a second. Medians are shown, the trials' range beside them. Frame timing is {p.pacing_repeats} separate {p.pacing_seconds} s captures of each mode.
   </li>
+  {
+    ready && (
+      <li>
+        <strong>Not ranked against earlier runs:</strong> since 2026-10-26 a trial's sample starts from its window being ready (frontmost and uncovered, polled up to {(p as any).readiness_timeout_seconds ?? 2.5} s), not from its launch, and each app runs {(p as any).lifetime_margin_seconds ?? 3} s longer; earlier runs measured from launch.
+      </li>
+    )
+  }
 </ul>
 <h3 id="how-rune-is-driven">How Rune is driven</h3>
 <ul set:html={text.rune_notes} />

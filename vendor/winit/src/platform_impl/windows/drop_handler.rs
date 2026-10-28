@@ -7,7 +7,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use windows_sys::core::{IUnknown, GUID, HRESULT};
 use windows_sys::Win32::Foundation::{DV_E_FORMATETC, HWND, POINTL, S_OK};
 use windows_sys::Win32::System::Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL};
-use windows_sys::Win32::System::Ole::{CF_HDROP, DROPEFFECT_COPY, DROPEFFECT_NONE};
+use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+use windows_sys::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+use windows_sys::Win32::System::Ole::{
+    ReleaseStgMedium, CF_HDROP, CF_UNICODETEXT, DROPEFFECT_COPY, DROPEFFECT_NONE,
+};
 use windows_sys::Win32::UI::Shell::{DragFinish, DragQueryFileW, HDROP};
 
 use tracing::debug;
@@ -29,6 +33,8 @@ pub struct FileDropHandlerData {
     cursor_effect: u32,
     hovered_is_valid: bool, /* If the currently hovered item is not valid there must not be any
                              * `HoveredFileCancelled` emitted */
+    /// zgx patch: the drag carries text, not files (`platform::text_drop`).
+    text: bool,
 }
 
 pub struct FileDropHandler {
@@ -45,6 +51,7 @@ impl FileDropHandler {
             send_event,
             cursor_effect: DROPEFFECT_NONE,
             hovered_is_valid: false,
+            text: false,
         });
         FileDropHandler { data: Box::into_raw(data) }
     }
@@ -80,7 +87,7 @@ impl FileDropHandler {
         this: *mut IDropTarget,
         pDataObj: *const IDataObject,
         _grfKeyState: u32,
-        _pt: *const POINTL,
+        pt: POINTL,
         pdwEffect: *mut u32,
     ) -> HRESULT {
         use crate::event::WindowEvent::HoveredFile;
@@ -94,6 +101,14 @@ impl FileDropHandler {
             })
         };
         drop_handler.hovered_is_valid = hdrop.is_some();
+        // zgx patch: text, not files, goes where the window says.
+        drop_handler.text = hdrop.is_none()
+            && crate::platform::text_drop::text_drops().is_some()
+            && unsafe { Self::has_text(pDataObj) };
+        if drop_handler.text {
+            unsafe { *pdwEffect = drop_handler.text_over(pt) };
+            return S_OK;
+        }
         drop_handler.cursor_effect =
             if drop_handler.hovered_is_valid { DROPEFFECT_COPY } else { DROPEFFECT_NONE };
         unsafe {
@@ -106,10 +121,14 @@ impl FileDropHandler {
     pub unsafe extern "system" fn DragOver(
         this: *mut IDropTarget,
         _grfKeyState: u32,
-        _pt: *const POINTL,
+        pt: POINTL,
         pdwEffect: *mut u32,
     ) -> HRESULT {
         let drop_handler = unsafe { Self::from_interface(this) };
+        if drop_handler.text {
+            unsafe { *pdwEffect = drop_handler.text_over(pt) };
+            return S_OK;
+        }
         unsafe {
             *pdwEffect = drop_handler.cursor_effect;
         }
@@ -120,6 +139,12 @@ impl FileDropHandler {
     pub unsafe extern "system" fn DragLeave(this: *mut IDropTarget) -> HRESULT {
         use crate::event::WindowEvent::HoveredFileCancelled;
         let drop_handler = unsafe { Self::from_interface(this) };
+        if std::mem::take(&mut drop_handler.text) {
+            if let Some(drops) = crate::platform::text_drop::text_drops() {
+                drops.out(drop_handler.id());
+            }
+            return S_OK;
+        }
         if drop_handler.hovered_is_valid {
             drop_handler.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(drop_handler.window)),
@@ -134,11 +159,26 @@ impl FileDropHandler {
         this: *mut IDropTarget,
         pDataObj: *const IDataObject,
         _grfKeyState: u32,
-        _pt: *const POINTL,
+        pt: POINTL,
         _pdwEffect: *mut u32,
     ) -> HRESULT {
         use crate::event::WindowEvent::DroppedFile;
         let drop_handler = unsafe { Self::from_interface(this) };
+        if std::mem::take(&mut drop_handler.text) {
+            let drops = crate::platform::text_drop::text_drops();
+            let (x, y) = unsafe { drop_handler.client_point(pt) };
+            let taken = match (unsafe { Self::text(pDataObj) }, &drops) {
+                (Some(text), Some(drops)) => drops.dropped(drop_handler.id(), x, y, &text),
+                _ => false,
+            };
+            if !taken {
+                if let Some(drops) = drops {
+                    drops.out(drop_handler.id());
+                }
+            }
+            unsafe { *_pdwEffect = if taken { DROPEFFECT_COPY } else { DROPEFFECT_NONE } };
+            return S_OK;
+        }
         let hdrop = unsafe {
             Self::iterate_filenames(pDataObj, |filename| {
                 drop_handler.send_event(Event::WindowEvent {
@@ -152,6 +192,43 @@ impl FileDropHandler {
         }
 
         S_OK
+    }
+
+    /// zgx patch: `CF_UNICODETEXT` in an `HGLOBAL`.
+    fn text_format() -> FORMATETC {
+        FORMATETC {
+            cfFormat: CF_UNICODETEXT,
+            ptd: ptr::null_mut(),
+            dwAspect: DVASPECT_CONTENT,
+            lindex: -1,
+            tymed: TYMED_HGLOBAL as u32,
+        }
+    }
+
+    /// zgx patch: whether the data object has text.
+    unsafe fn has_text(data_obj: *const IDataObject) -> bool {
+        let query = unsafe { (*(*data_obj).cast::<IDataObjectVtbl>()).QueryGetData };
+        unsafe { query(data_obj as *mut _, &Self::text_format()) == S_OK }
+    }
+
+    /// zgx patch: the data object's text.
+    unsafe fn text(data_obj: *const IDataObject) -> Option<String> {
+        let mut medium = unsafe { std::mem::zeroed() };
+        let get_data_fn = unsafe { (*(*data_obj).cast::<IDataObjectVtbl>()).GetData };
+        if unsafe { get_data_fn(data_obj as *mut _, &Self::text_format(), &mut medium) } < 0 {
+            return None;
+        }
+        let global = unsafe { medium.u.hGlobal };
+        let units = unsafe { GlobalLock(global) } as *const u16;
+        let text = (!units.is_null()).then(|| {
+            // NUL-terminated UTF-16.
+            let length = (0..).take_while(|&i| unsafe { *units.add(i) } != 0).count();
+            let text = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(units, length) });
+            unsafe { GlobalUnlock(global) };
+            text
+        });
+        unsafe { ReleaseStgMedium(&mut medium) };
+        text
     }
 
     unsafe fn from_interface<'a, InterfaceT>(this: *mut InterfaceT) -> &'a mut FileDropHandlerData {
@@ -213,6 +290,31 @@ impl FileDropHandler {
 impl FileDropHandlerData {
     fn send_event(&self, event: Event<()>) {
         (self.send_event)(event);
+    }
+
+    fn id(&self) -> RootWindowId {
+        RootWindowId(WindowId(self.window))
+    }
+
+    /// zgx patch: screen point `pt` (COM passes it by value) in the
+    /// window's client pixels.
+    unsafe fn client_point(&self, pt: POINTL) -> (f64, f64) {
+        let mut point = windows_sys::Win32::Foundation::POINT { x: pt.x, y: pt.y };
+        unsafe { ScreenToClient(self.window, &mut point) };
+        (point.x as f64, point.y as f64)
+    }
+
+    /// zgx patch: the text drag moved to screen point `pt`: a copy where
+    /// the window would take it, else nothing.
+    unsafe fn text_over(&self, pt: POINTL) -> u32 {
+        let (x, y) = unsafe { self.client_point(pt) };
+        let over = crate::platform::text_drop::text_drops()
+            .is_some_and(|drops| drops.over(self.id(), x, y));
+        if over {
+            DROPEFFECT_COPY
+        } else {
+            DROPEFFECT_NONE
+        }
     }
 }
 

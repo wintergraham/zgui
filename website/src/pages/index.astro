@@ -1,229 +1,248 @@
 ---
-// The home page: static HTML, no React. Its words are README.md's, its
-// samples README's quick start, its numbers the published benchmark, its doc
-// sets the manifest's, its version crates.io's.
-import { Box, FileCode, MonitorSmartphone, SquareTerminal, Gauge, ArrowRight } from 'lucide-react';
+// The home page (design/BRIEF.md). Static HTML and CSS; small scripts for the
+// theme toggle, sections fading in, and the chart's entrance. Its samples are
+// getting started's, its numbers the published benchmark's, its doc sets the
+// manifest's, its version crates.io's.
+import { Box, FileCode, MonitorSmartphone, SquareTerminal, Gauge, ArrowRight, BookOpen, Layers } from 'lucide-react';
 import Base from '@/layouts/Base.astro';
 import BenchOverview from '@/components/home/BenchOverview.astro';
 import CodeBlocks from '@/components/CodeBlocks.astro';
 import readme from '@/generated/readme.json';
 import { sets } from '../../docs.manifest.mjs';
-import { headline, date, commit, repo, fmt, scene, value } from '@/lib/perf';
+import { headline, fmt, scene, value, startupLead } from '@/lib/perf';
 import { repoUrl } from '@/lib/shared';
 import { publishedVersion, workspaceVersion } from '@/lib/repo';
 import { codeBlock, codeTabs } from '@/lib/highlight';
-import fs from 'node:fs';
-import path from 'node:path';
+import { available as hasWindows } from '@/lib/perf-windows';
 
 const published = await publishedVersion();
 const version = published ?? workspaceVersion();
 const icons = { Box, FileCode, MonitorSmartphone, SquareTerminal, Gauge } as const;
 const h = headline();
 const heavy = scene('heavy');
-const [first, second] = readme.lede.split(/(?<=\.) /);
 
-const samples = codeTabs(
+const samples = await codeTabs(
   [
-    { code: readme.rust, lang: 'rust', title: 'main.rs' },
-    { code: readme.luau, lang: 'luau', title: 'app.luau' },
+    { code: readme.samples.rust, lang: 'rust', title: 'counter.rs' },
+    { code: readme.samples.luau, lang: 'luau', title: 'app.luau' },
   ],
   'hero',
 );
-const agentCode = codeBlock({
-  code: `claude mcp add zgx -- zgx inspect mcp   # any MCP client\nzgx inspect tree --depth 2\nzgx inspect click '"Send"'\nzgx inspect frames 5`,
+const agentCode = await codeBlock({
+  code: `claude mcp add zgx -- zgx inspect mcp\nzgx inspect tree --depth 2\nzgx inspect click '"Add"'\nzgx inspect frames 5`,
   lang: 'sh',
   title: 'terminal',
 });
 
-// Each doc set's first pages after its overview, as quick links.
-const quick = (set: (typeof sets)[number]) =>
-  set.pages
-    .filter((p): p is Exclude<typeof p, string> => typeof p !== 'string' && p.slug !== 'index')
-    .slice(0, 3)
-    .map((p) => ({ href: `/${set.dir}/${p.slug}`, title: ('title' in p && p.title) || mdxTitle(p) || p.slug }));
-// A hand-written page's title, from its frontmatter.
-function mdxTitle(p: { mdx?: string }) {
-  if (!p.mdx) return undefined;
-  const text = fs.readFileSync(path.join(process.cwd(), 'content-src', p.mdx), 'utf8');
-  return text.match(/^title:\s*(.+)$/m)?.[1].replace(/^["']|["']$/g, '');
-}
-// README's features read on from their bold lead ("**Layout** as CSS's…"): alone, each starts a sentence.
+// README's features read on from their bold lead: alone, each starts a sentence.
 const sentence = (html: string) => {
-  const s = html.replace(/^\(([^)]*)\):\s*/, '$1: ').replace(/^(as|through)\s+/, (m) => m);
+  const s = html.replace(/^\(([^)]*)\):\s*/, '$1: ');
   return /^[a-z]/.test(s) ? s[0].toUpperCase() + s.slice(1) : s;
 };
-const stats = [
-  { value: `${fmt(value(heavy, 'zgx', 'idle', 'cpu_percent_one_core')!, 2)}%`, label: 'CPU while idle', note: 'An idle window does no work.' },
-  { value: h.cards[2].value, label: 'Frames over 25 ms', note: 'In every mode of every scene.' },
-  { value: h.cards[0].value, label: 'CPU, heavy dashboard', note: h.cards[0].detail.map((d) => `${d.name} ${d.text}`).join(' · ') },
+const figures = [
+  { label: 'CPU while idle', value: `${fmt(value(heavy, 'zgx', 'idle', 'cpu_percent_one_core')!, 2)}%` },
+  { label: 'CPU, heavy dashboard', value: h.cards[0].value, note: `GPUI Fast ${fmt(value(heavy, 'gpui-fast', 'both', 'cpu_percent_one_core')!, 1)}%` },
+  { label: 'Frames over 25 ms, at most', value: h.cards[2].value, note: `rivals ${h.cards[2].detail[0].text}` },
 ];
+// Launch to first content, when the published run measured it.
+const launch = startupLead();
+if (launch)
+  figures.unshift({
+    label: 'Launch to first content',
+    value: `${fmt(launch.content, 0)} ms`,
+    note: `${fmt(launch.sooner, 0)} ms sooner than GPUI Fast, ${Math.round(launch.fewer * 100)}% fewer instructions`,
+  });
+const navName = (dir: string, title: string) => (dir === 'rust' ? 'Rust' : dir === 'luau' ? 'Luau' : title);
 ---
 
 <Base title="zgx: native interfaces in Rust and Luau" description={readme.lede} image="/og/index.png" bare>
   <a href="#main" class="skip">Skip to content</a>
   <header class="top">
-    <div class="wrap top-row">
+    <div class="top-row">
       <a href="/" class="brand" aria-label="zgx home">
-        <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
-          <rect x="2" y="2" width="20" height="20" rx="6" fill="var(--color-fd-primary)"></rect>
-          <path d="M7.5 8h9l-9 8h9" fill="none" stroke="var(--color-fd-background)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
+        <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="2" y="2" width="20" height="20" rx="6" fill="var(--color-signal)"></rect>
+          <path d="M7.5 8h9l-9 8h9" fill="none" stroke="var(--color-paper)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
         </svg>
         <span>zgx</span>
       </a>
       <nav aria-label="Documentation" class="top-nav">
-        {sets.map((set) => <a href={`/${set.dir}`}>{set.dir === 'rust' ? 'Rust' : set.dir === 'luau' ? 'Luau' : set.title}</a>)}
+        {
+          sets.map((set) => {
+            const Icon = icons[set.icon as keyof typeof icons];
+            return (
+              <a href={`/${set.dir}`}>
+                <Icon size={15} strokeWidth={1.7} aria-hidden="true" />
+                {navName(set.dir, set.title)}
+              </a>
+            );
+          })
+        }
       </nav>
       <div class="top-actions">
-        <a href="#docs" class="top-docs">Docs</a>
-        <a href={repoUrl} class="icon-btn" aria-label="zgx on GitHub">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2.2c-3.3.7-4-1.4-4-1.4-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2 0 1.9 1.2 1.9 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.2-.4-.6-1.6 0-3.2 0 0 1-.3 3.4 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.6 1.6.2 2.8 0 3.2.9.8 1.3 1.9 1.3 3.2 0 4.6-2.8 5.6-5.5 5.9.5.4.9 1.1.9 2.2v3.3c0 .3.1.7.8.6A12 12 0 0 0 12 .3"></path></svg>
-        </a>
         <button type="button" class="icon-btn" id="theme-toggle" aria-label="Switch to dark theme">
-          <svg class="sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path></svg>
-          <svg class="moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path></svg>
+          <svg class="sun" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path></svg>
+          <svg class="moon" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path></svg>
         </button>
+        <a href={repoUrl} class="btn btn-quiet">GitHub</a>
+        <a href="/rust/getting-started" class="btn btn-primary">Get started</a>
       </div>
     </div>
   </header>
 
-  <main id="main">
-    <section class="hero" aria-labelledby="hero-title">
-      <div class="wrap">
-        <a class="pill" href="/rust/changelog">
-          <span class="pill-dot" aria-hidden="true"></span>
-          {published ? `${version} on crates.io` : `zgx ${version}`}
-          <span class="pill-sep" aria-hidden="true">·</span>
-          <span class="pill-muted">What’s new</span>
+  <main id="main" class="frame">
+    <section class="split hero" aria-labelledby="hero-title">
+      <div class="copy">
+        <a class="tag" href="/rust/changelog">
+          <span class="tag-mark">{published ? 'New' : 'Latest'}</span>
+          {published ? `zgx ${version} is on crates.io` : `zgx ${version}`}
           <ArrowRight size={13} aria-hidden="true" />
         </a>
-        <div class="hero-grid">
-          <h1 id="hero-title">Native interfaces that do no work when nothing changes.</h1>
-          <div class="hero-side">
-            <p class="lede">{first} {second}</p>
-            <div class="cta">
-              <a class="btn btn-primary" href="/rust/getting-started">Get started in Rust</a>
-              <a class="btn" href="/luau/getting-started">Start with Luau</a>
-            </div>
-          </div>
+        <h1 id="hero-title" class="lead">
+          <strong>Native interfaces that do no work when nothing changes.</strong>{' '}
+          <span>Write them in Rust or Luau; zgx repaints only what changed.</span>
+        </h1>
+        <div class="cta">
+          <a class="btn btn-primary btn-lg" href="/rust/getting-started">Start in Rust</a>
+          <a class="btn btn-lg" href="/luau/getting-started">Start in Luau</a>
         </div>
-        <div class="hero-code">
+        <dl class="specs">
+          <div><dt>Runs on</dt><dd>macOS, Windows, Linux</dd></div>
+          <div><dt>Draws with</dt><dd>Metal, Direct3D 12, Vulkan</dd></div>
+          <div><dt>License</dt><dd>MIT</dd></div>
+        </dl>
+      </div>
+      <div class="panel">
+        <div class="panel-inner">
           <Fragment set:html={samples} />
-          <div class="hero-code-foot">
-            <p>The same window in Rust and in Luau. <code>cargo run</code> the first; <code>zgx-run hello/</code> the second, and save to see it change, its state kept.</p>
-            <dl class="facts">
-              <div><dt>Platforms</dt><dd>macOS, Windows, Linux</dd></div>
-              <div><dt>Renderer</dt><dd>wgpu: Metal, D3D12, Vulkan</dd></div>
-              <div><dt>Scripts</dt><dd>Luau, hot reloaded</dd></div>
-            </dl>
-          </div>
+          <p class="panel-note">The same counter, twice. Save the Luau file and the window updates with its count kept.</p>
         </div>
       </div>
     </section>
 
-    <section class="bench" aria-labelledby="bench-title">
-      <div class="wrap">
-        <p class="eyebrow">Benchmarks · macOS · {date}</p>
-        <div class="bench-head">
-          <h2 id="bench-title">The least CPU in {h.ledCpu} of {h.tests} tests.</h2>
-          <p>
-            Against GPUI Fast, MyGo and Rune: the same four scenes, built from one workload, run on one Mac in one session. Each mark is a rival’s figure as a multiple of zgx’s. Right of the line, it uses more.
-          </p>
-        </div>
-        <BenchOverview />
-        <dl class="stats">
+    <section class="split perf reveal" aria-labelledby="perf-title">
+      <div class="copy">
+        <p class="label"><span class="label-icon" aria-hidden="true"><Gauge size={14} strokeWidth={1.8} /></span>Performance</p>
+        <h2 id="perf-title" class="lead">
+          <strong>The least CPU in {h.ledCpu} of {h.tests} tests.</strong>{' '}
+          <span>Against GPUI Fast, MyGo and Rune: the same scenes, from one workload, on one Mac.</span>
+        </h2>
+        <dl class="figures">
           {
-            stats.map((s) => (
-              <div class="stat">
-                <dt>{s.label}</dt>
-                <dd class="stat-value">{s.value}</dd>
-                <dd class="stat-note">{s.note}</dd>
+            figures.map((f) => (
+              <div>
+                <dt>{f.label}</dt>
+                <dd class="figure">{f.value}</dd>
+                {f.note && <dd class="figure-note">{f.note}</dd>}
               </div>
             ))
           }
         </dl>
-        <p class="bench-foot">
-          <span>Apple M5 Max, macOS 26. Medians of fresh launches; zgx at <a href={`${repo}/commit/${commit}`}><code>{commit.slice(0, 7)}</code></a>.</span>
+        <div class="more-row">
           <a class="more" href="/performance">Every scene and metric <ArrowRight size={14} aria-hidden="true" /></a>
-        </p>
-      </div>
-    </section>
-
-    <section class="docs" id="docs" aria-labelledby="docs-title">
-      <div class="wrap">
-        <p class="eyebrow">Documentation</p>
-        <div class="section-head">
-          <h2 id="docs-title">Five ways in.</h2>
-          <p>Each set has its own sidebar; every page is the repository’s own docs, rebuilt as they change.</p>
+          {hasWindows && <a class="more" href="/performance/windows">On Windows <ArrowRight size={14} aria-hidden="true" /></a>}
         </div>
-        <ul class="sets">
-          {
-            sets.map((set) => {
-              const Icon = icons[set.icon as keyof typeof icons];
-              return (
-                <li class="set">
-                  <a href={`/${set.dir}`} class="set-main">
-                    <span class="set-icon" aria-hidden="true">
-                      <Icon size={17} strokeWidth={1.8} />
-                    </span>
-                    <span class="set-title">{set.title}</span>
-                    <span class="set-desc">{set.description}</span>
-                  </a>
-                  <ul class="set-links" aria-label={`${set.title}: start here`}>
-                    {quick(set).map((q) => (
-                      <li>
-                        <a href={q.href}>{q.title}</a>
-                      </li>
-                    ))}
-                  </ul>
-                </li>
-              );
-            })
-          }
-        </ul>
+      </div>
+      <div class="panel">
+        <BenchOverview />
       </div>
     </section>
 
-    <section class="features" aria-labelledby="features-title">
-      <div class="wrap">
-        <p class="eyebrow">What it has</p>
-        <h2 id="features-title" class="sr-only">What it has</h2>
-        <ul class="feature-grid">
-          {
-            readme.features.map((f) => (
+    <section class="split caps reveal" aria-labelledby="caps-title">
+      <div class="copy">
+        <p class="label"><span class="label-icon" aria-hidden="true"><Layers size={14} strokeWidth={1.8} /></span>Capabilities</p>
+        <h2 id="caps-title" class="lead">
+          <strong>Everything a desktop app needs.</strong>{' '}
+          <span>Layout as CSS does it, shaped and editable text, a GPU renderer, the platform's services and accessibility.</span>
+        </h2>
+      </div>
+      <div class="rows">
+        {
+          readme.features.map((f, i) => (
+            <details open={i === 0}>
+              <summary>
+                {f.title}
+                <span class="plus" aria-hidden="true" />
+              </summary>
+              <p set:html={sentence(f.html)} />
+            </details>
+          ))
+        }
+      </div>
+    </section>
+
+    <section class="split agents reveal" aria-labelledby="agents-title">
+      <div class="copy">
+        <p class="label"><span class="label-icon" aria-hidden="true"><SquareTerminal size={14} strokeWidth={1.8} /></span>Devtools</p>
+        <h2 id="agents-title" class="lead">
+          <strong>Built to be driven by agents.</strong>{' '}
+          <span><code>zgx inspect</code> reads a running app's tree, state and frame costs, and clicks, types and presses keys by the same targets its tests use. Over MCP, any agent can drive it.</span>
+        </h2>
+        <a class="more" href="/devtools">Devtools <ArrowRight size={14} aria-hidden="true" /></a>
+      </div>
+      <div class="panel">
+        <div class="panel-inner">
+          <Fragment set:html={agentCode} />
+        </div>
+      </div>
+    </section>
+
+    <section class="index reveal" aria-labelledby="index-title">
+      <p class="label" id="index-title"><span class="label-icon" aria-hidden="true"><BookOpen size={14} strokeWidth={1.8} /></span>Documentation</p>
+      <ul class="index-rows">
+        {
+          sets.map((set) => {
+            const Icon = icons[set.icon as keyof typeof icons];
+            return (
               <li>
-                <h3>{f.title}</h3>
-                <p set:html={sentence(f.html)} />
+                <a href={`/${set.dir}`}>
+                  <span class="index-icon" aria-hidden="true">
+                    <Icon size={16} strokeWidth={1.7} />
+                  </span>
+                  <span class="index-title">{set.title}</span>
+                  <span class="index-desc">{set.description}</span>
+                  <ArrowRight size={16} className="index-arrow" aria-hidden="true" />
+                </a>
               </li>
-            ))
-          }
-        </ul>
-      </div>
-    </section>
-
-    <section class="agents" aria-labelledby="agents-title">
-      <div class="wrap agents-grid">
-        <div>
-          <p class="eyebrow">Devtools</p>
-          <h2 id="agents-title">Built to be driven by agents.</h2>
-          <p>
-            <code>zgx inspect</code> reads a running app’s tree, state, errors and frame costs, and clicks, types and presses keys by the same targets its tests use. Served over MCP, any agent can drive it.
-          </p>
-          <a class="more" href="/devtools">Devtools <ArrowRight size={14} aria-hidden="true" /></a>
-        </div>
-        <Fragment set:html={agentCode} />
-      </div>
+            );
+          })
+        }
+      </ul>
     </section>
   </main>
 
   <footer class="foot">
-    <div class="wrap foot-row">
-      <span>zgx · MIT</span>
-      <nav aria-label="Footer">
+    <div class="foot-row">
+      <div class="foot-brand">
+        <span class="brand">
+          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="2" y="2" width="20" height="20" rx="6" fill="var(--color-signal)"></rect>
+            <path d="M7.5 8h9l-9 8h9" fill="none" stroke="var(--color-paper)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+          <span>zgx</span>
+        </span>
+        <p>Native interfaces in Rust and Luau.</p>
+      </div>
+      <nav aria-label="Docs" class="foot-col">
+        <p class="foot-head">Docs</p>
+        {sets.map((set) => <a href={`/${set.dir}`}>{set.title}</a>)}
+      </nav>
+      <nav aria-label="Start" class="foot-col">
+        <p class="foot-head">Start</p>
+        <a href="/rust/getting-started">In Rust</a>
+        <a href="/luau/getting-started">In Luau</a>
+        <a href="/luau/coming-from-react">Coming from React</a>
+        <a href="/devtools/cli">CLI reference</a>
+      </nav>
+      <nav aria-label="Project" class="foot-col">
+        <p class="foot-head">Project</p>
         <a href={repoUrl}>GitHub</a>
         <a href="/rust/changelog">Changelog</a>
+        <a href="https://crates.io/crates/zgx">crates.io</a>
         <a href="/llms.txt">llms.txt</a>
       </nav>
     </div>
+    <p class="foot-base">MIT licensed.</p>
   </footer>
   <CodeBlocks />
 </Base>
@@ -244,546 +263,561 @@ const stats = [
       try { localStorage.setItem('theme', dark ? 'dark' : 'light'); } catch {}
       sync();
     });
+    // Sections fade in as they come into view.
+    const seen = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        entry.target.classList.add('shown');
+        seen.unobserve(entry.target);
+      }
+    }, { threshold: 0.12 });
+    document.querySelectorAll('.reveal').forEach((el) => seen.observe(el));
   })();
 </script>
+<noscript><style>.reveal { opacity: 1 !important; transform: none !important; }</style></noscript>
 
 <style>
-  .wrap {
-    width: 100%;
-    max-width: 76rem;
-    margin-inline: auto;
-    padding-inline: clamp(1.25rem, 4vw, 2.5rem);
-  }
   a:focus-visible,
   button:focus-visible,
-  input:focus-visible + label {
-    outline: 2px solid var(--color-fd-ring);
+  summary:focus-visible {
+    outline: 2px solid var(--color-signal);
     outline-offset: 2px;
     border-radius: 0.375rem;
   }
-  .eyebrow {
-    margin: 0 0 1rem;
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--color-fd-muted-foreground);
-  }
-  h2 {
-    margin: 0;
-    font-size: clamp(1.75rem, 3.6vw, 2.5rem);
-    line-height: 1.1;
-    letter-spacing: -0.035em;
-    font-weight: 620;
-    text-wrap: balance;
-  }
-  .more {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-    font-weight: 550;
-    color: var(--color-fd-foreground);
-  }
-  .more:hover {
-    color: var(--color-fd-primary);
-  }
 
-  /* Header */
+  /* ---- Header ---- */
   .top {
     position: sticky;
     top: 0;
-    z-index: 20;
-    background: color-mix(in oklab, var(--color-fd-background) 82%, transparent);
+    z-index: 30;
+    background: color-mix(in oklab, var(--color-paper) 85%, transparent);
     backdrop-filter: saturate(1.4) blur(14px);
-    border-bottom: 1px solid color-mix(in oklab, var(--color-fd-foreground) 8%, transparent);
+    border-bottom: 1px solid var(--color-hairline);
   }
   .top-row {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    gap: 2rem;
+    gap: 1.5rem;
     height: 3.75rem;
+    padding-inline: clamp(1rem, 3vw, 2rem);
   }
   .brand {
     display: inline-flex;
     align-items: center;
-    gap: 0.55rem;
-    font-weight: 650;
+    gap: 0.5rem;
     font-size: 1.0625rem;
-    letter-spacing: -0.02em;
+    font-weight: 650;
+    letter-spacing: -0.035em;
+    color: var(--color-ink);
   }
   .top-nav {
     display: flex;
-    gap: 1.6rem;
+    gap: 1.75rem;
     font-size: 0.875rem;
-    color: var(--color-fd-muted-foreground);
+    color: var(--color-ink-2);
   }
-  .top-nav a:hover,
-  .top-docs:hover {
-    color: var(--color-fd-foreground);
+  .top-nav a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    transition: color 150ms ease-out;
+  }
+  .top-nav a:hover {
+    color: var(--color-ink);
   }
   .top-actions {
     display: flex;
     align-items: center;
-    gap: 0.25rem;
-    margin-left: auto;
-  }
-  .top-docs {
-    display: none;
-    padding: 0 0.6rem;
-    font-size: 0.875rem;
-    font-weight: 550;
-    color: var(--color-fd-muted-foreground);
+    justify-content: end;
+    gap: 0.5rem;
   }
   .icon-btn {
     display: grid;
     place-items: center;
-    width: 2.25rem;
-    height: 2.25rem;
+    width: 2.1rem;
+    height: 2.1rem;
     border-radius: 0.5rem;
-    color: var(--color-fd-muted-foreground);
+    color: var(--color-ink-2);
+    transition: color 150ms ease-out, background-color 150ms ease-out;
   }
   .icon-btn:hover {
-    color: var(--color-fd-foreground);
-    background: color-mix(in oklab, var(--color-fd-foreground) 6%, transparent);
+    color: var(--color-ink);
+    background: color-mix(in oklab, var(--color-ink) 6%, transparent);
   }
   :global(.dark) .sun,
   :global(html:not(.dark)) .moon {
     display: none;
   }
-  @media (max-width: 800px) {
-    .top-nav {
-      display: none;
+  @media (max-width: 960px) {
+    .top-row {
+      grid-template-columns: auto 1fr;
     }
-    .top-docs {
-      display: inline-flex;
+    .top-nav,
+    .top-actions .btn-quiet {
+      display: none;
     }
   }
 
-  /* Hero */
-  .hero {
-    position: relative;
-    isolation: isolate;
-    padding-block: clamp(3.5rem, 8vw, 6.5rem) clamp(3.5rem, 7vw, 6rem);
-    overflow: hidden;
+  /* ---- Controls ---- */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    height: 2.1rem;
+    padding: 0 0.85rem;
+    border: 1px solid var(--color-hairline-strong);
+    border-radius: 0.5rem;
+    background: var(--color-surface);
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--color-ink);
+    transition: border-color 150ms ease-out, background-color 150ms ease-out;
   }
-  .hero::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    background-image:
-      linear-gradient(color-mix(in oklab, var(--color-fd-foreground) 5%, transparent) 1px, transparent 1px),
-      linear-gradient(90deg, color-mix(in oklab, var(--color-fd-foreground) 5%, transparent) 1px, transparent 1px);
-    background-size: 56px 56px;
-    mask-image: radial-gradient(ellipse 70% 60% at 30% 0%, black, transparent 75%);
+  .btn:hover {
+    border-color: color-mix(in oklab, var(--color-ink) 32%, transparent);
   }
-  .hero::after {
-    content: '';
-    position: absolute;
-    z-index: -1;
-    top: -18rem;
-    left: 10%;
-    width: 46rem;
-    height: 30rem;
-    background: radial-gradient(closest-side, color-mix(in oklab, var(--color-fd-primary) 16%, transparent), transparent);
-    filter: blur(20px);
+  .btn-primary {
+    border-color: transparent;
+    background: var(--color-signal);
+    color: var(--color-fd-primary-foreground);
   }
-  .hero-grid {
+  .btn-primary:hover {
+    border-color: transparent;
+    background: color-mix(in oklab, var(--color-signal) 88%, var(--color-ink));
+  }
+  .btn-quiet {
+    border-color: transparent;
+    background: transparent;
+    color: var(--color-ink-2);
+  }
+  .btn-quiet:hover {
+    border-color: transparent;
+    color: var(--color-ink);
+  }
+  .btn-lg {
+    height: 2.5rem;
+    padding: 0 1.1rem;
+    font-size: 0.9375rem;
+  }
+  .more {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-top: 2rem;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: var(--color-ink);
+    transition: color 150ms ease-out, gap 150ms ease-out;
+  }
+  .more:hover {
+    gap: 0.5rem;
+    color: var(--color-signal);
+  }
+  .more-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 1.75rem;
+  }
+
+  /* ---- The ruled column ---- */
+  .frame {
+    max-width: 80rem;
+    margin-inline: auto;
+    border-inline: 1px solid var(--color-hairline);
+  }
+  .frame > section + section {
+    border-top: 1px solid var(--color-hairline);
+  }
+  .split {
     display: grid;
-    grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
-    gap: 1.5rem clamp(2.5rem, 5vw, 5rem);
-    align-items: end;
-    margin-top: 1.75rem;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: clamp(2rem, 4vw, 4rem);
+    align-items: start;
+    padding: clamp(3.5rem, 7vw, 6.5rem) clamp(1.25rem, 3.5vw, 2.75rem);
   }
-  @media (max-width: 960px) {
-    .hero-grid {
+  @media (max-width: 980px) {
+    .split {
       grid-template-columns: minmax(0, 1fr);
     }
   }
-  .pill {
+
+  /* Leads: a dark first sentence, a lighter one after it, one paragraph. */
+  .lead {
+    margin: 0;
+    font-size: clamp(1.5rem, 2.2vw, 1.75rem);
+    line-height: 1.3;
+    font-weight: 500;
+    letter-spacing: -0.035em;
+    text-wrap: pretty;
+  }
+  .lead strong {
+    font-weight: 600;
+    color: var(--color-ink);
+  }
+  .lead span {
+    color: var(--color-ink-2);
+  }
+  .lead code {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    letter-spacing: -0.02em;
+  }
+  h1.lead {
+    font-size: clamp(1.9rem, 3vw, 2.35rem);
+    line-height: 1.2;
+    letter-spacing: -0.04em;
+  }
+  .label {
     display: inline-flex;
     align-items: center;
-    gap: 0.45rem;
-    padding: 0.3rem 0.75rem 0.3rem 0.6rem;
-    border: 1px solid color-mix(in oklab, var(--color-fd-foreground) 12%, transparent);
-    border-radius: 999px;
-    background: color-mix(in oklab, var(--color-fd-background) 70%, transparent);
+    gap: 0.55rem;
+    margin: 0 0 1.4rem;
     font-size: 0.8125rem;
     font-weight: 500;
-    transition: border-color 120ms ease;
+    color: var(--color-ink);
   }
-  .pill:hover {
-    border-color: color-mix(in oklab, var(--color-fd-primary) 50%, transparent);
+  .label-icon {
+    display: grid;
+    place-items: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 0.4rem;
+    background: var(--color-signal-soft);
+    color: var(--color-signal);
   }
-  .pill-dot {
-    width: 0.45rem;
-    height: 0.45rem;
-    border-radius: 50%;
-    background: var(--color-fd-primary);
-    box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-fd-primary) 22%, transparent);
+
+  /* ---- Hero ---- */
+  .hero .panel {
+    padding: clamp(0.75rem, 1.6vw, 1.25rem);
   }
-  .pill-sep,
-  .pill-muted {
-    color: var(--color-fd-muted-foreground);
+  .hero .panel :global(.cb-pre) {
+    font-size: 0.75rem;
   }
-  h1 {
-    margin: 0;
-    max-width: 15ch;
-    font-size: clamp(2.6rem, 6vw, 4.5rem);
-    line-height: 1;
-    letter-spacing: -0.042em;
-    font-weight: 640;
-    text-wrap: balance;
+  .hero {
+    align-items: center;
+    padding-top: clamp(3rem, 7vw, 6rem);
   }
-  .lede {
-    max-width: 36rem;
-    margin: 0;
-    font-size: clamp(1.0625rem, 1.5vw, 1.1875rem);
-    line-height: 1.6;
-    color: var(--color-fd-muted-foreground);
-    text-wrap: pretty;
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    margin-bottom: 1.6rem;
+    font-size: 0.8125rem;
+    color: var(--color-ink-2);
+    transition: color 150ms ease-out;
+  }
+  .tag:hover {
+    color: var(--color-ink);
+  }
+  .tag-mark {
+    padding: 0.15rem 0.45rem;
+    border-radius: 0.35rem;
+    background: var(--color-signal-soft);
+    color: var(--color-signal);
+    font-size: 0.75rem;
+    font-weight: 600;
   }
   .cta {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.65rem;
-    margin-top: 1.75rem;
+    gap: 0.6rem;
+    margin-top: 2.25rem;
   }
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    height: 2.75rem;
-    padding: 0 1.2rem;
-    border-radius: 0.625rem;
-    border: 1px solid color-mix(in oklab, var(--color-fd-foreground) 14%, transparent);
-    background: var(--color-fd-background);
-    font-size: 0.9375rem;
-    font-weight: 550;
-    transition: background-color 120ms ease, border-color 120ms ease;
+  .specs {
+    display: grid;
+    grid-template-columns: repeat(3, auto);
+    justify-content: start;
+    gap: 0.5rem 2.25rem;
+    margin: 3rem 0 0;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--color-hairline);
   }
-  .btn:hover {
-    border-color: color-mix(in oklab, var(--color-fd-foreground) 30%, transparent);
+  @media (max-width: 520px) {
+    .specs {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
-  .btn-primary {
-    border-color: transparent;
-    background: var(--color-fd-foreground);
-    color: var(--color-fd-background);
-  }
-  .btn-primary:hover {
-    background: color-mix(in oklab, var(--color-fd-foreground) 84%, var(--color-fd-background));
-  }
-  .facts {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem 2rem;
-    margin: 0;
-  }
-  .facts dt {
-    font-family: var(--font-mono);
-    font-size: 0.6875rem;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+  .specs dt {
+    font-size: 0.75rem;
     color: var(--color-fd-muted-foreground);
   }
-  .facts dd {
+  .specs dd {
     margin: 0.25rem 0 0;
-    font-size: 0.8125rem;
+    font-size: 0.875rem;
     font-weight: 500;
   }
-  .hero-code {
-    margin-top: clamp(2.5rem, 5vw, 4rem);
-  }
-  .hero-code :global(.cb) {
-    margin: 0;
-    border-radius: 0.9rem;
-    box-shadow:
-      0 1px 0 color-mix(in oklab, var(--color-fd-foreground) 4%, transparent),
-      0 24px 48px -24px color-mix(in oklab, var(--color-fd-foreground) 22%, transparent);
-  }
-  .hero-code :global(.cb-pre) {
-    max-height: 34rem;
-  }
-  .hero-code-foot {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    align-items: start;
-    gap: 1rem 3rem;
-    margin: 1.1rem 0.25rem 0;
-  }
-  .hero-code-foot p {
-    max-width: 34rem;
-    margin: 0;
-    font-size: 0.8125rem;
-    line-height: 1.55;
-    color: var(--color-fd-muted-foreground);
-  }
-  .hero-code-foot code,
-  .agents p code {
-    font-family: var(--font-mono);
-    font-size: 0.92em;
-    color: var(--color-fd-foreground);
-  }
 
-  /* Benchmarks */
-  .bench,
-  .docs,
-  .features,
-  .agents {
-    padding-block: clamp(4rem, 8vw, 6.5rem);
-    border-top: 1px solid color-mix(in oklab, var(--color-fd-foreground) 8%, transparent);
-  }
-  .bench-head,
-  .section-head {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 1rem 4rem;
-    align-items: end;
-    margin-bottom: 2.5rem;
-  }
-  @media (max-width: 860px) {
-    .bench-head,
-    .section-head {
-      grid-template-columns: minmax(0, 1fr);
-    }
-  }
-  .bench-head p,
-  .section-head p {
-    margin: 0;
-    font-size: 1rem;
-    line-height: 1.6;
-    color: var(--color-fd-muted-foreground);
-    text-wrap: pretty;
-  }
-  .stats {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 1rem;
-    margin: 1rem 0 0;
-  }
-  @media (max-width: 760px) {
-    .stats {
-      grid-template-columns: minmax(0, 1fr);
-    }
-  }
-  .stat {
-    display: flex;
-    flex-direction: column;
-    padding: 1.25rem 1.35rem;
-    border: 1px solid color-mix(in oklab, var(--color-fd-foreground) 10%, transparent);
+  /* ---- Product panels ---- */
+  .panel {
     border-radius: 1rem;
+    background: var(--color-wash);
+    padding: clamp(1rem, 3vw, 2.5rem);
   }
-  .stat dt {
-    order: 2;
-    margin-top: 0.35rem;
-    font-size: 0.875rem;
-    font-weight: 550;
+  .panel-inner {
+    max-width: 40rem;
+    margin-inline: auto;
   }
-  .stat dd {
+  .panel :global(.cb) {
     margin: 0;
+    border-radius: 0.8rem;
+    box-shadow: 0 1px 2px color-mix(in oklab, var(--color-ink) 6%, transparent), 0 24px 48px -28px color-mix(in oklab, var(--color-ink) 28%, transparent);
   }
-  .stat-value {
-    order: 1;
-    font-size: clamp(2rem, 4vw, 2.75rem);
-    line-height: 1;
-    letter-spacing: -0.04em;
-    font-weight: 620;
-    font-variant-numeric: tabular-nums;
-    color: var(--color-zgx);
+  .panel :global(.cb-pre) {
+    font-size: 0.8125rem;
   }
-  .stat-note {
-    order: 3;
-    margin-top: 0.3rem !important;
+  .panel :global(.bench-card) {
+    border-color: transparent;
+    box-shadow: 0 1px 2px color-mix(in oklab, var(--color-ink) 6%, transparent), 0 24px 48px -28px color-mix(in oklab, var(--color-ink) 28%, transparent);
+  }
+  @media (max-width: 640px) {
+    /* On a phone the panel is a tint behind its content, not a frame around it. */
+    .panel {
+      margin-inline: calc(-1 * clamp(1.25rem, 3.5vw, 2.75rem) + 0.5rem);
+      padding: 0.5rem;
+      border-radius: 0.9rem;
+    }
+    .panel :global(.bench-card) {
+      padding: 0.9rem 0.75rem;
+    }
+  }
+  .panel-note {
+    margin: 1rem 0.25rem 0;
     font-size: 0.8125rem;
     line-height: 1.5;
-    color: var(--color-fd-muted-foreground);
+    color: var(--color-ink-2);
   }
-  .bench-foot {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 0.75rem 2rem;
-    margin: 1.5rem 0 0;
+
+  /* ---- Performance ---- */
+  .perf {
+    grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+  }
+  @media (max-width: 980px) {
+    .perf {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+  .figures {
+    display: grid;
+    gap: 1.6rem;
+    margin: 2.5rem 0 0;
+  }
+  .figures dt {
+    font-size: 0.8125rem;
+    color: var(--color-ink-2);
+  }
+  .figures dd {
+    margin: 0;
+  }
+  .figure {
+    margin-top: 0.2rem !important;
+    font-size: 2.5rem;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: -0.045em;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-ink);
+  }
+  .figure-note {
+    margin-top: 0.35rem !important;
     font-size: 0.8125rem;
     color: var(--color-fd-muted-foreground);
   }
-  .bench-foot a:not(.more) {
+
+  /* ---- Capabilities ---- */
+  .rows details {
+    border-bottom: 1px solid var(--color-hairline);
+  }
+  .rows details:first-child {
+    border-top: 1px solid var(--color-hairline);
+  }
+  .rows summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.05rem 0.25rem;
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--color-ink);
+    cursor: pointer;
+    list-style: none;
+  }
+  .rows summary::-webkit-details-marker {
+    display: none;
+  }
+  .plus {
+    position: relative;
+    flex: none;
+    width: 0.8rem;
+    height: 0.8rem;
+  }
+  .plus::before,
+  .plus::after {
+    content: '';
+    position: absolute;
+    inset: 50% 0 auto;
+    height: 1.5px;
+    margin-top: -0.75px;
+    background: var(--color-ink-2);
+    transition: transform 200ms ease-out;
+  }
+  .plus::after {
+    transform: rotate(90deg);
+  }
+  details[open] .plus::after {
+    transform: rotate(0deg);
+  }
+  .rows p {
+    margin: -0.25rem 0 0;
+    padding: 0 2rem 1.25rem 0.25rem;
+    font-size: 0.9375rem;
+    line-height: 1.65;
+    color: var(--color-ink-2);
+  }
+  .rows :global(code) {
+    font-family: var(--font-mono);
+    font-size: 0.86em;
+    color: var(--color-ink);
+  }
+  .rows :global(a) {
     text-decoration: underline;
     text-underline-offset: 0.2em;
   }
-  .bench-foot code {
-    font-family: var(--font-mono);
-  }
 
-  /* Doc sets */
-  .sets {
-    display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-    gap: 1rem;
+  /* ---- Documentation index ---- */
+  .index {
+    padding: clamp(3.5rem, 7vw, 6rem) clamp(1.25rem, 3.5vw, 2.75rem);
+  }
+  .index-rows {
     margin: 0;
     padding: 0;
     list-style: none;
+    border-top: 1px solid var(--color-hairline);
   }
-  .set {
-    grid-column: span 2;
-    display: flex;
-    flex-direction: column;
-    border: 1px solid color-mix(in oklab, var(--color-fd-foreground) 10%, transparent);
-    border-radius: 1rem;
-    background: var(--color-fd-background);
-    transition: border-color 150ms ease;
+  .index-rows li {
+    border-bottom: 1px solid var(--color-hairline);
   }
-  .set:nth-child(4),
-  .set:nth-child(5) {
-    grid-column: span 3;
+  .index-rows a {
+    display: grid;
+    grid-template-columns: auto 12rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 1.25rem;
+    padding: 1.15rem 0.5rem;
+    transition: background-color 150ms ease-out;
   }
-  @media (max-width: 960px) {
-    .sets {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-    .set,
-    .set:nth-child(4),
-    .set:nth-child(5) {
-      grid-column: span 1;
-    }
+  .index-rows a:hover {
+    background: color-mix(in oklab, var(--color-ink) 2.5%, transparent);
   }
-  @media (max-width: 600px) {
-    .sets {
-      grid-template-columns: minmax(0, 1fr);
-    }
-  }
-  .set:hover {
-    border-color: color-mix(in oklab, var(--color-fd-foreground) 22%, transparent);
-  }
-  .set-main {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    padding: 1.35rem 1.35rem 1rem;
-  }
-  .set-icon {
+  .index-icon {
     display: grid;
     place-items: center;
-    width: 2.1rem;
-    height: 2.1rem;
-    margin-bottom: 0.65rem;
-    border-radius: 0.6rem;
-    background: color-mix(in oklab, var(--color-fd-primary) 12%, transparent);
-    color: var(--color-fd-primary);
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.5rem;
+    background: var(--color-signal-soft);
+    color: var(--color-signal);
   }
-  .set-title {
-    font-size: 1.0625rem;
-    font-weight: 600;
-    letter-spacing: -0.015em;
-  }
-  .set-main:hover .set-title {
-    color: var(--color-fd-primary);
-  }
-  .set-desc {
-    font-size: 0.875rem;
-    line-height: 1.5;
-    color: var(--color-fd-muted-foreground);
-  }
-  .set-links {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.35rem 1rem;
-    margin: auto 0 0;
-    padding: 0.85rem 1.35rem 1.1rem;
-    border-top: 1px dashed color-mix(in oklab, var(--color-fd-foreground) 10%, transparent);
-    list-style: none;
-    font-size: 0.8125rem;
-  }
-  .set-links a {
-    color: var(--color-fd-muted-foreground);
-  }
-  .set-links a:hover {
-    color: var(--color-fd-foreground);
-  }
-
-  /* Features */
-  .feature-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 2.25rem 2rem;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-  @media (max-width: 1000px) {
-    .feature-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-  }
-  @media (max-width: 560px) {
-    .feature-grid {
-      grid-template-columns: minmax(0, 1fr);
-    }
-  }
-  .feature-grid h3 {
-    margin: 0 0 0.5rem;
-    padding-top: 0.9rem;
-    border-top: 1px solid color-mix(in oklab, var(--color-fd-foreground) 12%, transparent);
-    font-size: 0.9375rem;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-  }
-  .feature-grid p {
-    margin: 0;
-    font-size: 0.875rem;
-    line-height: 1.6;
-    color: var(--color-fd-muted-foreground);
-  }
-  .feature-grid :global(code) {
-    font-family: var(--font-mono);
-    font-size: 0.88em;
-  }
-  .feature-grid :global(a) {
-    text-decoration: underline;
-    text-underline-offset: 0.2em;
-  }
-
-  /* Agents */
-  .agents-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-    gap: 2.5rem 4rem;
-    align-items: center;
-  }
-  @media (max-width: 900px) {
-    .agents-grid {
-      grid-template-columns: minmax(0, 1fr);
-    }
-  }
-  .agents p:not(.eyebrow) {
-    margin: 1.1rem 0 1.4rem;
-    max-width: 30rem;
+  .index-title {
     font-size: 1rem;
-    line-height: 1.6;
-    color: var(--color-fd-muted-foreground);
+    font-weight: 600;
+    letter-spacing: -0.02em;
   }
-  .agents :global(.cb) {
-    margin: 0;
+  .index-desc {
+    font-size: 0.9375rem;
+    color: var(--color-ink-2);
+  }
+  .index-rows :global(.index-arrow) {
+    color: var(--color-fd-muted-foreground);
+    transition: transform 150ms ease-out, color 150ms ease-out;
+  }
+  .index-rows a:hover :global(.index-arrow) {
+    color: var(--color-signal);
+    transform: translateX(3px);
+  }
+  @media (max-width: 720px) {
+    .index-rows a {
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      row-gap: 0.2rem;
+    }
+    .index-desc {
+      grid-column: 2;
+      grid-row: 2;
+      font-size: 0.875rem;
+    }
+    .index-rows :global(.index-arrow) {
+      grid-column: 3;
+      grid-row: 1 / span 2;
+    }
   }
 
-  /* Footer */
+  /* ---- Entrance ---- */
+  .reveal {
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 600ms ease-out, transform 600ms cubic-bezier(0.2, 0.75, 0.2, 1);
+  }
+  .reveal:global(.shown) {
+    opacity: 1;
+    transform: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .reveal {
+      opacity: 1;
+      transform: none;
+      transition: none;
+    }
+  }
+
+  /* ---- Footer ---- */
   .foot {
-    border-top: 1px solid color-mix(in oklab, var(--color-fd-foreground) 8%, transparent);
-    font-size: 0.8125rem;
-    color: var(--color-fd-muted-foreground);
+    border-top: 1px solid var(--color-hairline);
   }
   .foot-row {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 1rem;
-    padding-block: 1.75rem;
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) repeat(3, minmax(0, 1fr));
+    gap: 2rem;
+    max-width: 80rem;
+    margin-inline: auto;
+    padding: 3.5rem clamp(1.25rem, 3.5vw, 2.75rem) 2rem;
   }
-  .foot-row nav {
-    display: flex;
-    gap: 1.5rem;
+  @media (max-width: 760px) {
+    .foot-row {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    .foot-brand {
+      grid-column: 1 / -1;
+    }
   }
-  .foot-row a:hover {
-    color: var(--color-fd-foreground);
+  .foot-brand p {
+    margin: 0.75rem 0 0;
+    font-size: 0.875rem;
+    color: var(--color-ink-2);
+  }
+  .foot-col {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    font-size: 0.875rem;
+  }
+  .foot-col a {
+    color: var(--color-ink-2);
+    transition: color 150ms ease-out;
+  }
+  .foot-col a:hover {
+    color: var(--color-ink);
+  }
+  .foot-head {
+    margin: 0 0 0.25rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--color-ink);
+  }
+  .foot-base {
+    max-width: 80rem;
+    margin: 0 auto;
+    padding: 1.25rem clamp(1.25rem, 3.5vw, 2.75rem) 2.5rem;
+    font-size: 0.8125rem;
+    color: var(--color-fd-muted-foreground);
   }
 </style>

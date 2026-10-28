@@ -1,0 +1,203 @@
+{
+ "commit": "03a9d895093bc3c5bf1bf57ab5307b9cecda88b3",
+ "machine": "home-laptop (M5, 120 Hz)",
+ "window": "window 22, 2026-10-26 11:45 PDT",
+ "probe": "scripts/startup_probe.swift: spawn, window, first non-flat strip of its content; instructions and CPU of the process at content",
+ "apps": {
+  "zgx": "component_workload (lab), ZGX_MODE=idle",
+  "gpui-fast": "comparisons/gpui-fast (lab), with #692: the same menu bar zgx builds"
+ },
+ "protocol": "10 rounds, the two alternating; staged /tmp copies, clean environment",
+ "launches": {
+  "zgx": [
+   {
+    "t0": 135676831.7,
+    "window_ms": 401.1,
+    "content_ms": 437.4,
+    "instructions": 862421363,
+    "cpu_ms": 89.8
+   },
+   {
+    "t0": 135690588.0,
+    "window_ms": 145.1,
+    "content_ms": 177.4,
+    "instructions": 836910462,
+    "cpu_ms": 103.8
+   },
+   {
+    "t0": 135694982.2,
+    "window_ms": 125.8,
+    "content_ms": 162.6,
+    "instructions": 880072592,
+    "cpu_ms": 94.4
+   },
+   {
+    "t0": 135708165.5,
+    "window_ms": 107.0,
+    "content_ms": 146.1,
+    "instructions": 866327247,
+    "cpu_ms": 89.0
+   },
+   {
+    "t0": 135712551.9,
+    "window_ms": 130.8,
+    "content_ms": 166.2,
+    "instructions": 880065121,
+    "cpu_ms": 98.0
+   },
+   {
+    "t0": 135725789.6,
+    "window_ms": 131.1,
+    "content_ms": 163.3,
+    "instructions": 760723904,
+    "cpu_ms": 92.5
+   },
+   {
+    "t0": 135730185.7,
+    "window_ms": 111.1,
+    "content_ms": 153.7,
+    "instructions": 813188134,
+    "cpu_ms": 87.0
+   },
+   {
+    "t0": 135743379.0,
+    "window_ms": 103.6,
+    "content_ms": 144.4,
+    "instructions": 879812383,
+    "cpu_ms": 94.5
+   },
+   {
+    "t0": 135747762.0,
+    "window_ms": 127.5,
+    "content_ms": 168.7,
+    "instructions": 811782238,
+    "cpu_ms": 95.7
+   },
+   {
+    "t0": 135760951.4,
+    "window_ms": 114.4,
+    "content_ms": 150.2,
+    "instructions": 806892436,
+    "cpu_ms": 85.1
+   }
+  ],
+  "gpui-fast": [
+   {
+    "t0": 135681510.5,
+    "window_ms": 397.7,
+    "content_ms": 435.4,
+    "instructions": 944545555,
+    "cpu_ms": 113.4
+   },
+   {
+    "t0": 135686166.7,
+    "window_ms": 145.7,
+    "content_ms": 180.2,
+    "instructions": 933589511,
+    "cpu_ms": 99.3
+   },
+   {
+    "t0": 135699352.2,
+    "window_ms": 145.5,
+    "content_ms": 191.2,
+    "instructions": 957600210,
+    "cpu_ms": 101.9
+   },
+   {
+    "t0": 135703761.2,
+    "window_ms": 144.0,
+    "content_ms": 187.1,
+    "instructions": 954334857,
+    "cpu_ms": 103.8
+   },
+   {
+    "t0": 135716943.7,
+    "window_ms": 137.7,
+    "content_ms": 179.9,
+    "instructions": 953568000,
+    "cpu_ms": 97.2
+   },
+   {
+    "t0": 135721363.5,
+    "window_ms": 165.2,
+    "content_ms": 198.6,
+    "instructions": 946024320,
+    "cpu_ms": 109.4
+   },
+   {
+    "t0": 135734583.8,
+    "window_ms": 145.8,
+    "content_ms": 179.7,
+    "instructions": 937596041,
+    "cpu_ms": 98.9
+   },
+   {
+    "t0": 135738999.1,
+    "window_ms": 139.5,
+    "content_ms": 181.9,
+    "instructions": 952755787,
+    "cpu_ms": 94.2
+   },
+   {
+    "t0": 135752148.1,
+    "window_ms": 138.1,
+    "content_ms": 170.4,
+    "instructions": 934628153,
+    "cpu_ms": 98.7
+   },
+   {
+    "t0": 135756555.8,
+    "window_ms": 137.5,
+    "content_ms": 170.9,
+    "instructions": 935902919,
+    "cpu_ms": 95.7
+   }
+  ]
+ },
+ "medians": {
+  "zgx": {
+   "window_ms": {
+    "median": 126.65,
+    "min": 103.6,
+    "max": 401.1
+   },
+   "content_ms": {
+    "median": 162.95,
+    "min": 144.4,
+    "max": 437.4
+   },
+   "instructions": {
+    "median": 849665912.5,
+    "min": 760723904,
+    "max": 880072592
+   },
+   "cpu_ms": {
+    "median": 93.45,
+    "min": 85.1,
+    "max": 103.8
+   }
+  },
+  "gpui-fast": {
+   "window_ms": {
+    "median": 144.75,
+    "min": 137.5,
+    "max": 397.7
+   },
+   "content_ms": {
+    "median": 181.05,
+    "min": 170.4,
+    "max": 435.4
+   },
+   "instructions": {
+    "median": 945284937.5,
+    "min": 933589511,
+    "max": 957600210
+   },
+   "cpu_ms": {
+    "median": 99.1,
+    "min": 94.2,
+    "max": 113.4
+   }
+  }
+ }
+}

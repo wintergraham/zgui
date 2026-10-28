@@ -143,6 +143,8 @@ enum Event {
     #[cfg(target_os = "macos")]
     NativeMenuAction(crate::MenuAction),
     Wake(u64),
+    /// The window's zoom changed (`Ui::set_zoom`): its content scale follows.
+    Zoom(u64),
     /// A sleep on another thread is now the earliest timer: see `zgx::timer::host`.
     Timers,
     Redraw(u64),
@@ -458,9 +460,9 @@ pub struct WindowFactory {
     alive: Rc<Cell<bool>>,
     clipboard: Rc<RefCell<Option<crate::clipboard::Clipboard>>>,
     gpu_contexts: Rc<RefCell<Vec<GpuContext>>>,
-    /// macOS: the first GPU context, made on a thread of its own while
-    /// AppKit makes the first window (`make_renderer` takes it).
-    #[cfg(target_os = "macos")]
+    /// macOS and Windows: the first GPU context, made on a thread of its
+    /// own while the first window is (`make_renderer` takes it).
+    #[cfg(any(target_os = "macos", windows))]
     early_gpu: Rc<RefCell<Option<zgx_gpu::PendingGpuContext>>>,
     proxy: EventLoopProxy<Event>,
     /// What every window's `Ui` runs on: one runtime, so state one window
@@ -817,13 +819,15 @@ impl Application {
     /// return once the application quits.
     pub fn run(self, build: impl FnOnce(&mut WindowContext)) -> Result<(), Box<dyn Error>> {
         zgx::profile::mark("run");
-        // The GPU device, its pipelines and the fonts are made beside
-        // AppKit's launch and first window, which hold the main thread
-        // meanwhile. Metal's adapter draws to any window, so it needs none
-        // to be found. Windows and Linux make it with the first window, as
-        // they choose an adapter by its surface (and Linux's GL needs its
-        // display).
-        #[cfg(target_os = "macos")]
+        // The GPU device, its pipelines and the fonts are made beside the
+        // launch and the first window, which hold the main thread
+        // meanwhile. Metal's adapter draws to any window, and Windows takes
+        // the adapter DXGI ranks first, so neither needs a window to find
+        // it: on Windows, opening the device is most of a start (190 ms of
+        // 300 on an RTX 4090), and this put the first content 16 to 24 ms
+        // sooner. Linux makes it with the first window, as it chooses an
+        // adapter by its surface (and GL needs its display).
+        #[cfg(any(target_os = "macos", windows))]
         let early_gpu = zgx_gpu::GpuContext::prepare_in_background();
         let mut event_loop = EventLoop::<Event>::with_user_event();
         // zgx installs a menu bar of its own (`app_menu`) as it resumes:
@@ -880,7 +884,7 @@ impl Application {
             alive: Rc::new(Cell::new(true)),
             clipboard: Rc::new(RefCell::new(None)),
             gpu_contexts: Rc::new(RefCell::new(Vec::new())),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             early_gpu: Rc::new(RefCell::new(Some(early_gpu))),
             proxy: proxy.clone(),
             runtime: zgx::reactive::Runtime::new(),
@@ -1066,31 +1070,59 @@ impl Latch {
         let ready = now
             .checked_sub(std::mem::take(&mut self.held))
             .unwrap_or(now);
-        let (mut at, early) = self.choose(ready, origin, period);
+        let (mut at, early, kept) = self.choose(ready, origin, period);
+        let chosen = at;
         while at < now {
             at += period;
         }
         self.early = early;
+        // Why it waits, for devtools (`zgx inspect frames`).
+        if kept {
+            zgx::profile::note(|| {
+                format!(
+                    "waited a refresh more to keep the last frame's cadence, until {} frames \
+                     in a row are ready {:.1} ms before their refresh ({early} so far)",
+                    Self::RETURN,
+                    Self::KEEP.as_secs_f64() * 1e3
+                )
+            });
+        }
+        if at > chosen {
+            zgx::profile::note(|| {
+                format!(
+                    "missed its refresh: ready {:.2} ms after the point it was to hand over at",
+                    now.saturating_duration_since(chosen).as_secs_f64() * 1e3
+                )
+            });
+        }
         // Held into a later refresh than planned: hold none for a while.
         if self
             .planned
             .take()
             .is_some_and(|planned| at > planned + period / 2)
         {
+            zgx::profile::note(|| {
+                format!(
+                    "rendered too late for the refresh it was held for: frames render at once \
+                     for the next {}",
+                    Self::REST
+                )
+            });
             self.offset = std::time::Duration::ZERO;
             self.resting = Self::REST;
         }
         self.last = Some((ready, at));
         at
     }
-    /// The point a frame ready at `ready` presents at, and the count of
-    /// frames comfortably early on a later cadence that it leaves.
+    /// The point a frame ready at `ready` presents at, the count of frames
+    /// comfortably early on a later cadence that it leaves, and whether that
+    /// cadence put it a refresh later than it could have shown.
     fn choose(
         &self,
         ready: std::time::Instant,
         origin: std::time::Instant,
         period: std::time::Duration,
-    ) -> (std::time::Instant, u8) {
+    ) -> (std::time::Instant, u8, bool) {
         // The phase of `ready` on the grid, either side of `origin`.
         let period_ns = period.as_nanos().max(1);
         let since = match ready.checked_duration_since(origin) {
@@ -1119,9 +1151,9 @@ impl Latch {
             0
         };
         if late && early < Self::RETURN {
-            (first + period, early)
+            (first + period, early, true)
         } else {
-            (first, 0)
+            (first, 0, false)
         }
     }
     /// When a frame that could start rendering at `now` does. It waits for
@@ -1145,7 +1177,7 @@ impl Latch {
         period: std::time::Duration,
     ) -> std::time::Instant {
         let ready = now + self.work;
-        let (point, _) = self.choose(ready, origin, period);
+        let (point, _, _) = self.choose(ready, origin, period);
         self.room = point
             .saturating_duration_since(ready)
             .saturating_sub(Self::KEEP);
@@ -1230,7 +1262,11 @@ struct Host {
     ime_cancellation: crate::native_ime::CancellationTracker,
     native_focused: bool,
     x11: bool,
+    /// The scale its content draws at: the display's times the window's
+    /// zoom (`Ui::zoom`), the display's itself at 100%.
     scale_factor: f64,
+    /// The display's scale: window frames, sizes and screen positions.
+    display_scale: f64,
     /// What the window last showed, and its scale, for `Ui::snapshot`.
     #[cfg(target_os = "macos")]
     shown: std::rc::Rc<std::cell::RefCell<Option<(zgx_gpu::ShownFrame, f64)>>>,
@@ -1574,6 +1610,7 @@ impl Host {
             native_focused: false,
             x11: false,
             scale_factor: 1.,
+            display_scale: 1.,
             #[cfg(target_os = "macos")]
             shown,
             force: true,
@@ -1910,7 +1947,11 @@ impl Host {
         self.accessibility_geometry_dirty |= !report.damage.is_empty();
         let full = [scene.bounds(scene.root())];
         let forced = self.force;
-        let damage = if self.force {
+        // Painting only what changed can be switched off, to compare
+        // (`zgx inspect switch partial_repaint off`): a frame that changes
+        // anything then paints the whole window.
+        let whole = !zgx::switches::PARTIAL_REPAINT.on() && !report.damage.is_empty();
+        let damage = if self.force || whole {
             &full[..]
         } else {
             &report.damage
@@ -1919,8 +1960,9 @@ impl Host {
         // over them; paint moving between planes repaints on both.
         let planned = match &mut self.renderer {
             Some(renderer) if self.native.active() => {
+                let zoom = self.context.ui.zoom() as f32;
                 self.native
-                    .plan(&scene, &window, renderer, self.scale_factor as f32)?
+                    .plan(&scene, &window, renderer, self.scale_factor as f32, zoom)?
             }
             _ => Vec::new(),
         };
@@ -2014,6 +2056,11 @@ impl Host {
                             link.refresh_phase(crate::frame_source::VSYNC_RESYNC * 3)
                         && let Some(wait) = align_wait(period.saturating_sub(phase), period)
                     {
+                        zgx::profile::note(|| {
+                            "ready early: waited to hand over with the display link's other \
+                             frames, so two don't land on one refresh"
+                                .into()
+                        });
                         // One wakeup, not `sleep_until`'s two: running late
                         // only moves it nearer the point, still before it.
                         std::thread::sleep(wait);
@@ -2032,10 +2079,11 @@ impl Host {
                     *self.shown.borrow_mut() = renderer
                         .shown_frame()
                         .map(|frame| (frame, self.scale_factor));
-                    if let Some(gpu) = renderer.take_gpu_time()
-                        && grid.is_some()
-                    {
-                        self.latch.ran(gpu);
+                    if let Some(gpu) = renderer.take_gpu_time() {
+                        zgx::profile::gpu_time(gpu);
+                        if grid.is_some() {
+                            self.latch.ran(gpu);
+                        }
                     }
                 }
                 if status == zgx_gpu::PresentationStatus::Presented {
@@ -2353,9 +2401,9 @@ impl Host {
         // The context made while the window was (`Application::run`): the
         // first shared one. Failing, a context is made for the window as
         // without it, so errors come as they always did.
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         let early = self.context.windows.early_gpu.borrow_mut().take();
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         if let Some(Ok(context)) = early.map(zgx_gpu::PendingGpuContext::join) {
             for font in self.context.windows.fonts.iter() {
                 font.install(&mut context.text_system().borrow_mut());
@@ -2623,7 +2671,19 @@ impl Host {
         zgx::profile::mark("window created");
         let mut renderer = self.make_renderer(&window)?;
         zgx::profile::mark("renderer made");
-        self.scale_factor = window.scale_factor();
+        self.display_scale = window.scale_factor();
+        // At the zoom it was left at, kept with its frame (before the zoom's
+        // host is told of changes: nothing to apply yet).
+        if let Some(zoom) = self
+            .options
+            .frame_autosave
+            .as_deref()
+            .and_then(crate::zoom_store::load)
+        {
+            self.context.ui.set_zoom(zoom);
+            crate::popup_window::set_zoom(window.id(), self.context.ui.zoom());
+        }
+        self.scale_factor = self.content_scale();
         renderer.set_scale_factor(self.scale_factor as f32);
         self.context
             .ui
@@ -2762,8 +2822,24 @@ impl Host {
                 }
             }
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", zgx_winit_patched))]
         crate::services::add(window.id(), &self.context.ui);
+        #[cfg(all(
+            any(target_os = "macos", windows, target_os = "linux"),
+            zgx_winit_patched
+        ))]
+        {
+            let (proxy, token) = (self.proxy.clone(), self.context.window.token);
+            crate::text_drop::add(&window, &self.context.ui, move || {
+                let _ = proxy.send_event(Event::Wake(token));
+            });
+        }
+        {
+            let (proxy, token) = (self.proxy.clone(), self.context.window.token);
+            self.context.ui.on_zoom(move || {
+                let _ = proxy.send_event(Event::Zoom(token));
+            });
+        }
         self.window = Some(window);
         #[cfg(target_os = "macos")]
         {
@@ -2801,7 +2877,7 @@ impl Host {
                 let minimum = self
                     .options
                     .min_size
-                    .map(|(w, h)| LogicalSize::new(w, h).to_physical::<u32>(self.scale_factor));
+                    .map(|(w, h)| LogicalSize::new(w, h).to_physical::<u32>(self.display_scale));
                 let size = minimum.map_or(PhysicalSize::new(bounds.size.0, bounds.size.1), |min| {
                     PhysicalSize::new(bounds.size.0.max(min.width), bounds.size.1.max(min.height))
                 });
@@ -2866,7 +2942,7 @@ impl Host {
                         (width.max(min_w), height.max(min_h))
                     });
                 if let Some(size) = window.request_inner_size(
-                    LogicalSize::new(width, height).to_physical::<u32>(self.scale_factor),
+                    LogicalSize::new(width, height).to_physical::<u32>(self.display_scale),
                 ) && apply_viewport(
                     &mut self.options,
                     &self.context.ui,
@@ -3234,10 +3310,12 @@ impl Host {
             }
             // Reported as a window first reaches its display, unchanged.
             WindowEvent::ScaleFactorChanged { scale_factor, .. }
-                if scale_factor == self.scale_factor => {}
+                if scale_factor == self.display_scale => {}
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 // This event is authoritative. Some X11 XSETTINGS paths leave
                 // Window::scale_factor() stale for an existing native window.
+                self.display_scale = scale_factor;
+                let scale_factor = self.content_scale();
                 if self.x11 {
                     let ratio = (self.scale_factor / scale_factor) as f32;
                     self.cursor.0 *= ratio;
@@ -3469,7 +3547,26 @@ impl Host {
                     self.touch
                         .wheel(phase, self.cursor, (dx, dy), std::time::Instant::now());
                 }
-                if crate::scroll_resample::enabled() {
+                // Control with the wheel zooms the window, a level a notch, as
+                // browsers on Windows and Linux do, unless what is under the
+                // pointer takes it (scroll views leave it). On macOS neither
+                // the wheel nor a pinch zooms a page.
+                let zooms = cfg!(not(target_os = "macos"))
+                    && self.modifiers.control
+                    && !self.modifiers.alt
+                    && !self.modifiers.meta
+                    && self.context.ui.wheel_zooms();
+                if zooms {
+                    let event = InputEvent::Scroll {
+                        x: self.cursor.0,
+                        y: self.cursor.1,
+                        delta_x: dx,
+                        delta_y: dy,
+                    };
+                    if !zgx::zoom::wheel(|| self.dispatch_prevented(event))? {
+                        self.context.ui.zoom_wheel(-dy / step.1);
+                    }
+                } else if crate::scroll_resample::enabled() {
                     // Applied on display refreshes; see `update`.
                     let now = std::time::Instant::now();
                     self.scroll.position = self.cursor;
@@ -3779,11 +3876,65 @@ impl Host {
             self.global_scale(),
         ))
     }
-    /// Global units per point of its content (`popup_window::global_scale`).
+    /// Global units per point of its content (`popup_window::global_scale`),
+    /// its zoom's points.
     fn global_scale(&self) -> f64 {
-        self.window
+        let base = self
+            .window
             .as_deref()
-            .map_or(1., crate::popup_window::global_scale)
+            .map_or(1., crate::popup_window::global_scale);
+        zoomed(base, self.context.ui.zoom())
+    }
+    /// The scale its content draws at: the display's at 100%, exactly (no
+    /// multiply), else the display's times the zoom.
+    fn content_scale(&self) -> f64 {
+        zoomed(self.display_scale, self.context.ui.zoom())
+    }
+    /// The window's zoom changed: its content draws at the display's scale
+    /// times it, reflowed in the logical viewport its size then has, as a
+    /// display change does; what each scroll view showed at its top stays
+    /// there. Nothing more runs while it stays.
+    fn apply_zoom(&mut self) -> Result<(), Box<dyn Error>> {
+        let scale = self.content_scale();
+        if scale == self.scale_factor {
+            return Ok(());
+        }
+        let anchors = self.context.ui.zoom_anchors();
+        if let Some(window) = &self.window {
+            crate::popup_window::set_zoom(window.id(), self.context.ui.zoom());
+        }
+        // Kept with its frame, for the next time it opens.
+        if let Some(name) = &self.options.frame_autosave {
+            crate::zoom_store::save(name, self.context.ui.zoom());
+        }
+        let ratio = (self.scale_factor / scale) as f32;
+        self.cursor.0 *= ratio;
+        self.cursor.1 *= ratio;
+        self.scale_factor = scale;
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_scale_factor(scale as f32);
+        }
+        self.context
+            .ui
+            .scene
+            .borrow_mut()
+            .set_pixel_scale(scale as f32);
+        if let Some(window) = self.window.clone() {
+            apply_viewport(
+                &mut self.options,
+                &self.context.ui,
+                &self.context.viewport,
+                window.inner_size(),
+                scale,
+            );
+            window.request_redraw();
+        }
+        self.context.ui.refresh_text_geometry();
+        self.ime_geometry = None;
+        self.force = true;
+        self.context.ui.try_prepare_frame()?;
+        self.context.ui.restore_zoom_anchors(anchors);
+        Ok(())
     }
     /// The platform's drag moved or ended, at a global point: the window's
     /// pointer, which the platform reports to its session meanwhile. Back
@@ -4001,6 +4152,11 @@ impl Host {
             // Each refresh applies the motion due by then; with no refreshes
             // coming (hidden, minimized), everything applies at once.
             let delta = if !self.frames_presented() {
+                zgx::profile::note(|| {
+                    "scroll input applied at once: the window isn't presenting (hidden, \
+                     minimized or covered), so no refreshes pace it"
+                        .into()
+                });
                 self.scroll.flush()
             } else if self.frame_arrived {
                 self.scroll.sample(std::time::Instant::now())
@@ -4184,8 +4340,12 @@ impl Host {
     #[cfg(target_os = "macos")]
     fn refresh_grid(&mut self) -> Option<(std::time::Instant, std::time::Duration)> {
         let now = std::time::Instant::now();
-        // Unlimited frames hand over as soon as they are drawn.
-        if self.context.frame_mode.get() == FrameMode::Unlimited {
+        // Unlimited frames, or the grid switched off (`zgx inspect switch
+        // refresh_grid off`), hand over as soon as they are drawn.
+        if self.context.frame_mode.get() == FrameMode::Unlimited
+            || !zgx::switches::REFRESH_GRID.on()
+        {
+            self.latch = Latch::default();
             return None;
         }
         if self
@@ -4724,7 +4884,7 @@ impl WindowManager {
         let Some(host) = self.hosts.get(&token) else {
             return false;
         };
-        let (scale, (left, top)) = (host.scale_factor, host.content_origin.unwrap_or_default());
+        let (scale, (left, top)) = (host.display_scale, host.content_origin.unwrap_or_default());
         let ended = match event {
             WindowEvent::CursorMoved { position, .. } => {
                 let (x, y) = (left + position.x / scale, top + position.y / scale);
@@ -4880,6 +5040,41 @@ impl WindowManager {
         }
     }
     fn menu_action(&mut self, token: u64, action: crate::MenuAction) {
+        // The window's zoom items, which zgx puts in the View menu.
+        if let Some(zoom) = crate::app_menu::zoom_action(&action) {
+            if let Some(host) = self.hosts.get(&token)
+                && !host.context.window.is_closed()
+            {
+                use crate::app_menu::ZoomAction;
+                let ui = &host.context.ui;
+                match zoom {
+                    ZoomAction::In => ui.zoom_in(),
+                    ZoomAction::Out => ui.zoom_out(),
+                    ZoomAction::Reset => ui.reset_zoom(),
+                }
+            }
+            return;
+        }
+        // Find in page's items, which zgx puts in the Edit menu.
+        if let Some(find) = crate::app_menu::find_action(&action) {
+            if let Some(host) = self.hosts.get_mut(&token)
+                && !host.context.window.is_closed()
+            {
+                use crate::app_menu::FindAction;
+                let ui = &mut host.context.ui;
+                match find {
+                    FindAction::Open => {
+                        ui.open_find();
+                    }
+                    FindAction::Next => ui.find_next(),
+                    FindAction::Previous => ui.find_previous(),
+                    FindAction::UseSelection => {
+                        ui.find_selection();
+                    }
+                }
+            }
+            return;
+        }
         if !crate::app_menu::enabled_action(&self.factory.menus.borrow(), &action) {
             return;
         }
@@ -4951,8 +5146,14 @@ impl WindowManager {
             && let Some(window) = &host.window
         {
             self.native.remove(&window.id());
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", zgx_winit_patched))]
             crate::services::remove(window.id());
+            #[cfg(all(
+                any(target_os = "macos", windows, target_os = "linux"),
+                zgx_winit_patched
+            ))]
+            crate::text_drop::remove(window.id());
+            crate::popup_window::set_zoom(window.id(), 1.);
             // Its drag, if X11's, goes with it.
             #[cfg(target_os = "linux")]
             if crate::native_drag::active(window.id()) {
@@ -5128,6 +5329,28 @@ impl WindowManager {
                             host.dispatch(InputEvent::FileHover { x, y, path })
                         }
                         FileEvent::Leave => host.dispatch(InputEvent::FileHoverCancelled),
+                        FileEvent::TextOver { x, y } => {
+                            crate::wayland_data::answer_text(crate::text_drop::over(
+                                &host.context.ui,
+                                x,
+                                y,
+                            ));
+                            Ok(())
+                        }
+                        FileEvent::TextOut => {
+                            crate::text_drop::out(&host.context.ui);
+                            Ok(())
+                        }
+                        FileEvent::TextDrop {
+                            x,
+                            y,
+                            text,
+                            accepted,
+                        } => {
+                            let taken = crate::text_drop::dropped(&host.context.ui, x, y, &text);
+                            let _ = accepted.send(taken);
+                            Ok(())
+                        }
                         FileEvent::Rejected { x, y, reason } => {
                             host.dispatch(InputEvent::FilesDropRejected { x, y, reason })
                         }
@@ -5306,6 +5529,13 @@ impl WindowManager {
                             .ui
                             .set_popup_screens(crate::popup_window::popup_screens(window));
                     }
+                }
+            }
+            Event::Zoom(token) => {
+                if let Some(host) = self.hosts.get_mut(&token)
+                    && let Err(error) = host.apply_zoom()
+                {
+                    self.fail(event_loop, error);
                 }
             }
             Event::Wake(token) => {
@@ -5804,6 +6034,10 @@ fn map_key(key: &WKey) -> Option<Key> {
     })
 }
 
+/// `scale` zoomed by `zoom`: `scale` itself at 100%, no multiply to round it.
+fn zoomed(scale: f64, zoom: f64) -> f64 {
+    if zoom == 1. { scale } else { scale * zoom }
+}
 fn apply_viewport(
     options: &mut WindowOptions,
     ui: &Ui,
@@ -5823,8 +6057,11 @@ fn apply_viewport(
     {
         return false;
     }
-    options.width = width;
-    options.height = height;
+    // The window's size in points, as it was asked for: the display's, its
+    // content's zoom apart.
+    let zoom = ui.zoom();
+    options.width = zoomed(width, zoom);
+    options.height = zoomed(height, zoom);
     ui.scene.borrow_mut().resize(width as f32, height as f32);
     viewport.set((width as f32, height as f32));
     true
@@ -5859,11 +6096,14 @@ fn native_cursor(cursor: zgx::cursor::Cursor) -> CursorIcon {
         C::ZoomOut => CursorIcon::ZoomOut,
     }
 }
+/// The cursor a control shows unless it states one, as Chrome's defaults and
+/// AppKit's controls give it: the hand over links alone (a button, a
+/// checkbox, a menu item and a slider keep the arrow), the I-beam over text
+/// fields.
 fn cursor_for_role(role: Option<Role>) -> CursorIcon {
     match role {
-        Some(Role::Button | Role::Link | Role::CheckBox | Role::MenuItem) => CursorIcon::Pointer,
+        Some(Role::Link) => CursorIcon::Pointer,
         Some(Role::TextInput | Role::MultilineTextInput) => CursorIcon::Text,
-        Some(Role::Slider) => CursorIcon::EwResize,
         _ => CursorIcon::Default,
     }
 }
@@ -6291,6 +6531,32 @@ mod tests {
     }
     #[cfg(target_os = "macos")]
     #[test]
+    fn a_frame_held_to_a_later_cadence_says_so() {
+        use std::time::{Duration, Instant};
+        let period = Duration::from_nanos(8_333_333);
+        let ms = |v: f64| Duration::from_secs_f64(v / 1e3);
+        let origin = Instant::now();
+        let point = (period - Latch::LEAD).as_secs_f64() * 1e3;
+        let mut latch = Latch::default();
+        // A 60 Hz stream ready just after its point sets a later cadence.
+        latch.decide(origin + period * 10 + ms(point + 0.1), origin, period);
+        // The next, ready just before its point, could show a refresh
+        // sooner: the cadence keeps it, and says so (`decide`'s note).
+        let ready = origin + period * 12 + ms(point - 0.1);
+        let (_, _, kept) = latch.choose(ready, origin, period);
+        assert!(kept);
+        latch.decide(ready, origin, period);
+        // Comfortably early, frame after frame, it gives way: none kept.
+        let mut kept = true;
+        for i in 0..=Latch::RETURN as u32 {
+            let ready = origin + period * (14 + 2 * i) + ms(point - 3.);
+            kept = latch.choose(ready, origin, period).2;
+            latch.decide(ready, origin, period);
+        }
+        assert!(!kept);
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
     fn held_up_frames_render_later_within_their_wait() {
         use std::time::{Duration, Instant};
         let period = Duration::from_nanos(8_333_333);
@@ -6440,13 +6706,71 @@ mod tests {
         );
     }
     #[test]
-    fn native_cursor_roles_distinguish_editable_and_actionable_controls() {
-        assert_eq!(cursor_for_role(Some(Role::Button)), CursorIcon::Pointer);
+    fn content_scale_is_the_displays_exactly_at_100_percent() {
+        for display in [1., 1.25, 1.5, 1.75, 2., 2.25, 3., 1. / 3.] {
+            assert_eq!(
+                zoomed(display, 1.).to_bits(),
+                display.to_bits(),
+                "{display}"
+            );
+            assert_eq!(zoomed(display, 1.5), display * 1.5);
+        }
+        // The viewport reflows in the zoom's points; the window keeps its
+        // size in the display's.
+        let mut ui = Ui::new(100., 100.);
+        let viewport = ui.signal((0_f32, 0_f32));
+        let mut options = WindowOptions::default();
+        let size = PhysicalSize::new(1600, 1200);
+        assert!(apply_viewport(&mut options, &ui, &viewport, size, 2.));
+        assert_eq!(viewport.get(), (800., 600.));
+        assert_eq!((options.width, options.height), (800., 600.));
+        ui.set_zoom(1.25);
+        assert!(apply_viewport(
+            &mut options,
+            &ui,
+            &viewport,
+            size,
+            zoomed(2., ui.zoom())
+        ));
+        assert_eq!(viewport.get(), (640., 480.));
+        assert_eq!(
+            (options.width, options.height),
+            (800., 600.),
+            "the window's points"
+        );
+        // The system's text scale and the zoom compose: a text's size is
+        // its points times the text scale, drawn at the content scale.
+        let view = ui.mount(zgx::style::Styled::text_size(
+            zgx::compose::text("Big"),
+            zgx::theme::tok::FONT_SIZE_MD,
+        ));
+        ui.prepare_frame();
+        let font = |ui: &Ui| match ui.scene.borrow().kind(view.node()) {
+            zgx::scene::NodeKind::Text { font_size, .. } => *font_size,
+            _ => panic!("a text"),
+        };
+        let plain = font(&ui);
+        ui.theme().set_system_text_scale(1.5);
+        ui.prepare_frame();
+        assert_eq!(font(&ui), plain * 1.5, "the system's text scale");
+        let pixels = font(&ui) as f64 * zoomed(2., ui.zoom());
+        assert_eq!(
+            pixels,
+            plain as f64 * 1.5 * 2. * 1.25,
+            "times the zoom, in pixels"
+        );
+    }
+    #[test]
+    fn native_cursor_roles_distinguish_links_and_text_fields() {
+        assert_eq!(cursor_for_role(Some(Role::Link)), CursorIcon::Pointer);
         assert_eq!(
             cursor_for_role(Some(Role::MultilineTextInput)),
             CursorIcon::Text
         );
-        assert_eq!(cursor_for_role(Some(Role::Slider)), CursorIcon::EwResize);
+        // Chrome's and AppKit's controls keep the arrow.
+        for role in [Role::Button, Role::CheckBox, Role::MenuItem, Role::Slider] {
+            assert_eq!(cursor_for_role(Some(role)), CursorIcon::Default, "{role:?}");
+        }
         assert_eq!(cursor_for_role(None), CursorIcon::Default);
     }
     #[test]
@@ -6534,7 +6858,7 @@ mod tests {
                 .unwrap(),
             ))),
             gpu_contexts: Rc::new(RefCell::new(Vec::new())),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             early_gpu: Rc::default(),
             proxy: event_loop.create_proxy(),
             runtime: zgx::reactive::Runtime::new(),
@@ -6678,7 +7002,7 @@ mod tests {
             alive: Rc::new(Cell::new(true)),
             clipboard: Rc::new(RefCell::new(None)),
             gpu_contexts: Rc::new(RefCell::new(Vec::new())),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             early_gpu: Rc::default(),
             proxy: event_loop.create_proxy(),
             runtime: zgx::reactive::Runtime::new(),
@@ -6767,7 +7091,7 @@ mod tests {
             alive: Rc::new(Cell::new(true)),
             clipboard: Rc::new(RefCell::new(None)),
             gpu_contexts: Rc::new(RefCell::new(Vec::new())),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             early_gpu: Rc::default(),
             proxy: event_loop.create_proxy(),
             runtime: zgx::reactive::Runtime::new(),
@@ -6838,7 +7162,7 @@ mod tests {
             alive: Rc::new(Cell::new(true)),
             clipboard: Rc::new(RefCell::new(None)),
             gpu_contexts: Rc::new(RefCell::new(Vec::new())),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             early_gpu: Rc::default(),
             proxy: event_loop.create_proxy(),
             runtime: zgx::reactive::Runtime::new(),
@@ -6903,7 +7227,7 @@ mod tests {
             alive: Rc::new(Cell::new(true)),
             clipboard: Rc::new(RefCell::new(None)),
             gpu_contexts: Rc::new(RefCell::new(Vec::new())),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             early_gpu: Rc::default(),
             proxy: event_loop.create_proxy(),
             runtime: zgx::reactive::Runtime::new(),

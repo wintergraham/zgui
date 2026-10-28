@@ -34,3 +34,5 @@ mod hover_subtree;
 mod native_pointer;
 #[path = "../pointer_drag_buttons.rs"]
 mod pointer_drag_buttons;
+#[path = "../zoom.rs"]
+mod zoom;

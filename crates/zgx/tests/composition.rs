@@ -126,6 +126,36 @@ fn keyed_reorder_keeps_local_state_and_builds_only_new_keys() {
     assert!(handle.find("row-3").is_none());
 }
 
+/// Rows whose keys go are removed in the order they were in, the same every
+/// run: what their removal repaints follows it (a map's order did not).
+#[test]
+fn keyed_rows_go_in_the_order_they_were_in() {
+    struct Gone(i32, Rc<RefCell<Vec<i32>>>);
+    impl Drop for Gone {
+        fn drop(&mut self) {
+            self.1.borrow_mut().push(self.0);
+        }
+    }
+    let mut ui = Ui::new(400., 200.);
+    let keys = ui.signal((0..12).collect::<Vec<i32>>());
+    let gone: Rc<RefCell<Vec<i32>>> = Rc::default();
+    ui.mount(keyed(
+        {
+            let keys = keys.clone();
+            move || keys.get()
+        },
+        {
+            let gone = gone.clone();
+            move |key, cx| {
+                cx.retain(Gone(key, gone.clone()));
+                text(key.to_string())
+            }
+        },
+    ));
+    keys.set(vec![9, 4, 1]);
+    assert_eq!(*gone.borrow(), [0, 2, 3, 5, 6, 7, 8, 10, 11]);
+}
+
 /// Keys read again unchanged (a list whose rows changed in place) leave
 /// the children as they are; a child removed from elsewhere is built again.
 #[test]

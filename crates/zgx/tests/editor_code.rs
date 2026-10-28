@@ -220,6 +220,19 @@ fn tab_indents_and_outdents_lines_and_undo_takes_it_back() {
     assert_eq!(value.get(), "    a\n    b\n    c\nd");
     // The editor keeps focus: Tab did not move it on.
     assert_eq!(ui.focused_editor().map(|e| e.node), Some(editor.node));
+    // Control-Tab leaves it, as AppKit's text views, indenting nothing.
+    let (mut ui, editor, value) = code(text.clone(), |v| {
+        column()
+            .child(v.tab_indent("    "))
+            .child(button().child(self::text("Next")))
+    });
+    let control = Modifiers {
+        control: true,
+        ..Modifiers::default()
+    };
+    press(&mut ui, Key::Tab, control);
+    assert_eq!(value.get(), text);
+    assert_ne!(ui.focused_editor().map(|e| e.node), Some(editor.node));
     // Without an indent, Tab moves focus on, as in any field.
     let (mut ui, editor, value) = code(text.clone(), |v| {
         column().child(v).child(button().child(self::text("Next")))

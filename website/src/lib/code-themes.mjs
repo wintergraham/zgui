@@ -41,7 +41,7 @@ export const zgxLight = theme({
 export const zgxDark = theme({
   name: 'zgx-dark',
   type: 'dark',
-  bg: '#111111',
+  bg: '#0c120f',
   fg: '#ececec',
   c: { comment: '#8c8c8c', punct: '#a3a3a3', keyword: '#ff7aa4', string: '#6fd391', constant: '#6cb6ff', func: '#c79dff', type: '#f0c46c' },
 });

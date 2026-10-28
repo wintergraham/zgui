@@ -2,7 +2,7 @@
 //! refresh each shown frame went up on. While a window animates at the
 //! display's rate, every present should show one refresh after the last;
 //! `+2 refreshes` for one present is a refresh that repeated a frame.
-use windows::Win32::Graphics::Dxgi::DXGI_FRAME_STATISTICS;
+use windows::Win32::Graphics::Dxgi::{DXGI_FRAME_STATISTICS, IDXGISwapChain};
 
 #[derive(Default)]
 pub(crate) struct PresentStats {
@@ -24,6 +24,13 @@ impl PresentStats {
         let Some(chain) = hal.swap_chain() else {
             return;
         };
+        self.presented_chain(&chain);
+    }
+    /// After a present to a swap chain of the renderer's own (dxgi_present.rs).
+    pub(crate) fn presented_chain(&mut self, chain: &IDXGISwapChain) {
+        if !crate::present_log::enabled() {
+            return;
+        }
         let mut stats = DXGI_FRAME_STATISTICS::default();
         // Fails until a present has shown, and after a mode change.
         // SAFETY: `chain` is a reference of our own to the surface's swap

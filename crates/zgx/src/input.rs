@@ -567,6 +567,9 @@ struct Group {
     /// None: one Tab stop whose arrows its owner handles (a virtual list).
     axis: Option<FocusGroup>,
     current: Option<NodeId>,
+    /// Its arrows choose what they move to, wrapping at the ends: a radio
+    /// group's (`set_group_chooses`).
+    chooses: bool,
 }
 struct FocusScope {
     root: NodeId,
@@ -664,6 +667,9 @@ struct State {
     file_hovered: Option<NodeId>,
     pressed: Option<NodeId>,
     key_pressed: Option<(NodeId, Key)>,
+    /// The window's semantics: a control's role says which keys activate it
+    /// (`activates`).
+    semantics: Weak<RefCell<crate::semantics::Semantics>>,
     scopes: Vec<FocusScope>,
     /// Focus groups (`set_focus_group`): one Tab stop each.
     groups: crate::scene::NodeMap<Group>,
@@ -828,6 +834,27 @@ impl InputDispatcher {
     /// A dispatcher with no listeners and nothing focused.
     pub fn new() -> Self {
         Self::default()
+    }
+    /// The semantics whose roles say which keys activate a control.
+    pub(crate) fn set_semantics(&self, semantics: &Rc<RefCell<crate::semantics::Semantics>>) {
+        self.state.borrow_mut().semantics = Rc::downgrade(semantics);
+    }
+    /// Whether `key` activates `node`, as Chrome's and AppKit's controls
+    /// take it: Enter as it goes down, Space as it comes up, except that a
+    /// link takes Enter alone and a checkbox, radio button or switch Space
+    /// alone (Enter goes on to the form's default action).
+    pub(crate) fn activates(&self, node: NodeId, key: &Key) -> bool {
+        use crate::semantics::Role;
+        let semantics = self.state.borrow().semantics.upgrade();
+        let role = semantics.and_then(|s| s.borrow().get(node).map(|node| node.role));
+        match key {
+            Key::Enter => !matches!(
+                role,
+                Some(Role::CheckBox | Role::RadioButton | Role::Switch)
+            ),
+            Key::Space => role != Some(Role::Link),
+            _ => false,
+        }
     }
     /// Register a scoped keymap. Keep its guard alive for the component lifetime.
     pub fn bind_keys(
@@ -1735,12 +1762,16 @@ impl InputDispatcher {
         let mut s = self.state.borrow_mut();
         match axis {
             Some(axis) => {
-                let current = s.groups.get(&root).and_then(|g| g.current);
+                let (current, chooses) = s
+                    .groups
+                    .get(&root)
+                    .map_or((None, false), |g| (g.current, g.chooses));
                 s.groups.insert(
                     root,
                     Group {
                         axis: Some(axis),
                         current,
+                        chooses,
                     },
                 );
             }
@@ -1760,8 +1791,17 @@ impl InputDispatcher {
             Group {
                 axis: None,
                 current,
+                chooses: false,
             },
         );
+    }
+    /// Make focus group `root`'s arrows choose what they move to (activate
+    /// it), wrapping from one end to the other, as a radio group's do in a
+    /// browser and in AppKit.
+    pub(crate) fn set_group_chooses(&self, root: NodeId, chooses: bool) {
+        if let Some(group) = self.state.borrow_mut().groups.get_mut(&root) {
+            group.chooses = chooses;
+        }
     }
     /// Make `member` the one its focus group's Tab stop lands on: the
     /// selected option, the active tab.
@@ -1802,7 +1842,11 @@ impl InputDispatcher {
     fn group_step(&self, scene: &Scene, key: &Key) -> Option<NodeId> {
         let focused = self.focused()?;
         let group = self.group_of(scene, focused)?;
-        let axis = self.state.borrow().groups.get(&group)?.axis?;
+        let (axis, wraps) = {
+            let s = self.state.borrow();
+            let g = s.groups.get(&group)?;
+            (g.axis?, g.chooses)
+        };
         enum Step {
             Back,
             On,
@@ -1836,6 +1880,8 @@ impl InputDispatcher {
             .collect();
         let at = members.iter().position(|id| *id == focused)?;
         match step {
+            Step::Back if wraps && at == 0 => members.last().copied(),
+            Step::On if wraps && at + 1 == members.len() => members.first().copied(),
             Step::Back => at.checked_sub(1).map(|i| members[i]),
             Step::On => members.get(at + 1).copied(),
             Step::First => members.first().copied(),
@@ -2408,11 +2454,14 @@ impl InputDispatcher {
                         self.focus(scene, focus);
                     }
                 }
+                // Tab and Shift-Tab, and Control with them (AppKit's and
+                // GTK's way out of a text view that takes Tab); Option- and
+                // Command-Tab are the system's, or a field's literal tab.
                 InputEvent::KeyDown {
                     key: Key::Tab,
                     modifiers,
                     ..
-                } => {
+                } if !modifiers.alt && !modifiers.meta => {
                     let next = self.next_focus(&scene.borrow(), modifiers.shift);
                     self.focus(scene, next);
                     prevented = true;
@@ -2432,6 +2481,15 @@ impl InputDispatcher {
                     if next.is_some() {
                         self.focus(scene, next);
                         prevented = true;
+                        // A radio group's arrows choose too.
+                        let chooses = next.and_then(|id| {
+                            let group = self.group_of(&scene.borrow(), id)?;
+                            let chooses = self.state.borrow().groups.get(&group)?.chooses;
+                            chooses.then_some(id)
+                        });
+                        if let Some(id) = chooses.filter(|id| self.focused() == Some(*id)) {
+                            self.dispatch_to(scene, id, InputEvent::Activate);
+                        }
                     }
                 }
                 InputEvent::PointerUp {
@@ -2445,12 +2503,28 @@ impl InputDispatcher {
                         self.dispatch_to(scene, id, InputEvent::Activate);
                     }
                 }
+                // Enter activates as it goes down, as a browser's button and
+                // AppKit's default button take it.
                 InputEvent::KeyDown {
-                    key: key @ (Key::Enter | Key::Space),
+                    key: Key::Enter,
                     repeat: false,
                     ..
                 } => {
-                    let pressed = self.focused().map(|id| (id, key.clone()));
+                    self.state.borrow_mut().key_pressed = None;
+                    if let Some(id) = self.focused().filter(|id| self.activates(*id, &Key::Enter)) {
+                        self.dispatch_to(scene, id, InputEvent::Activate);
+                    }
+                }
+                // Space as it comes up: pressed, it shows pressed until then.
+                InputEvent::KeyDown {
+                    key: Key::Space,
+                    repeat: false,
+                    ..
+                } => {
+                    let pressed = self
+                        .focused()
+                        .filter(|id| self.activates(*id, &Key::Space))
+                        .map(|id| (id, Key::Space));
                     self.state.borrow_mut().key_pressed = pressed;
                 }
                 InputEvent::KeyUp { key, .. } => {
@@ -2867,6 +2941,50 @@ mod tests {
         assert_eq!(d.focused(), None);
     }
     #[test]
+    fn tab_moves_focus_with_shift_or_control_but_not_option_or_command() {
+        let (scene, a, b) = setup();
+        let d = InputDispatcher::new();
+        let opts = NodeInput {
+            focusable: true,
+            ..Default::default()
+        };
+        let _a = d.register(a, opts, |_| {});
+        let _b = d.register(b, opts, |_| {});
+        let tab = |modifiers| InputEvent::KeyDown {
+            key: Key::Tab,
+            modifiers,
+            repeat: false,
+        };
+        d.focus(&scene, Some(a));
+        let alt = Modifiers {
+            alt: true,
+            ..Default::default()
+        };
+        let meta = Modifiers {
+            meta: true,
+            ..Default::default()
+        };
+        for held in [alt, meta] {
+            let result = d.dispatch(&scene, tab(held));
+            assert_eq!(d.focused(), Some(a), "{held:?}");
+            assert!(!result.default_prevented, "{held:?} goes on unhandled");
+        }
+        // Control-Tab: AppKit's and GTK's way out of a text view.
+        let control = Modifiers {
+            control: true,
+            ..Default::default()
+        };
+        d.dispatch(&scene, tab(control));
+        assert_eq!(d.focused(), Some(b));
+        let back = Modifiers {
+            shift: true,
+            control: true,
+            ..Default::default()
+        };
+        d.dispatch(&scene, tab(back));
+        assert_eq!(d.focused(), Some(a));
+    }
+    #[test]
     fn disabling_ancestor_cancels_unfocused_press_before_reenable() {
         let (scene, a, _) = setup();
         let input = InputDispatcher::new();
@@ -3046,12 +3164,13 @@ mod tests {
         input.dispatch(&scene, up(Key::Space));
         input.dispatch(&scene, up(Key::Space));
         assert_eq!(clicks.get(), 1);
-        // The latest non-repeat activation key owns the one pending activation.
+        // Enter activates as it goes down, once, and drops a pending Space.
         input.dispatch(&scene, down(Key::Space, false));
         input.dispatch(&scene, down(Key::Enter, false));
+        assert_eq!(clicks.get(), 2);
+        input.dispatch(&scene, down(Key::Enter, true));
         input.dispatch(&scene, down(Key::Space, true));
         input.dispatch(&scene, up(Key::Space));
-        assert_eq!(clicks.get(), 1);
         input.dispatch(&scene, up(Key::Enter));
         assert_eq!(clicks.get(), 2);
     }

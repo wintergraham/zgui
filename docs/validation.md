@@ -69,6 +69,8 @@ Further native Linux probes, each on a private Xvfb/Openbox desktop or a nested 
 
 - Wayland clipboard: copy and paste go through the compositor (`set_selection`, `receive`, `send` in the protocol trace) via one data device per seat, which Weston requires (`wayland_input_smoke.py`).
 - The primary selection: an editor's double-clicked word and Ctrl+A reach other clients, and another client's selection lands where a middle click puts the caret, on X11 (`xclip`) and as a native Wayland client of Sway (`wl-paste`/`wl-copy --primary`) (`primary_selection_smoke.py`). Selected display text is the primary selection too (`selectable_text_smoke.py`).
+- Find in page on X11, with real keys: Ctrl+F opens selectable_text's bar, "line 7777)" finds the one transcript row of 10,000 the list had not mounted, the list scrolls to it and its current mark (the `find.current` orange) shows; Escape closes it, the marks gone; "transcript line" counts all 10,000 matches in slices, and Return steps (`find_in_page_smoke.py`).
+- A window's zoom on X11, with real keys: zoom_probe's Ctrl+= twice, Ctrl+- and Ctrl+0 step through 110%, 125%, 110% and 100%, and Control with a wheel notch up and one down steps to 110% and back; the logical viewport shrinks by the zoom while the window keeps its size, and text keeps its size in points (`zoom_smoke.py`).
 - Copying display text reaches other clients: selectable_text's document, pressed on and selected whole with Ctrl+A, copied with Ctrl+C, is read back by xclip on X11 and by wl-paste through Sway as `text/html` and UTF-8 plain text, both with all 10,000 lines of its transcript's virtual list in order (the rows it never mounted included) and none of the part marked unselectable: 10,012 lines, 669 KB of HTML (`selection_copy_smoke.py`).
 - An input method that goes with a focus queued for the app (ibus-x11 killed while the app is stopped and focus moves to it): the app takes the focus without a round trip to the gone server, keeps answering, and closes on Alt+F4; before, it waited in libX11's `_XimRead` forever (`native_ime_smoke.py --server-gone`).
 - Images through the clipboard, on X11 (`xclip`) and as a Wayland client of Sway (`wl-copy`, `wl-paste`): clipboard_image's Paste takes a 30 by 20 PNG another client offered as `image/png`, its half-transparent columns' alpha straight, at its size and pixels (their digest); its Copy offers its 64 by 48 gradient as `image/png`, read back pixel for pixel, its transparent column included (`clipboard_image_smoke.py`).
@@ -95,12 +97,14 @@ Further native Linux probes, each on a private Xvfb/Openbox desktop or a nested 
 - Drags between windows on X11 (under picom): drag_probe's tab dropped on its other window's strip lands there; over an xmessage window covering that strip it does not, and released there it is torn off; tab_windows' tab torn off below its window opens with the tab's grabbed point under the pointer, to the pixel; that window's only tab moves the window, which follows the pointer to the pixel and stays where it is let go, and dropped on the other window's strip merges into it (`drag_windows_smoke.py`).
 - Where windows open on Linux: on X11 (Openbox) a second window opens a title bar's height down and right of the first; a window with `frame_autosave` moved and resized is saved once the moves settle (the app then killed), and reopens there at its size; maximized and closed at once with Alt+F4 it reopens maximized, and restores to the frame before; at a saved frame no monitor shows it opens on the screen at its saved size. Under Weston it reopens at its saved size, or maximized from its first frame, no buffer drawn at the saved size (Weston's protocol trace) (`window_frames_smoke.py`).
 - Drags out to other apps on X11: drag_probe's chip, exporting its text, dragged with real input onto a GTK window of the probe's own (`xdnd_target.py`) is taken over XDND as `UTF8_STRING`, and the source hears it accepted; out of the window the preview follows the pointer pixel for pixel, drawing nothing and the window nothing; back over its own window, with Escape, or over a GTK target that refuses it, nothing is dropped and the source hears it not taken; and a text field's selected words, pressed on and dragged out the same way, arrive at the target as text (`xdnd_source_smoke.py`).
+- Text dragged in from other apps on X11: a GTK window of the probe's own (`text_drag_source.py`) drags text with real input onto drag_probe's Words field: hovering changes nothing, let go at the field's end the text lands there (asked for as `text/plain;charset=utf-8`) and the source hears it taken; let go over the chip it is refused, and Escape drops nothing (`xdnd_text_drop_smoke.py`).
 - Drags between windows on X11 (under picom): drag_probe's tab dropped on its other window's strip lands there; over an xmessage window covering that strip it does not, and released there it is torn off; tab_windows' tab torn off below its window opens with the tab's grabbed point under the pointer, to the pixel (`drag_windows_smoke.py`).
 - No fonts at all: the gallery on Xvfb, its fontconfig listing only an empty directory, draws its window (every control, no text), says once on stderr why its text does not show, and does not panic (`no_fonts_smoke.py`).
 - X screens of 16 and 30 bits: the gallery on Xvfb at each depth shows a window of a 32-bit visual, drawing exactly the pixels it draws on a 24-bit screen, with no panic (`x11_depths_smoke.py`).
 - GL where no Vulkan driver is: the gallery on Xvfb with no Vulkan driver to find starts and draws the same pixels as through lavapipe, with Mesa's GL loaded; with Vulkan, no GL driver is mapped (`gl_fallback_smoke.py`).
 - Popups past the window on Wayland: under sway, popup_probe's menu clicked open with a virtual pointer shows as an `xdg_popup` past the window's bottom edge, exactly where the scene placed it, drawn; its last item, below the window, clicked, is chosen and the popup goes; opened again, a press in the window closes it; the window moved near the output's bottom, the menu flips above its trigger, 4 points off it, and its first item takes a click there. The submenus example's submenu, a popup of its menu, opens beside that menu where the compositor flipped it (48 points down it, at its right edge). A menu of 60 items, taller than the 960-point output, is cut to it by the compositor, laid out 960 high, and scrolled to its last item, which takes a click. A popover with an arrow, flipped above its trigger by the compositor near the output's bottom, is placed there by the scene, its arrow's tip on its bottom edge, centred on the trigger. On outputs scaled 2× and 1.5× (fractional, through the viewporter), the menu's buffer is its size in the output's pixels (400 × 404, 300 × 303), it shows where the scene put it in those pixels, within one, and its last item takes a click. Under Weston, the menu opened by the app sits the same on the content, below the title bar winit draws (`wayland_popups_smoke.py`).
-- Drags out to other apps on Wayland: under sway, drag_probe's chip dragged with a virtual pointer onto a GTK window of the probe's own (`GDK_BACKEND=wayland`) is taken as `UTF8_STRING`, under its icon, and the source hears it accepted; back over its own window, or over a GTK target that refuses it and hears it move, nothing is dropped and the source hears it not taken; drag_probe's tab, carrying nothing to other apps, drops on the Other window's strip (accepted) and, let go on the bare desktop, is torn off; a window's only tab moves its window with the pointer, by the compositor's move (`wayland_drag_out_smoke.py`).
+- Drags out to other apps on Wayland: under sway, drag_probe's chip dragged with a virtual pointer onto a GTK window of the probe's own (`GDK_BACKEND=wayland`) is taken as `UTF8_STRING`, under its icon, and the source hears it accepted; back over its own window, or over a GTK target that refuses it and hears it move, nothing is dropped and the source hears it not taken; a text field's selected words, pressed on and dragged out onto the GTK target, arrive there as text; drag_probe's tab, carrying nothing to other apps, drops on the Other window's strip (accepted) and, let go on the bare desktop, is torn off; a window's only tab moves its window with the pointer, by the compositor's move (`wayland_drag_out_smoke.py`).
+- Text dragged in from other apps on Wayland: under sway, the same GTK source (`GDK_BACKEND=wayland`) dragged with a virtual pointer onto drag_probe's Words field drops its text at the field's end, hovering changing nothing, and the source hears it taken; let go over the chip it is refused (`wayland_text_drop_smoke.py`).
 - A window manager's resize waits for zgx's frames on X11: window_probe's window names `_NET_WM_SYNC_REQUEST` and its counter, and through an Openbox Alt and right button resize of 12 steps the counter goes from 0 to Openbox's last request, the window takes the pointer's size and a frame is drawn for each step (`resize_sync_smoke.py`).
 - A window's icon and class on X11: window_probe, with no application id, finds its executable's icon in a private icon theme (`XDG_DATA_HOME`, a 48 pixel PNG of one colour), and its window carries it as `_NET_WM_ICON`, 48 by 48 of that colour, classed by its executable; given a desktop file ID (`Application::desktop_id`, as zgx-run gives a script's `app_id`), its class is that ID and its icon the one of that name (`window_icon_smoke.py`).
 - A window's last user input on X11: window_probe's First carries no `_NET_WM_USER_TIME` before any input, a click sets it and a later key moves it on, and Second, opened 3 s after First, carries the time of that key (`user_time_smoke.py`).
@@ -131,7 +135,7 @@ Recorded native runs use `scripts/platform_smoke.py`, which creates and cleans u
 | Linux X11, forced scale 2 | 1800×1520 initial physical surface; same input checks; resize to 2000×1600 with logical viewport 1000×800 | Same monitor-transition limit |
 | Linux Wayland, headless Weston/pixman | Captured actual gallery surface, semantic snapshot, timed close, multi-window survival/close-policy/exactly-once cleanup | This historical headless run had no input seat; see the newer nested-seat input run below |
 | macOS ARM64 target | `cargo check --workspace --all-targets --target aarch64-apple-darwin --locked` passes from Linux | Type checking only: no native linking, execution, Metal or AppKit interaction evidence |
-| macOS 26, Apple silicon, two 2× displays: popups, drags and windows ([multi-window](multi-window.md)) | `popup_probe`, `drag_probe`, `window_probe` and `corners_probe` post AppKit events to their own windows: menus past the window, press-drag-release, close on deactivation and minimize, drags within and between windows, tear-off, a window moved by its only tab, the Window menu, cascading, saved frames. By hand (2026-10-23): ⌘` cycles `tab_windows`' windows | Drops into other apps, fullscreen and Space switches, and displays of different scales are not probed (a synthetic drag-out would drop at the real pointer; fullscreen takes the screen) |
+| macOS 26, Apple silicon, two 2× displays: popups, drags and windows ([multi-window](multi-window.md)) | `popup_probe`, `drag_probe`, `window_probe` and `corners_probe` post AppKit events to their own windows: menus past the window, press-drag-release, close on deactivation and minimize, drags within and between windows, tear-off, a window moved by its only tab, the Window menu, cascading, saved frames; text another app drags in (a pasteboard of the probe's own handed to the window's dragging destination as AppKit hands it one: refused over the chip, a copy over the Words field, nothing changed by hovering, dropped there at its end, focused and selected, `TEXT_DROP`). By hand (2026-10-23): ⌘` cycles `tab_windows`' windows | Drops into other apps, fullscreen and Space switches, and displays of different scales are not probed (a synthetic drag-out would drop at the real pointer; fullscreen takes the screen) |
 
 All native rendering above uses llvmpipe, not a hardware GPU. Reproduce the isolated runs with:
 
@@ -357,8 +361,10 @@ live-task ownership without requiring a desktop.
 
 A [live Linux AT-SPI run](platform-validation/atspi/README.md) validates ordinary
 component controls over a private accessibility bus: readable text and status,
-focus, caret and selection, buttons, numeric values, checkbox state, disabled
-input and fresh-state reactivation, and a canvas named from state (a chart) read as an
+focus, caret and selection, where each character of a field's text shows
+(`GetCharacterExtents`: one line, left to right, inside the field, and the
+point at a box's middle naming its character, `GetOffsetAtPoint`), buttons,
+numeric values, checkbox state, disabled input and fresh-state reactivation, and a canvas named from state (a chart) read as an
 image whose name follows the state while a client reads, and is current after a
 press made while none did (names from state wait for one, #396). Static labels now use the AccessKit text
 value contract; editors publish cached Unicode TextRuns and route selection
@@ -906,6 +912,26 @@ never mounted are in it (their text derived from how the rows are built).
 The app reads only what it wrote, so macOS prompts no one; it is launched
 as a direct child from a temporary directory and sends no input. Passed on
 macOS 26 (M5), 2026-10-25: 10,012 lines, 670 KB of HTML.
+
+## macOS find in page (⌘F)
+
+`scripts/macos_find_probe.py` runs the selectable_text example with
+`--find-probe`: it sends its own key window ⌘F, types "line 7777)" into the
+bar, presses Return and Escape (`-[NSApplication sendEvent:]`, so the
+keyboard and other apps hear nothing), and prints find's status as it
+changes. It checks that ⌘F opens the bar, that the one match, in a
+transcript row of 10,000 the list had not mounted, is found and counted,
+that the transcript scrolls to it, and that Escape closes the bar. Passed
+on macOS 26 (M5), 2026-10-26.
+## macOS zoom (⌘=, ⌘-, ⌘0)
+
+`scripts/macos_zoom_probe.py` runs the zoom_probe example with `--drive`:
+it sends its own key window ⌘=, ⌘=, ⌘- and ⌘0
+(`-[NSApplication sendEvent:]`) and prints its zoom, viewport and a text's
+size as they change. It checks that the keys step through Chrome's levels,
+that the viewport in points follows the zoom (480×360 at 100%, 384×288 at
+125%), and that text keeps its size in points. Passed on macOS 26 (M5),
+2026-10-26.
 
 ## macOS full-rate animation (the display's refresh)
 

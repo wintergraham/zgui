@@ -27,6 +27,7 @@ pub mod timer;
 pub mod env;
 pub mod frame;
 pub mod profile;
+pub mod switches;
 #[cfg(feature = "trace")]
 pub mod trace;
 
@@ -35,10 +36,14 @@ pub(crate) mod editor_lines;
 pub(crate) mod editor_menu;
 pub(crate) mod editor_spell;
 pub(crate) mod elastic;
+pub mod find;
+mod find_text;
 pub mod rich_text;
 mod scroll_keys;
 pub mod selection;
 pub mod text_layout;
+mod typeahead;
+pub mod zoom;
 
 pub mod affine;
 pub mod background;
@@ -106,6 +111,19 @@ pub(crate) fn shrink_sparse<K: std::hash::Hash + Eq, V, S: std::hash::BuildHashe
     if map.capacity() > 1024 && map.len() * 4 < map.capacity() {
         map.shrink_to(map.len() * 2);
     }
+}
+
+/// The hasher of keys from an app's data (a list's row keys): fast, and
+/// seeded once per process from std's random seed, so keys made to collide
+/// cannot slow every lookup, as they can a fixed hasher's. What depends on
+/// order iterates in the list's own (a map's differs from run to run).
+pub(crate) type KeyHasher = foldhash::fast::FixedState;
+pub(crate) fn key_hasher() -> KeyHasher {
+    static SEED: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    foldhash::fast::FixedState::with_seed(*SEED.get_or_init(|| {
+        use std::hash::BuildHasher;
+        std::collections::hash_map::RandomState::new().hash_one(0_u8)
+    }))
 }
 
 /// Runs `f`, level `level` of a recursion over a tree (mounting, lowering,

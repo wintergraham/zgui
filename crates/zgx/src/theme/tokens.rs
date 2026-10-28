@@ -287,6 +287,10 @@ schema! {
     SELECTION_TEXT_INACTIVE: Color = "selection.text.inactive" => "{selection.text}",
     /// The corner radius of selected text's highlight.
     SELECTION_RADIUS: Number = "selection.radius" => "0",
+    /// Find in page's matches, behind their text (Chrome's yellow).
+    FIND_MATCH: Color = "find.match" => "#ffd60a80",
+    /// Find in page's current match (Chrome's orange).
+    FIND_CURRENT: Color = "find.current" => "#ff9632d9",
 }
 
 struct Registry {

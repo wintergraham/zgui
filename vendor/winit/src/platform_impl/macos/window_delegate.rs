@@ -9,11 +9,11 @@ use core_graphics::display::{CGDisplay, CGPoint};
 use monitor::VideoModeHandle;
 use objc2::rc::{autoreleasepool, Retained};
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{declare_class, msg_send_id, mutability, sel, ClassType, DeclaredClass};
+use objc2::{declare_class, msg_send, msg_send_id, mutability, sel, ClassType, DeclaredClass};
 use objc2_app_kit::{
     NSAppKitVersionNumber, NSAppKitVersionNumber10_12, NSAppearance, NSAppearanceCustomization,
     NSAppearanceNameAqua, NSApplication, NSApplicationPresentationOptions, NSBackingStoreType,
-    NSColor, NSDraggingDestination, NSFilenamesPboardType, NSPasteboard,
+    NSColor, NSDraggingDestination, NSFilenamesPboardType, NSPasteboard, NSPasteboardTypeString,
     NSRequestUserAttentionType, NSScreen, NSView, NSWindowButton, NSWindowDelegate,
     NSWindowFullScreenButton, NSWindowLevel, NSWindowOcclusionState, NSWindowOrderingMode,
     NSWindowSharingType, NSWindowStyleMask, NSWindowTabbingMode, NSWindowTitleVisibility,
@@ -123,6 +123,9 @@ pub(crate) struct State {
     is_simple_fullscreen: Cell<bool>,
     saved_style: Cell<Option<NSWindowStyleMask>>,
     is_borderless_game: Cell<bool>,
+    /// zgx patch: the drag over the window carries text from another app
+    /// (`platform::text_drop`), not files.
+    text_drag: Cell<bool>,
 }
 
 declare_class!(
@@ -367,7 +370,7 @@ declare_class!(
     unsafe impl NSDraggingDestination for WindowDelegate {
         /// Invoked when the dragged image enters destination bounds or frame
         #[method(draggingEntered:)]
-        fn dragging_entered(&self, sender: &NSObject) -> bool {
+        fn dragging_entered(&self, sender: &NSObject) -> usize {
             trace_scope!("draggingEntered:");
 
             use std::path::PathBuf;
@@ -375,8 +378,14 @@ declare_class!(
             let pb: Retained<NSPasteboard> = unsafe { msg_send_id![sender, draggingPasteboard] };
             let filenames = match pb.propertyListForType(unsafe { NSFilenamesPboardType }) {
                 Some(filenames) => filenames,
-                None => return false.into(),
+                // zgx patch: text from another app (`platform::text_drop`).
+                None => {
+                    let text = self.carries_text(sender, &pb);
+                    self.ivars().text_drag.set(text);
+                    return if text { self.text_over(sender) } else { DRAG_NONE };
+                }
             };
+            self.ivars().text_drag.set(false);
             let filenames: Retained<NSArray<NSString>> = unsafe { Retained::cast(filenames) };
 
             filenames.into_iter().for_each(|file| {
@@ -384,7 +393,20 @@ declare_class!(
                 self.queue_event(WindowEvent::HoveredFile(path));
             });
 
-            true
+            DRAG_COPY
+        }
+
+        /// zgx patch: invoked as the drag moves over the window (and
+        /// periodically while it rests there): text's destination changes
+        /// with it.
+        #[method(draggingUpdated:)]
+        fn dragging_updated(&self, sender: &NSObject) -> usize {
+            trace_scope!("draggingUpdated:");
+            if self.ivars().text_drag.get() {
+                self.text_over(sender)
+            } else {
+                DRAG_COPY
+            }
         }
 
         /// Invoked when the image is released
@@ -402,6 +424,21 @@ declare_class!(
             use std::path::PathBuf;
 
             let pb: Retained<NSPasteboard> = unsafe { msg_send_id![sender, draggingPasteboard] };
+            if self.ivars().text_drag.replace(false) {
+                let text = unsafe { pb.stringForType(NSPasteboardTypeString) };
+                let (x, y) = self.drag_point(sender);
+                let drops = crate::platform::text_drop::text_drops();
+                let taken = match (text, &drops) {
+                    (Some(text), Some(drops)) => drops.dropped(self.public_id(), x, y, &text.to_string()),
+                    _ => false,
+                };
+                if !taken {
+                    if let Some(drops) = drops {
+                        drops.out(self.public_id());
+                    }
+                }
+                return taken.into();
+            }
             let filenames = match pb.propertyListForType(unsafe { NSFilenamesPboardType }) {
                 Some(filenames) => filenames,
                 None => return false.into(),
@@ -426,6 +463,12 @@ declare_class!(
         #[method(draggingExited:)]
         fn dragging_exited(&self, _sender: Option<&NSObject>) {
             trace_scope!("draggingExited:");
+            if self.ivars().text_drag.replace(false) {
+                if let Some(drops) = crate::platform::text_drop::text_drops() {
+                    drops.out(self.public_id());
+                }
+                return;
+            }
             self.queue_event(WindowEvent::HoveredFileCancelled);
         }
     }
@@ -665,11 +708,55 @@ fn new_window(
         // register for drag and drop operations.
         window
             .registerForDraggedTypes(&NSArray::from_id_slice(&[
-                unsafe { NSFilenamesPboardType }.copy()
+                unsafe { NSFilenamesPboardType }.copy(),
+                // zgx patch: text from other apps (`platform::text_drop`).
+                unsafe { NSPasteboardTypeString }.copy(),
             ]));
 
         Some(window)
     })
+}
+
+/// `NSDragOperationNone` and `NSDragOperationCopy`.
+const DRAG_NONE: usize = 0;
+const DRAG_COPY: usize = 1;
+
+impl WindowDelegate {
+    /// zgx patch: whether the drag carries text another app's (a drag of
+    /// the app's own is its windows' already) and the app takes text drops.
+    fn carries_text(&self, sender: &NSObject, pb: &NSPasteboard) -> bool {
+        let source: Option<Retained<AnyObject>> = unsafe { msg_send_id![sender, draggingSource] };
+        let types = NSArray::from_id_slice(&[unsafe { NSPasteboardTypeString }.copy()]);
+        source.is_none()
+            && unsafe { pb.availableTypeFromArray(&types) }.is_some()
+            && crate::platform::text_drop::text_drops().is_some()
+    }
+
+    fn public_id(&self) -> crate::window::WindowId {
+        crate::window::WindowId(self.id())
+    }
+
+    /// zgx patch: the drag's point in the content, in physical pixels from
+    /// its top left.
+    fn drag_point(&self, sender: &NSObject) -> (f64, f64) {
+        let location: NSPoint = unsafe { msg_send![sender, draggingLocation] };
+        let point = self.view().convertPoint_fromView(location, None);
+        let scale = self.scale_factor();
+        (point.x * scale, point.y * scale)
+    }
+
+    /// zgx patch: the text drag moved: a copy where the window would take
+    /// it, else nothing.
+    fn text_over(&self, sender: &NSObject) -> usize {
+        let (x, y) = self.drag_point(sender);
+        let over = crate::platform::text_drop::text_drops()
+            .is_some_and(|drops| drops.over(self.public_id(), x, y));
+        if over {
+            DRAG_COPY
+        } else {
+            DRAG_NONE
+        }
+    }
 }
 
 impl WindowDelegate {
@@ -735,6 +822,7 @@ impl WindowDelegate {
             is_simple_fullscreen: Cell::new(false),
             saved_style: Cell::new(None),
             is_borderless_game: Cell::new(attrs.platform_specific.borderless_game),
+            text_drag: Cell::new(false),
         });
         let delegate: Retained<WindowDelegate> = unsafe { msg_send_id![super(delegate), init] };
 

@@ -871,6 +871,14 @@ impl PlatformNode {
         upgrade(&self.context)
     }
 
+    /// zgx patch: a client reading `what` of the placeholder root asks for
+    /// the tree (`Context::read_past_placeholder`).
+    fn read_past_placeholder(&self, what: impl FnOnce() -> String) {
+        if let Some(context) = self.context.upgrade() {
+            context.read_past_placeholder(what);
+        }
+    }
+
     fn with_tree_state_and_context<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(&TreeState, &Arc<Context>) -> Result<T>,
@@ -1054,10 +1062,37 @@ impl IRawElementProviderSimple_Impl for PlatformNode_Impl {
     }
 
     fn GetPatternProvider(&self, pattern_id: UIA_PATTERN_ID) -> Result<IUnknown> {
+        self.read_past_placeholder(|| format!("pattern {}", pattern_id.0));
         self.pattern_provider(pattern_id)
     }
 
     fn GetPropertyValue(&self, property_id: UIA_PROPERTY_ID) -> Result<VARIANT> {
+        // zgx patch: what an MSAA probe reads of a window (its role, name,
+        // state and place) the placeholder answers; anything more asks for
+        // the tree.
+        if !matches!(
+            property_id,
+            UIA_ControlTypePropertyId
+                | UIA_LocalizedControlTypePropertyId
+                | UIA_NamePropertyId
+                | UIA_NativeWindowHandlePropertyId
+                | UIA_ProcessIdPropertyId
+                | UIA_FrameworkIdPropertyId
+                | UIA_ProviderDescriptionPropertyId
+                | UIA_ClassNamePropertyId
+                | UIA_AutomationIdPropertyId
+                | UIA_RuntimeIdPropertyId
+                | UIA_BoundingRectanglePropertyId
+                | UIA_IsEnabledPropertyId
+                | UIA_IsOffscreenPropertyId
+                | UIA_IsPasswordPropertyId
+                | UIA_HasKeyboardFocusPropertyId
+                | UIA_IsKeyboardFocusablePropertyId
+                | UIA_IsControlElementPropertyId
+                | UIA_IsContentElementPropertyId
+        ) {
+            self.read_past_placeholder(|| format!("property {}", property_id.0));
+        }
         self.resolve_with_tree_state_and_context(|node, state, context| {
             let mut buffer = StringBuffer::acquire();
             let mut wrapper = NodeWrapper {
@@ -1126,6 +1161,12 @@ impl IRawElementProviderSimple_Impl for PlatformNode_Impl {
 #[allow(non_snake_case)]
 impl IRawElementProviderFragment_Impl for PlatformNode_Impl {
     fn Navigate(&self, direction: NavigateDirection) -> Result<IRawElementProviderFragment> {
+        if matches!(
+            direction,
+            NavigateDirection_FirstChild | NavigateDirection_LastChild
+        ) {
+            self.read_past_placeholder(|| "children".into());
+        }
         self.resolve_with_context(|node, context| {
             let result = match direction {
                 NavigateDirection_Parent => node.filtered_parent(&filter_with_root_exception),
@@ -1236,6 +1277,7 @@ impl PlatformNode {
 
 impl IRawElementProviderFragmentRoot_Impl for PlatformNode_Impl {
     fn ElementProviderFromPoint(&self, x: f64, y: f64) -> Result<IRawElementProviderFragment> {
+        self.read_past_placeholder(|| "element at a point".into());
         self.resolve_with_context(|node, context| {
             let client_top_left = context.client_top_left();
             let point = Point::new(x - client_top_left.x, y - client_top_left.y);
@@ -1252,6 +1294,7 @@ impl IRawElementProviderFragmentRoot_Impl for PlatformNode_Impl {
     }
 
     fn GetFocus(&self) -> Result<IRawElementProviderFragment> {
+        self.read_past_placeholder(|| "focus".into());
         self.with_tree_state_and_context(|state, context| {
             if let Some(node) = state.focus() {
                 let id = node.id();

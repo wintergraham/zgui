@@ -405,6 +405,10 @@ pub(crate) struct Page {
     visible: Cell<bool>,
     parent: Cell<HWND>,
     scale: Cell<f32>,
+    /// The app's zoom of the page (`WebView::set_zoom`) and its window's
+    /// (`Ui::zoom`): WebView2 shows it at their product, as a browser's
+    /// zoom (its CSS pixels that many raw pixels over the scale).
+    zoom: Cell<(f64, f64)>,
     focused: Cell<bool>,
     /// The pointer is over it (dcomp.rs): its cursor shows at once.
     pub hovered: Cell<bool>,
@@ -488,6 +492,7 @@ pub(crate) fn backend(web: &WebView, parent: HWND, scale: f32) -> Option<Rc<Page
         visible: Cell::new(false),
         parent: Cell::new(parent),
         scale: Cell::new(scale),
+        zoom: Cell::new((1., 1.)),
         focused: Cell::new(false),
         hovered: Cell::new(false),
         cursor: Cell::new(None),
@@ -646,6 +651,10 @@ impl Page {
                 if let Ok(controller) = controller.cast::<ICoreWebView2Controller3>() {
                     controller.SetShouldDetectMonitorScaleChanges(false)?;
                     controller.SetRasterizationScale(f64::from(self.scale.get()))?;
+                }
+                let (page, window) = self.zoom.get();
+                if page * window != 1. {
+                    controller.SetZoomFactor(page * window)?;
                 }
                 Ok(Ready {
                     composition,
@@ -1326,6 +1335,19 @@ impl Page {
             let _ = unsafe { ready.controller.SetIsVisible(visible) };
         }
     }
+    /// Its window zoomed to `zoom` (`Ui::zoom`): the page zooms as much, on
+    /// top of its own zoom.
+    pub fn set_window_zoom(&self, zoom: f64) {
+        let (page, window) = self.zoom.get();
+        if window == zoom {
+            return;
+        }
+        self.zoom.set((page, zoom));
+        if let Some(ready) = &*self.ready.borrow() {
+            // SAFETY: WebView2 on the UI thread.
+            let _ = unsafe { ready.controller.SetZoomFactor(page * zoom) };
+        }
+    }
     /// The page's box in its window, in physical pixels, and the window's scale.
     pub fn set_bounds(&self, bounds: (i32, i32, i32, i32), scale: f32) {
         let rescaled = self.scale.replace(scale) != scale;
@@ -1502,7 +1524,9 @@ impl Page {
                 }
                 WebViewCommand::SetZoom(zoom) => {
                     if zoom > 0. {
-                        let _ = ready.controller.SetZoomFactor(zoom);
+                        let window = self.zoom.get().1;
+                        self.zoom.set((zoom, window));
+                        let _ = ready.controller.SetZoomFactor(zoom * window);
                     }
                 }
             }

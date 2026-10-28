@@ -46,6 +46,32 @@ impl Harness {
 }
 
 #[test]
+fn computed_text_formats_as_state_text_does() {
+    let mut h = Harness::inline(
+        r#"local values = {
+            "", "hello", "\0", "\xffa\xc0\xaf\xe2\x82", "e\u{301} 😀",
+            string.rep("x", 65535), string.rep("y", 65536), string.rep("z", 65537),
+            true, false, 0, -123, 1.25, math.huge, 0/0,
+            {"a", 2, false}, {b = "two", a = 1},
+        }
+        local children = {}
+        for i, value in values do
+            local state = ui.state("case" .. i, value)
+            table.insert(children, ui.text { id = "state" .. i, state })
+            table.insert(children, ui.text { id = "computed" .. i, function() return value end })
+        end
+        return ui.column { children }"#,
+    );
+    for i in 1..=17 {
+        assert_eq!(
+            h.text(&format!("computed{i}")),
+            h.text(&format!("state{i}")),
+            "case {i}"
+        );
+    }
+}
+
+#[test]
 fn components_have_their_own_state_and_mount_hooks() {
     let mut h = Harness::inline(
         r##"local mounted = ui.state("mounted", 0)
@@ -1075,6 +1101,14 @@ fn a_middle_click_reaches_the_innermost_on_aux_click() {
         h.text("seen"),
         "inner middle middle;outer middle;inner 4 middle;click;"
     );
+    // That press released away is spent: a later one begun elsewhere and
+    // released over the node is no click of it, nor of the node around it.
+    press(&mut h, inner, away, PointerButton::Middle);
+    press(&mut h, away, inner, PointerButton::Middle);
+    assert_eq!(
+        h.text("seen"),
+        "inner middle middle;outer middle;inner 4 middle;click;"
+    );
 }
 
 #[test]
@@ -1704,6 +1738,30 @@ fn rotated_buttons_are_hit_where_they_are_drawn() {
         "1",
         "only the point inside the rotated box clicked"
     );
+}
+
+/// Sparse nested lists keep numeric order, including which invalid child fails first.
+#[test]
+fn nested_sparse_children_keep_order_and_first_error() {
+    let mut h = Harness::inline(
+        r#"local nested = {}
+        nested[90] = function() return "c" end
+        nested[3] = "b"
+        nested[2] = false
+        nested[0] = 123
+        nested[-1] = true
+        nested.ignored = true
+        local root = {}
+        root[40] = "d"
+        root[5] = nested
+        root[1] = ui.text { "a" }
+        local ok, err = pcall(function()
+            return ui.row { [30] = true, [7] = { [100] = true, [5] = 27 } }
+        end)
+        assert(not ok and string.find(tostring(err), "a child must be a ui node, string or function, not integer", 1, true), tostring(err))
+        return ui.row(root)"#,
+    );
+    assert_eq!(h.texts(), ["a", "b", "c", "d"]);
 }
 
 #[test]

@@ -281,6 +281,19 @@ pub struct TextPosition {
     /// Which side of a shared boundary the caret sits on.
     pub affinity: TextAffinity,
 }
+/// A visual line's carets (`TextLayout::line_carets`), in the layout's
+/// coordinates.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LineCarets {
+    /// Its bytes, its break left out.
+    pub range: Range<usize>,
+    /// Its top.
+    pub top: f32,
+    /// Its height.
+    pub height: f32,
+    /// The caret's x before each grapheme in `range`, then at its end.
+    pub carets: Vec<f32>,
+}
 /// Shaped text's geometry: its size, carets, hit testing and selection
 /// rectangles, in the layout's own logical coordinates.
 pub trait TextLayout {
@@ -322,6 +335,31 @@ pub trait TextLayout {
     /// The caret's rectangle at `position`, on the side its affinity says.
     fn caret_position(&self, position: TextPosition) -> Rect {
         self.caret(position.byte_offset)
+    }
+    /// Every visual line of `text` (the text laid out) in one pass: its
+    /// bytes, top and height, and the caret's x before each grapheme in it
+    /// and at its end, as accessibility gives a text's characters. `None`
+    /// (the default): asked of `visual_line_range` and `carets_x` line by
+    /// line instead, each a walk of the text.
+    fn line_carets(&self, text: &str) -> Option<Vec<LineCarets>> {
+        let _ = text;
+        None
+    }
+    /// The caret's x before each of `offsets` (grapheme boundaries, in
+    /// order, affinity after): each character's place, as accessibility
+    /// gives a text's characters. Shapers that can walk their glyphs once
+    /// override it; the default asks `caret_position` of each.
+    fn carets_x(&self, offsets: &[usize]) -> Vec<f32> {
+        offsets
+            .iter()
+            .map(|&byte_offset| {
+                self.caret_position(TextPosition {
+                    byte_offset,
+                    affinity: TextAffinity::After,
+                })
+                .x
+            })
+            .collect()
     }
     /// Logical byte-ordered range of the caret's visual row, excluding hard
     /// line endings. Native bidi layouts override this: physical left/right

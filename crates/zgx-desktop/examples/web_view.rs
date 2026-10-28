@@ -6,7 +6,8 @@
 //! `-- --fixture`: checks geometry, layering, backdrops, hit testing and
 //! script evaluation against live AppKit state, prints `FIXTURE` lines,
 //! holds the window for a screenshot (`WINDOW <n>`, `screencapture -l <n>`),
-//! then exits (non-zero on failure).
+//! then exits (non-zero on failure). `--zoom 1.25` zooms the window first:
+//! the same checks, in zgx's points, with AppKit's frames at the zoom.
 #[cfg(target_os = "macos")]
 use std::time::Duration;
 use std::{cell::RefCell, rc::Rc};
@@ -63,7 +64,16 @@ fn icon_button(label: &str) -> View {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let fixture = args.iter().any(|arg| arg == "--fixture");
-    let url = args.iter().find(|arg| !arg.starts_with("--")).cloned();
+    let zoom = args
+        .iter()
+        .skip_while(|arg| *arg != "--zoom")
+        .nth(1)
+        .and_then(|zoom| zoom.parse::<f64>().ok());
+    // Not `--zoom`'s value.
+    let url = args
+        .iter()
+        .find(|arg| !arg.starts_with("--") && arg.parse::<f64>().is_err())
+        .cloned();
     Application::new()
         .window(WindowOptions {
             title: "zgx web view".into(),
@@ -72,6 +82,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..Default::default()
         })
         .run(move |cx| {
+            if let Some(zoom) = zoom {
+                cx.ui.set_zoom(zoom);
+            }
             let web = WebView::new(&cx.ui.runtime, WebViewOptions::default());
             match &url {
                 Some(url) => web.load_url(url.clone()),
@@ -288,6 +301,19 @@ fn run_fixture(
                 }
             };
             let sleep = |ms| zgx::timer::sleep(Duration::from_millis(ms));
+            // Equal but for float rounding (AppKit's points over a zoom).
+            let close = |a: zgx::scene::Rect, b: zgx::scene::Rect| {
+                [a.x - b.x, a.y - b.y, a.width - b.width, a.height - b.height]
+                    .iter()
+                    .all(|d| d.abs() < 0.01)
+            };
+            let framed = |frame: Option<zgx::scene::Rect>, b| frame.is_some_and(|a| close(a, b));
+            let cut_to = |masks: &[(zgx::scene::Rect, f64)], b, radius: f64| {
+                masks.len() == 1 && close(masks[0].0, b) && (masks[0].1 - radius).abs() < 0.01
+            };
+            let at = |point: Option<(f32, f32)>, (x, y): (f32, f32)| {
+                point.is_some_and(|(px, py)| (px - x).abs() < 0.01 && (py - y).abs() < 0.01)
+            };
             for _ in 0..100 {
                 if finished.with_untracked(|count| *count) > 0 {
                     break;
@@ -309,7 +335,7 @@ fn run_fixture(
             if let Some(report) = &report {
                 check(
                     "page frame follows layout",
-                    report.frame == Some(bounds("page")),
+                    framed(report.frame, bounds("page")),
                     format!("{:?} vs {:?}", report.frame, bounds("page")),
                 );
                 check(
@@ -319,7 +345,7 @@ fn run_fixture(
                 );
                 check(
                     "page cut to its own rounded corners",
-                    report.masks == vec![(bounds("page"), 14.)],
+                    cut_to(&report.masks[..], bounds("page"), 14.),
                     format!("{:?}", report.masks),
                 );
             }
@@ -343,6 +369,31 @@ fn run_fixture(
                 value == Some(Ok("\"zgx web view 42\"".into())),
                 format!("{value:?}"),
             );
+            // A zoomed window's page is zoomed as much: its CSS width is
+            // its box's in zgx's points, whatever AppKit's frame is.
+            let width = Rc::new(RefCell::new(None));
+            {
+                let width = width.clone();
+                web.evaluate_js("window.innerWidth", move |value| {
+                    *width.borrow_mut() = Some(value)
+                });
+            }
+            for _ in 0..40 {
+                if width.borrow().is_some() {
+                    break;
+                }
+                sleep(25).await;
+            }
+            let css = width
+                .borrow()
+                .clone()
+                .and_then(|value| value.ok())
+                .and_then(|value| value.parse::<f32>().ok());
+            check(
+                "page CSS width is its box's",
+                css.is_some_and(|css| (css - bounds("page").width).abs() <= 1.),
+                format!("{css:?} vs {}", bounds("page").width),
+            );
             web.run_js("window.zgx.postMessage({hello: 1})");
             sleep(200).await;
             check(
@@ -356,10 +407,10 @@ fn run_fixture(
             check(
                 "composer backdrop shaped to the node",
                 backdrops.iter().any(|b| {
-                    b.frame == composer
+                    close(b.frame, composer)
                         && !b.hidden
                         && (b.corner_radius - 22.).abs() < 0.01
-                        && b.blur == Some(22.)
+                        && b.blur.is_some_and(|blur| (blur - 22.).abs() < 0.01)
                 }),
                 format!("{backdrops:?} vs {composer:?}"),
             );
@@ -405,9 +456,9 @@ fn run_fixture(
             check(
                 "menu backdrop",
                 // Exactly the rounded panel: no square backdrop at its corners.
-                backdrops
-                    .iter()
-                    .any(|b| b.frame == menu && !b.hidden && (b.corner_radius - 14.).abs() < 0.01),
+                backdrops.iter().any(|b| {
+                    close(b.frame, menu) && !b.hidden && (b.corner_radius - 14.).abs() < 0.01
+                }),
                 format!("{backdrops:?} vs {menu:?}"),
             );
             let (mx, my) = center(menu);
@@ -484,15 +535,17 @@ fn run_fixture(
             );
             check(
                 "the page hears the pointer",
-                web.pointer() == Some((px - page_rect.x, py - page_rect.y)),
+                at(web.pointer(), (px - page_rect.x, py - page_rect.y)),
                 format!("{:?}", web.pointer()),
             );
             diagnostics.pointer_moved(px + 30., py + 10.);
             sleep(100).await;
             check(
                 "moves over the page: the page follows, zgx hovers nothing",
-                web.pointer() == Some((px + 30. - page_rect.x, py + 10. - page_rect.y))
-                    && input.hovered().is_none(),
+                at(
+                    web.pointer(),
+                    (px + 30. - page_rect.x, py + 10. - page_rect.y),
+                ) && input.hovered().is_none(),
                 format!("{:?} {:?}", web.pointer(), input.hovered()),
             );
             let (cx_, cy_) = center(bounds("composer"));
@@ -554,14 +607,17 @@ fn run_fixture(
             check(
                 "resize: page frame and cut follow layout",
                 resized.as_ref().is_some_and(|r| {
-                    r.frame == Some(bounds("page")) && r.masks == vec![(bounds("page"), 14.)]
+                    framed(r.frame, bounds("page")) && cut_to(&r.masks[..], bounds("page"), 14.)
                 }),
                 format!("{resized:?} vs {:?}", bounds("page")),
             );
             let composer = bounds("composer");
             check(
                 "resize: composer backdrop follows",
-                diagnostics.backdrops().iter().any(|b| b.frame == composer),
+                diagnostics
+                    .backdrops()
+                    .iter()
+                    .any(|b| close(b.frame, composer)),
                 format!("{:?} vs {composer:?}", diagnostics.backdrops()),
             );
             println!("SCREENSHOT resized");
@@ -597,7 +653,7 @@ fn run_fixture(
                 "shown again in place",
                 shown
                     .as_ref()
-                    .is_some_and(|r| !r.hidden && r.frame == Some(bounds("page"))),
+                    .is_some_and(|r| !r.hidden && framed(r.frame, bounds("page"))),
                 format!("{shown:?}"),
             );
             println!("FIXTURE {} failures", failures);

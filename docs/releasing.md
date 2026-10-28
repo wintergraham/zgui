@@ -1,6 +1,6 @@
 # Releasing
 
-zgx 0.1.2 is on crates.io (2026-10-26, tag `v0.1.2`; 0.1.0, the first, on 2026-10-25). This is how a release goes, and what it checks.
+zgx 0.1.3 is on crates.io (2026-10-27, tag `v0.1.3`; 0.1.0, the first, on 2026-10-25). This is how a release goes, and what it checks.
 
 ## Version scheme
 
@@ -23,17 +23,17 @@ And four forks, as zgx's own crates, published first:
 | `zgx-taffy` | taffy 0.9.0 | auto margins that keep a flex line's gaps | `vendor/taffy/ZGX_PATCH.md` |
 | `zgx-mlua` | mlua 0.12.2 | table walks and userdata without a copy per key; Luau held at 740 (0.12.3), as 744 fails mlua's setup | `vendor/mlua/ZGX_PATCH.md` |
 
-Each keeps its upstream's license files, authors and library name (`harfrust`, `cosmic_text`, `taffy`, `mlua`), and its version (a fix of our own bumps the patch: `zgx-cosmic-text` is 0.19.1 since it shapes with `zgx-harfrust`; `zgx-harfrust` is 0.5.3, as 0.5.2, uploaded on 2026-10-26, never reached crates.io's index). zgx's crates depend on them by path and version under their upstream names (`cosmic-text = { package = "zgx-cosmic-text", version = "0.19.1", path = "../../vendor/cosmic-text" }`, and `zgx-cosmic-text` on `zgx-harfrust` likewise), so code reads `cosmic_text::` as before. Only zgx's crates use them, so an app never sees two of one. Drop a fork, back to the upstream crate, once a release of it has the fix.
+Each keeps its upstream's license files, authors and library name (`harfrust`, `cosmic_text`, `taffy`, `mlua`), and its version (a fix of our own bumps the patch: `zgx-cosmic-text` is 0.19.2, as it shapes with `zgx-harfrust` (0.19.1) and places glyphs inline (0.19.2); `zgx-mlua` is 0.12.4, its Luau held (0.12.3) and its userdata checks inlined (0.12.4); `zgx-harfrust` is 0.5.3, as 0.5.2, uploaded on 2026-10-26, never reached crates.io's index). zgx's crates depend on them by path and version under their upstream names (`cosmic-text = { package = "zgx-cosmic-text", version = "0.19.2", path = "../../vendor/cosmic-text" }`, and `zgx-cosmic-text` on `zgx-harfrust` likewise), so code reads `cosmic_text::` as before. Only zgx's crates use them, so an app never sees two of one. Drop a fork, back to the upstream crate, once a release of it has the fix.
 
 ## What stays patched in the repository alone
 
 The workspace's `[patch.crates-io]` keeps the rest: wgpu-hal (Metal command buffers made lazily and never empty, a Direct3D 12 adapter exposed without opening the others), winit (a Wayland window's `xdg_surface`, X11's `_NET_WM_SYNC_REQUEST` and `_NET_WM_USER_TIME`), and AccessKit's consumer and adapters for macOS, Windows and Linux (headings, grid rows, tables, tree items, a field's error message). Forking them would mean forking what depends on them too (wgpu, accesskit_winit). An app depending on zgx from crates.io gets their releases instead, and zgx builds and runs with them, without those fixes:
 
-- **winit**: Wayland popups open in their window, as on a compositor without `xdg_popup`, instead of as popup surfaces of their own. The X11 changes are behaviour alone: a window manager's resize no longer waits for frames, and focus-stealing prevention sees no user time.
+- **winit**: Wayland popups open in their window, as on a compositor without `xdg_popup`, instead of as popup surfaces of their own. Text dragged in from other apps drops into fields on Wayland alone (zgx's own data device takes it; on macOS, Windows and X11 the platform's drag reaches winit's windows, whose hook is the patch's), and macOS's Services don't act on zgx's selected text. The X11 changes are behaviour alone: a window manager's resize no longer waits for frames, and focus-stealing prevention sees no user time.
 - **wgpu-hal**: Metal frames take upstream's command buffers (more per submission); on Windows, `request_adapter` ranks the adapters, opening a device on each.
 - **AccessKit**: VoiceOver's rotor misses headings and its table navigation finds no grid rows; Narrator and Orca lose what their patches add. An invalid field's error is said in its description rather than as the platform's own invalid flag and error message (zgx-desktop sees which it has by the vendored consumer's `links` metadata, so patch the consumer with the adapters, never alone). Everything else reads as before.
 
-Where a patch adds an API zgx calls (winit's `xdg_surface`, wgpu-hal's `expose_preferred_adapter`), zgx detects it at build time: the vendored crate carries `links` metadata (`links = "zgx_winit"`, `"zgx_wgpu_hal"`) whose `patched` key reaches the build scripts of the crates depending on it (zgx-desktop, zgx-gpu), which set `zgx_winit_patched` and `zgx_wgpu_hal_patched`. With crates.io's crates neither is set, and the fallback above is compiled. Nothing to enable: a build in the repository has every patch, any other has none.
+Where a patch adds an API zgx calls (winit's `xdg_surface`, `text_drop` and `SelectionServices`, wgpu-hal's `expose_preferred_adapter`), zgx detects it at build time: the vendored crate carries `links` metadata (`links = "zgx_winit"`, `"zgx_wgpu_hal"`) whose `patched` key reaches the build scripts of the crates depending on it (zgx-desktop, zgx-gpu), which set `zgx_winit_patched` and `zgx_wgpu_hal_patched`. With crates.io's crates neither is set, and the fallback above is compiled. Nothing to enable: a build in the repository has every patch, any other has none.
 
 ## Follow-ups: patches to drop
 
@@ -49,7 +49,7 @@ Where a patch adds an API zgx calls (winit's `xdg_surface`, wgpu-hal's `expose_p
 2. Every published workspace crate is packaged and built from its package, in dependency order (`cargo publish --workspace --dry-run`). That build leaves the workspace's `[patch.crates-io]` out: winit, wgpu-hal and AccessKit come from crates.io, as an app depending on zgx gets them, so what only builds with a vendored patch fails it. The forks, which crates.io has only once the release publishes them, are given from `vendor/` (`--config 'patch.crates-io.zgx-cosmic-text.path="vendor/cosmic-text"'`) for that run alone.
 3. A new app with no lockfile depends on what 1 and 2 packaged, every other crate resolved afresh from crates.io as `cargo add` resolves it, and runs a Luau script headless. zgx's lockfile holds its dependencies where they were tested; a new app's does not, and a new release of one (luau0-src 0.22.1, Luau 744) failed every Luau app at start while 1 and 2 passed.
 
-It never publishes. It doesn't run on pull requests: CI's time is unchanged. Locally, `scripts/release_check.sh --allow-dirty` checks uncommitted work.
+It never publishes. It doesn't run on pull requests: CI's time is unchanged. Locally, `scripts/release_check.sh --allow-dirty` checks uncommitted work. In Git Bash on Windows, coreutils' `link` comes before MSVC's on the path, and every build script fails to link ("link: extra operand"): set `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER` to MSVC's `link.exe` (GitHub's runners don't need it). Before a release, the check can run on machines of our own while CI's queue is long: 0.1.3's ran in the Linux container and on a Windows PC as well as macOS.
 
 ## Publishing
 

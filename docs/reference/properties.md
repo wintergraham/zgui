@@ -91,7 +91,7 @@ The types: `Color` is `"#rgb"`, `"#rrggbb"`, `"#rrggbbaa"`, `"rgb(…)"`, `"rgba
 | `fit` | `"fill" \| "contain" \| "cover" \| "none" \| "scale_down"` | `"fill"` | how an image fills its box |
 | `tint` | `Color` | | recolors an SVG (a state or function re-tints it) |
 | `dither` | `number` | | draws an image dithered in dots this many points square (see [Images and canvas](media.md)) |
-| `cursor` | `Cursor` | `"default"` | `"pointer"`, `"text"`, `"vertical_text"`, `"crosshair"`, `"move"`, `"grab"`, `"grabbing"`, `"not_allowed"`, `"wait"`, `"progress"`, `"help"`, `"context_menu"`, `"copy"`, `"alias"`, `"no_drop"`, `"all_scroll"`, `"col_resize"`, `"row_resize"`, `"ew_resize"`, `"ns_resize"`, `"nesw_resize"`, `"nwse_resize"`, `"zoom_in"`, `"zoom_out"`; CSS's spellings (`"nwse-resize"`) too |
+| `cursor` | `Cursor` | `"default"` | `"pointer"`, `"text"`, `"vertical_text"`, `"crosshair"`, `"move"`, `"grab"`, `"grabbing"`, `"not_allowed"`, `"wait"`, `"progress"`, `"help"`, `"context_menu"`, `"copy"`, `"alias"`, `"no_drop"`, `"all_scroll"`, `"col_resize"`, `"row_resize"`, `"ew_resize"`, `"ns_resize"`, `"nesw_resize"`, `"nwse_resize"`, `"zoom_in"`, `"zoom_out"`; CSS's spellings (`"nwse-resize"`) too. Unstated, a link shows `"pointer"` and a text field `"text"`; buttons, checkboxes, menu items and sliders keep the arrow, as Chrome's and AppKit's do |
 
 ## Background images, masks, shader fills, clip insets
 
@@ -102,6 +102,9 @@ The types: `Color` is `"#rgb"`, `"#rrggbb"`, `"#rrggbbaa"`, `"rgb(…)"`, `"rgba
 | `mask` | `Bitmap \| { bitmap, w, h, x, y, sweep }` | | the content shows through `ui.bitmap`'s alpha, drawn at `w`×`h` (the bitmap's size) from (`x`, `y`); animate `maskX`, `maskY`, or `sweep = { x, y, duration, frame_rate }` to have the engine move it by (`x`, `y`) every `duration` ms, over and over, with no script per step |
 | `bg_shader` | `Shader` | | `ui.shader(wgsl, { fps })` fills the box per pixel (see [Images and canvas](media.md)) |
 | `shader_params` | `{ Color \| { number } }` | zeros | up to four vec4s: colors (0 to 1) or lists of numbers; animate `shaderTime`, `shaderParam0` to `shaderParam15` |
+| `blend` | `"multiply" \| "screen" \| "overlay" \| "darken" \| "lighten" \| "color-dodge" \| "color-burn" \| "hard-light" \| "soft-light" \| "difference" \| "exclusion" \| "hue" \| "saturation" \| "color" \| "luminosity"` | `"normal"` | CSS `mix-blend-mode`: the node and its children paint into a cached layer that mixes with what lies beneath it (the window, or the layer it sits in) by the mode's formula, as it composites |
+| `layer_shader` | `LayerShader` | | `ui.layer_shader(wgsl, { fps })`: the subtree, cached as a layer, composites through it, pixel by pixel over the box (see [Images and canvas](media.md)) |
+| `layer_params` | `{ Color \| { number } }` | zeros | its four vec4s, as `shader_params`; animate `layerTime`, `layerParam0` to `layerParam15`, which composite again without repainting |
 | `clip_inset` | `Sides` | | paints only inside the box shrunk by `{ top, right, bottom, left }` (CSS `clip-path: inset()`); animate `clipTop`, `clipRight`, `clipBottom`, `clipLeft` |
 | `clip_feather` | `number` | `0` | where it clips (`overflow = "hidden"`), its content fades out over this many points inside its rounded edge rather than being cut there, in the fragment shader quads already run (no layer, no mask). Its corners follow its clip inset, held to half the inset box: with `rounded = 9999` and the clip inset animated from the middle out, a soft circle opens, compositing alone |
 
@@ -138,7 +141,7 @@ The types: `Color` is `"#rgb"`, `"#rrggbb"`, `"#rrggbbaa"`, `"rgb(…)"`, `"rgba
 
 ## Transforms
 
-`x`, `y` (`number`, points), `scale`, `scale_x`, `scale_y` (`number`, `1`), `rotate`, `skew`, `skew_x`, `skew_y` (`number`, degrees) and `origin` (`Pair`, fractions of the node, `{ 0.5, 0.5 }`). They apply after layout: the node keeps its place in the flow, and hit testing follows the transform. Rotation, scale and skew paint the subtree into a cached layer.
+`x`, `y` (`number`, points), `scale`, `scale_x`, `scale_y` (`number`, `1`), `rotate`, `skew`, `skew_x`, `skew_y`, `rotate_x`, `rotate_y` (`number`, degrees), `perspective` (`number`, points, `0`: none) and `origin` (`Pair`, fractions of the node, `{ 0.5, 0.5 }`). They apply after layout: the node keeps its place in the flow, and hit testing follows the transform. Rotation, scale, skew and tilt paint the subtree into a cached layer. `rotate_x` and `rotate_y` tilt it about the axes through `origin` (CSS `rotateX`, `rotateY`), seen from `perspective` points away (CSS `perspective()`): the nearer side shows larger, the layer composited as a projected quad; without a perspective a tilt only narrows it.
 
 ## Pseudo-states, window dragging, identity
 
@@ -247,4 +250,4 @@ return ui.column {
 - Children stretch across their container (`items = "stretch"`) and shrink in one too small for them (`shrink = 1`), as CSS's flexbox; text does not wrap (`wrap = false`) unless asked. A child that shrinks stops at its content's narrowest (CSS's `min-width: auto`: a text's longest word), unless it clips (`overflow`, a scroll) or sets `min_w = 0`; `shrink = 0` holds it.
 - `gap` is points only; `gap_x` and `gap_y` take percentages.
 - A transparent border still takes its width; a ring that must not move content is `border_over = true`.
-- `bg_fit` and the shape of `mask`, `bg_shader` and `shader_params` are read once, as literals.
+- `bg_fit` and the shape of `mask`, `bg_shader`, `shader_params`, `layer_shader` and `layer_params` are read once, as literals.

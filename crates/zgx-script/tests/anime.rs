@@ -578,6 +578,40 @@ fn motion_paths_text_split_scopes_and_drawn_strokes() {
 }
 
 #[test]
+fn tilts_in_perspective_animate_as_compositor_transforms() {
+    let mut h = Harness::inline(
+        r##"anime.animate("#card", { rotateY = { 0, 20 }, rotateX = -8, duration = 100, ease = "linear" })
+        return ui.column { ui.div { id = "card", w = 40, h = 60, bg = "#58a6ff", rotate_x = 4, perspective = 1100 } }"##,
+    );
+    let local = |h: &mut Harness| {
+        let node = h.find("card").unwrap();
+        h.ui.scene.borrow().local_transform(node)
+    };
+    let start = local(&mut h);
+    assert!(
+        (start.rotate_x - 4f32.to_radians()).abs() < 1e-4,
+        "rotate_x in degrees"
+    );
+    assert_eq!(start.perspective, 1100.);
+    h.frame();
+    h.run_ms(50.);
+    let t = local(&mut h);
+    assert!(
+        (t.rotate_y.to_degrees() - 10.).abs() < 0.5,
+        "{}",
+        t.rotate_y.to_degrees()
+    );
+    assert!(
+        (t.rotate_x.to_degrees() + 2.).abs() < 0.5,
+        "{}",
+        t.rotate_x.to_degrees()
+    );
+    assert_eq!(t.perspective, 1100., "a tilt keeps the literal perspective");
+    let node = h.find("card").unwrap();
+    assert!(h.ui.scene.borrow().is_layer(node));
+}
+
+#[test]
 fn rotation_and_scale_animate_as_compositor_transforms() {
     let mut h = Harness::inline(
         r##"anime.animate("#spin", { rotate = "1turn", scale = { 1, 2 }, duration = 100, ease = "linear" })
@@ -1006,6 +1040,66 @@ fn shader_fills_take_params_and_animate_their_uniforms() {
         mid.params[1][0],
         2.,
         "shaderParam4 is the second vec4's first value",
+    );
+    close(mid.params[1][1], 2., "the rest keep their literal values");
+}
+
+#[test]
+fn blend_names_a_mode_and_follows_state() {
+    let mut h = Harness::inline(
+        r##"local mode = ui.state("mode", "soft-light")
+        return ui.column {
+            ui.div { id = "d", w = 20, h = 20, bg = "#336699", blend = mode },
+            ui.button { id = "b", label = "Swap", on_click = function() mode:set("difference") end },
+        }"##,
+    );
+    let node = h.find("d").unwrap();
+    assert_eq!(
+        h.ui.scene.borrow().blend(node),
+        zgx::scene::BlendMode::SoftLight
+    );
+    assert!(
+        h.ui.scene.borrow().is_layer(node),
+        "a blended node is a layer"
+    );
+    h.click("b");
+    h.frame();
+    assert_eq!(
+        h.ui.scene.borrow().blend(node),
+        zgx::scene::BlendMode::Difference
+    );
+}
+
+#[test]
+fn layer_shaders_take_params_and_animate_their_uniforms() {
+    let mut h = Harness::inline(
+        r##"local sheen = ui.layer_shader("fn layer(input: LayerInput) -> vec4<f32> { return input.color * input.params[0]; }")
+        return ui.div { id = "d", w = 40, h = 40, bg = "#336699", layer_shader = sheen, layer_params = { "#ffffff80", { 1, 2, 3, 4 } },
+            on_mount = function(el)
+                anime.animate(el, { layerTime = { 0, 2 }, layerParam4 = { 1, 3 }, duration = 100, ease = "linear" })
+            end }"##,
+    );
+    let node = h.find("d").unwrap();
+    assert!(
+        h.ui.scene.borrow().is_layer(node),
+        "a layer shader caches the subtree as a layer"
+    );
+    let start = h.ui.scene.borrow().layer_shader(node).cloned().unwrap();
+    assert!(start.shader.is_some());
+    close(
+        start.uniforms.params[0][0],
+        1.,
+        "a color parameter is 0 to 1",
+    );
+    close(start.uniforms.params[0][3], 128. / 255., "with its alpha");
+    h.frame();
+    h.run_ms(50.);
+    let mid = h.ui.scene.borrow().layer_shader(node).unwrap().uniforms;
+    close(mid.time, 1., "time half way");
+    close(
+        mid.params[1][0],
+        2.,
+        "layerParam4 is the second vec4's first value",
     );
     close(mid.params[1][1], 2., "the rest keep their literal values");
 }

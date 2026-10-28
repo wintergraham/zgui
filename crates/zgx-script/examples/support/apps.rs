@@ -279,7 +279,8 @@ fn dashboard(make: MakeDrawing) {
 }
 
 fn sketch(make: MakeDrawing) {
-    let dir = std::env::temp_dir().join(format!("zgx-apps-bench-{}", std::process::id()));
+    // A name of one length whatever the process's id (see `code`).
+    let dir = std::env::temp_dir().join(format!("zgx-apps-bench-{:010}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("busy.json");
     let shapes: Vec<String> = (0..size("SHAPES", 500))
@@ -358,7 +359,9 @@ fn source(lines: usize) -> String {
 
 fn code(make: MakeDrawing) {
     let lines = size("LINES", 100_000);
-    let path = std::env::temp_dir().join(format!("zgx-apps-bench-{}.rs", std::process::id()));
+    // A name of one length whatever the process's id: the editor shows and
+    // measures the path (a 7-digit id cost 37 K more than a 6-digit one).
+    let path = std::env::temp_dir().join(format!("zgx-apps-bench-{:010}.rs", std::process::id()));
     std::fs::write(&path, source(lines)).unwrap();
     let mut b = Bench::new("code_editor", (1100., 760.), &[], make);
     b.app.desktop.clone().unwrap().pick([&path]);

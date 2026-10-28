@@ -27,7 +27,7 @@ Every command that takes a node takes a target. The same syntax works in Rust te
 | `#messages row 3` | a list's third mounted row |
 | `"Copy"[2]` | the second of several matches |
 
-A target matching several nodes is an error listing them (`@n role "name" box`), so you can name the one you meant with `@n`, a role, `>>` or `[n]`. Actions never pick one silently.
+A target matching several nodes is an error listing them (`@n role "name" box`, `hidden` after those out of layout), so you can name the one you meant with `@n`, a role, `>>` or `[n]`. Actions never pick one silently, with one exception: nodes hidden from layout (`hidden`, or inside something hidden, as a tab's panel kept mounted while another shows) match too, and where exactly one of the matches shows, the target names that one, the one a person can reach.
 
 ## Reading
 
@@ -41,7 +41,21 @@ zgx inspect state messages --full     # one state; long values are cut at 200 by
 zgx inspect errors                    # the script error, type errors, lint findings, layout warnings ("none")
 zgx inspect lint                      # zgx lint over the app's scripts: file:line:col rule message
 zgx inspect frames 5                  # the last frames: where their time went, what ran and why
+zgx inspect frames --since fling      # only the frames after `mark fling`; --since 412 after frame 412
+zgx inspect frames 5 --runs 20        # more of each frame's runs (5 by default); --all for every one
+zgx inspect frames --keep 2000        # keep more frames (480 by default: four seconds at 120 Hz)
+zgx inspect mark fling                # mark now, to read only what follows
 zgx inspect snapshot '#messages' --out list.png   # what it looks like, as the window last drew it
+zgx inspect search "overflow"         # find in page: the count, the current match, the first five
+zgx inspect search --next             # the window's find steps on; --prev back, --all every match, --close
+```
+
+`search` is the window's find in page (Command-F), as a user's: case and accents ignored, over all the window's text, fields' values and virtual lists' rows they have not mounted (counted whole before it answers, for at most 2 s; `+` after the count if not done). It answers how many, which is current, and the first five (`--all`, every one; `n` as JSON), each where it is (`@node`, or a list's `@node row 1500`), its range and the text around it (`…[match]…`), and its box while it shows. The window's bar shows the same, its marks too:
+
+```text
+6 matches for "cafe", 1 current
+* 1 @12 [Café] one
+  2 @14 [cafe] two
 ```
 
 `frames` is where each frame's time went and why the app did what it did: the frame's time, the states written (named ones by name, the rest counted) and the runs they caused with their total; then its phases, the costliest first (each counted once, with its instructions where the platform counts them); then the costliest runs, each with its time, what it is and the state that queued it:
@@ -54,6 +68,18 @@ frame 131 (1.42 ms): state.luau::messages, 8 unnamed → 20 runs, 293 µs
   19 µs effect 124 ← state.luau::messages
 ```
 
+Where the engine took a slower path, or waited, the frame says why, and where the renderer measures the GPU's own time (macOS's Metal frames) it says that too:
+
+```text
+frame 3230 (6.95 ms, then 6.12 ms waiting for the display): page_scroll, 1 unnamed → 3 runs, 7 µs
+  phases: present 6442 µs (147K instr), paint 307 µs, encode 101 µs
+  gpu: 1210 µs (its own time, within present)
+  why: scroll @537 repainted its view: @2071 (text) draws over it, so moving its pixels would move that too (keep what draws over a scroll view outside its box)
+  why: waited a refresh more to keep the last frame's cadence, until 8 frames in a row are ready 1.5 ms before their refresh (0 so far)
+```
+
+The notes say which fast path a frame missed and what stopped it: a scroll that repainted its view rather than moving its pixels (a node drawing over the scroll view, what lies under it showing through, a move between device pixels), a frame that missed its refresh or was held to the last frame's cadence, scroll input applied all at once while the window wasn't presenting. `gpu` is the GPU's time alone; `present` also counts waiting for the window server and the display, so a `present` well above `gpu` is the system's time, not the frame's.
+
 A binding is a node's (`@67`, its kind or the script line that made it); an effect a script's `ui.effect` (its line) or the engine's. The phases are `ZGX_PROFILE`'s (input, script, update, style, layout, text, damage, paint, encode, submit, present, wait), measured only while devtools serve, so no restart: a frame with no writes (a scroll, an animation's layout) shows with its phases alone. `wait` is pacing, not work: on macOS a frame is held to render and hand over at its point in a refresh, up to a refresh long (8.3 ms at 120 Hz, 16.7 at 60), so the frame's time leaves it out and says it apart (`then 6.10 ms waiting for the display`). `present` includes waiting for the GPU to finish the frame. Use it to find what a write costs, what reads too much, and which phase a slow frame spent.
 
 A tree line is `@n #id role "name or text" ="value" x,y wxh` and flags (`focused`, `disabled`, `checked`), indented two spaces a level, in document order. Boxes with nothing to say (no id, role or text) are left out and their children shown in their place; a button's own label text is folded into the button. `--all` shows every node. Same tree, same text: compare runs with `diff`.
@@ -61,6 +87,8 @@ A tree line is `@n #id role "name or text" ="value" x,y wxh` and flags (`focused
 `snapshot` is a PNG of a node's box as the window last drew it, at the window's pixels (`--width 600` halves it until it fits). Without `--out` it stays beside the socket, readable by its user alone, and the answer says where; the app keeps its last 16. As MCP, `zgx_snapshot` answers the picture itself. Pictures come from what a macOS window shows; elsewhere, and in `TestApp`, the answer says there is none.
 
 A module's states are named `module.luau::name`; give the name alone when only one module has it.
+
+A hidden, minimized or covered window draws no frames (macOS stops a covered window's refreshes): `frames` says so first, and a `replay` is refused rather than answering "0 frames", since its events would only wait for the window. Keep the window in front and uncovered while measuring.
 
 ## Acting
 
@@ -93,11 +121,36 @@ zgx inspect replay '#messages' fling.tape             # played back there, as if
 playing 292 events over 2408 ms: 288 frames, every 8.33 ms (median), longest gap 16.74 ms, 3 over 1.5 frames; work 0.82 ms median, 1.32 ms most (frame 290)
 ```
 
+One run measures little: a window's frames differ that much from one replay to the next (a fresh window against one long running, other apps drawing). `--repeat N` plays the tape N times and gives each run's line and then the spread, least to most with the median, of the interval, late frames, work and longest gap:
+
+```sh
+zgx inspect replay '#messages' fling.tape --repeat 3
+```
+
+A tape keeps the timing the window received. Recorded while the window fell behind (running at half its refresh rate, say), the platform coalesced its events, an event every other refresh, and replaying the tape repeats that: a fix to the slowness can't show in it. `record stop` warns when the events came further apart than the display refreshes; `--every MS` spreads a tape's motion over events that far apart, each recorded event's motion divided evenly over the time before it:
+
+```sh
+zgx inspect replay '#messages' fling.tape --every 8.33     # as a window keeping up at 120 Hz is sent them
+```
+
 The answer comes once the tape and what follows it (springing back from an edge) have played: how many frames, the time between them, frames shown late (more than half a refresh past their turn), and the work in each. `frames` then has every frame of it. Nothing reaches the desktop: the events go to this window alone, through the same path as the platform's, so the trackpad's phases, resampling and elastic edges run as they do for a hand. A tape is text, an event a line (`8.312 pixel 0 -6.75 moved`: milliseconds, pixel motion in points or wheel `lines`, across and down, the phase), so one can be written or edited too. Desktop windows record and replay; headless hosts and `TestApp` say they cannot.
+
+## Switches: one app, two paths
+
+A change measured across a rebuild and a relaunch compares two windows as much as two builds. The engine's fast paths can instead be switched off and on in the running app, and the same replay measured each way:
+
+```sh
+zgx inspect switch                          # each switch, on or off, and what it does
+zgx inspect switch scroll_copy off          # scrolls repaint their view rather than moving its pixels
+zgx inspect replay '#messages' fling.tape --repeat 3
+zgx inspect switch scroll_copy on
+```
+
+`scroll_copy` (a scroll moves what is drawn and paints the strip scrolled in), `refresh_grid` (macOS: steady frames hand over at a set point before a refresh; off, as soon as drawn) and `partial_repaint` (a frame paints only what changed; off, the whole window).
 
 ## As MCP tools
 
-`zgx inspect mcp` serves the same commands as MCP tools on stdio (`zgx_tree`, `zgx_node`, `zgx_find`, `zgx_state`, `zgx_set_state`, `zgx_click`, `zgx_type`, `zgx_key`, `zgx_scroll`, `zgx_command`, `zgx_errors`, `zgx_lint`, `zgx_frames`, `zgx_snapshot`, `zgx_record`, `zgx_replay`, `zgx_wait`, `zgx_sleep`, `zgx_apps`), each answering the text the CLI prints, with `isError` when it failed. Every tool takes an optional `app` (a pid) for when several apps run.
+`zgx inspect mcp` serves the same commands as MCP tools on stdio (`zgx_tree`, `zgx_node`, `zgx_find`, `zgx_state`, `zgx_set_state`, `zgx_click`, `zgx_type`, `zgx_key`, `zgx_scroll`, `zgx_command`, `zgx_errors`, `zgx_lint`, `zgx_frames`, `zgx_mark`, `zgx_switch`, `zgx_search`, `zgx_snapshot`, `zgx_record`, `zgx_replay`, `zgx_wait`, `zgx_sleep`, `zgx_apps`), each answering the text the CLI prints, with `isError` when it failed. Every tool takes an optional `app` (a pid) for when several apps run.
 
 ```sh
 claude mcp add zgx -- zgx inspect mcp      # Claude Code; any MCP client runs the same command
@@ -132,6 +185,9 @@ What the runs tell you:
 | a `binding` run for a whole long text or list after a small change | `items:update(function(l) … end)` or `set` of a rebuilt table | `push`, `set_key`, `append`, `patch`: they write the path that changed |
 | few or cheap runs, yet `layout`, `text` or `paint` is most of the frame | the cost is the interface's size or drawing, not the script | a box laid out from its content (no `w`/`h`), a long text re-measured, a blur or shadow redrawn; `zgx inspect tree --depth 2` shows which boxes are large or deep enough to cost |
 | a slow frame with no writes and no runs | a scroll or an animation laying out or drawing a lot | the same as above: the phases say which |
+| `why: scroll @n repainted its view: @m … draws over it` | a node (a sticky header, a floating nav) painting over the scroll view, so its pixels can't simply move | keep what draws over a scroll view outside its box: make the scroll view start beside it |
+| `why: … shows under it` | the scroll view has no opaque fill of its own, so what lies beneath shows through | give the scroll view an opaque `bg`, exactly its box |
+| `present` far above `gpu`, frames 16.7 ms apart at 120 Hz with `waited a refresh more to keep the last frame's cadence` | the GPU or the window server took long once, and the frames after kept the slower cadence | make each frame cheaper (the notes above), then measure with `--repeat` |
 
 ## Recipes
 

@@ -2,13 +2,16 @@
 // One metric of one scene as a table whose bars are drawn in CSS: readable
 // as a table by a screen reader, with no script.
 import { chart, fmt, scene as sceneOf } from '@/lib/perf';
+import * as win from '@/lib/perf-windows';
 
 interface Props {
   scene: string;
   metric: string;
+  /** Which run: macOS's (the default) or Windows'. */
+  platform?: 'macos' | 'windows';
 }
-const { scene, metric } = Astro.props;
-const c = chart(sceneOf(scene), metric);
+const { scene, metric, platform = 'macos' } = Astro.props;
+const c = platform === 'windows' ? win.chart(win.scene(scene), metric) : chart(sceneOf(scene), metric);
 ---
 
 <figure class="perf-chart not-prose">

@@ -76,7 +76,8 @@ def main():
                     active_pixel(key + "-released", False)
                 assert reports["space_held"]["accepted"] == 0, reports
                 assert reports["space_released"]["accepted"] == 1, reports
-                assert reports["Return_held"]["accepted"] == 1, reports
+                # Enter activates as it goes down, as a browser's button.
+                assert reports["Return_held"]["accepted"] == 2, reports
                 assert reports["Return_released"]["accepted"] == 2, reports
                 # Moving focus while Space is held must cancel the armed button.
                 xdo("keydown", "space")

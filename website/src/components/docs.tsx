@@ -22,6 +22,8 @@ export interface DocsProps {
   pathname: string;
   params: Record<string, string | undefined>;
   title: string;
+  /** The doc set's name, above the title. */
+  section?: string;
   description?: string;
   toc: TOCItemType[];
   markdownUrl: string;
@@ -35,7 +37,7 @@ export interface DocsProps {
  * set switcher, table of contents and search. The page's content is
  * rendered by Astro and passed in as static HTML.
  */
-export function Docs({ tree, pathname, params, title, description, toc, markdownUrl, sourceUrl, children }: DocsProps) {
+export function Docs({ tree, pathname, params, title, section, description, toc, markdownUrl, sourceUrl, children }: DocsProps) {
   // A copy: the loader deserializes in place, and Astro serializes these
   // props for the browser after the server has rendered them.
   const copy = useMemo(() => structuredClone(tree), [tree]);
@@ -49,6 +51,7 @@ export function Docs({ tree, pathname, params, title, description, toc, markdown
         tabMode="auto"
       >
         <DocsPage toc={toc} tableOfContent={{ style: 'clerk' }}>
+          {section ? <p className="doc-eyebrow">{section}</p> : null}
           <DocsTitle>{title}</DocsTitle>
           {description ? <DocsDescription className="mb-0">{description}</DocsDescription> : null}
           <div className="flex flex-row flex-wrap gap-2 items-center border-b pb-6">

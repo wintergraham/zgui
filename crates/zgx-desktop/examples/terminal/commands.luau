@@ -25,7 +25,7 @@ local PAGE_ACTIONS: { [string]: (web: Web, pane: string) -> () } = {
 		web:run("document.execCommand('selectAll')")
 	end,
 }
--- Page zoom by pane, for Bigger and Smaller.
+-- Page zoom by pane, for Bigger Text and Smaller Text.
 local page_zoom: { [string]: number } = {}
 local function zoom_page(pane: string, by: number?)
 	local z = if by then math.clamp((page_zoom[pane] or 1) * by, 0.3, 3) else 1
@@ -116,9 +116,11 @@ function M.declare()
 		end
 	end)
 	ui.command { menu = "View", separator = true }
-	command("bigger", "Bigger", "View", "cmd+=", binding("increase_font_size:1"))
-	command("smaller", "Smaller", "View", "cmd+-", binding("decrease_font_size:1"))
-	command("actual_size", "Actual Size", "View", "cmd+0", binding("reset_font_size"))
+	-- The pane's font size on ⌘⌥: ⌘=, ⌘- and ⌘0 zoom the whole window (zgx's
+	-- Zoom In, Zoom Out and Actual Size in this menu), as a browser does.
+	command("bigger", "Bigger Text", "View", "cmd+alt+=", binding("increase_font_size:1"))
+	command("smaller", "Smaller Text", "View", "cmd+alt+-", binding("decrease_font_size:1"))
+	command("actual_size", "Actual Text Size", "View", "cmd+alt+0", binding("reset_font_size"))
 	ui.command { menu = "View", separator = true }
 	command("reload_page", "Reload Page", "View", "cmd+r", function()
 		local pane = current()

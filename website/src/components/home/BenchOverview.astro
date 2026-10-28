@@ -23,8 +23,24 @@ const h = headline();
   </div>
   <div class="bench-panel bench-cpu"><BenchDots metric="cpu_percent_one_core" id="dots-cpu" /></div>
   <div class="bench-panel bench-gpu"><BenchDots metric="gpu_power_mw" id="dots-gpu" /></div>
+  <noscript><style>.dots .dot { animation: none !important; }</style></noscript>
   <p class="bench-gpu-note bench-gpu">The least GPU power in {h.ledGpu} of {h.tests}: in the animation, MyGo draws for a little less.</p>
 </div>
+
+<script>
+  // The marks travel out from the zgx line once the chart is in view.
+  const seen = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        entry.target.classList.add('in');
+        seen.unobserve(entry.target);
+      }
+    },
+    { threshold: 0.25 },
+  );
+  document.querySelectorAll('.bench-card').forEach((card) => seen.observe(card));
+</script>
 
 <style>
   .bench-card {

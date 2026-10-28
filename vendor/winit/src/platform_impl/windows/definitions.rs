@@ -33,7 +33,7 @@ pub struct IDataObjectVtbl {
         pformatetc: *const FORMATETC,
         pmedium: *mut STGMEDIUM,
     ) -> HRESULT,
-    QueryGetData:
+    pub QueryGetData:
         unsafe extern "system" fn(This: *mut IDataObject, pformatetc: *const FORMATETC) -> HRESULT,
     pub GetCanonicalFormatEtc: unsafe extern "system" fn(
         This: *mut IDataObject,
@@ -72,13 +72,15 @@ pub struct IDropTargetVtbl {
         This: *mut IDropTarget,
         pDataObj: *const IDataObject,
         grfKeyState: u32,
-        pt: *const POINTL,
+        // zgx patch: by value, as COM passes it (x64: in a register).
+        pt: POINTL,
         pdwEffect: *mut u32,
     ) -> HRESULT,
     pub DragOver: unsafe extern "system" fn(
         This: *mut IDropTarget,
         grfKeyState: u32,
-        pt: *const POINTL,
+        // zgx patch: by value, as COM passes it (x64: in a register).
+        pt: POINTL,
         pdwEffect: *mut u32,
     ) -> HRESULT,
     pub DragLeave: unsafe extern "system" fn(This: *mut IDropTarget) -> HRESULT,
@@ -86,7 +88,8 @@ pub struct IDropTargetVtbl {
         This: *mut IDropTarget,
         pDataObj: *const IDataObject,
         grfKeyState: u32,
-        pt: *const POINTL,
+        // zgx patch: by value, as COM passes it (x64: in a register).
+        pt: POINTL,
         pdwEffect: *mut u32,
     ) -> HRESULT,
 }

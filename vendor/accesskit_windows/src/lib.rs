@@ -12,6 +12,7 @@ mod window_handle;
 
 mod adapter;
 pub use adapter::{Adapter, QueuedEvents};
+pub use context::activation_message;
 
 mod subclass;
 pub use subclass::SubclassingAdapter;

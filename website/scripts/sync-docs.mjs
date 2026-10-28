@@ -104,6 +104,8 @@ const pages = [];
 const anchors = new Map(); // `${src}#${sourceSlug}` → url
 const fileUrls = new Map(); // src → url of its first page
 const taken = new Map(); // src → Set of section titles taken
+// A page with `when` exists only while that file does (a platform's results).
+for (const set of sets) set.pages = set.pages.filter((p) => typeof p === 'string' || !p.when || fs.existsSync(path.join(root, p.when)));
 for (const set of sets) {
   for (const page of set.pages) {
     if (typeof page === 'string') continue;
@@ -224,6 +226,30 @@ function fence(src, node) {
   node.meta = title ? `title="${title}"` : null;
 }
 
+// --- Facts read from the source, for hand-written Markdown pages. -----------
+/** A Rust `const NAME: &str = "…";`, unescaped. */
+function rustString(file, name) {
+  const match = fs.readFileSync(path.join(root, file), 'utf8').match(new RegExp(`const ${name}: &str = "((?:[^"\\\\]|\\\\.)*)";`));
+  if (!match) return fail(`${file}: no const ${name}: &str`), '';
+  return match[1].replace(/\\(["\\n])/g, (_, c) => (c === 'n' ? '\n' : c));
+}
+/** `zgx lint`'s rules: `zgx_script::lint::RULES`. */
+function lintRules() {
+  const source = fs.readFileSync(path.join(root, 'crates/zgx-script/src/lint.rs'), 'utf8');
+  const start = source.indexOf('pub const RULES');
+  const table = source.slice(start, source.indexOf('];', start));
+  const rules = [...table.matchAll(/\(\s*"([^"]+)",\s*"((?:[^"\\\\]|\\\\.)*)",?\s*\)/g)].map((m) => [m[1], m[2].replace(/\\"/g, '"')]);
+  if (!rules.length) fail('crates/zgx-script/src/lint.rs: no RULES');
+  return rules;
+}
+function expandFromSource(text, page) {
+  return text
+    .replace(/<!-- usage (\S+) (\S+) -->/g, (_, file, name) => `\`\`\`text title="${file.split('/').pop()} · ${name}"\n${rustString(file, name)}\n\`\`\``)
+    .replace(/<!-- lint-rules -->/g, () =>
+      ['| Rule | Flags |', '| --- | --- |', ...lintRules().map(([rule, what]) => `| \`${rule}\` | ${what.replace(/\|/g, '\\|')} |`)].join('\n'))
+    .replace(/<!-- (usage|lint-rules)[^>]*-->/g, (m) => (fail(`${page}: ${m} is not a directive the sync knows`), m));
+}
+
 // --- Write. ------------------------------------------------------------------
 fs.rmSync(outDir, { recursive: true, force: true });
 // Astro keeps rendered pages by their files' contents, so a change to the
@@ -250,11 +276,11 @@ function firstSentence(nodes) {
 }
 
 for (const { set, page, url, parsed, nodes } of pages) {
-  const file = path.join(outDir, set.dir, `${page.slug}.${page.mdx ? 'mdx' : 'md'}`);
+  const file = path.join(outDir, set.dir, `${page.slug}.${page.mdx?.endsWith('.mdx') ? 'mdx' : 'md'}`);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   if (page.mdx) {
     // Its source, for "Edit on GitHub", as the synced pages carry theirs.
-    const text = fs.readFileSync(path.join(handWritten, page.mdx), 'utf8');
+    const text = expandFromSource(fs.readFileSync(path.join(handWritten, page.mdx), 'utf8'), page.mdx);
     fs.writeFileSync(file, text.replace(/^---\n/, `---\nsource: "website/content-src/${page.mdx}"\n`));
     continue;
   }
@@ -336,6 +362,7 @@ print(json.dumps({
   'metrics': {k: {'title': t, 'unit': u, 'digits': d, 'scale': s, 'source': src, 'applies': a} for k, (t, u, d, s, src, a) in b.METRICS.items()},
   'micro_scenes': {k: {'title': t, 'note': n} for k, (t, n) in b.MICRO_SCENES.items()},
   'rune_notes': b.RUNE_NOTES,
+  'windows_metrics': {k: {'title': t, 'unit': u, 'digits': d, 'scale': s, 'source': src, 'applies': a} for k, (t, u, d, s, src, a) in getattr(b, 'WINDOWS_METRICS', {}).items()},
 }))
 `], { cwd: root, encoding: 'utf8' });
   const data = JSON.parse(fs.readFileSync(path.join(root, 'site/data.json'), 'utf8'));
@@ -346,7 +373,14 @@ print(json.dumps({
     .map((line) => JSON.parse(line));
   const generated = path.join(website, 'src/generated');
   fs.mkdirSync(generated, { recursive: true });
-  fs.writeFileSync(path.join(generated, 'perf.json'), JSON.stringify({ ...data, text: JSON.parse(text), micro }));
+  const words = JSON.parse(text);
+  fs.writeFileSync(path.join(generated, 'perf.json'), JSON.stringify({ ...data, text: words, micro }));
+  // Windows' run, on a page of its own when it is published (never ranked with macOS's).
+  const windowsData = path.join(root, 'site/windows/data.json');
+  fs.writeFileSync(
+    path.join(generated, 'perf-windows.json'),
+    JSON.stringify(fs.existsSync(windowsData) ? { available: true, ...JSON.parse(fs.readFileSync(windowsData, 'utf8')), metricFormats: words.windows_metrics, modes: words.modes, sceneText: words.scenes } : { available: false }),
+  );
 }
 
 // --- The home page's words: README's "What it has" and its two samples. ----
@@ -376,10 +410,24 @@ print(json.dumps({
   const rust = quick.find((n) => n.lang?.startsWith('rust'));
   const luau = quick.find((n) => n.lang === 'lua' || n.lang === 'luau');
   if (!rust || !luau) fail('README.md: Quick start needs a rust and a lua sample for the home page');
+  // The same counter in both languages: getting started's "State" sections,
+  // the Rust one's component without its main.
+  const guide = source('docs/getting-started.md').tree.children;
+  const stateCode = (part) => {
+    const at = guide.findIndex((n) => n.type === 'heading' && n.depth === 2 && toString(n) === part);
+    const state = guide.findIndex((n, i) => i > at && n.type === 'heading' && n.depth === 3 && toString(n) === 'State');
+    const code = guide.slice(state).find((n) => n.type === 'code');
+    if (at === -1 || state === -1 || !code) fail(`docs/getting-started.md: no "${part}" › "State" sample for the home page`);
+    return code?.value ?? '';
+  };
+  const rustState = stateCode('In Rust');
+  const counter = rustState.slice(rustState.indexOf('fn counter'), rustState.indexOf('\nfn main')).trim();
+  if (!counter.startsWith('fn counter')) fail('docs/getting-started.md: the Rust "State" sample has no fn counter()');
+  const samples = { rust: `use zgx::compose::prelude::*;\n\n${counter}`, luau: stateCode('In Luau') };
   const lede = toString(nodes.find((n) => n.type === 'paragraph'));
   fs.writeFileSync(
     path.join(website, 'src/generated/readme.json'),
-    JSON.stringify({ lede, features, rust: rust?.value, luau: luau?.value }),
+    JSON.stringify({ lede, features, rust: rust?.value, luau: luau?.value, samples }),
   );
 }
 

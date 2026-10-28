@@ -47,11 +47,36 @@ pub struct Dnd {
     pub source_window: Option<xproto::Window>,
     // Populated by SelectionNotify event handler (triggered by XdndPosition event handler)
     pub result: Option<Result<Vec<PathBuf>, DndDataParseError>>,
+    /// zgx patch: a drag carrying text, not files (`platform::text_drop`).
+    pub text: Option<TextDrag>,
+}
+
+/// zgx patch: a drag carrying text over a window, as `platform::text_drop`
+/// hears it.
+#[derive(Debug, Default)]
+pub struct TextDrag {
+    /// Where it last was, in the window's pixels.
+    pub point: (f64, f64),
+    /// Whether the window would take it there (the last `XdndStatus`).
+    pub accepted: bool,
+    /// Its text was asked for (`XdndSelection` converted).
+    pub asked: bool,
+    /// Its text, once it arrived (`None` inside: none could be had).
+    pub text: Option<Option<String>>,
+    /// Let go of before its text arrived: the source to finish with then.
+    pub dropped: Option<xproto::Window>,
 }
 
 impl Dnd {
     pub fn new(xconn: Arc<XConnection>) -> Result<Self, X11Error> {
-        Ok(Dnd { xconn, version: None, type_list: None, source_window: None, result: None })
+        Ok(Dnd {
+            xconn,
+            version: None,
+            type_list: None,
+            source_window: None,
+            result: None,
+            text: None,
+        })
     }
 
     pub fn reset(&mut self) {
@@ -59,6 +84,109 @@ impl Dnd {
         self.type_list = None;
         self.source_window = None;
         self.result = None;
+        self.text = None;
+    }
+
+    /// zgx patch: the target a drag's text is asked for in, if it carries
+    /// text and no files, most exact first.
+    pub fn text_target(&self) -> Option<xproto::Atom> {
+        let atoms = self.xconn.atoms();
+        let types = self.type_list.as_ref()?;
+        if types.contains(&atoms[TextUriList]) {
+            return None;
+        }
+        [atoms[TextPlainUtf8], atoms[UTF8_STRING], atoms[TextPlain]]
+            .into_iter()
+            .find(|target| types.contains(target))
+    }
+
+    /// zgx patch: whether the window would take the text drag, as a copy.
+    pub unsafe fn send_text_status(
+        &self,
+        this_window: xproto::Window,
+        target_window: xproto::Window,
+        accepted: bool,
+    ) -> Result<(), X11Error> {
+        let atoms = self.xconn.atoms();
+        let action = if accepted { atoms[XdndActionCopy] } else { atoms[DndNone] };
+        self.xconn
+            .send_client_msg(target_window, target_window, atoms[XdndStatus] as _, None, [
+                this_window,
+                accepted as u32,
+                0,
+                0,
+                action as _,
+            ])?
+            .ignore_error();
+        Ok(())
+    }
+
+    /// zgx patch: the text drag is over: whether its text was taken.
+    pub unsafe fn send_text_finished(
+        &self,
+        this_window: xproto::Window,
+        target_window: xproto::Window,
+        taken: bool,
+    ) -> Result<(), X11Error> {
+        let atoms = self.xconn.atoms();
+        let action = if taken { atoms[XdndActionCopy] } else { atoms[DndNone] };
+        self.xconn
+            .send_client_msg(target_window, target_window, atoms[XdndFinished] as _, None, [
+                this_window,
+                taken as u32,
+                action as _,
+                0,
+                0,
+            ])?
+            .ignore_error();
+        Ok(())
+    }
+
+    /// zgx patch: ask the source for the drag's text in `target` (it
+    /// arrives as `SelectionNotify`).
+    pub unsafe fn convert_text(
+        &self,
+        window: xproto::Window,
+        target: xproto::Atom,
+        time: xproto::Timestamp,
+    ) {
+        let atoms = self.xconn.atoms();
+        self.xconn
+            .xcb_connection()
+            .convert_selection(window, atoms[XdndSelection], target, atoms[XdndSelection], time)
+            .expect_then_ignore_error("Failed to send XdndSelection event")
+    }
+
+    /// zgx patch: the drag's text, as the source put it on `window`, of
+    /// whatever type it names it (GTK the target's, others `UTF8_STRING`).
+    pub unsafe fn read_text(&self, window: xproto::Window) -> Option<String> {
+        let atoms = self.xconn.atoms();
+        let conn = self.xconn.xcb_connection();
+        let mut data = Vec::new();
+        let mut offset = 0;
+        loop {
+            let reply = conn
+                .get_property(
+                    true,
+                    window,
+                    atoms[XdndSelection],
+                    xproto::AtomEnum::ANY,
+                    offset,
+                    1 << 20,
+                )
+                .ok()?
+                .reply()
+                .ok()?;
+            if reply.format != 8 {
+                return None;
+            }
+            data.extend_from_slice(&reply.value);
+            if reply.bytes_after == 0 {
+                break;
+            }
+            offset += (reply.value.len() / 4) as u32;
+        }
+        Some(String::from_utf8_lossy(&data).into_owned())
     }
 
     pub unsafe fn send_status(

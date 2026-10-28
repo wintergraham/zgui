@@ -12,6 +12,7 @@ on:
       - "CHANGELOG.md"
       - "Cargo.toml"
       - "site/data.json"
+      - "site/windows/data.json"
       - "site/micro.jsonl"
       - "scripts/build_site.py"
       - "scripts/perf/README.md"

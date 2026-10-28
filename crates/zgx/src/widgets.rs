@@ -167,6 +167,9 @@ struct EditorHint {
     /// A selection set by the program shows the next time it is drawn,
     /// focused or not (a search's match, chosen from its field).
     reveal: Cell<bool>,
+    /// A place to scroll into view the next time it is drawn, its caret and
+    /// selection left as they are (find in page's match in a field).
+    reveal_at: Cell<Option<usize>>,
     /// What a code editor adds (`CodeHint`), made when first used: an
     /// editor without it carries a pointer's room.
     code: std::cell::OnceCell<Box<CodeHint>>,
@@ -209,6 +212,7 @@ impl EditorHint {
             clause: Cell::default(),
             composition_layer: Cell::default(),
             reveal: Cell::default(),
+            reveal_at: Cell::default(),
             code: std::cell::OnceCell::default(),
         }
     }
@@ -290,6 +294,12 @@ impl EditorHandle {
         let selection = self.editor.borrow().selection();
         (selection.anchor, selection.focus)
     }
+    /// Scroll byte `at` into view the next time it is drawn, its caret and
+    /// selection left as they are.
+    pub(crate) fn reveal_offset(&self, at: usize) {
+        self.hint.reveal_at.set(Some(at));
+        self.refresh();
+    }
     /// Select from `anchor` to `focus` (UTF-8 byte offsets, clamped to the
     /// text and moved back to a grapheme boundary), as a drag would.
     pub fn set_selection(&self, anchor: usize, focus: usize) {
@@ -343,6 +353,10 @@ impl EditorHandle {
     /// front keeps the selection it had.
     pub fn set_select_on_focus(&self, select: bool) {
         self.hint.select_on_focus.set(select);
+    }
+    /// Whether it is a password's (`set_secure`).
+    pub(crate) fn is_secure(&self) -> bool {
+        self.hint.secure.get()
     }
     /// A password field: its text shows as a bullet per character (each in
     /// that character's place, so carets and selections work), and copying
@@ -554,9 +568,10 @@ impl EditorHandle {
             return;
         }
         self.preferred_x.set(None);
+        // A step of its own, even of one character: not the typing's.
         self.editor
             .borrow_mut()
-            .insert(&normalize_text(text, self.multiline));
+            .insert_pasted(&normalize_text(text, self.multiline));
         self.hint.value.write(&self.editor);
         self.refresh();
     }
@@ -594,7 +609,7 @@ pub struct Ui {
     pub input: InputDispatcher,
     /// The accessibility tree hosts project to the platform.
     pub semantics: Rc<RefCell<Semantics>>,
-    storage: Rc<UiStorage>,
+    pub(crate) storage: Rc<UiStorage>,
 }
 // One focused-editor snapshot per document. Large or unaccounted custom layouts
 // remain usable but are never retained by this reuse entry.
@@ -855,6 +870,9 @@ struct EditorDrag {
     /// The selection while a drag of text shows where it would drop (the
     /// caret there): back as it leaves, or before the drop.
     drop_restore: Cell<Option<crate::text_edit::Selection>>,
+    /// A drop focuses the editor: the text it dropped stays selected, a
+    /// field that selects all as it is focused or not.
+    dropped: Cell<bool>,
 }
 impl EditorDrag {
     fn cancel(&self) {
@@ -903,6 +921,14 @@ pub(crate) struct UiStorage {
     popup_soon_sent: Cell<bool>,
     /// The host's way to picture what the window last showed (`Ui::on_snapshot`).
     snapshotter: RefCell<Option<Snapshotter>>,
+    /// The window's zoom (`zoom`), 1 at 100%.
+    pub(crate) zoom: Cell<f64>,
+    /// The app turned zoom off (`set_zoomable`).
+    pub(crate) zoom_off: Cell<bool>,
+    /// Who is told the zoom changed (`on_zoom`): the host, a script.
+    pub(crate) zoom_host: RefCell<Vec<Rc<dyn Fn()>>>,
+    /// A Control-wheel's notches short of a whole one (`zoom_wheel`).
+    pub(crate) zoom_wheel: Cell<f32>,
     /// The host's wheel recorder and player (`Ui::on_wheel_tape`).
     wheel_taper: RefCell<Option<WheelTaper>>,
     /// The display's refresh period (`Ui::set_refresh_interval`).
@@ -953,6 +979,12 @@ pub(crate) struct UiStorage {
     selection: RefCell<crate::selection::State>,
     /// Virtual lists' scroll-to-row requests, by list (`NodeHandle::scroll_to_row`).
     list_reveals: RefCell<std::collections::HashMap<NodeId, Signal<crate::compose::RowReveal>>>,
+    /// Find in page, while open (`find`).
+    pub(crate) find: RefCell<Option<crate::find::Session>>,
+    /// The app turned find in page off.
+    pub(crate) find_off: Cell<bool>,
+    /// Virtual lists' rows' indices from their places, by list.
+    pub(crate) list_rows: RefCell<std::collections::HashMap<NodeId, crate::find::RowIndex>>,
     /// What the last primary press went to: the keyboard scrolls the scroll
     /// view around it (`scroll_keys`).
     last_pressed: Cell<Option<NodeId>>,
@@ -1136,6 +1168,10 @@ impl Ui {
             popup_soon: RefCell::new(None),
             popup_soon_sent: Cell::new(false),
             snapshotter: RefCell::new(None),
+            zoom: Cell::new(1.),
+            zoom_off: Cell::new(false),
+            zoom_host: RefCell::new(Vec::new()),
+            zoom_wheel: Cell::new(0.),
             wheel_taper: RefCell::new(None),
             refresh_interval: Cell::new(std::time::Duration::from_micros(16_667)),
             popup_previews: Cell::new(false),
@@ -1168,12 +1204,16 @@ impl Ui {
             primary_paste_on: Cell::new(true),
             selection: Default::default(),
             list_reveals: Default::default(),
+            find: RefCell::new(None),
+            find_off: Cell::new(false),
+            list_rows: Default::default(),
             last_pressed: Cell::new(None),
             elastic: Default::default(),
             scrollbar_fades: RefCell::new(Vec::new()),
             dispatching: Cell::new(false),
             document_listeners: RefCell::new(Vec::new()),
         });
+        storage.input.set_semantics(&storage.semantics);
         Self::from_storage(storage)
     }
     pub(crate) fn from_storage(storage: Rc<UiStorage>) -> Self {
@@ -1259,6 +1299,13 @@ impl Ui {
         }
         self.selection_after_dispatch(selection, result);
         self.scroll_after_dispatch(scroll, result);
+    }
+    /// After the document had key `event`: find in page's keys, if nothing
+    /// took it.
+    fn find_after_dispatch(&self, event: &InputEvent, result: &mut crate::input::DispatchResult) {
+        if crate::find::after_dispatch(self, event, result.default_prevented) {
+            result.default_prevented = true;
+        }
     }
     /// A handle that does not keep the document alive.
     pub fn downgrade(&self) -> WeakUi {
@@ -1974,6 +2021,17 @@ impl Ui {
     /// Inform retained media that its native window can currently present.
     /// Headless hosts default to presented; hidden/suspended hosts should set false.
     pub fn set_presented(&self, presented: bool) {
+        if presented != self.is_presented() {
+            crate::profile::note(|| {
+                if presented {
+                    "the window presents again".into()
+                } else {
+                    "the window stopped presenting (hidden, minimized or covered): it draws no \
+                     frames, and input waits for it"
+                        .into()
+                }
+            });
+        }
         self.storage.presented.set(presented);
     }
     /// Draw scrollbars as macOS's overlay ones (and GTK's) are: hidden until
@@ -2106,8 +2164,9 @@ impl Ui {
     pub(crate) fn observe_presentation(&self) -> Signal<bool> {
         self.storage.presented.clone()
     }
-    /// Whether the window can present now (`Ui::set_presented`), untracked.
-    pub(crate) fn is_presented(&self) -> bool {
+    /// Whether the window can present now (`Ui::set_presented`), untracked:
+    /// a hidden, minimized or covered window draws no frames.
+    pub fn is_presented(&self) -> bool {
         self.storage
             .presented
             .with_untracked(|presented| *presented)
@@ -2243,7 +2302,8 @@ impl Ui {
             self.storage.refresh_interval.set(interval);
         }
     }
-    pub(crate) fn refresh_interval(&self) -> std::time::Duration {
+    /// The display's refresh period (`Ui::set_refresh_interval`).
+    pub fn refresh_interval(&self) -> std::time::Duration {
         self.storage.refresh_interval.get()
     }
     /// How the host records and plays back wheel input for devtools (`zgx
@@ -2359,6 +2419,18 @@ impl Ui {
     /// An error does not roll back application mutations; correct the dependency
     /// and call again. Native window hosts propagate this error to `Application::run`.
     pub fn try_prepare_frame(&self) -> Result<(), LayoutFeedbackError> {
+        if self.storage.preparing_frame.get() {
+            return Ok(());
+        }
+        self.prepare_frame_once()?;
+        // Find in page's marks where text mounted or moved, and what its
+        // bar asked for.
+        if self.storage.find.borrow().is_some() {
+            crate::find::sync(self);
+        }
+        Ok(())
+    }
+    fn prepare_frame_once(&self) -> Result<(), LayoutFeedbackError> {
         if self.storage.preparing_frame.replace(true) {
             return Ok(());
         }
@@ -2644,7 +2716,7 @@ impl Ui {
                 }
                 return Default::default();
             }
-            event @ InputEvent::Scroll { .. } if elastic => {
+            event @ InputEvent::Scroll { .. } if elastic && !crate::zoom::wheel_zooms() => {
                 match crate::elastic::before_scroll(self, event) {
                     Some(event) => event,
                     None => return Default::default(),
@@ -2652,9 +2724,19 @@ impl Ui {
             }
             event => event,
         };
-        let scroll = (elastic && matches!(event, InputEvent::Scroll { .. })).then(|| event.clone());
+        let scroll =
+            (elastic && !crate::zoom::wheel_zooms() && matches!(event, InputEvent::Scroll { .. }))
+                .then(|| event.clone());
+        let key = matches!(event, InputEvent::KeyDown { .. }).then(|| event.clone());
         let mut result = dispatch(self, event);
         self.after_dispatch(after, &mut result);
+        if let Some(key) = key {
+            self.find_after_dispatch(&key, &mut result);
+            // The window's zoom keys, for keys nothing took.
+            if !result.default_prevented && crate::zoom::after_dispatch(self, &key) {
+                result.default_prevented = true;
+            }
+        }
         if let Some(event) = scroll {
             crate::elastic::after_scroll(self, &event, &result);
         }
@@ -2679,6 +2761,7 @@ impl Ui {
             crate::compose_scrollbar::next_fade(self),
             crate::elastic::next_step(self),
             crate::caret_blink::next(self),
+            crate::find::next_step(self),
         ]
         .into_iter()
         .flatten()
@@ -2744,6 +2827,13 @@ impl Ui {
         };
         // The focused editor's caret blinking.
         let keys = if crate::caret_blink::advance(self, now) {
+            self.try_prepare_frame()?;
+            true
+        } else {
+            keys
+        };
+        // Find in page counting a list's rows.
+        let keys = if crate::find::advance(self, now) {
             self.try_prepare_frame()?;
             true
         } else {
@@ -3470,19 +3560,29 @@ impl Ui {
             let line_height = caret_rect.height;
             let mut scroll = scroll_for_draw.borrow_mut();
             let reveal = draw_reveal_caret.replace(true) && draw_gesture.mode.get().is_none();
-            let asked = draw_hint.reveal.take();
+            // A place asked for (find's match), else the caret.
+            let (rx, ry, rh, asked) = match draw_hint.reveal_at.take() {
+                Some(at) => {
+                    let r = layout.caret_position(TextPosition {
+                        byte_offset: at,
+                        affinity: TextAffinity::After,
+                    });
+                    (r.x, r.y, r.height, true)
+                }
+                _ => (cx, cy, line_height, draw_hint.reveal.take()),
+            };
             if (*focus.borrow() || asked) && reveal {
-                if cx - scroll.0 > (inner_width - 8.).max(0.) {
-                    scroll.0 = cx - ((inner_width - 8.).max(0.));
+                if rx - scroll.0 > (inner_width - 8.).max(0.) {
+                    scroll.0 = rx - ((inner_width - 8.).max(0.));
                 }
-                if cx < scroll.0 {
-                    scroll.0 = cx;
+                if rx < scroll.0 {
+                    scroll.0 = rx;
                 }
-                if cy - scroll.1 > (inner_height - line_height).max(0.) {
-                    scroll.1 = cy - ((inner_height - line_height).max(0.));
+                if ry - scroll.1 > (inner_height - rh).max(0.) {
+                    scroll.1 = ry - ((inner_height - rh).max(0.));
                 }
-                if cy < scroll.1 {
-                    scroll.1 = cy;
+                if ry < scroll.1 {
+                    scroll.1 = ry;
                 }
             }
             let (tw, th) = layout.size();
@@ -4380,7 +4480,8 @@ impl Ui {
                         state.set(HOVERED);
                     }
                     // Focus coming to it, not its window coming back.
-                    if hint.select_on_focus.get() && !window_blurred.replace(false) {
+                    let dropped = gesture.dropped.replace(false);
+                    if hint.select_on_focus.get() && !window_blurred.replace(false) && !dropped {
                         let mut edit = editor.borrow_mut();
                         edit.select_all();
                         position.set(TextPosition {
@@ -4716,6 +4817,12 @@ impl Ui {
                                     affinity: TextAffinity::After,
                                 });
                                 changed = true;
+                                // Focused, its dropped text selected, as
+                                // AppKit's text views and a browser's fields.
+                                if !*focused.borrow() {
+                                    gesture.dropped.set(true);
+                                    cx.focus();
+                                }
                             }
                             cx.prevent_default();
                             cx.stop_propagation();
@@ -4973,8 +5080,10 @@ impl Ui {
                                     changed = e.insert("\n");
                                 }
                             }
+                            // Control-Tab leaves it, as AppKit's text views.
                             Key::Tab
                                 if !command
+                                    && !modifiers.control
                                     && !modifiers.alt
                                     && tab_indent.code().is_some_and(|c| c.indent.borrow().is_some()) =>
                             {

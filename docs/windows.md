@@ -172,6 +172,34 @@ Measured on an RTX 4090 at 60 Hz:
 | Keystroke to composed screen, animating | 47 ms median | 12 ms median |
 | Animation at the display's rate | 57.7–60 fps, timer drifting against refreshes | every refresh, none repeated or dropped |
 
+A window presents through a swap chain of the renderer's own
+(`crates/zgx-gpu/src/dxgi_present.rs`), made on wgpu's Direct3D 12 queue and
+shown through the window's DirectComposition visual. It is flip-sequential,
+so each buffer keeps what it held: the buffer is the retained frame. A frame
+repaints what changed since that buffer was last shown and presents with the
+regions it changed as `Present1`'s dirty rectangles, so the compositor
+composes only those. wgpu's swap chain discards a buffer once shown, so
+presenting through it means copying the whole retained frame into a buffer
+every frame, with its barriers and a command list of its own. Measured
+against it on an RTX 4090 at 60 Hz (alternating runs of one binary, in front,
+High performance):
+
+| Scene | Cycles a frame | App GPU | Compositor GPU | Compositor CPU |
+| --- | --- | --- | --- | --- |
+| animate | −1.8% | −33% | −16% | same |
+| vlist fling | −1.9% | −45% | same | −7% |
+| heavy | −4.1% | −12% | −5% | −25% |
+| lab | −5.4% | −41% | −4% | −11% |
+| at rest | same | none either way | same | same |
+
+Startup to the first text: 346 → 280 ms (component_workload, medians of 12
+launches). `ZGX_DXGI_PRESENT=0` presents through wgpu's swap chain, for a
+release, to compare with; renderers presenting into a caller's visual
+(`composition`) always do. `scripts/windows_present_probe.py` reads off the
+screen that every buffer is brought up to date; with
+`ZGX_DXGI_PRESENT_WHOLE=1` each present covers its whole buffer, which the
+compositor otherwise takes only within the dirty rectangles.
+
 `ZGX_PRESENT_LOG=1` logs each shown present as DXGI reports it. The probes
 measure the same things on any machine:
 
@@ -554,7 +582,16 @@ python scripts/windows_text_smoke.py target/debug/examples/text_selection.exe
 python scripts/windows_clipboard_image_smoke.py target/debug/examples/clipboard_image.exe
 python scripts/windows_contrast_smoke.py target/debug/examples/text_selection.exe
 python scripts/windows_caret_blink_probe.py target/release/examples/text_selection.exe
+cargo build --release -p zgx-gpu --example present_check
+python scripts/windows_present_probe.py target/release/examples/present_check.exe --lose
 ```
+
+- `windows_present_probe.py` (`present_check`): a mark moves along a row
+  over 30 frames, each drawing its damage alone; on screen every place it
+  passed shows the background again and the last the mark, through the
+  renderer's own swap chain (with dirty rectangles and whole), and wgpu's;
+  `--lose` loses the device after, and a new renderer for the same window
+  draws the frame again.
 
 - `windows_desktop_smoke.py`: pointer activation, typing, selection, clipboard,
   Tab focus, resize and close in the gallery.
@@ -661,7 +698,10 @@ python scripts/windows_caret_blink_probe.py target/release/examples/text_selecti
   `DoDragDrop`'s loop; dragged out and back, let go in its own window,
   Windows dropping nothing; Escape over the target cancelling, and the
   preview sliding back to the chip in its own window; a tab dropped onto the
-  probe's other window, and torn off past both. It never lets go over any
+  probe's other window, and torn off past both; text another app drags in
+  (`drop_target_probe --source`, `CF_UNICODETEXT`) let go over the Words
+  field's end landing there, copied, and refused over the chip. It never
+  lets go over any
   window but its own and the target's: it checks the way is clear before each
   drag, and cancels with Escape if another window covers the target.
 

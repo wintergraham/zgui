@@ -365,3 +365,135 @@ fn the_design_lint_skips_the_kinds_an_app_leaves_alone() {
     );
     assert!(bad.text("why").contains("`spaces`"), "{}", bad.text("why"));
 }
+
+/// A retained computed reads the current lint mode after host and script changes.
+#[test]
+fn a_retained_computed_observes_design_lint_changes() {
+    let mut h = Harness::new(|runtime| {
+        zgx_script::ScriptHost::inline(
+            runtime,
+            "app",
+            r##"local tick = ui.shared("tick", 0)
+            return ui.column {
+                ui.div { id = "computed", w = 10, h = 10, bg = function()
+                    local n = tick:get()
+                    if n == 5 then ui.theme.strict("off") end
+                    if n == 6 then ui.theme.strict("error") end
+                    return if n % 2 == 0 then "#123456" else "#abcdef"
+                end },
+                ui.text { id = "last", function() return tostring(tick:get()) end },
+                ui.button { id = "warn", on_click = function()
+                    ui.theme.strict("warn"); tick:set(4)
+                end, "Warn" },
+            }"##,
+        )
+        .error_banner(false)
+    });
+    assert!(h.host.warnings().is_empty());
+    assert_eq!(h.fill("computed"), Color(0x12, 0x34, 0x56, 255));
+    h.host.design_lint(zgx_script::DesignLint::Warn);
+    h.host.shared("tick", 0.).set(zgx_script::Value::Num(1.));
+    h.settle();
+    assert_eq!(h.warned("#abcdef").len(), 1);
+    assert_eq!(h.fill("computed"), Color(0xab, 0xcd, 0xef, 255));
+    h.host.design_lint(zgx_script::DesignLint::Error);
+    h.host.shared("tick", 0.).set(zgx_script::Value::Num(2.));
+    h.settle();
+    let error = h.error().expect("the failing computed is reported");
+    assert!(error.contains("the function for `bg` returns"), "{error}");
+    assert_eq!(h.text("last"), "2");
+    h.host.design_lint(zgx_script::DesignLint::Off);
+    h.host.shared("tick", 0.).set(zgx_script::Value::Num(3.));
+    h.settle();
+    assert_eq!(h.fill("computed"), Color(0xab, 0xcd, 0xef, 255));
+    h.click("warn");
+    assert_eq!(h.warned("#123456").len(), 1);
+    assert_eq!(h.fill("computed"), Color(0x12, 0x34, 0x56, 255));
+    let errors = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let reported = errors.clone();
+    h.host
+        .on_error(move |error| reported.borrow_mut().push(error.to_owned()));
+    let before = errors.borrow().len();
+    h.host.shared("tick", 0.).set(zgx_script::Value::Num(5.));
+    h.settle();
+    assert_eq!(h.fill("computed"), Color(0xab, 0xcd, 0xef, 255));
+    h.host.shared("tick", 0.).set(zgx_script::Value::Num(6.));
+    h.settle();
+    assert_eq!(h.fill("computed"), Color(0x12, 0x34, 0x56, 255));
+    assert_eq!(
+        errors.borrow().len(),
+        before,
+        "the call entered with lint off"
+    );
+    h.host.shared("tick", 0.).set(zgx_script::Value::Num(7.));
+    h.settle();
+    assert_eq!(errors.borrow().len(), before + 1);
+}
+
+/// Ordinary computed properties match the element-backed path, including
+/// errors among several properties, recovery, and changing theme tokens.
+#[test]
+fn ordinary_computed_styles_match_element_styles() {
+    let mut h = Harness::inline(
+        r##"local tick = ui.shared("tick", 0)
+        local function box(targetable, group)
+            local props = {
+                w = function()
+                    if tick:get() == 1 then error("ordinary style failure") end
+                    return 40 + tick:get()
+                end,
+                h = function() return 20 + tick:get() end,
+                bg = function() return if tick:get() % 2 == 0 then "$accent" else "#123456" end,
+                opacity = function() return 0.5 + tick:get() / 10 end,
+                rounded = function() return 2 + tick:get() end,
+                border = function() return 1 + tick:get() end,
+                border_color = function() return "$border.subtle" end,
+            }
+            if group == "transform" then
+                props.x = function() return tick:get() end
+                props.y = 3
+                props.rotate = function() return tick:get() * 5 end
+            elseif group == "corner" then
+                props.rounded_tl = function() return tick:get() end
+            end
+            if targetable then props.on_mount = function() end end
+            return ui.div(props)
+        end
+        return ui.column { id = "cases",
+            box(false), box(true),
+            box(false, "transform"), box(true, "transform"),
+            box(false, "corner"), box(true, "corner"),
+        }"##,
+    );
+    for tick in 0..=3 {
+        h.host
+            .shared("tick", 0.)
+            .set(zgx_script::Value::Num(tick as f64));
+        h.settle();
+        let parent = h.find("cases").unwrap();
+        let scene = h.ui.scene.borrow();
+        let children = scene.children(parent);
+        assert_eq!(children.len(), 6);
+        for pair in children.chunks_exact(2) {
+            let (plain, element) = (pair[0], pair[1]);
+            assert_eq!(scene.style(plain), scene.style(element), "tick {tick}");
+            assert_eq!(scene.effects(plain), scene.effects(element), "tick {tick}");
+            assert_eq!(scene.kind(plain), scene.kind(element), "tick {tick}");
+            assert_eq!(
+                scene.transform(plain),
+                scene.transform(element),
+                "tick {tick}"
+            );
+            assert_eq!(
+                scene.local_transform(plain),
+                scene.local_transform(element),
+                "tick {tick}"
+            );
+            assert_eq!(scene.bounds(plain).height, (20 + tick) as f32);
+        }
+        drop(scene);
+        if tick == 1 {
+            assert!(h.error().unwrap().contains("ordinary style failure"));
+        }
+    }
+}

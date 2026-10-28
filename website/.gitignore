@@ -8,4 +8,6 @@ test-results/
 screenshots/
 src/generated/
 public/_redirects
-design/
+design/*
+!design/BRIEF.md
+!design/screenshots/

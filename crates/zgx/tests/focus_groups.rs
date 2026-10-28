@@ -1,6 +1,7 @@
 //! Focus groups (ARIA's composite widgets: toolbars, list boxes, tabs): the
 //! group is one Tab stop, landing on the member last focused in it or the
-//! selected one, and its arrow keys, Home and End move focus inside it.
+//! selected one, and its arrow keys, Home and End move focus inside it. A
+//! radio group's arrows choose as they move, wrapping at the ends.
 use zgx::{
     compose::{ViewHandle, prelude::*},
     input::{InputEvent, Key, Modifiers},
@@ -196,4 +197,142 @@ fn right_to_left_the_arrows_read_the_other_way() {
     assert_eq!(focused(&ui, &view).as_deref(), Some("b"));
     press(&mut ui, Key::ArrowRight, false);
     assert_eq!(focused(&ui, &view).as_deref(), Some("a"));
+}
+
+#[test]
+fn a_radio_group_is_one_tab_stop_and_its_arrows_choose_wrapping() {
+    let mut ui = Ui::new(500., 300.);
+    let size = ui.signal(String::from("m"));
+    let view = ui.mount(
+        column()
+            .child(button_named("before"))
+            .child(
+                radio_group("Size")
+                    .child(radio("Small", size.clone(), "s".to_string()).id("one"))
+                    .child(radio("Medium", size.clone(), "m".to_string()).id("two"))
+                    .child(radio("Large", size.clone(), "l".to_string()).id("three")),
+            )
+            .child(button_named("after")),
+    );
+    ui.prepare_frame();
+    let semantics = |ui: &Ui, name: &str| {
+        let id = view.find(name).unwrap();
+        ui.semantics.borrow().get(id).map(|n| (n.role, n.checked))
+    };
+    assert_eq!(semantics(&ui, "two"), Some((Role::RadioButton, Some(true))));
+    tab(&mut ui);
+    tab(&mut ui);
+    assert_eq!(
+        focused(&ui, &view).as_deref(),
+        Some("two"),
+        "Tab lands on the checked radio"
+    );
+    press(&mut ui, Key::ArrowDown, false);
+    ui.prepare_frame();
+    assert_eq!(focused(&ui, &view).as_deref(), Some("three"));
+    assert_eq!(size.get(), "l", "the arrow chose it");
+    press(&mut ui, Key::ArrowRight, false);
+    ui.prepare_frame();
+    assert_eq!(
+        focused(&ui, &view).as_deref(),
+        Some("one"),
+        "past the end, it wraps"
+    );
+    assert_eq!(size.get(), "s");
+    press(&mut ui, Key::ArrowUp, false);
+    ui.prepare_frame();
+    assert_eq!(size.get(), "l", "and back");
+    assert_eq!(
+        semantics(&ui, "three"),
+        Some((Role::RadioButton, Some(true)))
+    );
+    assert_eq!(
+        semantics(&ui, "one"),
+        Some((Role::RadioButton, Some(false)))
+    );
+    tab(&mut ui);
+    assert_eq!(
+        focused(&ui, &view).as_deref(),
+        Some("after"),
+        "one Tab stop"
+    );
+    press(&mut ui, Key::Tab, true);
+    assert_eq!(
+        focused(&ui, &view).as_deref(),
+        Some("three"),
+        "back at the checked one"
+    );
+    // Space chooses the focused radio; a click chooses too.
+    let one = view.find("one").unwrap();
+    let r = ui.scene.borrow().bounds(one);
+    let (x, y) = (r.x + 8., r.y + r.height / 2.);
+    ui.dispatch(InputEvent::PointerDown {
+        x,
+        y,
+        button: zgx::input::PointerButton::Primary,
+    });
+    ui.dispatch(InputEvent::PointerUp {
+        x,
+        y,
+        button: zgx::input::PointerButton::Primary,
+    });
+    assert_eq!(size.get(), "s");
+}
+
+#[test]
+fn typing_in_a_list_box_jumps_by_name_and_page_keys_move_a_page() {
+    let mut ui = Ui::new(500., 300.);
+    let names = [
+        "Apple",
+        "Banana",
+        "Blueberry",
+        "Cherry",
+        "Date",
+        "Fig",
+        "Grape",
+        "Kiwi",
+    ];
+    let mut list = column().role(Role::ListBox);
+    for name in names {
+        list = list.child(
+            row()
+                .id(name)
+                .h(20.)
+                .shrink_0()
+                .role(Role::ListBoxOption)
+                .on_click(|| {})
+                .child(text(name)),
+        );
+    }
+    let offset = ui.signal(0_f32);
+    let view = ui.mount(column().child(scroll(offset).h(60.).child(list)));
+    ui.prepare_frame();
+    let focused = |ui: &Ui| {
+        let id = ui.input.focused()?;
+        names.into_iter().find(|name| view.find(name) == Some(id))
+    };
+    ui.input.focus(&ui.scene, view.find("Apple"));
+    let typed = |ui: &mut Ui, text: &str| {
+        ui.dispatch(InputEvent::KeyDown {
+            key: Key::Character(text.into()),
+            modifiers: Modifiers::default(),
+            repeat: false,
+        })
+    };
+    typed(&mut ui, "b");
+    assert_eq!(focused(&ui), Some("Banana"));
+    typed(&mut ui, "l");
+    assert_eq!(focused(&ui), Some("Blueberry"), "bl");
+    // A page: as much as its 60-point scroll view shows (three options),
+    // as a browser's list box goes to the last one showing, then on.
+    ui.input.focus(&ui.scene, view.find("Apple"));
+    press(&mut ui, Key::PageDown, false);
+    ui.prepare_frame();
+    assert_eq!(focused(&ui), Some("Blueberry"));
+    press(&mut ui, Key::PageDown, false);
+    ui.prepare_frame();
+    assert_eq!(focused(&ui), Some("Date"));
+    press(&mut ui, Key::PageUp, false);
+    ui.prepare_frame();
+    assert_eq!(focused(&ui), Some("Blueberry"));
 }

@@ -567,37 +567,49 @@ impl Adapter {
             return None;
         }
 
+        // zgx patch: only UI Automation's own request for the root asks the
+        // activation handler for the tree. MSAA's (`OBJID_CLIENT`, and the
+        // ids 0 and above `AccessibleObjectFromEvent` sends) get a
+        // placeholder root: Windows' text services send them on every
+        // window as it is shown, in-thread, with no assistive technology
+        // running, and building the tree for them kept every window's
+        // accessibility tree live. A client reading past the placeholder
+        // (`Context::read_past_placeholder`) gets the tree then.
+        let uia_root = objid == UiaRootObjectId;
+        if let State::Inactive {
+            hwnd,
+            is_window_focused,
+            action_handler,
+        } = &self.state
+        {
+            let (hwnd, is_window_focused) = (*hwnd, *is_window_focused);
+            let action_handler = Arc::clone(action_handler);
+            if uia_root {
+                self.state = match activation_handler.request_initial_tree() {
+                    Some(initial_state) => {
+                        let tree = Tree::new(initial_state, is_window_focused);
+                        State::Active(Context::new(hwnd, tree, action_handler, false))
+                    }
+                    None => {
+                        let context = placeholder(hwnd, is_window_focused, action_handler);
+                        context.tree_requested.store(true, Ordering::SeqCst);
+                        State::Placeholder(context)
+                    }
+                };
+            } else {
+                crate::context::log(|| {
+                    format!("a placeholder for an MSAA request (object id {objid})")
+                });
+                self.state =
+                    State::Placeholder(placeholder(hwnd, is_window_focused, action_handler));
+            }
+        } else if uia_root {
+            // A placeholder served to MSAA: UI Automation's request for the
+            // root asks for the tree now.
+            let _ = self.activate(activation_handler);
+        }
         let (hwnd, platform_node) = match &self.state {
-            State::Inactive {
-                hwnd,
-                is_window_focused,
-                action_handler,
-            } => match activation_handler.request_initial_tree() {
-                Some(initial_state) => {
-                    let hwnd = *hwnd;
-                    let tree = Tree::new(initial_state, *is_window_focused);
-                    let context = Context::new(hwnd, tree, Arc::clone(action_handler), false);
-                    let node_id = context.read_tree().state().root_id();
-                    let platform_node = context.get_or_create_platform_node(node_id);
-                    self.state = State::Active(context);
-                    (hwnd, platform_node)
-                }
-                None => {
-                    let hwnd = *hwnd;
-                    let placeholder_update = TreeUpdate {
-                        nodes: vec![(PLACEHOLDER_ROOT_ID, NodeProvider::new(Role::Window))],
-                        tree: Some(TreeData::new(PLACEHOLDER_ROOT_ID)),
-                        tree_id: TreeId::ROOT,
-                        focus: PLACEHOLDER_ROOT_ID,
-                    };
-                    let placeholder_tree = Tree::new(placeholder_update, *is_window_focused);
-                    let context =
-                        Context::new(hwnd, placeholder_tree, Arc::clone(action_handler), true);
-                    let platform_node = PlatformNode::unspecified_root(&context);
-                    self.state = State::Placeholder(context);
-                    (hwnd, platform_node)
-                }
-            },
+            State::Inactive { .. } => unreachable!("made active or a placeholder above"),
             State::Placeholder(context) => (context.hwnd, PlatformNode::unspecified_root(context)),
             State::Active(context) => {
                 let node_id = context.read_tree().state().root_id();
@@ -612,6 +624,47 @@ impl Adapter {
             el,
         })
     }
+}
+
+impl Adapter {
+    /// zgx patch: a placeholder's window was sent `activation_message` (a
+    /// client read past the placeholder), or UI Automation asked for the
+    /// root: ask the activation handler for the tree, once. A tree given at
+    /// once replaces the placeholder (with a focus event, so clients read
+    /// again); otherwise the next `update_if_active` does.
+    ///
+    /// If a [`QueuedEvents`] instance is returned, the caller must call
+    /// [`QueuedEvents::raise`] on it, outside of `WM_GETOBJECT`.
+    pub fn activate<H: ActivationHandler + ?Sized>(
+        &mut self,
+        activation_handler: &mut H,
+    ) -> Option<QueuedEvents> {
+        let State::Placeholder(context) = &self.state else {
+            return None;
+        };
+        if context.tree_requested.swap(true, Ordering::SeqCst) {
+            return None;
+        }
+        let update = activation_handler.request_initial_tree()?;
+        self.update_if_active(|| update)
+    }
+}
+
+/// zgx patch: a placeholder root (role `Window`, no children) until the
+/// tree comes.
+fn placeholder(
+    hwnd: WindowHandle,
+    is_window_focused: bool,
+    action_handler: Arc<dyn ActionHandlerNoMut + Send + Sync>,
+) -> Arc<Context> {
+    let placeholder_update = TreeUpdate {
+        nodes: vec![(PLACEHOLDER_ROOT_ID, NodeProvider::new(Role::Window))],
+        tree: Some(TreeData::new(PLACEHOLDER_ROOT_ID)),
+        tree_id: TreeId::ROOT,
+        focus: PLACEHOLDER_ROOT_ID,
+    };
+    let placeholder_tree = Tree::new(placeholder_update, is_window_focused);
+    Context::new(hwnd, placeholder_tree, action_handler, true)
 }
 
 fn init_uia() {
@@ -692,3 +745,144 @@ impl QueuedEvents {
 // so implement Send even though windows-rs doesn't implement it for all
 // contained types. This is safe because we're not using COM threading.
 unsafe impl Send for QueuedEvents {}
+
+/// zgx patch: MSAA probes get a placeholder; reading past it, or UI
+/// Automation's request for the root, asks for the tree.
+#[cfg(test)]
+mod placeholder_tests {
+    use super::*;
+    use accesskit::{ActionRequest, Tree as TreeData};
+    use windows::core::{Interface, w};
+
+    struct Counting {
+        asked: usize,
+    }
+    impl ActivationHandler for Counting {
+        fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
+            self.asked += 1;
+            let mut root = NodeProvider::new(Role::Window);
+            root.set_children(vec![LocalNodeId(1)]);
+            let mut button = NodeProvider::new(Role::Button);
+            button.set_label("Button");
+            Some(TreeUpdate {
+                nodes: vec![(LocalNodeId(0), root), (LocalNodeId(1), button)],
+                tree: Some(TreeData::new(LocalNodeId(0))),
+                tree_id: TreeId::ROOT,
+                focus: LocalNodeId(1),
+            })
+        }
+    }
+    struct NoActions;
+    impl ActionHandler for NoActions {
+        fn do_action(&mut self, _request: ActionRequest) {}
+    }
+
+    fn window() -> HWND {
+        // SAFETY: a system class's window, destroyed by the test.
+        unsafe {
+            CreateWindowExW(
+                Default::default(),
+                w!("STATIC"),
+                w!("placeholder test"),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                200,
+                100,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        .unwrap()
+    }
+    /// MSAA's `AccessibleObjectFromEvent`, as text services send it when a
+    /// window shows: `OBJID_CLIENT`, then 0, 1, 0 and 2.
+    fn probe(adapter: &mut Adapter, handler: &mut Counting) {
+        for objid in [OBJID_CLIENT.0, 0, 1, 0, 2] {
+            let result = adapter.handle_wm_getobject(
+                WPARAM(0xffff_ffff),
+                LPARAM(objid as isize),
+                handler,
+            );
+            assert!(result.is_some(), "object id {objid} is answered");
+        }
+    }
+    fn activation_posted(hwnd: HWND) -> bool {
+        let message = crate::activation_message();
+        let mut msg = MSG::default();
+        // SAFETY: our own window's queue, on its thread.
+        unsafe { PeekMessageW(&mut msg, Some(hwnd), message, message, PM_REMOVE) }.as_bool()
+    }
+
+    #[test]
+    fn an_msaa_probe_gets_a_placeholder_and_reading_past_it_asks_for_the_tree() {
+        let _lock_guard = crate::tests::MUTEX.lock();
+        let hwnd = window();
+        // Focused: the tree's arrival raises a focus event.
+        let mut adapter = Adapter::new(hwnd, true, NoActions);
+        let mut handler = Counting { asked: 0 };
+        probe(&mut adapter, &mut handler);
+        assert_eq!(handler.asked, 0, "no tree for the probe");
+        let State::Placeholder(context) = &adapter.state else {
+            panic!("a placeholder: {:?}", adapter.state);
+        };
+        // What a probe reads of a window, the placeholder answers.
+        let root: IRawElementProviderSimple =
+            PlatformNode::unspecified_root(context).into_interface();
+        for property in [UIA_ControlTypePropertyId, UIA_NamePropertyId, UIA_IsEnabledPropertyId] {
+            // SAFETY: a live provider, on its window's thread.
+            unsafe { root.GetPropertyValue(property) }.unwrap();
+        }
+        assert!(!activation_posted(hwnd));
+        // Its children: the window is asked to activate, once.
+        let fragment: IRawElementProviderFragment = root.cast().unwrap();
+        for _ in 0..2 {
+            // SAFETY: as above; the placeholder has no children (an error).
+            let _ = unsafe { fragment.Navigate(NavigateDirection_FirstChild) };
+        }
+        assert!(activation_posted(hwnd));
+        assert!(!activation_posted(hwnd), "posted once");
+        // Its handling: the tree replaces the placeholder, with a focus
+        // event for clients to read it again.
+        let events = adapter.activate(&mut handler);
+        assert_eq!(handler.asked, 1);
+        assert!(events.is_some());
+        assert!(matches!(adapter.state, State::Active(_)));
+        assert!(adapter.activate(&mut handler).is_none());
+        assert_eq!(handler.asked, 1);
+        // SAFETY: the window made above.
+        unsafe { DestroyWindow(hwnd) }.unwrap();
+    }
+
+    #[test]
+    fn ui_automations_request_for_the_root_asks_for_the_tree_at_once() {
+        let _lock_guard = crate::tests::MUTEX.lock();
+        let hwnd = window();
+        let root_request = |adapter: &mut Adapter, handler: &mut Counting| {
+            let result = adapter.handle_wm_getobject(
+                WPARAM(0),
+                LPARAM(UiaRootObjectId as isize),
+                handler,
+            );
+            assert!(result.is_some());
+        };
+        // First, as a screen reader's.
+        let mut adapter = Adapter::new(hwnd, false, NoActions);
+        let mut handler = Counting { asked: 0 };
+        root_request(&mut adapter, &mut handler);
+        assert_eq!(handler.asked, 1);
+        assert!(matches!(adapter.state, State::Active(_)));
+        drop(adapter);
+        // After a probe's placeholder.
+        let mut adapter = Adapter::new(hwnd, false, NoActions);
+        let mut handler = Counting { asked: 0 };
+        probe(&mut adapter, &mut handler);
+        root_request(&mut adapter, &mut handler);
+        assert_eq!(handler.asked, 1);
+        assert!(matches!(adapter.state, State::Active(_)));
+        // SAFETY: the window made above.
+        unsafe { DestroyWindow(hwnd) }.unwrap();
+    }
+}

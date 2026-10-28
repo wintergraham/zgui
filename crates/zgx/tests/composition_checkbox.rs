@@ -32,7 +32,9 @@ fn checkbox_input_model_semantics_and_owned_cleanup() {
         "Enable notifications"
     );
     assert!(ui.input.focus(&ui.scene, Some(root)));
-    for key in [Key::Space, Key::Enter] {
+    // Space toggles it, as a browser's and AppKit's do; Enter goes on to the
+    // form's default action.
+    for key in [Key::Space, Key::Enter, Key::Space] {
         ui.dispatch(InputEvent::KeyDown {
             key: key.clone(),
             modifiers: Modifiers::default(),

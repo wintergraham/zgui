@@ -18,7 +18,7 @@ const ticks = [1, 2, 4, 8];
 const shown = (v: number) => (unit === '%' ? `${fmt(v, 1)}%` : `${fmt(v, 0)} mW`);
 ---
 
-<div class="dots" id={id}>
+<div class="dots" id={id} style={`--one: ${x(1)}%`}>
   <div class="dots-axis" aria-hidden="true">
     <span class="dots-axis-label">{metric === 'gpu_power_mw' ? 'GPU power' : 'CPU'}, as a multiple of zgx’s</span>
     <div class="dots-ticks">
@@ -28,8 +28,8 @@ const shown = (v: number) => (unit === '%' ? `${fmt(v, 1)}%` : `${fmt(v, 0)} mW`
   </div>
   <ol class="dots-rows" aria-hidden="true">
     {
-      tests.map((t) => (
-        <li class="dots-row">
+      tests.map((t, row) => (
+        <li class="dots-row" style={`--row: ${row}`}>
           <span class="dots-label">
             {t.scene}
             {t.mode && <span class="dots-mode"> · {t.mode}</span>}

@@ -7,11 +7,18 @@ use accesskit::{ActionHandler, ActionRequest, Point};
 use accesskit_consumer::{NodeId, Tree};
 use hashbrown::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, atomic::AtomicBool};
-use windows::Win32::UI::Accessibility::{
-    UIA_AutomationFocusChangedEventId, UIA_EVENT_ID, UIA_PROPERTY_ID,
+use std::sync::{
+    Arc, Mutex, RwLock, RwLockReadGuard,
+    atomic::{AtomicBool, Ordering},
 };
-use windows::core::ComObject;
+use windows::Win32::{
+    Foundation::{LPARAM, WPARAM},
+    UI::{
+        Accessibility::{UIA_AutomationFocusChangedEventId, UIA_EVENT_ID, UIA_PROPERTY_ID},
+        WindowsAndMessaging::{PostMessageW, RegisterWindowMessageW},
+    },
+};
+use windows::core::{ComObject, w};
 
 use crate::{node::PlatformNode, util::*, window_handle::WindowHandle};
 
@@ -38,6 +45,12 @@ pub(crate) struct Context {
     pub(crate) tree: RwLock<Tree>,
     pub(crate) action_handler: Arc<dyn ActionHandlerNoMut + Send + Sync>,
     pub(crate) is_placeholder: AtomicBool,
+    /// zgx patch: the activation handler was asked for the tree (a
+    /// placeholder for an MSAA probe is served without asking).
+    pub(crate) tree_requested: AtomicBool,
+    /// zgx patch: a client read past the placeholder, and the window was
+    /// sent `activation_message` to ask for the tree.
+    activation_posted: AtomicBool,
     platform_nodes: Mutex<HashMap<NodeId, ComObject<PlatformNode>>>,
     /// zgx patch: what UI Automation clients listen for, as UIA tells the
     /// fragment root (`IRawElementProviderAdviseEvents`): each event id, and
@@ -69,9 +82,37 @@ impl Context {
             tree: RwLock::new(tree),
             action_handler,
             is_placeholder: AtomicBool::new(is_placeholder),
+            tree_requested: AtomicBool::new(!is_placeholder),
+            activation_posted: AtomicBool::new(false),
             platform_nodes: Mutex::new(HashMap::new()),
             subscriptions: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// zgx patch: a client read past the placeholder root (`what`: its
+    /// children, focus, a pattern, more than its basic properties). Unless
+    /// the tree was asked for already, the window is sent
+    /// `activation_message`, whose handling (`Adapter::activate`, on the
+    /// window's thread) asks for it. This read is answered from the
+    /// placeholder; the real tree's arrival raises a focus event, and the
+    /// client reads again.
+    pub(crate) fn read_past_placeholder(&self, what: impl FnOnce() -> String) {
+        if !self.is_placeholder.load(Ordering::SeqCst)
+            || self.tree_requested.load(Ordering::SeqCst)
+            || self.activation_posted.swap(true, Ordering::SeqCst)
+        {
+            return;
+        }
+        log(|| format!("a client read past the placeholder ({})", what()));
+        // SAFETY: posting to our own window, from any thread.
+        let _ = unsafe {
+            PostMessageW(
+                Some(self.hwnd.0),
+                activation_message(),
+                WPARAM(0),
+                LPARAM(0),
+            )
+        };
     }
 
     /// A client added (or removed) a handler for these event and property ids.
@@ -161,6 +202,25 @@ fn listened(
     let has = |id: i32| subscriptions.get(&id).is_some_and(|count| *count > 0);
     has(event_id.0) && property_id.is_none_or(|property| has(property.0))
 }
+
+/// zgx patch: the message a placeholder's window is sent when a client
+/// reads past the placeholder (`Context::read_past_placeholder`). The
+/// subclassing adapter handles it; a window using `Adapter` directly passes
+/// it to `Adapter::activate`.
+pub fn activation_message() -> u32 {
+    static MESSAGE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    // SAFETY: a constant, NUL-terminated name.
+    *MESSAGE.get_or_init(|| unsafe { RegisterWindowMessageW(w!("AccessKitActivate")) })
+}
+
+/// zgx patch: what the adapter does about clients, on standard error,
+/// while `ZGX_ACCESSIBILITY_LOG` is set.
+pub(crate) fn log(what: impl FnOnce() -> String) {
+    if std::env::var_os("ZGX_ACCESSIBILITY_LOG").is_some() {
+        eprintln!("accessibility: {}", what());
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

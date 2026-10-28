@@ -164,6 +164,27 @@ Some(text))` (`None` past its end) and it copies the rows out of view too, in
 order and whole, so select-all and copy on a long transcript copies all of
 it. Without `row_text`, nothing extra is kept, and only mounted rows copy.
 
+Find in page is the window's, as a browser's: Command-F (Control-F elsewhere)
+opens a bar at its top right, and what is typed there is found in all the
+window's text (text, rich text, fields' values, and virtual lists' rows,
+those not mounted by their `row_text`, else by building the row's description
+without mounting it), case and accents ignored as Chrome's and Safari's do
+("cafe" finds "Café", composed and decomposed forms alike, curly quotes as
+straight ones). Each match is marked behind its text (`find.match`), the
+current one apart (`find.current`) and scrolled into view; Enter and
+Command-G (Control-G, F3) go to the next, with Shift the one before,
+wrapping; Escape closes it, the match selected where the text is selectable
+(a field's match is scrolled to but its selection left until then). On
+macOS Command-E finds what is selected (Use Selection for Find), and an app
+menu with an Edit menu gains AppKit's Find submenu (Find…, Find Next, Find
+Previous, Use Selection for Find) unless its own items take those keys.
+A long list's rows are counted a slice a frame (the bar says `+` until
+done), and nothing runs once they are, or while no find is open. A keymap or
+menu item binding the key keeps it (the code editor example's own find);
+`Ui::set_find_in_page(false)` turns it off. `Ui::find_text`, `find_next`,
+`find_status` and `find_results` do from code what the bar does, and `zgx
+inspect search` from an agent.
+
 A secondary press (a control-click on macOS) on selected text opens a menu
 with Copy and Select All, unless the region has a `context_menu` of its own;
 elsewhere the press goes on to an enclosing view's menu. Copy uses the
@@ -340,7 +361,12 @@ Committed editor text uses LF line endings: CRLF and lone CR become LF, then `te
 Undo goes back a run at a time, as AppKit's text views do. Consecutive typed
 graphemes join one step, as do consecutive deletions one way (Backspace, or
 forward Delete). A caret move, a selection change, a line break, a different
-kind of edit, a paste or multi-character insert, or undo/redo ends a run.
+kind of edit, a paste or multi-character insert, or undo/redo ends a run, and
+a paste, even of one character, is a step of its own.
+The arrows move in the order the text shows, as AppKit's text views do: through
+mixed left-to-right and right-to-left text (`abc אבג def`) Right always goes
+right on screen, a grapheme or, with Option (Control elsewhere), a word at a
+time.
 Option+Backspace / Control+Backspace delete a word; ⌘⌫ and ⌘⌦ on macOS delete
 to the line's start or end (at its edge, the line break). On macOS the Control
 keys work as in every Cocoa text field: A and E go to the line's start and end,
@@ -921,6 +947,17 @@ means, as ARIA's attributes do in HTML; a view that sets none pays nothing:
   arrows along the axis, Home and End move among them. A field inside keeps its
   arrows. `ListBox` is vertical and `Toolbar` and `TabList` horizontal without
   asking, and a virtual list with `keyboard_navigation(true)` is one stop too.
+  A `ListBox` also takes typing, jumping to the next option whose name starts
+  with what was typed (letters within 750 ms build a prefix, the same letter
+  again cycles), and Page Up and Page Down move a page of its options, as a
+  browser's list box and AppKit's tables do; so does a keyboard virtual list,
+  reading rows it has not mounted by their `row_text`.
+  A `RadioGroup` (`radio_group`, Luau `role = "radiogroup"`) takes every arrow,
+  and they choose the radio they move to, wrapping at the ends, as a browser's
+  and AppKit's radio buttons do; Tab lands on the checked one.
+- `radio(label, selected, value)`: a radio button choosing `value` for the
+  `selected` state, checked while it holds it, its circle drawn as the
+  platform's. Space or a click chooses it.
 - When what has focus leaves (a message archived with its toolbar), focus
   moves to its nearest focusable ancestor that stays, else to the next Tab
   stop (a focus group's own), else the one before: never to the window,

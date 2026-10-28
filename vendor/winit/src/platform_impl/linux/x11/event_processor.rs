@@ -504,6 +504,47 @@ impl EventProcessor {
             // Action is specified in versions 2 and up, though we don't need it anyway.
             // let action = xev.data.get_long(4);
 
+            // zgx patch: text, not files, goes where the window says
+            // (`platform::text_drop`).
+            if let Some(drops) = crate::platform::text_drop::text_drops() {
+                if let Some(target) = self.dnd.text_target() {
+                    let packed = xev.data.get_long(2);
+                    let (x, y) = ((packed >> 16) as i16, (packed & 0xffff) as i16);
+                    let point = wt
+                        .xconn
+                        .xcb_connection()
+                        .translate_coordinates(wt.root, window, x, y)
+                        .ok()
+                        .and_then(|cookie| cookie.reply().ok())
+                        .map(|reply| (reply.dst_x as f64, reply.dst_y as f64));
+                    let text = self.dnd.text.get_or_insert_with(Default::default);
+                    if let Some(point) = point {
+                        text.point = point;
+                    }
+                    let (x, y) = text.point;
+                    let accepted = drops.over(window_id, x, y);
+                    let text = self.dnd.text.as_mut().unwrap();
+                    text.accepted = accepted;
+                    if accepted && !text.asked {
+                        text.asked = true;
+                        let time = if version >= 1 {
+                            xev.data.get_long(3) as xproto::Timestamp
+                        } else {
+                            x11rb::CURRENT_TIME
+                        };
+                        wt.xconn.set_timestamp(time);
+                        unsafe { self.dnd.convert_text(window, target, time) };
+                    }
+                    self.dnd.source_window = Some(source_window);
+                    unsafe {
+                        self.dnd
+                            .send_text_status(window, source_window, accepted)
+                            .expect("Failed to send `XdndStatus` message.");
+                    }
+                    return;
+                }
+            }
+
             let accepted = if let Some(ref type_list) = self.dnd.type_list {
                 type_list.contains(&atoms[TextUriList])
             } else {
@@ -547,6 +588,16 @@ impl EventProcessor {
         }
 
         if xev.message_type == atoms[XdndDrop] as c_ulong {
+            // zgx patch: text drops once it arrives (now, or as it does).
+            if let Some(text) = &mut self.dnd.text {
+                let source_window = xev.data.get_long(0) as xproto::Window;
+                if text.accepted && text.text.is_none() {
+                    text.dropped = Some(source_window);
+                    return;
+                }
+                self.drop_text(window, source_window);
+                return;
+            }
             let (source_window, state) = if let Some(source_window) = self.dnd.source_window {
                 if let Some(Ok(ref path_list)) = self.dnd.result {
                     for path in path_list {
@@ -576,6 +627,14 @@ impl EventProcessor {
         }
 
         if xev.message_type == atoms[XdndLeave] as c_ulong {
+            // zgx patch: a text drag left.
+            if self.dnd.text.is_some() {
+                self.dnd.reset();
+                if let Some(drops) = crate::platform::text_drop::text_drops() {
+                    drops.out(window_id);
+                }
+                return;
+            }
             self.dnd.reset();
             let event = Event::WindowEvent { window_id, event: WindowEvent::HoveredFileCancelled };
             callback(&self.target, event);
@@ -594,6 +653,19 @@ impl EventProcessor {
 
         // Set the timestamp.
         wt.xconn.set_timestamp(xev.time as xproto::Timestamp);
+
+        // zgx patch: a text drag's text (property `None`: none to be had).
+        if xev.selection == atoms[XdndSelection] as c_ulong && self.dnd.text.is_some() {
+            let text = (xev.property == atoms[XdndSelection] as c_ulong)
+                .then(|| unsafe { self.dnd.read_text(window) })
+                .flatten();
+            let drag = self.dnd.text.as_mut().unwrap();
+            drag.text = Some(text);
+            if let Some(source_window) = drag.dropped {
+                self.drop_text(window, source_window);
+            }
+            return;
+        }
 
         if xev.property != atoms[XdndSelection] as c_ulong {
             return;
@@ -614,6 +686,31 @@ impl EventProcessor {
             }
             self.dnd.result = Some(parse_result);
         }
+    }
+
+    /// zgx patch: the text drag let go of over `window` drops where it was
+    /// (if the window would take it there and its text came), and the
+    /// source hears whether it was taken.
+    fn drop_text(&mut self, window: xproto::Window, source_window: xproto::Window) {
+        let window_id = mkwid(window);
+        let drops = crate::platform::text_drop::text_drops();
+        let taken = match (self.dnd.text.take(), &drops) {
+            (Some(super::dnd::TextDrag { accepted: true, text: Some(Some(text)), point, .. }), Some(drops)) => {
+                drops.dropped(window_id, point.0, point.1, &text)
+            },
+            _ => false,
+        };
+        if !taken {
+            if let Some(drops) = drops {
+                drops.out(window_id);
+            }
+        }
+        unsafe {
+            self.dnd
+                .send_text_finished(window, source_window, taken)
+                .expect("Failed to send `XdndFinished` message.");
+        }
+        self.dnd.reset();
     }
 
     fn configure_notify<T: 'static, F>(&self, xev: &XConfigureEvent, mut callback: F)

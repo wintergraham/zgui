@@ -647,6 +647,9 @@ pub(crate) struct MacWebView {
     /// The last HTML shown and its base: WebKit reloads such a page by
     /// fetching its URL (`about:blank`, a blank page), so reload shows it again.
     html: RefCell<Option<Html>>,
+    /// The app's zoom of the page (`WebView::set_zoom`) and the window's
+    /// (`Ui::zoom`): the page shows at their product.
+    zoom: Cell<(f64, f64)>,
 }
 /// A page's HTML and its base URL.
 type Html = (Retained<NSString>, Option<Retained<NSURL>>);
@@ -757,10 +760,31 @@ impl MacWebView {
             messages: options.messages,
             transparent: options.transparent,
             html: RefCell::new(None),
+            zoom: Cell::new((1., 1.)),
         }
     }
     pub fn view(&self) -> &NSView {
         &self.view
+    }
+    /// Follow the window's zoom: the page lays out at it, as under a
+    /// browser's zoom, times the app's own.
+    pub(crate) fn set_window_zoom(&self, zoom: f64) {
+        let (page, window) = self.zoom.get();
+        if window != zoom {
+            self.zoom.set((page, zoom));
+            self.show_zoom();
+        }
+    }
+    fn show_zoom(&self) {
+        let (page, window) = self.zoom.get();
+        // SAFETY: WKWebView's `setPageZoom:` (CGFloat), on the main thread
+        // (`MacWebView` lives there), sent only where the view responds to it.
+        unsafe {
+            let has: bool = msg_send![&*self.view, respondsToSelector: sel!(setPageZoom:)];
+            if has {
+                let _: () = msg_send![&*self.view, setPageZoom: page * window];
+            }
+        }
     }
     pub fn transparent(&self) -> bool {
         self.transparent
@@ -819,8 +843,7 @@ impl WebViewBackend for MacWebView {
         // there). The script completion is a `void (^)(id, NSError *)`
         // block, as WebKit calls it, on the main thread. The unpublished
         // `_inspector` (an object, nil-checked, whose `show` takes nothing)
-        // and `setPageZoom:` (CGFloat, `zoom` is f64) are sent only where
-        // the view responds to them.
+        // is sent only where the view responds to it.
         unsafe {
             match command {
                 WebViewCommand::LoadUrl(url) => {
@@ -913,10 +936,8 @@ impl WebViewBackend for MacWebView {
                     }
                 }
                 WebViewCommand::SetZoom(zoom) => {
-                    let has: bool = msg_send![&*self.view, respondsToSelector: sel!(setPageZoom:)];
-                    if has {
-                        let _: () = msg_send![&*self.view, setPageZoom: zoom];
-                    }
+                    self.zoom.set((zoom, self.zoom.get().1));
+                    self.show_zoom();
                 }
             }
         }

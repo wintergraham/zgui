@@ -191,6 +191,8 @@ export type ColorToken =
 	| "$selection.inactive"
 	| "$selection.text"
 	| "$selection.text.inactive"
+	| "$find.match"
+	| "$find.current"
 export type NumberToken =
 	"$glass.blur"
 	| "$font.size.xs"
@@ -319,6 +321,8 @@ export type TokenName =
 	| "selection.text"
 	| "selection.text.inactive"
 	| "selection.radius"
+	| "find.match"
+	| "find.current"
 
 -- "#rgb", "#rrggbb", "#rrggbbaa", "rgb(…)", "rgba(…)", "hsl(…)", a few
 -- names, 0xrrggbb, or a colour token ("$text.secondary"; `ColorToken`
@@ -353,6 +357,24 @@ export type TextAlign = "start" | "end" | "left" | "center" | "right"
 -- "mono" (or "monospace"), "sans" ("sans-serif"), "serif", or a family name.
 -- A family name, or a font token (`FontToken`).
 export type Font = string
+-- How a node mixes with what lies beneath it: CSS `mix-blend-mode`.
+export type BlendMode =
+	"normal"
+	| "multiply"
+	| "screen"
+	| "overlay"
+	| "darken"
+	| "lighten"
+	| "color-dodge"
+	| "color-burn"
+	| "hard-light"
+	| "soft-light"
+	| "difference"
+	| "exclusion"
+	| "hue"
+	| "saturation"
+	| "color"
+	| "luminosity"
 -- Cursor names, or CSS's spellings of them ("nwse-resize").
 export type Cursor =
 	"default"
@@ -494,6 +516,8 @@ declare extern type Bitmap with
 	h: number
 end
 declare extern type Shader with
+end
+declare extern type LayerShader with
 end
 declare extern type Brush with
 end
@@ -953,10 +977,15 @@ export type WindowRect = { x: number, y: number, width: number, height: number }
 -- inset or hidden title bar leaves (nil for a standard title bar, in
 -- fullscreen, and where the platform does not say), and `controls`, the
 -- window's own buttons in it (nil where there are none). Both follow
--- resizes, scale and fullscreen.
+-- resizes, scale and fullscreen. `zoom` is the window's zoom, as a
+-- browser's page zoom (1 at 100%; Cmd/Ctrl +, - and 0 change it, and
+-- setting it zooms the window, within 0.25 to 5); `zoomable` false turns
+-- the keys off.
 export type WindowApi = ((opts: WindowOptions) -> ()) & {
 	titlebar_area: State<WindowRect?>,
 	controls: State<WindowRect?>,
+	zoom: State<number>,
+	zoomable: State<boolean>,
 }
 
 ---------------------------------------------------------------------------
@@ -1171,6 +1200,8 @@ export type Styles = {
 	brightness: number?,
 	contrast: number?,
 	saturate: number?,
+	-- Mixes the node with what lies beneath it (CSS `mix-blend-mode`).
+	blend: BlendMode?,
 	blur: number?,
 	backdrop_blur: Num?,
 	fade: Pair?,
@@ -1228,6 +1259,11 @@ export type Styles = {
 	skew: number?,
 	skew_x: number?,
 	skew_y: number?,
+	-- Degrees about the horizontal and vertical axes through `origin` (CSS
+	-- `rotateX`, `rotateY`), seen from `perspective` points away.
+	rotate_x: number?,
+	rotate_y: number?,
+	perspective: number?,
 	origin: Pair?,
 	[number]: never,
 }
@@ -1329,6 +1365,7 @@ export type StyleProps = {
 	brightness: Reactive<number>?,
 	contrast: Reactive<number>?,
 	saturate: Reactive<number>?,
+	blend: Reactive<BlendMode>?,
 	blur: Reactive<number>?,
 	backdrop_blur: Reactive<Num>?,
 	fade: Reactive<Pair>?,
@@ -1372,6 +1409,9 @@ export type StyleProps = {
 	skew: Reactive<number>?,
 	skew_x: Reactive<number>?,
 	skew_y: Reactive<number>?,
+	rotate_x: Reactive<number>?,
+	rotate_y: Reactive<number>?,
+	perspective: Reactive<number>?,
 	origin: Reactive<Pair>?,
 }
 
@@ -1515,6 +1555,11 @@ export type NodeProps = {
 	bg_shader: Shader?,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: { read [number]: Color | { number } }?,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: LayerShader?,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: { read [number]: Color | { number } }?,
 	-- Events.
 	on_click: (ClickHandler | Handler | Action)?,
 	-- Primary pointer down and up.
@@ -1688,6 +1733,7 @@ export type Props = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -1731,6 +1777,9 @@ export type Props = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -1837,6 +1886,11 @@ export type Props = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -1996,6 +2050,7 @@ export type Props_opacity = Reactive<Num>?
 export type Props_brightness = Reactive<number>?
 export type Props_contrast = Reactive<number>?
 export type Props_saturate = Reactive<number>?
+export type Props_blend = Reactive<BlendMode>?
 export type Props_blur = Reactive<number>?
 export type Props_backdrop_blur = Reactive<Num>?
 export type Props_fade = Reactive<Pair>?
@@ -2034,6 +2089,9 @@ export type Props_rotate = Reactive<number>?
 export type Props_skew = Reactive<number>?
 export type Props_skew_x = Reactive<number>?
 export type Props_skew_y = Reactive<number>?
+export type Props_rotate_x = Reactive<number>?
+export type Props_rotate_y = Reactive<number>?
+export type Props_perspective = Reactive<number>?
 export type Props_origin = Reactive<Pair>?
 export type Props_theme = Reactive<ThemeSpec>?
 export type Props_provide = { [string]: any }?
@@ -2076,6 +2134,8 @@ export type Props_layout_clip = boolean?
 export type Props_mask = (Bitmap | MaskOptions)?
 export type Props_bg_shader = Shader?
 export type Props_shader_params = { read [number]: Color | { number } }?
+export type Props_layer_shader = LayerShader?
+export type Props_layer_params = { read [number]: Color | { number } }?
 export type Props_on_click = (ClickHandler | Handler | Action)?
 export type Props_on_press = (((e: PointerEvent) -> ...unknown) | Action)?
 export type Props_on_release = (((e: PointerEvent) -> ...unknown) | Action)?
@@ -2203,6 +2263,7 @@ export type ContainerProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -2246,6 +2307,9 @@ export type ContainerProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -2352,6 +2416,11 @@ export type ContainerProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -2525,6 +2594,7 @@ export type ScrollProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -2568,6 +2638,9 @@ export type ScrollProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -2674,6 +2747,11 @@ export type ScrollProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -2854,6 +2932,7 @@ export type TextProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -2897,6 +2976,9 @@ export type TextProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -3003,6 +3085,11 @@ export type TextProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -3175,6 +3262,7 @@ export type MarkdownViewProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -3218,6 +3306,9 @@ export type MarkdownViewProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -3324,6 +3415,11 @@ export type MarkdownViewProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -3544,6 +3640,7 @@ export type RichProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -3587,6 +3684,9 @@ export type RichProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -3693,6 +3793,11 @@ export type RichProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -3859,6 +3964,7 @@ export type ImageProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -3902,6 +4008,9 @@ export type ImageProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -4008,6 +4117,11 @@ export type ImageProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -4184,6 +4298,7 @@ export type SvgProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -4227,6 +4342,9 @@ export type SvgProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -4333,6 +4451,11 @@ export type SvgProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -4501,6 +4624,7 @@ export type CanvasProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -4544,6 +4668,9 @@ export type CanvasProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -4650,6 +4777,11 @@ export type CanvasProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -4848,6 +4980,7 @@ export type CheckboxProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -4891,6 +5024,9 @@ export type CheckboxProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -4997,6 +5133,11 @@ export type CheckboxProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -5171,6 +5312,7 @@ export type InputProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -5214,6 +5356,9 @@ export type InputProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -5320,6 +5465,11 @@ export type InputProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -5550,6 +5700,7 @@ export type ProgressProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -5593,6 +5744,9 @@ export type ProgressProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -5699,6 +5853,11 @@ export type ProgressProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -5866,6 +6025,7 @@ export type SliderProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -5909,6 +6069,9 @@ export type SliderProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -6015,6 +6178,11 @@ export type SliderProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -6195,6 +6363,7 @@ export type SegmentedProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -6238,6 +6407,9 @@ export type SegmentedProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -6344,6 +6516,11 @@ export type SegmentedProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -6520,6 +6697,7 @@ export type StepperProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -6563,6 +6741,9 @@ export type StepperProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -6669,6 +6850,11 @@ export type StepperProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -6846,6 +7032,7 @@ export type DisclosureProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -6889,6 +7076,9 @@ export type DisclosureProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -6995,6 +7185,11 @@ export type DisclosureProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -7171,6 +7366,7 @@ export type AccordionProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -7214,6 +7410,9 @@ export type AccordionProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -7320,6 +7519,11 @@ export type AccordionProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -7486,6 +7690,7 @@ export type SectionProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -7529,6 +7734,9 @@ export type SectionProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -7633,6 +7841,11 @@ export type SectionProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -7808,6 +8021,7 @@ export type SeparatorProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -7851,6 +8065,9 @@ export type SeparatorProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -7957,6 +8174,11 @@ export type SeparatorProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -8129,6 +8351,7 @@ export type TabsProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -8172,6 +8395,9 @@ export type TabsProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -8278,6 +8504,11 @@ export type TabsProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -8458,6 +8689,7 @@ export type TreeProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -8501,6 +8733,9 @@ export type TreeProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -8607,6 +8842,11 @@ export type TreeProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -8797,6 +9037,7 @@ export type DataGridProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -8840,6 +9081,9 @@ export type DataGridProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -8946,6 +9190,11 @@ export type DataGridProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -9132,6 +9381,7 @@ export type CalendarProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -9175,6 +9425,9 @@ export type CalendarProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -9281,6 +9534,11 @@ export type CalendarProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -9459,6 +9717,7 @@ export type DatePickerProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -9502,6 +9761,9 @@ export type DatePickerProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -9608,6 +9870,11 @@ export type DatePickerProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -9784,6 +10051,7 @@ export type TimeFieldProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -9827,6 +10095,9 @@ export type TimeFieldProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -9933,6 +10204,11 @@ export type TimeFieldProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -10108,6 +10384,7 @@ export type ComboboxProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -10151,6 +10428,9 @@ export type ComboboxProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -10257,6 +10537,11 @@ export type ComboboxProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -10441,6 +10726,7 @@ export type CommandPaletteProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -10484,6 +10770,9 @@ export type CommandPaletteProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -10590,6 +10879,11 @@ export type CommandPaletteProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -10762,6 +11056,7 @@ export type SelectProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -10805,6 +11100,9 @@ export type SelectProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -10911,6 +11209,11 @@ export type SelectProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -11086,6 +11389,7 @@ export type SplitProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -11129,6 +11433,9 @@ export type SplitProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -11235,6 +11542,11 @@ export type SplitProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -11422,6 +11734,7 @@ export type ListProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -11465,6 +11778,9 @@ export type ListProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -11571,6 +11887,11 @@ export type ListProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -11797,6 +12118,7 @@ export type LayerProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -11840,6 +12162,9 @@ export type LayerProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -11946,6 +12271,11 @@ export type LayerProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -12118,6 +12448,7 @@ export type ModalProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -12161,6 +12492,9 @@ export type ModalProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -12267,6 +12601,11 @@ export type ModalProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -12454,6 +12793,7 @@ export type PopoverProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -12497,6 +12837,9 @@ export type PopoverProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -12603,6 +12946,11 @@ export type PopoverProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -12795,6 +13143,7 @@ export type MenuItemProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -12838,6 +13187,9 @@ export type MenuItemProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -12940,6 +13292,11 @@ export type MenuItemProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -13115,6 +13472,7 @@ export type SubmenuProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -13158,6 +13516,9 @@ export type SubmenuProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -13264,6 +13625,11 @@ export type SubmenuProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -13441,6 +13807,7 @@ export type NativeProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -13484,6 +13851,9 @@ export type NativeProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -13590,6 +13960,11 @@ export type NativeProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -13757,6 +14132,7 @@ export type WebViewProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -13800,6 +14176,9 @@ export type WebViewProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -13906,6 +14285,11 @@ export type WebViewProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -14095,6 +14479,7 @@ export type TerminalProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -14138,6 +14523,9 @@ export type TerminalProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -14244,6 +14632,11 @@ export type TerminalProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -14411,6 +14804,7 @@ export type SlotProps = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -14454,6 +14848,9 @@ export type SlotProps = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -14560,6 +14957,11 @@ export type SlotProps = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -14732,6 +15134,7 @@ export type EachOptions = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -14775,6 +15178,9 @@ export type EachOptions = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -14881,6 +15287,11 @@ export type EachOptions = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -15056,6 +15467,7 @@ export type PresenceOptions = {
 	brightness: Props_brightness,
 	contrast: Props_contrast,
 	saturate: Props_saturate,
+	blend: Props_blend,
 	blur: Props_blur,
 	backdrop_blur: Props_backdrop_blur,
 	fade: Props_fade,
@@ -15099,6 +15511,9 @@ export type PresenceOptions = {
 	skew: Props_skew,
 	skew_x: Props_skew_x,
 	skew_y: Props_skew_y,
+	rotate_x: Props_rotate_x,
+	rotate_y: Props_rotate_y,
+	perspective: Props_perspective,
 	origin: Props_origin,
 	-- The subtree's theme: a theme's name (`"zgx-light"`), or tokens to
 	-- override (`{ accent = "#e5484d" }`, with `theme = name` to start from).
@@ -15205,6 +15620,11 @@ export type PresenceOptions = {
 	bg_shader: Props_bg_shader,
 	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
 	shader_params: Props_shader_params,
+	-- The subtree, cached as a layer, composites through it: each pixel of
+	-- the box passes through its `layer` function.
+	layer_shader: Props_layer_shader,
+	-- Up to four vec4s: lists of numbers, or colors (0 to 1).
+	layer_params: Props_layer_params,
 	-- Events.
 	on_click: Props_on_click,
 	-- Primary pointer down and up.
@@ -15578,6 +15998,11 @@ declare ui: {
 	-- A WGSL fill: `fn fill(input: FillInput) -> vec4<f32>`, with input.p,
 	-- input.size, input.time, input.scale and input.params (four vec4s).
 	shader: (source: string, opts: { fps: number? }?) -> Shader,
+	-- A WGSL layer shader: `fn layer(input: LayerInput) -> vec4<f32>`, with
+	-- input.color (the layer's pixel, straight alpha), input.p, input.size,
+	-- input.time, input.scale and input.params; `zgx_sample(p)` reads the
+	-- layer at another point of the box.
+	layer_shader: (source: string, opts: { fps: number? }?) -> LayerShader,
 	-- Sorts `list` in place, stably, by a field of each item (`"price"`) or
 	-- a function of it (called once an item); returns it. Use it over
 	-- `table.sort` with a comparator for long lists: that calls Luau some
@@ -15741,6 +16166,24 @@ export type ElementKeys = {
 	shaderParam13: AnimValue?,
 	shaderParam14: AnimValue?,
 	shaderParam15: AnimValue?,
+	layerTime: AnimValue?,
+	layer_time: AnimValue?,
+	layerParam0: AnimValue?,
+	layerParam1: AnimValue?,
+	layerParam2: AnimValue?,
+	layerParam3: AnimValue?,
+	layerParam4: AnimValue?,
+	layerParam5: AnimValue?,
+	layerParam6: AnimValue?,
+	layerParam7: AnimValue?,
+	layerParam8: AnimValue?,
+	layerParam9: AnimValue?,
+	layerParam10: AnimValue?,
+	layerParam11: AnimValue?,
+	layerParam12: AnimValue?,
+	layerParam13: AnimValue?,
+	layerParam14: AnimValue?,
+	layerParam15: AnimValue?,
 	clipBottom: AnimValue?,
 	clipLeft: AnimValue?,
 	clipRight: AnimValue?,
@@ -15832,6 +16275,11 @@ export type ElementKeys = {
 	skewY: AnimValue?,
 	skew_x: AnimValue?,
 	skew_y: AnimValue?,
+	rotateX: AnimValue?,
+	rotate_x: AnimValue?,
+	rotateY: AnimValue?,
+	rotate_y: AnimValue?,
+	perspective: AnimValue?,
 	text_size: AnimValue?,
 	tint: AnimValue?,
 	top: AnimValue?,
@@ -15891,6 +16339,24 @@ export type ElementParams = {
 	shaderParam13: AnimValue?,
 	shaderParam14: AnimValue?,
 	shaderParam15: AnimValue?,
+	layerTime: AnimValue?,
+	layer_time: AnimValue?,
+	layerParam0: AnimValue?,
+	layerParam1: AnimValue?,
+	layerParam2: AnimValue?,
+	layerParam3: AnimValue?,
+	layerParam4: AnimValue?,
+	layerParam5: AnimValue?,
+	layerParam6: AnimValue?,
+	layerParam7: AnimValue?,
+	layerParam8: AnimValue?,
+	layerParam9: AnimValue?,
+	layerParam10: AnimValue?,
+	layerParam11: AnimValue?,
+	layerParam12: AnimValue?,
+	layerParam13: AnimValue?,
+	layerParam14: AnimValue?,
+	layerParam15: AnimValue?,
 	clipBottom: AnimValue?,
 	clipLeft: AnimValue?,
 	clipRight: AnimValue?,
@@ -15982,6 +16448,11 @@ export type ElementParams = {
 	skewY: AnimValue?,
 	skew_x: AnimValue?,
 	skew_y: AnimValue?,
+	rotateX: AnimValue?,
+	rotate_x: AnimValue?,
+	rotateY: AnimValue?,
+	rotate_y: AnimValue?,
+	perspective: AnimValue?,
 	text_size: AnimValue?,
 	tint: AnimValue?,
 	top: AnimValue?,

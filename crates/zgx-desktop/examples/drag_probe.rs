@@ -3,7 +3,10 @@
 //! instructions each pointer move costs: a chip dragged along its window and
 //! released where nothing takes it (its preview sliding back), a tab dragged
 //! onto another window's strip, then a tab torn off (released outside both
-//! windows, it opens in a window of its own).
+//! windows, it opens in a window of its own). First, text another app would
+//! drag in: a pasteboard of the probe's own, handed to the window's dragging
+//! destination as AppKit hands it a drag's, over the chip and then the
+//! Words field, dropped there (`TEXT_DROP`).
 //!
 //! Nothing that carries an export leaves the windows: AppKit's session
 //! follows the real pointer, and with no real button down it drops at once
@@ -17,7 +20,9 @@
 //! real input, onto a test-owned drop target (`drop_target_probe`).
 //! `DRAG_PROBE_ANIMATE=1` moves a bar every display frame;
 //! `DRAG_PROBE_FILE=<path>` makes the chip carry that file beside its text,
-//! as a file dragged out to Explorer does (`CF_HDROP`).
+//! as a file dragged out to Explorer does (`CF_HDROP`). The Words field
+//! prints what it says as it changes (`WORDS`): text dropped in on X11
+//! (`xdnd_text_drop_smoke.py`) and Windows.
 use zgx::compose::prelude::*;
 use zgx_desktop::{Application, WindowBounds, WindowOptions};
 
@@ -131,10 +136,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .bg(rgb(0x3d7ef7))
                 .reactive_style(move || zgx::style::Styles::new().ml((clock.get() * 200.) % 300.));
             // Words to drag out as text: focused, they are all selected.
-            let words = text_input("Words", cx.ui.signal(String::from("drag these words")))
-                .id("words")
-                .size(240., 30.)
-                .select_on_focus(true);
+            let said = cx.ui.signal(String::from("drag these words"));
+            #[cfg(target_os = "macos")]
+            let (heard, ui) = (said.clone(), cx.ui.downgrade());
+            // What it says as it changes (text dropped in from another app).
+            let words = component(move |cx| {
+                let heard = said.clone();
+                let trace = cx
+                    .runtime()
+                    .effect(move || println!("WORDS {:?}", heard.get()));
+                cx.retain(trace);
+                text_input("Words", said.clone())
+                    .id("words")
+                    .size(240., 30.)
+                    .select_on_focus(true)
+            });
             cx.render(
                 column()
                     .w_full()
@@ -148,7 +164,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             #[cfg(target_os = "macos")]
             cx.tasks.spawn(async move {
-                macos::run().await;
+                macos::run(heard, ui).await;
                 std::process::exit(0);
             });
         })
@@ -156,7 +172,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use objc2::{MainThreadMarker, rc::Retained};
+    use objc2::{DefinedClass, MainThreadMarker, rc::Retained};
     use objc2_app_kit::{NSApplication, NSEvent, NSEventModifierFlags, NSEventType, NSWindow};
     use objc2_foundation::NSPoint;
     use std::time::Duration;
@@ -432,8 +448,98 @@ mod macos {
             (a.origin.y + a.size.height) - (b.origin.y + b.size.height),
         )
     }
-    pub async fn run() {
+    /// What AppKit hands a drag's destination (`NSDraggingInfo`), as a
+    /// drag from another app over the window would: its pasteboard (a
+    /// private one, never the system's), where it is, and no source in this
+    /// app.
+    struct Info {
+        pasteboard: Retained<objc2_app_kit::NSPasteboard>,
+        location: std::cell::Cell<NSPoint>,
+    }
+    objc2::define_class!(
+        // SAFETY: NSObject has no subclassing requirements; the methods have
+        // NSDraggingInfo's signatures, and only the probe calls them.
+        #[unsafe(super(objc2_foundation::NSObject))]
+        #[thread_kind = objc2::MainThreadOnly]
+        #[name = "ZgxProbeDraggingInfo"]
+        #[ivars = Info]
+        struct DraggingInfo;
+        impl DraggingInfo {
+            #[unsafe(method_id(draggingPasteboard))]
+            fn pasteboard(&self) -> Retained<objc2_app_kit::NSPasteboard> {
+                self.ivars().pasteboard.clone()
+            }
+            #[unsafe(method(draggingLocation))]
+            fn location(&self) -> NSPoint {
+                self.ivars().location.get()
+            }
+            #[unsafe(method(draggingSource))]
+            fn source(&self) -> *mut objc2::runtime::AnyObject {
+                std::ptr::null_mut()
+            }
+            #[unsafe(method(draggingSourceOperationMask))]
+            fn operations(&self) -> usize {
+                // NSDragOperationCopy.
+                1
+            }
+        }
+    );
+    /// Text another app drags over the Drag window's chip (no destination),
+    /// then its Words field, and drops there: through the window's own
+    /// dragging destination (winit's delegate), with no session of the
+    /// window server's, so nothing leaves the window.
+    fn text_drop(
+        window: &NSWindow,
+        said: &zgx::reactive::Signal<String>,
+        ui: &zgx::widgets::WeakUi,
+    ) {
+        use objc2::{MainThreadOnly, msg_send};
+        let mtm = MainThreadMarker::new().unwrap();
+        let pasteboard = objc2_app_kit::NSPasteboard::pasteboardWithUniqueName();
+        pasteboard.clearContents();
+        // SAFETY: AppKit's pasteboard type constant.
+        let string = unsafe { objc2_app_kit::NSPasteboardTypeString };
+        pasteboard.setString_forType(&objc2_foundation::NSString::from_str(" and more"), string);
+        let info = DraggingInfo::alloc(mtm).set_ivars(Info {
+            pasteboard: pasteboard.clone(),
+            location: std::cell::Cell::new(NSPoint::new(0., 0.)),
+        });
+        // SAFETY: NSObject's `init`, on a fresh allocation with its ivars set.
+        let info: Retained<DraggingInfo> = unsafe { msg_send![super(info), init] };
+        let delegate = window.delegate().unwrap();
+        let height = window.contentView().unwrap().frame().size.height;
+        // In the window's coordinates, bottom-up, as AppKit gives them.
+        let at = |x: f64, y: f64| info.ivars().location.set(NSPoint::new(x, height - y));
+        // The chip, then the Words field's far end (its centre 119 down).
+        at(60., 24.);
+        // SAFETY: NSDraggingDestination's methods, as AppKit calls them,
+        // with an object answering NSDraggingInfo's.
+        let chip: usize = unsafe { msg_send![&*delegate, draggingEntered: &*info] };
+        at(240., 119.);
+        let field: usize = unsafe { msg_send![&*delegate, draggingUpdated: &*info] };
+        let unchanged = said.get() == "drag these words";
+        at(60., 24.);
+        let off: usize = unsafe { msg_send![&*delegate, draggingUpdated: &*info] };
+        let _: () = unsafe { msg_send![&*delegate, draggingExited: &*info] };
+        at(240., 119.);
+        let again: usize = unsafe { msg_send![&*delegate, draggingEntered: &*info] };
+        let dropped: bool = unsafe { msg_send![&*delegate, performDragOperation: &*info] };
+        let _: () = unsafe { msg_send![&*delegate, concludeDragOperation: &*info] };
+        // SAFETY: `-[NSPasteboard releaseGlobally]`, which objc2 leaves
+        // out: the private pasteboard goes with the probe's use of it.
+        let _: () = unsafe { msg_send![&*pasteboard, releaseGlobally] };
+        let selected = ui
+            .upgrade()
+            .and_then(|ui| ui.focused_editor())
+            .map(|editor| editor.copy());
+        println!(
+            "TEXT_DROP chip={chip} field={field} unchanged={unchanged} off={off} again={again} dropped={dropped} value={:?} selected={selected:?}",
+            said.get()
+        );
+    }
+    pub async fn run(said: zgx::reactive::Signal<String>, ui: zgx::widgets::WeakUi) {
         sleep(3000).await;
+        text_drop(&window("Drag").unwrap(), &said, &ui);
         hold_buttons();
         let window = window("Drag").unwrap();
         let other = self::window("Other").unwrap();

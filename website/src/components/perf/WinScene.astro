@@ -1,0 +1,23 @@
+---
+// One scene of the Windows run: what it draws, anything to read before its
+// figures (the slot), then each metric it has.
+import BarChart from './BarChart.astro';
+import { windows, scene as sceneOf, format } from '@/lib/perf-windows';
+
+interface Props {
+  scene: string;
+}
+const { scene } = Astro.props;
+const s = sceneOf(scene);
+const order = ['cpu', 'cycles', 'gpu_time', 'dwm_gpu', 'p99', 'long', 'server', 'memory', 'board'];
+const metrics = order.filter((m) => windows.metrics[m] && s.cells.some((c) => format(m).source in c));
+const info = windows.sceneText[scene];
+---
+
+<p class="perf-note">
+  {info?.note} {s.trials} trials. <a href={`https://github.com/zeronsh/zgx/tree/main/${s.run}`}>Raw data</a>
+</p>
+<slot />
+<div class="perf-charts">
+  {metrics.map((metric) => <BarChart scene={scene} metric={metric} platform="windows" />)}
+</div>

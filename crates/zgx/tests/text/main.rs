@@ -4,6 +4,8 @@
 mod accessible_label;
 #[path = "../composition_rich_text.rs"]
 mod composition_rich_text;
+#[path = "../find_in_page.rs"]
+mod find_in_page;
 #[path = "../inspect.rs"]
 mod inspect;
 #[path = "../links.rs"]

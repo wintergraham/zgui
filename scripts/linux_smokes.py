@@ -69,6 +69,8 @@ SMOKES = [
     ("user-time", "python3 scripts/user_time_smoke.py {bin}/window_probe --output {out}", False),
     ("window-icon", "python3 scripts/window_icon_smoke.py {bin}/window_probe --output {out}", False),
     ("xdnd-source", "python3 scripts/xdnd_source_smoke.py {bin} --output {out}", False),
+    ("xdnd-text-drop", "python3 scripts/xdnd_text_drop_smoke.py {bin} --output {out}", False),
+    ("wayland-text-drop", "python3 scripts/wayland_text_drop_smoke.py {bin} --output {out}", False),
     ("wayland-drag-out", "python3 scripts/wayland_drag_out_smoke.py {bin} --output {out}", False),
     ("zenity-dialog", "python3 scripts/zenity_dialog_smoke.py {bin}/platform_services --output {out}", False),
     ("portal-dialog", "python3 scripts/portal_dialog_smoke.py {bin}/platform_services --output {out}", False),
@@ -97,6 +99,8 @@ SMOKES = [
     ("selection-copy-wayland", "python3 scripts/selection_copy_smoke.py {bin}/selectable_text --wayland --output {out}", False),
     ("clipboard-image", "python3 scripts/clipboard_image_smoke.py {bin}/clipboard_image --output {out}", False),
     ("selectable-text", "python3 scripts/selectable_text_smoke.py {bin}/selectable_text --output {out}", False),
+    ("find-in-page", "python3 scripts/find_in_page_smoke.py {bin}/selectable_text --output {out}", False),
+    ("zoom", "python3 scripts/zoom_smoke.py {bin}/zoom_probe --output {out}", False),
     ("luau-views", "python3 scripts/luau_views_smoke.py {bin}/luau_probe --output {out}", False),
     ("editor-autoscroll", "python3 scripts/editor_autoscroll_smoke.py {bin}/editor_autoscroll --output {out}", False),
     ("transparency", "python3 scripts/transparency_smoke.py {bin}/transparency --output {out}", False),
@@ -133,7 +137,7 @@ SMOKES = [
 
 # Examples probes run by name rather than as `{bin}/name` in their command
 # (the shader warm-up's, and those of probes given the examples directory).
-FIXTURES = ("windows", "drag_probe", "tab_windows", "submenus", "gallery", "kitchen_sink", "paint_styles",
+FIXTURES = ("windows", "drag_probe", "zoom_probe", "tab_windows", "submenus", "gallery", "kitchen_sink", "paint_styles",
             "canvas", "svg_transform", "animated_image")
 
 

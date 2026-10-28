@@ -88,6 +88,7 @@ pub struct PhysicalGlyph {
 }
 
 impl LayoutGlyph {
+    #[inline]
     pub fn physical(&self, offset: (f32, f32), scale: f32) -> PhysicalGlyph {
         let x_offset = self.font_size * self.x_offset;
         let y_offset = self.font_size * self.y_offset;

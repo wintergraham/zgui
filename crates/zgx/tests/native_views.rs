@@ -99,6 +99,16 @@ fn a_native_node_is_placed_where_layout_puts_it_clipped_and_rounded() {
     assert_eq!(page.rounded.len(), 1);
     assert_eq!(page.rounded[0].radii, [10.; 4]);
     assert_eq!(page.visible(), Some(Rect::new(200., 100., 600., 500.)));
+    // In a window zoomed to 125%, the platform places it in the zoom's
+    // points: larger, and sized (not drawn scaled), its corners with it.
+    let zoomed = split.zoomed(1.25);
+    let page = &zoomed.natives()[0];
+    assert_eq!(page.frame, Rect::new(250., 125., 750., 625.));
+    assert_eq!(page.size, (750., 625.));
+    assert_eq!(page.rounded[0].radii, [12.5; 4]);
+    // The composer's glass over it, at (300, 520) 400 by 60.
+    assert_eq!(split.backdrops()[0].rect, Rect::new(300., 520., 400., 60.));
+    assert_eq!(zoomed.backdrops()[0].rect, Rect::new(375., 650., 500., 75.));
 }
 
 #[test]

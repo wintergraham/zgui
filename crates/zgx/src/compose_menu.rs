@@ -9,7 +9,7 @@ use crate::{
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
-    time::{Duration, Instant},
+    time::Duration,
 };
 pub(crate) struct MenuContext {
     pub open: Signal<bool>,
@@ -102,11 +102,6 @@ fn items(ui: &Ui, panel: NodeId) -> Vec<NodeId> {
     }
     items
 }
-#[derive(Default)]
-struct Search {
-    prefix: String,
-    last: Option<Instant>,
-}
 pub(crate) fn mount(
     ui: &mut Ui,
     panel: NodeId,
@@ -140,13 +135,13 @@ pub(crate) fn mount(
             }
         });
     }
-    let search = Rc::new(RefCell::new(Search::default()));
+    let search = Rc::new(RefCell::new(crate::typeahead::Typeahead::default()));
     let reset = search.clone();
     let open = menu.open.clone();
     let semantics = ui.semantics.clone();
     ui.bind(panel, move || {
         let expanded = open.get();
-        *reset.borrow_mut() = Search::default();
+        reset.borrow_mut().reset();
         semantics.borrow_mut().update(anchor, |node| {
             node.has_popup = Some(PopupKind::Menu);
             node.expanded = Some(expanded);
@@ -300,45 +295,16 @@ pub(crate) fn mount(
             Key::Home => Some(items[0]),
             Key::End => items.last().copied(),
             Key::Character(text) if !modifiers.control && !modifiers.alt && !modifiers.meta => {
-                let Some(text) = bounded_prefix(text) else {
+                if crate::typeahead::bounded_prefix(text).is_none() {
                     return;
-                };
-                let mut search = search.borrow_mut();
-                let now = Instant::now();
-                if search
-                    .last
-                    .is_none_or(|last| now.duration_since(last) > Duration::from_millis(750))
-                {
-                    search.prefix.clear();
                 }
-                search.last = Some(now);
-                if search.prefix.len() + text.len() > 256 {
-                    search.prefix.clear();
-                }
-                // Repeating the same prefix cycles matching items, including
-                // labels such as "Aaron" that also match a doubled letter.
-                if search.prefix != text {
-                    search.prefix.push_str(&text);
-                }
-                let find = |prefix: &str| {
-                    (1..=items.len())
-                        .map(|step| {
-                            items[current.map_or(step - 1, |index| (index + step) % items.len())]
-                        })
-                        .find(|node| {
-                            ui.semantics
-                                .borrow()
-                                .get(*node)
-                                .is_some_and(|node| matches_prefix(&node.label, prefix))
-                        })
-                };
-                let target = find(&search.prefix);
-                if target.is_none() {
-                    search.prefix = text;
-                    find(&search.prefix)
-                } else {
-                    target
-                }
+                let semantics = ui.semantics.borrow();
+                let found = search
+                    .borrow_mut()
+                    .find(text, items.len(), current, |index| {
+                        semantics.get(items[index]).map(|node| node.label.clone())
+                    });
+                found.map(|index| items[index])
             }
             _ => return,
         };
@@ -514,37 +480,4 @@ fn item_at(ui: &Ui, panel: NodeId, x: f32, y: f32) -> Option<NodeId> {
                 && ui.input.is_enabled(&scene, *node)
         })
         .filter(|item| scene.is_within(*item, panel))
-}
-
-fn bounded_prefix(text: &str) -> Option<String> {
-    let mut result = String::new();
-    for character in text.chars().flat_map(char::to_lowercase) {
-        if character.is_control() {
-            return None;
-        }
-        if result.len() + character.len_utf8() > 256 {
-            break;
-        }
-        result.push(character);
-    }
-    (!result.is_empty()).then_some(result)
-}
-fn matches_prefix(label: &str, prefix: &str) -> bool {
-    let mut label = label.chars().flat_map(char::to_lowercase);
-    prefix
-        .chars()
-        .all(|character| label.next() == Some(character))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn typeahead_storage_is_bounded_with_unicode_case_expansion() {
-        let prefix = bounded_prefix(&"İ".repeat(10000)).unwrap();
-        assert!(prefix.len() <= 256);
-        assert!(prefix.starts_with("i\u{307}"));
-        assert!(matches_prefix(&"İ".repeat(10000), &prefix));
-        assert!(bounded_prefix("\n").is_none());
-    }
 }

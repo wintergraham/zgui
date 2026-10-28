@@ -6,6 +6,7 @@ import { Docs } from '@/components/docs';
 import CodeBlocks from '@/components/CodeBlocks.astro';
 import { pageTree, source } from '@/lib/source';
 import { markdownUrl, ogImage, repoUrl } from '@/lib/shared';
+import { sets } from '../../docs.manifest.mjs';
 
 export async function getStaticPaths() {
   return source.getPages().map((page) => ({
@@ -15,6 +16,15 @@ export async function getStaticPaths() {
 }
 
 const { slugs } = Astro.props;
+// Where the page sits: its doc set, and the sidebar group it is under.
+const set = sets.find((s) => s.dir === slugs[0]);
+const slug = slugs.slice(1).join('/') || 'index';
+let group: string | undefined;
+for (const entry of set?.pages ?? []) {
+  if (typeof entry === 'string') group = entry.replace(/^---|---$/g, '');
+  else if (entry.slug === slug || (slug.startsWith('reference') && entry.slug === slug)) break;
+}
+const eyebrow = [set?.title, group].filter(Boolean).join(' · ');
 const page = source.getPage(slugs)!;
 const entry = page.data._raw;
 const { Content, headings } = await render(entry);
@@ -33,6 +43,7 @@ const sourceUrl = entry.data.source ? `${repoUrl}/blob/main/${entry.data.source}
     pathname={page.url}
     params={Astro.params}
     title={page.data.title}
+    section={eyebrow}
     description={page.data.lede ? page.data.description : undefined}
     toc={toc}
     markdownUrl={markdownUrl(page.url)}

@@ -477,6 +477,118 @@ pub(crate) fn update_entry(
     false
 }
 
+/// What find in page's menu items do (`find_action`), by their actions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FindAction {
+    Open,
+    Next,
+    Previous,
+    UseSelection,
+}
+/// Find in page's items in an Edit menu: action, title, shortcut.
+const FIND_ITEMS: [(&str, &str, &str, FindAction); 4] = [
+    ("zgx:find", "Find…", "Super+F", FindAction::Open),
+    ("zgx:find-next", "Find Next", "Super+G", FindAction::Next),
+    (
+        "zgx:find-previous",
+        "Find Previous",
+        "Super+Shift+G",
+        FindAction::Previous,
+    ),
+    (
+        "zgx:find-selection",
+        "Use Selection for Find",
+        "Super+E",
+        FindAction::UseSelection,
+    ),
+];
+/// The find in page item `action` is, if it is one.
+pub(crate) fn find_action(action: &MenuAction) -> Option<FindAction> {
+    FIND_ITEMS
+        .iter()
+        .find(|(id, ..)| *id == action.0)
+        .map(|(.., what)| *what)
+}
+/// Whether the app's menus bind ⌘F, ⌘G or ⌘E themselves (its own find):
+/// zgx's find items stay out of them.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn binds_find_keys(menus: &[AppMenu]) -> bool {
+    fn binds(entries: &[AppMenuEntry]) -> bool {
+        entries.iter().any(|entry| match entry {
+            AppMenuEntry::Item {
+                accelerator: Some(MenuAccelerator(stroke)),
+                ..
+            } => {
+                stroke.modifiers.primary_shortcut()
+                    && matches!(&stroke.key, zgx::input::Key::Character(k) if ["f", "g", "e"].contains(&k.to_ascii_lowercase().as_str()))
+            }
+            AppMenuEntry::Submenu(child) => binds(&child.entries),
+            _ => false,
+        })
+    }
+    menus.iter().any(|menu| binds(&menu.entries))
+}
+/// Find in page's submenu, as AppKit apps' Edit menus have it.
+#[cfg(target_os = "macos")]
+fn find_submenu() -> Result<muda::Submenu, AppMenuError> {
+    let menu = muda::Submenu::new("Find", true);
+    for (id, label, shortcut, _) in FIND_ITEMS {
+        let accelerator = shortcut
+            .parse::<muda::accelerator::KeyAccelerator>()
+            .map_err(|e| AppMenuError(e.to_string()))?;
+        let item = muda::MenuItem::with_id(id, label, true, None);
+        item.set_key_accelerator(Some(accelerator))
+            .map_err(|e| AppMenuError(e.to_string()))?;
+        menu.append(&item)
+            .map_err(|e| AppMenuError(e.to_string()))?;
+    }
+    Ok(menu)
+}
+
+/// What the window's zoom items do (`zoom_action`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ZoomAction {
+    In,
+    Out,
+    Reset,
+}
+/// The window's zoom items in a View menu: action, title, shortcut.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const ZOOM_ITEMS: [(&str, &str, &str, ZoomAction); 3] = [
+    (
+        "zgx:zoom-reset",
+        "Actual Size",
+        "Super+Digit0",
+        ZoomAction::Reset,
+    ),
+    ("zgx:zoom-in", "Zoom In", "Super+Equal", ZoomAction::In),
+    ("zgx:zoom-out", "Zoom Out", "Super+Minus", ZoomAction::Out),
+];
+/// The zoom item `action` is, if it is one.
+pub(crate) fn zoom_action(action: &MenuAction) -> Option<ZoomAction> {
+    ZOOM_ITEMS
+        .iter()
+        .find(|(id, ..)| *id == action.0)
+        .map(|(.., what)| *what)
+}
+/// Whether the app's menus bind a zoom key themselves (⌘=, ⌘+, ⌘- or ⌘0;
+/// `zgx::zoom::is_zoom_key`): zgx's zoom items stay out of them. ⌘⌥ or ⌘⌃
+/// with them is the app's alone.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn binds_zoom_keys(menus: &[AppMenu]) -> bool {
+    fn binds(entries: &[AppMenuEntry]) -> bool {
+        entries.iter().any(|entry| match entry {
+            AppMenuEntry::Item {
+                accelerator: Some(MenuAccelerator(stroke)),
+                ..
+            } => zgx::zoom::is_zoom_key(&stroke.key, stroke.modifiers),
+            AppMenuEntry::Submenu(child) => binds(&child.entries),
+            _ => false,
+        })
+    }
+    menus.iter().any(|menu| binds(&menu.entries))
+}
+
 /// A menu model as an AppKit submenu: items, check items, shortcuts, the
 /// standard edit items and nested submenus.
 #[cfg(target_os = "macos")]
@@ -620,6 +732,8 @@ impl NativeMenu {
         let mut window = None;
         // AppKit puts its menu search in the Help menu.
         let mut help = None;
+        let find = !binds_find_keys(menus);
+        let zoom = !binds_zoom_keys(menus);
         for model in menus.iter().filter(|m| m.label != AppMenu::APPLICATION) {
             let submenu = if model.label == "Window" {
                 // The app's Window menu keeps the standard items around its
@@ -643,6 +757,29 @@ impl NativeMenu {
             } else {
                 native_submenu(model)?
             };
+            // Find in page in the Edit menu, as AppKit apps have it.
+            if model.label == "Edit" && find {
+                submenu
+                    .append_items(&[&muda::PredefinedMenuItem::separator(), &find_submenu()?])
+                    .map_err(|e| AppMenuError(e.to_string()))?;
+            }
+            // Zoom in the View menu, as a browser's.
+            if model.label == "View" && zoom {
+                submenu
+                    .append(&muda::PredefinedMenuItem::separator())
+                    .map_err(|e| AppMenuError(e.to_string()))?;
+                for (id, label, shortcut, _) in ZOOM_ITEMS {
+                    let accelerator = shortcut
+                        .parse::<muda::accelerator::KeyAccelerator>()
+                        .map_err(|e| AppMenuError(e.to_string()))?;
+                    let item = muda::MenuItem::with_id(id, label, true, None);
+                    item.set_key_accelerator(Some(accelerator))
+                        .map_err(|e| AppMenuError(e.to_string()))?;
+                    submenu
+                        .append(&item)
+                        .map_err(|e| AppMenuError(e.to_string()))?;
+                }
+            }
             menu.append(&submenu)
                 .map_err(|e| AppMenuError(e.to_string()))?;
             if model.label == "Window" {
@@ -1183,6 +1320,103 @@ mod dynamic_tests {
                     && node.toggled() == Some(accesskit::Toggled::True))
         );
         view.unmount();
+    }
+    #[test]
+    fn find_items_join_an_edit_menu_unless_the_app_binds_their_keys() {
+        let edit = |entries: Vec<AppMenuEntry>| vec![AppMenu::new("Edit", entries)];
+        assert!(!binds_find_keys(&edit(vec![AppMenuEntry::Standard(
+            StandardItem::Copy
+        )])));
+        for key in ["f", "G", "e"] {
+            assert!(binds_find_keys(&edit(vec![
+                AppMenuEntry::item("Mine", "mine")
+                    .accelerator(MenuAccelerator::primary(Key::Character(key.into())))
+            ])));
+        }
+        assert_eq!(
+            find_action(&MenuAction("zgx:find-next".into())),
+            Some(FindAction::Next)
+        );
+        assert_eq!(
+            find_action(&MenuAction("find".into())),
+            None,
+            "the app's own"
+        );
+    }
+    #[test]
+    fn an_apps_find_shortcut_keeps_it_from_find_in_page() {
+        let mut ui = Ui::new(400., 300.);
+        let root = ui.scene.borrow().root();
+        let output = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let fallback = output.clone();
+        let _listener = ui.input.listen(root, move |event| {
+            if event.phase != EventPhase::Capture
+                && let InputEvent::Action(action) = &event.event
+                && let Some(action) = action.downcast_ref::<MenuAction>()
+            {
+                fallback.borrow_mut().push(action.0.clone());
+                event.prevent_default();
+            }
+        });
+        // As the code editor example's Edit menu has it.
+        let model = vec![AppMenu::new(
+            "Edit",
+            [AppMenuEntry::item("Find…", "find")
+                .accelerator(MenuAccelerator::primary(Key::Character("f".into())))],
+        )];
+        let _binding = ui.input.bind_keys(root, keymap(&model));
+        let view = ui.mount(compose::column().child(compose::text("apple")));
+        ui.prepare_frame();
+        let command = Modifiers {
+            control: !cfg!(target_os = "macos"),
+            meta: cfg!(target_os = "macos"),
+            ..Default::default()
+        };
+        ui.dispatch(InputEvent::KeyDown {
+            key: Key::Character("f".into()),
+            modifiers: command,
+            repeat: false,
+        });
+        assert_eq!(*output.borrow(), ["find"], "the app's Find");
+        assert!(!ui.find_status().open, "not zgx's");
+        view.unmount();
+    }
+    #[test]
+    fn zoom_items_join_a_view_menu_unless_the_app_binds_their_keys() {
+        let view = |entries: Vec<AppMenuEntry>| vec![AppMenu::new("View", entries)];
+        assert!(!binds_zoom_keys(&view(vec![AppMenuEntry::item(
+            "Sidebar", "sidebar"
+        )])));
+        for key in ["=", "+", "-", "0"] {
+            assert!(binds_zoom_keys(&view(vec![
+                AppMenuEntry::item("Mine", "mine")
+                    .accelerator(MenuAccelerator::primary(Key::Character(key.into())))
+            ])));
+            // With Option, or Command and Control both, the app's own:
+            // zoom never takes those.
+            let mut with_option = MenuAccelerator::primary(Key::Character(key.into()));
+            with_option.0.modifiers.alt = true;
+            let mut with_both = MenuAccelerator::primary(Key::Character(key.into()));
+            (with_both.0.modifiers.meta, with_both.0.modifiers.control) = (true, true);
+            assert!(!binds_zoom_keys(&view(vec![
+                AppMenuEntry::item("Mine", "mine").accelerator(with_option),
+                AppMenuEntry::item("Evenly", "evenly").accelerator(with_both),
+            ])));
+        }
+        assert_eq!(
+            zoom_action(&MenuAction("zgx:zoom-in".into())),
+            Some(ZoomAction::In)
+        );
+        // Each item's shortcut is one AppKit takes.
+        #[cfg(target_os = "macos")]
+        for (_, _, shortcut, _) in ZOOM_ITEMS {
+            assert!(
+                shortcut
+                    .parse::<muda::accelerator::KeyAccelerator>()
+                    .is_ok(),
+                "{shortcut}"
+            );
+        }
     }
     #[test]
     fn replacement_unregisters_shortcuts_and_focused_action_can_override() {

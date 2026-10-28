@@ -191,3 +191,50 @@ fn atlas_icons_survive_the_atlas_filling_up() {
         }
     }
 }
+#[test]
+fn atlas_icons_survive_a_change_of_scale_and_back() {
+    // A window zoomed in and back (or moved to another display and back):
+    // its text, then an icon, in the glyph atlas. The other scale's glyphs
+    // take the atlas from its start, over where the icon was; back at the
+    // first scale the icon's raster is the one it had, and must be drawn
+    // from cells holding it, not those glyphs.
+    let mut scene = Scene::new(160., 120.);
+    scene.set_kind(scene.root(), NodeKind::Container(Layout::Column));
+    scene.append(
+        scene.root(),
+        NodeKind::Text {
+            text: "Agents and tabs".into(),
+            font_size: 24.,
+            color: Color(255, 255, 255, 255),
+        },
+        Style {
+            width: Some(160.),
+            height: Some(40.),
+            ..Default::default()
+        },
+    );
+    scene.append(
+        scene.root(),
+        NodeKind::Svg(Arc::new(data().tinted(Color(240, 180, 40, 255)))),
+        Style {
+            width: Some(20.),
+            height: Some(10.),
+            ..Default::default()
+        },
+    );
+    let whole = [Rect::new(0., 0., 160., 120.)];
+    let mut gpu = GpuRenderer::new(200, 150).unwrap();
+    for scale in [1., 1.25, 1.] {
+        gpu.set_scale_factor(scale);
+        scene.flush();
+        gpu.render(&scene, &whole).unwrap();
+    }
+    let mut fresh = GpuRenderer::new(200, 150).unwrap();
+    fresh.render(&scene, &whole).unwrap();
+    let (got, want) = (gpu.readback().unwrap(), fresh.readback().unwrap());
+    // The icon's rows (40 to 50), whole.
+    for y in 40..50 {
+        let row = |pixels: &[u8]| pixels[y * 200 * 4..][..20 * 4].to_vec();
+        assert_eq!(row(&got), row(&want), "row {y}");
+    }
+}

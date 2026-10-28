@@ -4,7 +4,6 @@ import { source } from '@/lib/source';
 import { sets } from '../../docs.manifest.mjs';
 import { siteUrl } from '@/lib/shared';
 import { luauApi } from '@/lib/luau-api';
-import { lintRules, rustString } from '@/lib/repo';
 
 /** Components whose content agents need as Markdown too. */
 const components: Record<string, (attrs: Record<string, string>) => string> = {
@@ -12,8 +11,6 @@ const components: Record<string, (attrs: Record<string, string>) => string> = {
     luauApi()
       .map((m) => `- \`${m.group}.${m.name}: ${m.type}\`${m.doc ? `\n  ${m.doc}` : ''}`)
       .join('\n'),
-  LintRules: () => ['| Rule | Flags |', '| --- | --- |', ...lintRules().map((r) => `| \`${r.name}\` | ${r.summary} |`)].join('\n'),
-  Usage: (a) => `\`\`\`text\n${rustString(a.file, a.name)}\n\`\`\``,
 };
 
 type Page = ReturnType<typeof source.getPages>[number];

@@ -1,4 +1,5 @@
-//! Explicit cursors inherit through component children, including disabled regions.
+//! Explicit cursors inherit through component children, including disabled
+//! regions; a button keeps the arrow and a link shows the hand.
 use zgx::compose::prelude::*;
 use zgx_desktop::{Application, WindowOptions};
 
@@ -57,12 +58,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ),
                     )
                     .child(
-                        button()
-                            .p(12.)
-                            .child(text("Toggle busy"))
-                            .on_click(move || {
-                                busy.set(!busy.get());
-                            }),
+                        row()
+                            .gap(24.)
+                            .items_center()
+                            // A button keeps the arrow; a link shows the hand.
+                            .child(
+                                button()
+                                    .p(12.)
+                                    .child(text("Toggle busy"))
+                                    .on_click(move || {
+                                        busy.set(!busy.get());
+                                    }),
+                            )
+                            .child(
+                                rich_text()
+                                    .text_size(16.)
+                                    .child(text_span("A link").on_click(|| {})),
+                            ),
                     ),
             );
         })

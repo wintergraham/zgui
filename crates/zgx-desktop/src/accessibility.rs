@@ -212,16 +212,19 @@ impl AccessibilityTree {
                         self.next += 1;
                         run_ids.push(AccessibleId(self.next));
                     }
-                    for (index, run) in runs.iter().enumerate() {
+                    let count = runs.len();
+                    let mut offsets = Vec::with_capacity(count);
+                    for (index, run) in runs.into_iter().enumerate() {
+                        offsets.push(run.offsets);
                         let mut node = Node::new(accesskit::Role::TextRun);
-                        node.set_value(run.value.clone());
-                        node.set_character_lengths(run.lengths.clone());
-                        node.set_word_starts(run.words.clone());
+                        node.set_value(run.value);
+                        node.set_character_lengths(run.lengths);
+                        node.set_word_starts(run.words);
                         // A line's runs (cut at 255 characters) are one line.
                         if index > 0 {
                             node.set_previous_on_line(run_ids[index - 1]);
                         }
-                        if index + 1 < runs.len() {
+                        if index + 1 < count {
                             node.set_next_on_line(run_ids[index + 1]);
                         }
                         nodes.push((run_ids[index], node));
@@ -230,7 +233,7 @@ impl AccessibilityTree {
                         text: value.into_owned(),
                         start: usize::MAX,
                         ids: run_ids,
-                        offsets: runs.into_iter().map(|run| run.offsets).collect(),
+                        offsets,
                     }
                 }
             };
@@ -681,23 +684,60 @@ impl AccessibilityTree {
                             }
                     });
                 let shown_box = shown_in.map(|node| scene.bounds(node));
-                let moved = self.run_boxes.get(&id).copied() != shown_box;
-                let reusable = !moved
-                    && self
-                        .ids
-                        .get(&id)
-                        .and_then(|native| self.cache.get(native))
-                        .is_some_and(|cached| {
-                            cached.role() == semantic_role(semantic)
-                                && cached.value() == text_value.filter(|_| !heading)
-                        })
+                let was = self.run_boxes.get(&id).copied();
+                let moved = was != shown_box;
+                let unchanged = self
+                    .ids
+                    .get(&id)
+                    .and_then(|native| self.cache.get(native))
+                    .is_some_and(|cached| {
+                        cached.role() == semantic_role(semantic)
+                            && cached.value() == text_value.filter(|_| !heading)
+                    })
                     && self.blocks.contains(&id) == block
                     && self.text_runs.get(&id).is_none_or(|ids| {
                         ids.iter().all(|run| {
                             self.cache.contains_key(run) && self.text_positions.contains_key(run)
                         })
                     });
-                if let Some((long, lines)) = &long {
+                let reusable = !moved && unchanged;
+                // Only moved, its box the same size (scrolled): its runs keep
+                // their shape, their boxes going with it, nothing shaped again.
+                let shifted = match (was, shown_box) {
+                    (Some(was), Some(now))
+                        if moved
+                            && unchanged
+                            && long.is_none()
+                            && was.width == now.width
+                            && was.height == now.height
+                            && self.text_runs.contains_key(&id) =>
+                    {
+                        Some((
+                            (now.x - was.x) as f64 * scale,
+                            (now.y - was.y) as f64 * scale,
+                            now,
+                        ))
+                    }
+                    _ => None,
+                };
+                if let Some((dx, dy, now)) = shifted {
+                    self.run_boxes.insert(id, now);
+                    for run in &self.text_runs[&id] {
+                        let Some(cached) = self.cache.get(run) else {
+                            continue;
+                        };
+                        let mut moved_run = cached.clone();
+                        if let Some(b) = moved_run.bounds() {
+                            moved_run.set_bounds(accesskit::Rect::new(
+                                b.x0 + dx,
+                                b.y0 + dy,
+                                b.x1 + dx,
+                                b.y1 + dy,
+                            ));
+                        }
+                        nodes.push((*run, moved_run));
+                    }
+                } else if let Some((long, lines)) = &long {
                     self.blocks.remove(&id);
                     self.long_runs(id, long, lines.clone(), &mut nodes);
                 } else if !reusable {
@@ -710,6 +750,8 @@ impl AccessibilityTree {
                         Some(shown) => self.run_boxes.insert(id, shown),
                         None => self.run_boxes.remove(&id),
                     };
+                    #[cfg(test)]
+                    SHAPED.with(|shaped| shaped.set(shaped.get() + 1));
                     let lines = shown_in.and_then(|node| scene.text_lines(node));
                     if let Some(runs) =
                         text_run_data_on(text_value.unwrap_or(""), block, lines.as_deref(), scale)
@@ -720,35 +762,34 @@ impl AccessibilityTree {
                             self.next += 1;
                             ids.push(AccessibleId(self.next));
                         }
-                        for (index, run) in runs.iter().enumerate() {
+                        // Whether each run's line goes on into the next.
+                        let joined: Vec<bool> = runs
+                            .iter()
+                            .map(|run| !run.wraps && !run.value.ends_with(['\n', '\r']))
+                            .collect();
+                        let count = runs.len();
+                        for (index, run) in runs.into_iter().enumerate() {
                             let mut text = Node::new(accesskit::Role::TextRun);
-                            text.set_value(run.value.clone());
-                            text.set_character_lengths(run.lengths.clone());
-                            text.set_word_starts(run.words.clone());
-                            if let Some(geometry) = &run.geometry {
+                            text.set_value(run.value);
+                            text.set_character_lengths(run.lengths);
+                            text.set_word_starts(run.words);
+                            if let Some(geometry) = run.geometry {
                                 text.set_bounds(geometry.bounds);
-                                text.set_character_positions(geometry.positions.clone());
-                                text.set_character_widths(geometry.widths.clone());
+                                text.set_character_positions(geometry.positions);
+                                text.set_character_widths(geometry.widths);
                                 text.set_text_direction(if geometry.rtl {
                                     accesskit::TextDirection::RightToLeft
                                 } else {
                                     accesskit::TextDirection::LeftToRight
                                 });
                             }
-                            let previous = index.checked_sub(1).map(|i| &runs[i]);
-                            if previous.is_some_and(|previous| {
-                                !previous.wraps && !previous.value.ends_with(['\n', '\r'])
-                            }) {
+                            if index > 0 && joined[index - 1] {
                                 text.set_previous_on_line(ids[index - 1]);
                             }
-                            if index + 1 < runs.len()
-                                && !run.wraps
-                                && !run.value.ends_with(['\n', '\r'])
-                            {
+                            if index + 1 < count && joined[index] {
                                 text.set_next_on_line(ids[index + 1]);
                             }
-                            self.text_positions
-                                .insert(ids[index], (id, run.offsets.clone()));
+                            self.text_positions.insert(ids[index], (id, run.offsets));
                             nodes.push((ids[index], text));
                         }
                     } else {
@@ -834,6 +875,12 @@ struct TextRunData {
     /// It ends where its line wraps: the next run is on the next line.
     wraps: bool,
 }
+#[cfg(test)]
+thread_local! {
+    /// Texts whose runs were placed from their shaping: none for a text
+    /// that only moved.
+    static SHAPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 struct RunGeometry {
     bounds: accesskit::Rect,
     positions: Vec<f32>,
@@ -878,141 +925,170 @@ fn text_run_data_on(
     lines: Option<&[zgx::scene::TextLine]>,
     scale: f64,
 ) -> Option<Vec<TextRunData>> {
-    // Each shown grapheme's line and edges; a break (not in a line) sits
-    // zero-wide at the end of the line before it.
-    let mut edges: HashMap<usize, (usize, f32, f32)> = HashMap::new();
-    let mut wrap_starts: HashSet<usize> = HashSet::new();
     if let Some(lines) = lines {
-        for (index, line) in lines.iter().enumerate() {
-            let shown = value.get(line.range.clone())?;
-            for (i, (offset, _)) in shown.grapheme_indices(true).enumerate() {
-                let (a, b) = (*line.carets.get(i)?, *line.carets.get(i + 1)?);
-                edges.insert(line.range.start + offset, (index, a, b));
-            }
-            if index > 0 && !value[..line.range.start].ends_with(['\n', '\r']) {
-                wrap_starts.insert(line.range.start);
-            }
+        for line in lines {
+            value.get(line.range.clone())?;
         }
     }
-    let line_of_break = |offset: usize| {
-        let lines = lines?;
-        let index = lines.iter().rposition(|line| line.range.end <= offset)?;
-        let x = *lines[index].carets.last()?;
-        Some((index, x, x))
-    };
-    // A run's box and places, from its characters' edges.
-    let place = |run: &TextRunData| -> Option<RunGeometry> {
-        let lines = lines?;
-        let chars: Vec<(usize, f32, f32)> = run.offsets[..run.offsets.len() - 1]
-            .iter()
-            .map(|offset| {
-                edges
-                    .get(offset)
-                    .copied()
-                    .or_else(|| line_of_break(*offset))
-            })
-            .collect::<Option<_>>()?;
-        let line = &lines[chars.first()?.0];
-        let rtl = line.rtl;
-        let (left, right) = chars
-            .iter()
-            .fold((f32::MAX, f32::MIN), |(l, r), (_, a, b)| {
-                (l.min(a.min(*b)), r.max(a.max(*b)))
-            });
-        let scale_f = scale as f32;
-        Some(RunGeometry {
-            bounds: accesskit::Rect::new(
-                left as f64 * scale,
-                line.rect.y as f64 * scale,
-                right as f64 * scale,
-                (line.rect.y + line.rect.height) as f64 * scale,
-            ),
-            positions: chars
-                .iter()
-                .map(|(_, a, b)| {
-                    let start = if rtl {
-                        right - a.max(*b)
-                    } else {
-                        a.min(*b) - left
-                    };
-                    start * scale_f
-                })
-                .collect(),
-            widths: chars
-                .iter()
-                .map(|(_, a, b)| (b - a).abs() * scale_f)
-                .collect(),
-            rtl,
-        })
-    };
-    let finish = |mut run: TextRunData, wraps: bool| {
-        run.geometry = place(&run);
+    // Lines follow the text's order, as its graphemes do: one walk gives
+    // each its line and edges.
+    let mut walk = lines.map(|lines| LineWalk {
+        lines,
+        index: 0,
+        grapheme: 0,
+    });
+    let mut words = value
+        .unicode_word_indices()
+        .map(|(offset, _)| offset)
+        .peekable();
+    let finish = |mut run: TextRunData, chars: &[Option<Edge>], wraps: bool| {
+        run.geometry = lines.and_then(|lines| place(lines, chars, scale));
         run.wraps = wraps;
         run
     };
-    let word_starts: HashSet<_> = value
-        .unicode_word_indices()
-        .map(|(offset, _)| offset)
-        .collect();
-    let mut runs = Vec::new();
-    let mut run = TextRunData {
+    let fresh = |offset: usize| TextRunData {
         value: String::new(),
         lengths: Vec::new(),
-        offsets: vec![0],
+        offsets: vec![offset],
         words: Vec::new(),
         geometry: None,
         wraps: false,
     };
+    let mut runs = Vec::new();
+    let mut run = fresh(0);
+    let mut chars: Vec<Option<Edge>> = Vec::new();
     for (offset, grapheme) in value.grapheme_indices(true) {
         let length = u8::try_from(grapheme.len()).ok()?;
-        let wrap = !run.lengths.is_empty() && wrap_starts.contains(&offset);
+        let (edge, wrap_start) = match &mut walk {
+            Some(walk) => walk.edge(value, offset)?,
+            None => (None, false),
+        };
+        let wrap = !run.lengths.is_empty() && wrap_start;
         if run.lengths.len() == 255 || wrap {
-            runs.push(finish(run, wrap));
-            run = TextRunData {
-                value: String::new(),
-                lengths: Vec::new(),
-                offsets: vec![offset],
-                words: Vec::new(),
-                geometry: None,
-                wraps: false,
-            };
+            runs.push(finish(
+                std::mem::replace(&mut run, fresh(offset)),
+                &chars,
+                wrap,
+            ));
+            chars.clear();
         }
-        if word_starts.contains(&offset) {
+        while words.next_if(|start| *start < offset).is_some() {}
+        if words.next_if_eq(&offset).is_some() {
             run.words.push(run.lengths.len() as u8);
         }
         run.value.push_str(grapheme);
         run.lengths.push(length);
         run.offsets.push(offset + grapheme.len());
+        chars.push(edge);
         if grapheme.ends_with(['\n', '\r']) {
-            runs.push(finish(run, false));
-            run = TextRunData {
-                value: String::new(),
-                lengths: Vec::new(),
-                offsets: vec![offset + grapheme.len()],
-                words: Vec::new(),
-                geometry: None,
-                wraps: false,
-            };
+            let next = fresh(offset + grapheme.len());
+            runs.push(finish(std::mem::replace(&mut run, next), &chars, false));
+            chars.clear();
         }
     }
+    // The block's break, zero-wide at the end of the last line.
+    let end = match &mut walk {
+        Some(walk) => walk.edge(value, value.len())?.0,
+        None => None,
+    };
     if block && !value.is_empty() && !value.ends_with(['\n', '\r']) {
         if run.lengths.len() == 255 {
-            runs.push(finish(run, false));
-            run = TextRunData {
-                value: String::new(),
-                lengths: Vec::new(),
-                offsets: vec![value.len()],
-                words: Vec::new(),
-                geometry: None,
-                wraps: false,
-            };
+            runs.push(finish(
+                std::mem::replace(&mut run, fresh(value.len())),
+                &chars,
+                false,
+            ));
+            chars.clear();
         }
         run.value.push('\n');
         run.lengths.push(1);
         run.offsets.push(value.len());
+        chars.push(end);
     }
-    runs.push(finish(run, false));
+    runs.push(finish(run, &chars, false));
     Some(runs)
+}
+/// A grapheme's line and its left and right edges.
+type Edge = (usize, f32, f32);
+/// Where `text_run_data_on`'s walk is in a text's lines.
+struct LineWalk<'a> {
+    lines: &'a [zgx::scene::TextLine],
+    /// The first line not ended before the grapheme walked to.
+    index: usize,
+    /// How many of its graphemes were walked.
+    grapheme: usize,
+}
+impl LineWalk<'_> {
+    /// The grapheme at `offset` (each in turn): its edges, if it shows
+    /// (a break, in no line, sits zero-wide at the end of the line before
+    /// it), and whether it starts a line that wraps. None if its line has
+    /// no carets for it.
+    fn edge(&mut self, value: &str, offset: usize) -> Option<(Option<Edge>, bool)> {
+        while let Some(line) = self.lines.get(self.index)
+            && line.range.end <= offset
+        {
+            self.index += 1;
+            self.grapheme = 0;
+        }
+        match self.lines.get(self.index) {
+            Some(line) if line.range.start <= offset => {
+                let wraps = self.grapheme == 0
+                    && self.index > 0
+                    && offset == line.range.start
+                    && !value[..offset].ends_with(['\n', '\r']);
+                let i = self.grapheme;
+                self.grapheme += 1;
+                let edge = (self.index, *line.carets.get(i)?, *line.carets.get(i + 1)?);
+                Some((Some(edge), wraps))
+            }
+            _ => {
+                let before = self.index.checked_sub(1).and_then(|index| {
+                    let x = *self.lines[index].carets.last()?;
+                    Some((index, x, x))
+                });
+                Some((before, false))
+            }
+        }
+    }
+}
+/// A run's box and its characters' places, from their edges (`chars`).
+fn place(
+    lines: &[zgx::scene::TextLine],
+    chars: &[Option<Edge>],
+    scale: f64,
+) -> Option<RunGeometry> {
+    let line = &lines[(*chars.first()?)?.0];
+    let rtl = line.rtl;
+    let mut left = f32::MAX;
+    let mut right = f32::MIN;
+    for edge in chars {
+        let (_, a, b) = (*edge)?;
+        left = left.min(a.min(b));
+        right = right.max(a.max(b));
+    }
+    let scale_f = scale as f32;
+    let mut positions = Vec::with_capacity(chars.len());
+    let mut widths = Vec::with_capacity(chars.len());
+    for (_, a, b) in chars.iter().flatten() {
+        let start = if rtl {
+            right - a.max(*b)
+        } else {
+            a.min(*b) - left
+        };
+        positions.push(start * scale_f);
+        widths.push((b - a).abs() * scale_f);
+    }
+    Some(RunGeometry {
+        bounds: accesskit::Rect::new(
+            left as f64 * scale,
+            line.rect.y as f64 * scale,
+            right as f64 * scale,
+            (line.rect.y + line.rect.height) as f64 * scale,
+        ),
+        positions,
+        widths,
+        rtl,
+    })
 }
 
 fn semantic_role(semantic: &zgx::semantics::SemanticNode) -> accesskit::Role {
@@ -1458,6 +1534,243 @@ mod editor_text_tests {
     /// a line, with no value copied whole: an edit sends its line's runs
     /// alone (the lines after it only move), the caret far away brings its
     /// own page, and selections map to the document's offsets.
+    /// `text_run_data_on` as it was, a map of every grapheme's edges.
+    #[allow(clippy::type_complexity)]
+    fn reference_runs(
+        value: &str,
+        block: bool,
+        lines: Option<&[zgx::scene::TextLine]>,
+        scale: f64,
+    ) -> Option<Vec<TextRunData>> {
+        // Each shown grapheme's line and edges; a break (not in a line) sits
+        // zero-wide at the end of the line before it.
+        let mut edges: HashMap<usize, (usize, f32, f32)> = HashMap::new();
+        let mut wrap_starts: HashSet<usize> = HashSet::new();
+        if let Some(lines) = lines {
+            for (index, line) in lines.iter().enumerate() {
+                let shown = value.get(line.range.clone())?;
+                for (i, (offset, _)) in shown.grapheme_indices(true).enumerate() {
+                    let (a, b) = (*line.carets.get(i)?, *line.carets.get(i + 1)?);
+                    edges.insert(line.range.start + offset, (index, a, b));
+                }
+                if index > 0 && !value[..line.range.start].ends_with(['\n', '\r']) {
+                    wrap_starts.insert(line.range.start);
+                }
+            }
+        }
+        let line_of_break = |offset: usize| {
+            let lines = lines?;
+            let index = lines.iter().rposition(|line| line.range.end <= offset)?;
+            let x = *lines[index].carets.last()?;
+            Some((index, x, x))
+        };
+        // A run's box and places, from its characters' edges.
+        let place = |run: &TextRunData| -> Option<RunGeometry> {
+            let lines = lines?;
+            let chars: Vec<(usize, f32, f32)> = run.offsets[..run.offsets.len() - 1]
+                .iter()
+                .map(|offset| {
+                    edges
+                        .get(offset)
+                        .copied()
+                        .or_else(|| line_of_break(*offset))
+                })
+                .collect::<Option<_>>()?;
+            let line = &lines[chars.first()?.0];
+            let rtl = line.rtl;
+            let (left, right) = chars
+                .iter()
+                .fold((f32::MAX, f32::MIN), |(l, r), (_, a, b)| {
+                    (l.min(a.min(*b)), r.max(a.max(*b)))
+                });
+            let scale_f = scale as f32;
+            Some(RunGeometry {
+                bounds: accesskit::Rect::new(
+                    left as f64 * scale,
+                    line.rect.y as f64 * scale,
+                    right as f64 * scale,
+                    (line.rect.y + line.rect.height) as f64 * scale,
+                ),
+                positions: chars
+                    .iter()
+                    .map(|(_, a, b)| {
+                        let start = if rtl {
+                            right - a.max(*b)
+                        } else {
+                            a.min(*b) - left
+                        };
+                        start * scale_f
+                    })
+                    .collect(),
+                widths: chars
+                    .iter()
+                    .map(|(_, a, b)| (b - a).abs() * scale_f)
+                    .collect(),
+                rtl,
+            })
+        };
+        let finish = |mut run: TextRunData, wraps: bool| {
+            run.geometry = place(&run);
+            run.wraps = wraps;
+            run
+        };
+        let word_starts: HashSet<_> = value
+            .unicode_word_indices()
+            .map(|(offset, _)| offset)
+            .collect();
+        let mut runs = Vec::new();
+        let mut run = TextRunData {
+            value: String::new(),
+            lengths: Vec::new(),
+            offsets: vec![0],
+            words: Vec::new(),
+            geometry: None,
+            wraps: false,
+        };
+        for (offset, grapheme) in value.grapheme_indices(true) {
+            let length = u8::try_from(grapheme.len()).ok()?;
+            let wrap = !run.lengths.is_empty() && wrap_starts.contains(&offset);
+            if run.lengths.len() == 255 || wrap {
+                runs.push(finish(run, wrap));
+                run = TextRunData {
+                    value: String::new(),
+                    lengths: Vec::new(),
+                    offsets: vec![offset],
+                    words: Vec::new(),
+                    geometry: None,
+                    wraps: false,
+                };
+            }
+            if word_starts.contains(&offset) {
+                run.words.push(run.lengths.len() as u8);
+            }
+            run.value.push_str(grapheme);
+            run.lengths.push(length);
+            run.offsets.push(offset + grapheme.len());
+            if grapheme.ends_with(['\n', '\r']) {
+                runs.push(finish(run, false));
+                run = TextRunData {
+                    value: String::new(),
+                    lengths: Vec::new(),
+                    offsets: vec![offset + grapheme.len()],
+                    words: Vec::new(),
+                    geometry: None,
+                    wraps: false,
+                };
+            }
+        }
+        if block && !value.is_empty() && !value.ends_with(['\n', '\r']) {
+            if run.lengths.len() == 255 {
+                runs.push(finish(run, false));
+                run = TextRunData {
+                    value: String::new(),
+                    lengths: Vec::new(),
+                    offsets: vec![value.len()],
+                    words: Vec::new(),
+                    geometry: None,
+                    wraps: false,
+                };
+            }
+            run.value.push('\n');
+            run.lengths.push(1);
+            run.offsets.push(value.len());
+        }
+        runs.push(finish(run, false));
+        Some(runs)
+    }
+
+    #[test]
+    fn text_runs_from_one_walk_match_a_map_of_every_graphemes_edges() {
+        use zgx::scene::{Rect, TextLine};
+        // Lines as `Scene::text_lines` gives them: each grapheme's caret.
+        fn lines_of(value: &str, wraps: &[usize], rtl: bool) -> Vec<TextLine> {
+            let mut lines = Vec::new();
+            let mut start = 0;
+            let mut ends: Vec<(usize, usize)> = Vec::new();
+            for (offset, grapheme) in value.grapheme_indices(true) {
+                if grapheme.ends_with(['\n', '\r']) {
+                    ends.push((offset, offset + grapheme.len()));
+                } else if wraps.contains(&offset) {
+                    ends.push((offset, offset));
+                }
+            }
+            ends.push((value.len(), value.len()));
+            for (index, (end, next)) in ends.into_iter().enumerate() {
+                let shown = &value[start..end];
+                let mut x = 4.;
+                let mut carets = vec![x];
+                for (i, _) in shown.grapheme_indices(true).enumerate() {
+                    x += 7. + (i % 3) as f32;
+                    carets.push(x);
+                }
+                if rtl {
+                    carets = carets.iter().map(|x| 300. - x).collect();
+                }
+                lines.push(TextLine {
+                    range: start..end,
+                    rect: Rect::new(0., index as f32 * 18., 300., 18.),
+                    carets,
+                    rtl,
+                });
+                start = next;
+            }
+            lines
+        }
+        let long = "word ".repeat(80);
+        let cases: Vec<(&str, Vec<usize>)> = vec![
+            ("", vec![]),
+            ("Hello, world", vec![]),
+            ("Hello, world", vec![7]),
+            ("one\ntwo\n\nthree", vec![]),
+            ("wrapped words here\nand after a break", vec![8, 26]),
+            (
+                "cafe\u{301} \u{1F469}\u{200D}\u{1F4BB} e\u{301}e\u{301}",
+                vec![6],
+            ),
+            ("line\r\nwindows\r\n", vec![]),
+            (&long, vec![100, 250]),
+        ];
+        let rendered = |runs: Option<Vec<TextRunData>>| {
+            runs.map(|runs| {
+                runs.into_iter()
+                    .map(|run| {
+                        let geometry = run.geometry.map(|g| {
+                            (
+                                (g.bounds.x0, g.bounds.y0, g.bounds.x1, g.bounds.y1),
+                                g.positions,
+                                g.widths,
+                                g.rtl,
+                            )
+                        });
+                        (
+                            run.value,
+                            run.lengths,
+                            run.offsets,
+                            run.words,
+                            run.wraps,
+                            geometry,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+        };
+        for (value, wraps) in &cases {
+            for rtl in [false, true] {
+                for block in [false, true] {
+                    let lines = lines_of(value, wraps, rtl);
+                    for lines in [None, Some(&lines[..])] {
+                        assert_eq!(
+                            rendered(text_run_data_on(value, block, lines, 2.)),
+                            rendered(reference_runs(value, block, lines, 2.)),
+                            "{value:?} wraps {wraps:?} rtl {rtl} block {block} lines {}",
+                            lines.is_some()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_long_document_reads_as_runs_for_a_page_of_its_lines() {
         struct Changes;
@@ -1924,6 +2237,58 @@ mod projection_key_tests {
 mod document_selection_tests {
     use super::*;
     use zgx::{compose::prelude::*, selection::TextPoint, widgets::Ui};
+
+    #[test]
+    fn scrolled_text_moves_its_runs_without_shaping_them_again() {
+        let mut ui = Ui::new(400., 200.);
+        let offset = ui.signal(0_f32);
+        let long = "a word ".repeat(400);
+        let view = ui.mount(
+            scroll(offset.clone()).h(100.).child(
+                column()
+                    .w(300.)
+                    .children([text(long.as_str()).text_wrap(true), text("Second line")]),
+            ),
+        );
+        ui.prepare_frame();
+        let scale = 2.;
+        let mut adapter = AccessibilityTree::new();
+        let update = |adapter: &mut AccessibilityTree, ui: &Ui| {
+            adapter.update(
+                &ui.scene.borrow(),
+                &ui.semantics.borrow(),
+                Some(view.node()),
+                "Test",
+                scale,
+            )
+        };
+        let runs = |update: &accesskit::TreeUpdate| -> Vec<(accesskit::NodeId, accesskit::Rect)> {
+            update
+                .nodes
+                .iter()
+                .filter(|(_, node)| node.role() == accesskit::Role::TextRun)
+                .map(|(id, node)| (*id, node.bounds().unwrap()))
+                .collect()
+        };
+        let first = runs(&update(&mut adapter, &ui));
+        assert!(first.len() > 2, "a wrapped paragraph's runs");
+        let shaped = SHAPED.with(|s| s.get());
+        offset.set(30.);
+        ui.prepare_frame();
+        let second = runs(&update(&mut adapter, &ui));
+        assert_eq!(SHAPED.with(|s| s.get()), shaped, "nothing shaped again");
+        assert_eq!(second.len(), first.len(), "every run went with its text");
+        for ((id, was), (moved, now)) in first.iter().zip(&second) {
+            assert_eq!(id, moved);
+            assert!(
+                (was.y0 - now.y0 - 30. * scale).abs() < 0.01,
+                "{was:?} to {now:?}"
+            );
+            assert!((was.x0 - now.x0).abs() < 0.01);
+        }
+        // Unchanged and unmoved: nothing sent.
+        assert!(runs(&update(&mut adapter, &ui)).is_empty());
+    }
 
     #[test]
     fn a_selection_across_labels_is_the_regions_and_assistive_technology_can_set_it() {

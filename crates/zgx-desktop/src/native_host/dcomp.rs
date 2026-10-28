@@ -135,6 +135,8 @@ pub(crate) struct Router {
     pub natives: NativeViews,
     /// The pointer over native views (zgx's leave, pages' pointers).
     pub pointer: zgx::native_view::NativePointer,
+    /// The window's zoom (`Ui::zoom`): its points are zgx's times it.
+    pub zoom: std::cell::Cell<f32>,
 }
 impl Router {
     /// The pointer moved to window point `(x, y)`: what zgx hears.
@@ -194,7 +196,9 @@ impl Pointer {
         let Some(page) = self.router.page(node) else {
             return;
         };
-        let scale = scale_of(hwnd);
+        // The router's split is zgx's: its points are the zoom's over the
+        // window's.
+        let scale = scale_of(hwnd) * self.router.zoom.get();
         let origin = self
             .router
             .natives
@@ -231,7 +235,7 @@ impl Pointer {
     }
     /// Where the pointer at client point `(x, y)` goes.
     fn route(&self, hwnd: HWND, x: i32, y: i32) -> PointerRoute {
-        let scale = scale_of(hwnd);
+        let scale = scale_of(hwnd) * self.router.zoom.get();
         self.router.route(x as f32 / scale, y as f32 / scale)
     }
     /// A window message, before winit: whether it was a page's (winit then
@@ -573,6 +577,11 @@ impl Surfaces {
     pub fn router(&self) -> &Router {
         &self.pointer.router
     }
+    /// Follow the window's zoom (`Ui::zoom`): placements come in its points
+    /// (`PlaneSplit::zoomed`), the pointer goes back through it.
+    pub fn set_zoom(&mut self, zoom: f32) {
+        self.pointer.router.zoom.set(zoom);
+    }
     fn scale(&self) -> f32 {
         scale_of(self.hwnd)
     }
@@ -640,6 +649,9 @@ impl Surfaces {
     /// Move native views to `split`'s placements.
     pub fn apply(&mut self, natives: &NativeViews, split: &PlaneSplit) {
         let scale = self.scale();
+        // Pages zoom with the window, as a browser's do (placements come in
+        // the zoomed window's points already).
+        let zoom = self.pointer.router.zoom.get();
         let views = natives.views();
         // Unmounted: their cuts go (pages stay with their controllers).
         self.clips.retain(|(node, clip)| {
@@ -704,7 +716,13 @@ impl Surfaces {
                 clip.placed = None;
             }
             clip.web = web;
-            Self::place(&self.composition, clip, split.native(*node).cloned(), scale);
+            Self::place(
+                &self.composition,
+                clip,
+                split.native(*node).cloned(),
+                scale,
+                zoom,
+            );
         }
         // Shown pages in paint order, between the base and the overlay.
         let mut shown: Vec<(usize, NodeId)> = self
@@ -780,6 +798,7 @@ impl Surfaces {
         clip: &mut Clip,
         placement: Option<NativePlacement>,
         scale: f32,
+        zoom: f32,
     ) {
         let visible = placement
             .as_ref()
@@ -801,6 +820,9 @@ impl Surfaces {
             clip.placed = None;
             return;
         };
+        if let Some(page) = &clip.page {
+            page.set_window_zoom(f64::from(zoom));
+        }
         let key = (placement.clone(), scale);
         if clip.placed.as_ref() != Some(&key) {
             let frame = frame_px(placement.frame, scale);

@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 use zgx::{
     compose::prelude::*,
-    input::{InputEvent, Modifiers, PointerButton},
+    input::{InputEvent, Key, Modifiers, PointerButton},
     scene::NodeId,
     semantics::Role,
     widgets::Ui,
@@ -228,4 +228,79 @@ fn only_web_and_mail_links_open_through_the_system() {
     );
     assert!(view.find("link-copy").is_some());
     assert!(view.find("link-open").is_none(), "no Open Link for a file");
+}
+
+#[test]
+fn a_links_focus_ring_shows_from_the_keyboard_not_a_click() {
+    let mut ui = Ui::new(300., 100.);
+    ui.mount(
+        rich_text()
+            .text_size(16.)
+            .child(text_span("one").on_click(|| {}))
+            .child(text_span(" and "))
+            .child(text_span("two").on_click(|| {}))
+            .into(),
+    );
+    ui.prepare_frame();
+    let links = links(&ui);
+    let ring = |ui: &Ui, link: NodeId| match ui.scene.borrow().kind(link) {
+        zgx::scene::NodeKind::Panel { quad, .. } => quad.border_width,
+        other => panic!("a link's box, not {other:?}"),
+    };
+    click(
+        &mut ui,
+        links[0],
+        PointerButton::Primary,
+        Modifiers::default(),
+    );
+    ui.dispatch(InputEvent::PointerMove { x: 290., y: 90. });
+    ui.prepare_frame();
+    assert_eq!(ui.input.focused(), Some(links[0]));
+    assert_eq!(ring(&ui, links[0]), 0., "clicked: focused, no ring");
+    ui.dispatch(InputEvent::KeyDown {
+        key: Key::Tab,
+        modifiers: Modifiers::default(),
+        repeat: false,
+    });
+    ui.prepare_frame();
+    assert_eq!(ui.input.focused(), Some(links[1]));
+    assert_eq!(ring(&ui, links[1]), 1., "tabbed to: its ring");
+}
+
+#[test]
+fn a_link_follows_enter_as_it_goes_down_and_not_space() {
+    let clicks = Rc::new(RefCell::new(0));
+    let count = clicks.clone();
+    let mut ui = Ui::new(300., 100.);
+    ui.mount(
+        rich_text()
+            .text_size(16.)
+            .child(text_span("a link").on_click(move || *count.borrow_mut() += 1))
+            .into(),
+    );
+    ui.prepare_frame();
+    let link = links(&ui)[0];
+    ui.input.focus(&ui.scene, Some(link));
+    let key = |ui: &mut Ui, key: Key, down: bool| {
+        ui.dispatch(if down {
+            InputEvent::KeyDown {
+                key,
+                modifiers: Modifiers::default(),
+                repeat: false,
+            }
+        } else {
+            InputEvent::KeyUp {
+                key,
+                modifiers: Modifiers::default(),
+            }
+        });
+    };
+    // Space scrolls the page in a browser; it follows no link.
+    key(&mut ui, Key::Space, true);
+    key(&mut ui, Key::Space, false);
+    assert_eq!(*clicks.borrow(), 0);
+    key(&mut ui, Key::Enter, true);
+    assert_eq!(*clicks.borrow(), 1, "Enter follows it as it goes down");
+    key(&mut ui, Key::Enter, false);
+    assert_eq!(*clicks.borrow(), 1);
 }

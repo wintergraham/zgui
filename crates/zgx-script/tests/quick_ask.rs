@@ -165,7 +165,7 @@ fn plus_attaches_and_uploads() {
     h.click("add");
     frames(&h, 60 * 2);
     assert!(
-        h.find("remove_file:Invoice INV-2291.pdf").is_some(),
+        h.handle.find("remove_file:Invoice INV-2291.pdf").is_some(),
         "the picked file is a chip"
     );
 }
@@ -208,7 +208,7 @@ fn finder_files_drop_onto_the_panel() {
     frames(&h, 60 * 2);
     snapshot(&h, "8-dropped");
     assert!(
-        h.find("remove_file:Move-in notes.md").is_some(),
+        h.handle.find("remove_file:Move-in notes.md").is_some(),
         "the dropped file is a chip"
     );
 }

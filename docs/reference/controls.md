@@ -23,7 +23,7 @@ Every control dims while `disabled` (to 45% opacity, as native controls do) unle
 
 ## button
 
-A focusable box whose children lie in a row; `on_click` runs on a click, Space or Enter.
+A focusable box whose children lie in a row; `on_click` runs on a click, Enter (as it goes down) or Space (as it comes up), as a browser's button does.
 
 | Option | Type | Default | |
 | --- | --- | --- | --- |
@@ -72,7 +72,7 @@ A long text (more than 64 KiB, or 2,000 lines), or one with `highlight`, is laid
 
 ## checkbox
 
-A toggle drawn as the platform draws one, a rounded 16-point box beside its label, bound to a boolean state: outlined while off; filled with the accent while on, its checkmark drawing on; a dash while `mixed`. A click on either, Space or Enter toggles it. Its colours are the theme's `$accent`, `$accent.text`, `$input.bg` and `$border.strong`, so the system's accent shows where the host gives it. Disabled, it dims.
+A toggle drawn as the platform draws one, a rounded 16-point box beside its label, bound to a boolean state: outlined while off; filled with the accent while on, its checkmark drawing on; a dash while `mixed`. A click on either, or Space, toggles it; Enter goes on to the form (its default action), as a browser's checkbox and AppKit's do. Its colours are the theme's `$accent`, `$accent.text`, `$input.bg` and `$border.strong`, so the system's accent shows where the host gives it. Disabled, it dims.
 
 | Option | Type | Default | |
 | --- | --- | --- | --- |

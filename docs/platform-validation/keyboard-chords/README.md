@@ -1,11 +1,12 @@
 # Keyboard activation chords
 
-Pending button activation now survives unrelated key releases. A matching
-Space/Enter release consumes the pending press before calling the activation
-handler; an activation callback may safely begin another press. Prevented
-matching releases and focus loss still cancel activation. When Enter and Space
-overlap, the latest nonrepeat activation-key press owns the single pending
-activation; repeats do not replace it.
+Enter activates a button as it goes down, as a browser's button does;
+Space activates as it comes up. A pending Space activation survives unrelated
+key releases, and a matching release consumes it before calling the
+activation handler; an activation callback may safely begin another press.
+Prevented matching releases and focus loss still cancel it. Enter pressed
+while Space is held activates and drops the pending Space; repeats do
+nothing.
 
 Active styles follow that same key ownership. Pointer and keyboard active state
 are tracked separately, so releasing one input does not erase the other held

@@ -7,7 +7,7 @@ published crate ships no license files) and applied through
 
 ## Why
 
-Two gaps Narrator meets in zgx's windows. AccessKit gives a heading's level to UI Automation only as the generic
+Gaps Narrator meets in zgx's windows, and a cost every window paid (item 6). AccessKit gives a heading's level to UI Automation only as the generic
 `Level` property and the ARIA `level`, never as `HeadingLevel` (UIA
 property 30173). Narrator's heading navigation (scan mode H, the headings
 list) and Windows' other screen readers go by `HeadingLevel`, so zgx's
@@ -57,6 +57,38 @@ WebView2 set it. 0.35.1 and upstream main still leave it out.
    - Tested by `context::tests`. A client that subscribes later receives
      what it subscribed to: a native one counting name changes on that
      dashboard received 2458 in 3 s, against 2489 before the patch.
+6. Only UI Automation's request for the root builds the tree. `handle_wm_getobject`
+   asked the activation handler for it on any `WM_GETOBJECT` for the client
+   area: `UiaRootObjectId`, MSAA's `OBJID_CLIENT`, and the ids 0 and above.
+   - Why: when a window is shown, Windows' text services (msctf, through the
+     IME glue's `CtfImeDispatchDefImeMessage`) call `AccessibleObjectFromEvent`
+     on it in-thread. That sends `OBJID_CLIENT`, then 0, 1, 0 and 2, on every
+     desktop, with no assistive technology running. Through accesskit_winit
+     that was `InitialTreeRequested`, so every Windows window built and
+     synced its full tree from startup. In zgx's lab and vlist benches that
+     cost 15–22% of each frame against `ZGX_ACCESSIBILITY=0`.
+   - Now those requests get the placeholder root (role `Window`, no
+     children), and the activation handler is not asked
+     (`Context::tree_requested`). `UiaRootObjectId` asks at once, as before,
+     whether the adapter is inactive or holding the placeholder. Narrator,
+     Accessibility Insights, and NVDA on UIA windows ask for the root that way.
+   - A client reading past the placeholder asks for the tree: its children,
+     its focus, an element at a point, a pattern, or a property beyond what
+     a probe reads of a window (role, name, class, process, place, enabled
+     and focus state). The placeholder posts `activation_message()`
+     (`AccessKitActivate`) to the window. The subclassing adapter handles it
+     with `Adapter::activate`, on the window's thread, and a window using
+     `Adapter` directly passes the message to it. The read itself is
+     answered from the placeholder. The tree replacing it raises a focus
+     event (`update_if_active`'s placeholder path), and the client reads
+     again.
+   - `ZGX_ACCESSIBILITY_LOG` logs the placeholder's requests and what read
+     past it.
+   - Tested by `adapter::placeholder_tests`.
+     NVDA is not tested yet. For a window with a UIA provider
+     (`UiaHasServerSideProvider` sends `UiaRootObjectId`), it should take the
+     same path as Narrator; an NVDA that reads such a window through MSAA
+     instead takes the read-past-the-placeholder path.
 
 Run the crate's tests on Windows with
 `cargo test --manifest-path vendor/accesskit_windows/Cargo.toml --locked`.

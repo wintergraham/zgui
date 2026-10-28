@@ -21,6 +21,9 @@ pub mod windows;
 #[cfg(any(x11_platform, docsrs))]
 pub mod x11;
 
+#[cfg(any(windows_platform, macos_platform, x11_platform, docsrs))]
+pub mod text_drop;
+
 #[cfg(any(
     windows_platform,
     macos_platform,

@@ -96,7 +96,7 @@ fn texts(h: &mut Harness, id: &str) -> String {
 fn editor_text(h: &Harness) -> (String, std::ops::Range<usize>) {
     let editor = h.ui.focused_editor().expect("a focused editor");
     let e = editor.editor.borrow();
-    (e.text().to_owned(), e.selection().range())
+    (e.text().into_owned(), e.selection().range())
 }
 fn open_address(h: &mut Harness) {
     h.host.run_command("focus_address");

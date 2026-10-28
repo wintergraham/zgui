@@ -1,0 +1,28 @@
+---
+// The Windows run's verdict, machine and what is different about its figures.
+import { windows, scene, repo } from '@/lib/perf-windows';
+
+const heavy = scene('heavy');
+const env = heavy.environment;
+const display = (env.displays ?? []).find((d: any) => d.main) ?? env.displays?.[0];
+const date = heavy.started_utc.slice(0, 10);
+---
+
+<div class="perf-headline not-prose">
+  <p class="perf-verdict">{windows.verdict}</p>
+  <p class="perf-meta">
+    Windows · {date} · zgx at <a href={`${repo}/commit/${windows.commit}`}><code>{windows.commit.slice(0, 7)}</code></a> · lower is better throughout
+  </p>
+</div>
+<ul class="win-facts">
+  <li><strong>Machine:</strong> {env.chip} ({env.cores} logical processors, {Math.floor(env.memory_bytes / 2 ** 30)} GB), {env.gpu} (driver {env.gpu_driver}), Windows {env.windows}, {env.power}.</li>
+  {display && <li><strong>Display:</strong> {display.name}, {display.resolution}. A 60 Hz display: the animation is drawn at that rate here, so its figures are not comparable with the macOS run's 120 Hz.</li>}
+  <li><strong>CPU</strong> is the app process's cycles, in millions a second: Windows counts CPU time in 15.6 ms scheduler ticks, too coarse for these loads.</li>
+  <li><strong>GPU</strong> is time, not power: the app's own time on the GPU's 3D engines, and the compositor's (DWM) beside it. Windows reads no GPU power, so there is none here.</li>
+  <li>Measured on its own and never ranked against the macOS run: the machines, displays and metrics differ.</li>
+</ul>
+<style>
+  .win-facts {
+    margin: 0 0 1rem;
+  }
+</style>

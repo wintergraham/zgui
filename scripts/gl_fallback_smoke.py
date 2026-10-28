@@ -48,12 +48,17 @@ def main():
                                    stderr=subprocess.STDOUT)
             processes.append(app)
             # Drawn and settled: the window shows and its pixels stop changing.
+            # A screen still blank is not settled: GL's start (its context,
+            # shaders compiled on the CPU) took past two captures a second
+            # apart on a loaded runner, which then compared a blank screen.
+            from PIL import Image
             shot, last, deadline = args.output / f"{name}.png", None, time.monotonic() + 30
             while time.monotonic() < deadline and app.poll() is None:
                 time.sleep(1)
                 subprocess.run(["import", "-window", "root", str(shot)], env=env, capture_output=True)
                 data = shot.read_bytes() if shot.exists() else None
-                if data and data == last:
+                drawn = data and len(Image.open(shot).convert("RGB").getcolors(1 << 22) or []) > 100
+                if drawn and data == last:
                     break
                 last = data
             alive = app.poll() is None

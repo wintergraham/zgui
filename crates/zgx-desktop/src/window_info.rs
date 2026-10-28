@@ -196,6 +196,17 @@ impl WindowInfo {
         self.bounds.set(WindowBounds::read(window));
         self.fullscreen.set(window.fullscreen().is_some());
         let (area, controls) = crate::window_chrome::titlebar_area(window, titlebar);
+        // In the content's points, its zoom's (a custom title bar's content
+        // zooms; the platform's own buttons do not).
+        let zoom = crate::popup_window::zoom_of(window.id()) as f32;
+        let unzoom = |r: zgx::scene::Rect| {
+            zgx::scene::Rect::new(r.x / zoom, r.y / zoom, r.width / zoom, r.height / zoom)
+        };
+        let (area, controls) = if zoom == 1. {
+            (area, controls)
+        } else {
+            (area.map(unzoom), controls.map(unzoom))
+        };
         if self.titlebar_area.with_untracked(|old| *old != area) {
             self.titlebar_area.set(area);
         }

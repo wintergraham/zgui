@@ -17,7 +17,7 @@
 //! Everything here is platform independent and headless: the desktop host
 //! (`zgx-desktop`) maps placements onto native views and layers.
 use crate::{
-    affine::Affine,
+    affine::Projective,
     input::InputDispatcher,
     scene::{NodeId, NodeKind, PaintItem, Rect, RoundRect, Scene},
 };
@@ -508,14 +508,14 @@ struct Walk<'a> {
 #[derive(Clone)]
 struct Context {
     /// From the items' space to the window's (None: the identity).
-    matrix: Option<Affine>,
+    matrix: Option<Projective>,
     opacity: f32,
     clip: Option<Rect>,
     rounded: Vec<RoundRect>,
     /// Isolated ancestors, outermost first.
     layers: Vec<NodeId>,
 }
-fn map_rect(matrix: Option<Affine>, rect: Rect) -> Rect {
+fn map_rect(matrix: Option<Projective>, rect: Rect) -> Rect {
     match matrix {
         Some(matrix) => matrix.bounds(rect),
         None => rect,
@@ -523,20 +523,23 @@ fn map_rect(matrix: Option<Affine>, rect: Rect) -> Rect {
 }
 /// A scale-and-translate matrix's scales, if it is one (rounded clips and
 /// radii map exactly only through those).
-fn axis_scales(matrix: Option<Affine>) -> Option<(f32, f32)> {
-    match matrix {
+fn axis_scales(matrix: Option<Projective>) -> Option<(f32, f32)> {
+    match matrix.map(Projective::affine) {
         None => Some((1., 1.)),
-        Some(m) if m.b.abs() < 1e-5 && m.c.abs() < 1e-5 && m.a > 0. && m.d > 0. => Some((m.a, m.d)),
+        Some(Some(m)) if m.b.abs() < 1e-5 && m.c.abs() < 1e-5 && m.a > 0. && m.d > 0. => {
+            Some((m.a, m.d))
+        }
         Some(_) => None,
     }
 }
-fn magnification(matrix: Option<Affine>) -> f32 {
+/// Its linear part's mean scale (at the origin, in perspective).
+fn magnification(matrix: Option<Projective>) -> f32 {
     match matrix {
         None => 1.,
-        Some(m) => ((m.a * m.d - m.b * m.c).abs()).sqrt(),
+        Some(m) => ((m.a * m.d - m.b * m.c).abs()).sqrt() / m.pw.abs().max(1e-6),
     }
 }
-fn map_round(matrix: Option<Affine>, round: RoundRect) -> Option<RoundRect> {
+fn map_round(matrix: Option<Projective>, round: RoundRect) -> Option<RoundRect> {
     let (sx, sy) = axis_scales(matrix)?;
     let scale = sx.min(sy);
     Some(RoundRect {
@@ -667,7 +670,7 @@ impl Walk<'_> {
             rounded.extend(context.rounded.iter().copied());
             if item.isolated {
                 let inner = self.scene.layer_items(Some(item.id));
-                let matrix = match (item.matrix(), context.matrix) {
+                let matrix = match (item.projective(), context.matrix) {
                     (Some(own), Some(outer)) => Some(own.then(outer)),
                     (own, outer) => own.or(outer),
                 };
@@ -937,6 +940,36 @@ impl PlaneSplit {
     /// Whether there are native views at all this frame.
     pub fn is_empty(&self) -> bool {
         self.natives.is_empty()
+    }
+    /// Its placements in a zoomed window's points (`Ui::zoom`: `zoom`
+    /// points to each logical unit), where the platform puts its views: a
+    /// view takes the zoomed size and lays out in it, as a page does under
+    /// a browser's zoom, rather than being drawn scaled. Renderers keep the
+    /// split itself, in logical units.
+    pub fn zoomed(&self, zoom: f32) -> Self {
+        let rect = |r: Rect| Rect::new(r.x * zoom, r.y * zoom, r.width * zoom, r.height * zoom);
+        let round = |r: &mut RoundRect| {
+            r.rect = rect(r.rect);
+            r.radii = r.radii.map(|radius| radius * zoom);
+            r.feather = crate::scene::Feather::new(r.feather.points() * zoom);
+        };
+        let mut split = self.clone();
+        for native in &mut split.natives {
+            native.frame = rect(native.frame);
+            native.size = (native.size.0 * zoom, native.size.1 * zoom);
+            native.clip = native.clip.map(rect);
+            native.rounded.iter_mut().for_each(round);
+        }
+        for backdrop in &mut split.backdrops {
+            backdrop.rect = rect(backdrop.rect);
+            backdrop.radii = backdrop.radii.map(|radius| radius * zoom);
+            backdrop.clip = backdrop.clip.map(rect);
+            backdrop.rounded.iter_mut().for_each(round);
+            backdrop.sigma *= zoom;
+        }
+        split.overlay.values_mut().for_each(|r| *r = rect(*r));
+        split.overlay_bounds = split.overlay_bounds.map(rect);
+        split
     }
     /// Whether anything paints on the overlay plane.
     pub fn has_overlay(&self) -> bool {

@@ -1,8 +1,10 @@
 //! Selected text drags as AppKit's text views and browsers drag it: within
 //! an editor it moves (one undo step), into another it moves too (Option on
 //! macOS, Control elsewhere, copies), out of the window as plain text, and a
-//! press on the selection that does not move puts the caret there.
+//! press on the selection that does not move puts the caret there. Text
+//! another app drags in drops where it was over, its text known only then.
 use zgx::{
+    actions::Action,
     compose::prelude::*,
     input::{DragItem, DraggedText, InputEvent, Modifiers, PointerButton},
     widgets::{EditorHandle, Ui},
@@ -183,6 +185,51 @@ fn text_dragged_into_another_editor_moves_unless_copied_and_leaves_as_text() {
         let left = if copy { "alpha beta" } else { "alpha " };
         assert_eq!(a.value().get(), left, "copy {copy}");
     }
+}
+
+#[test]
+fn text_from_another_app_drops_where_it_was_over_focused_and_selected() {
+    let mut ui = Ui::new(400., 300.);
+    let (a, b, c) = (
+        field(&ui, "a", "alpha beta"),
+        field(&ui, "b", "x"),
+        field(&ui, "c", "kept").read_only(true),
+    );
+    let view = ui.mount(column().child(a).child(b).child(c));
+    ui.prepare_frame();
+    let (a, b) = (editor(&ui, &view, "a"), editor(&ui, &view, "b"));
+    ui.input.focus(&ui.scene, view.find("a"));
+    select(&b, 0..1);
+    // The platform names text while it is over: what it is waits for the drop.
+    let hover = Action::new(DraggedText::new(String::new()));
+    assert!(ui.input.drag_over(&ui.scene, &hover, x_of(3), 80.));
+    ui.prepare_frame();
+    assert_eq!(b.selection(), (1, 1), "the caret where it would drop");
+    ui.input.drag_out(&ui.scene);
+    ui.prepare_frame();
+    assert_eq!(b.selection(), (0, 1), "gone: the selection back");
+    assert!(
+        !ui.input.drag_over(&ui.scene, &hover, x_of(1), 140.),
+        "a read-only field takes none"
+    );
+    assert!(ui.input.drag_over(&ui.scene, &hover, x_of(3), 80.));
+    let dropped = Action::new(DraggedText::new("dropped"));
+    assert!(ui.input.drag_drop(&ui.scene, &dropped, x_of(3), 80.));
+    ui.prepare_frame();
+    assert_eq!(b.value().get(), "xdropped");
+    assert_eq!(b.copy(), "dropped", "the dropped text selected");
+    assert_eq!(ui.input.focused(), view.find("b"), "and its field focused");
+    assert_eq!(a.value().get(), "alpha beta");
+    // A field selecting all as it is focused keeps the dropped text selected.
+    let mut ui = Ui::new(400., 300.);
+    let view = ui.mount(column().child(field(&ui, "a", "ab").select_on_focus(true)));
+    ui.prepare_frame();
+    let a = editor(&ui, &view, "a");
+    let dropped = Action::new(DraggedText::new("cd"));
+    assert!(ui.input.drag_drop(&ui.scene, &dropped, x_of(2), 20.));
+    ui.prepare_frame();
+    assert_eq!(ui.input.focused(), view.find("a"));
+    assert_eq!((a.value().get(), a.copy()), ("abcd".into(), "cd".into()));
 }
 
 #[test]

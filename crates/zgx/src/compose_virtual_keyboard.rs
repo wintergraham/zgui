@@ -54,11 +54,13 @@ impl Navigation {
         let write = request.clone();
         let rows = Rc::new(RefCell::new(Rows::default()));
         let state = rows.clone();
+        let typed = RefCell::new(crate::typeahead::Typeahead::default());
+        let weak = ui.downgrade();
         ui.on_event(root, true, move |cx| {
             if cx.phase == EventPhase::Capture || cx.default_prevented() {
                 return;
             }
-            let InputEvent::KeyDown { key, .. } = &cx.event else {
+            let InputEvent::KeyDown { key, modifiers, .. } = &cx.event else {
                 return;
             };
             let rows = state.borrow();
@@ -109,6 +111,29 @@ impl Navigation {
                 Key::ArrowUp => current.map_or(visible_start, |index| index.saturating_sub(1)),
                 Key::PageDown => next_page,
                 Key::PageUp => previous_page,
+                // Typing jumps to the next row whose text starts with it,
+                // as a browser's list box and AppKit's tables do: rows not
+                // mounted by their `row_text`, mounted ones by their name.
+                Key::Character(text) if !modifiers.control && !modifiers.alt && !modifiers.meta => {
+                    let Some(ui) = weak.upgrade() else {
+                        return;
+                    };
+                    let provided = crate::selection::list_row_text(&ui, root);
+                    let semantics = ui.semantics.borrow();
+                    let found = typed
+                        .borrow_mut()
+                        .find(text, rows.length, current, |index| {
+                            provided.as_ref().and_then(|text| text(index)).or_else(|| {
+                                let (_, _, item) =
+                                    rows.visible.iter().find(|(i, ..)| *i == index)?;
+                                Some(semantics.get(*item)?.label.clone())
+                            })
+                        });
+                    match found {
+                        Some(index) => index,
+                        None => return,
+                    }
+                }
                 _ => return,
             }
             .min(rows.length - 1);

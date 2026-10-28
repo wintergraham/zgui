@@ -1,0 +1,146 @@
+---
+// Startup: launch to first content, from a run's `startup` (scripts/
+// build_site.py): macOS's against GPUI Fast with the same menu bar, or
+// Windows' against all three. The page writes the heading; a run without
+// one says so under it.
+import { startup as macStartup, names as macNames, fmt, repo } from '@/lib/perf';
+import { windows } from '@/lib/perf-windows';
+
+interface Props {
+  platform?: 'macos' | 'windows';
+}
+const { platform = 'macos' } = Astro.props;
+type Stat = { median: number; min: number; max: number };
+const run = (platform === 'windows' ? (windows as any).startup : macStartup) as
+  | { commit: string; machine: string; protocol: string; medians: Record<string, Record<string, Stat>> }
+  | null
+  | undefined;
+const names: Record<string, string> = platform === 'windows' ? windows.frameworks : macNames;
+const name = (f: string) => names[f] ?? f;
+
+// Instructions where the run counted them (macOS), cycles where it did (Windows).
+const work = run && 'instructions' in (run.medians.zgx ?? {}) ? 'instructions' : 'cycles';
+const metrics = [
+  { key: 'content_ms', title: 'Launch', unit: 'ms to first content', scale: 1, digits: 0 },
+  { key: 'cpu_ms', title: 'CPU', unit: 'ms of CPU to first content', scale: 1, digits: 0 },
+  { key: work, title: work === 'instructions' ? 'Instructions' : 'Cycles', unit: `million ${work} to first content`, scale: 1e6, digits: 0 },
+];
+const frameworks = run ? Object.keys(run.medians).sort((a, b) => (a === 'zgx' ? -1 : b === 'zgx' ? 1 : 0)) : [];
+
+// The lead says what the run found: by how much zgx leads, or where it stands.
+let lead: { strong: string; rest: string } | null = null;
+if (run?.medians.zgx) {
+  const content = (f: string) => run.medians[f].content_ms.median;
+  const order = [...frameworks].sort((a, b) => content(a) - content(b));
+  const ms = (f: string) => `${fmt(content(f), 0)} ms`;
+  if (order[0] === 'zgx') {
+    const next = order[1];
+    const fewer = 1 - run.medians.zgx[work].median / run.medians[next][work].median;
+    lead = {
+      strong: `zgx reaches its first content ${fmt(content(next) - content('zgx'), 0)} ms sooner than ${name(next)}${fewer > 0 ? `, with ${Math.round(fewer * 100)}% fewer ${work}` : ''}.`,
+      rest: 'From launch to the window’s first drawn text.',
+    };
+  } else {
+    const ordinal = ['first', 'second', 'third', 'fourth', 'fifth'][order.indexOf('zgx')];
+    const counts = ['none', 'one', 'two', 'three', 'four', 'five'][order.length];
+    const rest = order.filter((f) => f !== 'zgx').map((f, i) => (i === 0 ? `${name(f)} takes ${ms(f)}` : `${name(f)} ${ms(f)}`));
+    lead = {
+      strong: `zgx draws its first text ${ms('zgx')} after launch, ${ordinal} of ${counts}.`,
+      rest: `${rest.slice(0, -1).join(', ')} and ${rest.at(-1)}.`,
+    };
+  }
+}
+---
+
+{!(run && lead) && <p>This run measured no startup.</p>}
+{
+  run && lead && (
+    <div class="startup not-prose">
+      <p class="startup-lead">
+        <strong>{lead.strong}</strong> <span>{lead.rest} {run.protocol}.</span>
+      </p>
+      <figure class="perf-chart">
+        <table class="perf-table">
+          <colgroup><col class="perf-col-mode" /><col class="perf-col-fw" /><col /></colgroup>
+          <caption>
+            <span class="perf-chart-title">Launch to first content</span>
+            <span class="perf-chart-unit">Medians of the launches, their range as a whisker; lower is better.</span>
+          </caption>
+          <thead class="sr-only">
+            <tr><th scope="col">Measure</th><th scope="col">Framework</th><th scope="col">Median (range)</th></tr>
+          </thead>
+          {metrics.map((m) => {
+            const top = Math.max(...frameworks.map((f) => run.medians[f][m.key]?.max ?? 0)) || 1;
+            return (
+              <tbody>
+                {frameworks.map((f, i) => {
+                  const s = run.medians[f][m.key];
+                  const v = (x: number) => fmt(x / m.scale, m.digits);
+                  return (
+                    <tr data-fw={f}>
+                      {i === 0 && (
+                        <th scope="rowgroup" rowspan={frameworks.length} class="perf-mode">
+                          {m.title}
+                          <span class="startup-unit">{m.unit}</span>
+                        </th>
+                      )}
+                      <th scope="row" class="perf-fw">{name(f)}</th>
+                      <td>
+                        <div class="perf-cell">
+                          <span class="perf-track" aria-hidden="true">
+                            <span class="perf-bar" style={`width:${((100 * s.median) / top).toFixed(1)}%`} />
+                            <span class="perf-whisker" style={`left:${((100 * s.min) / top).toFixed(1)}%;width:${((100 * (s.max - s.min)) / top).toFixed(1)}%`} />
+                          </span>
+                          <span class="perf-value">{v(s.median)}</span>
+                          <span class="sr-only">(launches {v(s.min)} to {v(s.max)})</span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            );
+          })}
+        </table>
+      </figure>
+      <p class="startup-foot">
+        Measured apart from the suite on {run.machine}, zgx at <a href={`${repo}/commit/${run.commit}`}><code>{run.commit.slice(0, 7)}</code></a>.
+      </p>
+    </div>
+  )
+}
+
+<style>
+  .startup {
+    margin: 0 0 2rem;
+  }
+  .startup-lead {
+    margin: 0 0 1.5rem;
+    font-size: 1.125rem;
+    line-height: 1.45;
+    letter-spacing: -0.02em;
+  }
+  .startup-lead strong {
+    font-weight: 600;
+    color: var(--color-ink);
+  }
+  .startup-lead span {
+    color: var(--color-ink-2);
+  }
+  .startup-unit {
+    display: block;
+    font-size: 0.6875rem;
+    color: var(--color-fd-muted-foreground);
+  }
+  .startup .perf-chart {
+    max-width: 36rem;
+  }
+  .startup-foot {
+    margin: 1rem 0 0;
+    font-size: 0.8125rem;
+    color: var(--color-fd-muted-foreground);
+  }
+  .startup-foot a {
+    color: inherit;
+  }
+</style>

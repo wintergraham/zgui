@@ -317,13 +317,10 @@ impl InputDispatcher {
                 y,
                 destination: None,
             });
+            // What it carries can be known only as it drops (another app's
+            // text: X11 hands it over then): where it was over hears it.
             if visit.payload != *payload {
-                *visit = Visit {
-                    payload: payload.clone(),
-                    x,
-                    y,
-                    destination: None,
-                };
+                visit.payload = payload.clone();
             }
             visit.x = x;
             visit.y = y;
@@ -374,21 +371,29 @@ impl InputDispatcher {
             return false;
         };
         let root = scene.borrow().root();
-        let accepted = visit
+        let (accepted, focus) = visit
             .destination
             .filter(|id| self.enabled(&scene.borrow(), *id))
-            .is_some_and(|id| {
-                self.route(scene, id, visit.event(DragPhase::Drop, root))
-                    .prevented
+            .map_or((false, None), |id| {
+                let cx = self.route(scene, id, visit.event(DragPhase::Drop, root));
+                (cx.prevented, cx.focus)
             });
         if let Some(id) = visit.destination.filter(|id| scene.borrow().contains(*id)) {
             self.route(scene, id, visit.event(DragPhase::Leave, root));
         }
+        self.focus_dropped(scene, focus);
         if accepted {
             let hovered = self.hit_target(&scene.borrow(), x, y);
             self.set_hover(scene, hovered);
         }
         accepted
+    }
+    /// A destination taking a drop asked for focus (an editor, as AppKit's
+    /// text views and a browser's fields): it has it once the drop is over.
+    fn focus_dropped(&self, scene: &Rc<RefCell<Scene>>, focus: Option<NodeId>) {
+        if let Some(focus) = focus.filter(|id| self.enabled(&scene.borrow(), *id)) {
+            self.focus(scene, Some(focus));
+        }
     }
     /// End the drag without a drop: the destination hears `Leave`, and the
     /// source `End`, not accepted.
@@ -636,18 +641,18 @@ impl InputDispatcher {
             state.captured = None;
             state.capture_button = None;
         }
-        let accepted = elsewhere
-            || drop
-                && drag
-                    .destination
-                    .filter(|id| self.enabled(&scene.borrow(), *id))
-                    .is_some_and(|id| {
-                        self.route(scene, id, drag.event(DragPhase::Drop, false))
-                            .prevented
-                    });
+        let (dropped, focus) = drag
+            .destination
+            .filter(|id| drop && !elsewhere && self.enabled(&scene.borrow(), *id))
+            .map_or((false, None), |id| {
+                let cx = self.route(scene, id, drag.event(DragPhase::Drop, false));
+                (cx.prevented, cx.focus)
+            });
+        let accepted = elsewhere || dropped;
         if let Some(id) = drag.destination.filter(|id| scene.borrow().contains(*id)) {
             self.route(scene, id, drag.event(DragPhase::Leave, accepted));
         }
+        self.focus_dropped(scene, focus);
         let mut end = drag.event(DragPhase::End, accepted);
         if let InputEvent::Drag(event) = &mut end {
             event.outside = outside;

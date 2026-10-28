@@ -15,7 +15,10 @@ Checks that:
 - Escape over the target cancels: nothing is dropped, not accepted;
 - the target's description of the drop (`CFSTR_DROPDESCRIPTION`, "Copy to
   …", as Explorer gives) shows under the drag's image: Windows draws it, in
-  a white label, only for a source that allows it.
+  a white label, only for a source that allows it;
+- text another app drags in (`drop_target_probe --source`, a test-owned OLE
+  source with `CF_UNICODETEXT`), let go over the Words field's end, lands
+  there and the source hears it copied; over the chip nothing takes it.
 
 It takes the pointer and keyboard while it runs.
 
@@ -163,7 +166,7 @@ def main():
     source_lines = reader(source)
     log = []
     threading.Thread(target=lambda: log.extend(line.strip() for line in source.stderr), daemon=True).start()
-    target = None
+    target = text_source = None
     try:
         # Its two windows: the source ("Drag"), and "Other" to its right.
         wait_for(lambda: len(win.windows_of(source.pid)) >= 2, "the probe's two windows", 15)
@@ -288,10 +291,53 @@ def main():
         drag(window, tab, steps(tab_start, inside))
         wait_for(lambda: "TORN tab" in source_lines, "the tab to tear off")
         print("ok: a tab let go outside the app's windows tears off")
+
+        # Text another app drags in: the test's own OLE source, where the
+        # target was. Let go over the Words field's end, it lands there.
+        target.kill()
+        target.wait()
+        text_source = subprocess.Popen([str(args.examples / "drop_target_probe.exe"),
+                                        f"--at={rect.left},{rect.bottom}", "--source= and more"],
+                                       stdout=subprocess.PIPE, text=True)
+        text_lines = reader(text_source)
+        wait_for(lambda: any(line.startswith("TARGET") for line in text_lines), "the text source")
+        source_window = win.wait_window(text_source)
+        # Clear of the probe's window, below it (Windows may place it over
+        # the probe): a press on it must be its own.
+        user32.GetWindowRect(window, ctypes.byref(rect))
+        user32.SetWindowPos(source_window, None, rect.left, rect.bottom + 8, 0, 0, 0x1 | 0x4 | 0x10)
+        time.sleep(0.3)
+        press = (100, 100)
+        pressed = win.to_screen(source_window, *press)
+        field = win.to_screen(window, 240 * scale, 119 * scale)
+        win.activate(window)
+        win.activate(source_window)
+        time.sleep(0.3)
+        if window_at(*pressed) != source_window:
+            raise SystemExit(f"the press at {pressed} would not land on the text source: not dragging")
+        if not only_ours(steps(pressed, start) + steps(start, field), (window, source_window)):
+            raise SystemExit("another window lies between the probe and the text source: not dragging")
+        assert 'WORDS "drag these words"' in source_lines, source_lines[-10:]
+        assert drag(source_window, press, steps(pressed, field), release_on=window), "not over the field"
+        wait_for(lambda: any(line.startswith("SOURCE_END") for line in text_lines), "the text drag's end")
+        wait_for(lambda: 'WORDS "drag these words and more"' in source_lines, "the text to land")
+        ended = next(line for line in text_lines if line.startswith("SOURCE_END"))
+        assert "effect=1" in ended, ended
+        print(f"ok: text dragged in from another app lands at the field's end, copied ({ended})")
+        # Over the chip: nothing takes it.
+        words = sum(line.startswith("WORDS") for line in source_lines)
+        win.activate(source_window)
+        time.sleep(0.3)
+        assert drag(source_window, press, steps(pressed, start), release_on=window), "not over the chip"
+        wait_for(lambda: sum(line.startswith("SOURCE_END") for line in text_lines) == 2, "the second drag's end")
+        ended = [line for line in text_lines if line.startswith("SOURCE_END")][-1]
+        assert "effect=0" in ended, ended
+        assert sum(line.startswith("WORDS") for line in source_lines) == words, "the chip took text"
+        print(f"ok: text let go over the chip is refused ({ended})")
         print("drag smoke passed")
     finally:
         shutil.rmtree(exported.parent, ignore_errors=True)
-        for proc in (source, target):
+        for proc in (source, target, text_source):
             if proc and proc.poll() is None:
                 proc.kill()
 

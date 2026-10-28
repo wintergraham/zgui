@@ -12,10 +12,13 @@
 //   intro        keep the text before the first `##` (default: true unless
 //                `sections` is given)
 //   sections     keep only these `##` sections, by title (a prefix matches)
+//   when         a file the page needs; without it the page is left out
 //   unwrap       drop the first section's heading (the page's title) and
 //                lift its subsections a level
 // Strings starting with `---` are sidebar separators. `page` with `mdx` is a
-// hand-written page in website/content-src/.
+// hand-written page in website/content-src/: MDX, or Markdown whose
+// `<!-- usage FILE CONST -->` and `<!-- lint-rules -->` the sync fills in
+// from the source.
 
 export const repo = 'https://github.com/zeronsh/zgx';
 
@@ -149,6 +152,8 @@ export const sets = [
         description: 'click, type, key, scroll, command, set, wait and sleep.' },
       { slug: 'gestures', src: 'docs/agents/inspect.md', title: 'Record and replay gestures', sections: ['Gestures'], unwrap: true,
         description: 'Record a trackpad gesture once, replay it through the window’s own input path, and read how its frames landed.' },
+      { slug: 'switches', src: 'docs/agents/inspect.md', title: 'Switches', sections: ['Switches'], unwrap: true,
+        description: 'Switch the engine’s fast paths off and on in the running app, to compare both ways in one window.' },
       { slug: 'mcp', src: 'docs/agents/inspect.md', title: 'MCP server', sections: ['As MCP tools'], unwrap: true,
         description: 'zgx inspect mcp serves every command as an MCP tool on stdio.' },
       { slug: 'slow-interactions', src: 'docs/agents/inspect.md', title: 'Diagnose a slow interaction', sections: ['Diagnose'], unwrap: true,
@@ -156,7 +161,7 @@ export const sets = [
       { slug: 'recipes', src: 'docs/agents/inspect.md', title: 'Recipes and safety', sections: ['Recipes', 'Safety and cost'],
         description: 'Common sequences, and what serving devtools costs and exposes.' },
       '---Tools---',
-      { slug: 'cli', mdx: 'devtools/cli.mdx' },
+      { slug: 'cli', mdx: 'devtools/cli.md' },
       { slug: 'profiling', src: 'scripts/perf/README.md', title: 'Profiling',
         description: 'ZGX_PROFILE splits a frame by phase; the perf suite compares two revisions in retired instructions.' },
     ],
@@ -168,6 +173,7 @@ export const sets = [
     icon: 'Gauge',
     pages: [
       { slug: 'index', mdx: 'performance/index.mdx' },
+      { slug: 'windows', mdx: 'performance/windows.mdx', when: 'site/windows/data.json' },
       { slug: 'microbenchmarks', mdx: 'performance/microbenchmarks.mdx' },
       { slug: 'gpui', src: 'README.md', title: 'zgx and GPUI', sections: ['Performance'], unwrap: true,
         description: 'The heavy dashboard in zgx, GPUI and GPUI’s fast path on an Apple Silicon Mac, with and without PGO.' },

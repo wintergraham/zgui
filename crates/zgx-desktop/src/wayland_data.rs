@@ -59,6 +59,22 @@ pub(crate) enum FileEvent {
         paths: Arc<[PathBuf]>,
         accepted: std::sync::mpsc::Sender<bool>,
     },
+    /// Another app's drag carrying text is at `x`, `y`: answer whether it
+    /// would drop there (`answer_text`).
+    TextOver {
+        x: f32,
+        y: f32,
+    },
+    /// The text drag left, or was let go of where nothing takes it.
+    TextOut,
+    /// The text drag was let go of at `x`, `y`, carrying `text`: answer
+    /// whether it was taken.
+    TextDrop {
+        x: f32,
+        y: f32,
+        text: String,
+        accepted: std::sync::mpsc::Sender<bool>,
+    },
 }
 type Handler = Arc<dyn Fn(u64, FileEvent) + Send + Sync>;
 /// Text types offered, in order of preference when reading.
@@ -104,6 +120,9 @@ enum Command {
         point: (f64, f64),
         send: Box<dyn Fn(crate::native_drag::NativeDrag) + Send>,
     },
+    /// Whether the window would take the text drag where it last was
+    /// (`FileEvent::TextOver`).
+    TextOver(bool),
 }
 /// The data worker's commands, for a drag handed off (`start_drag`).
 static COMMANDS: Mutex<Option<calloop::channel::Sender<Command>>> = Mutex::new(None);
@@ -129,6 +148,13 @@ pub(crate) fn start_drag(
             })
             .is_ok()
     })
+}
+/// Whether the window would take the text drag where it last was: the
+/// answer to `FileEvent::TextOver`.
+pub(crate) fn answer_text(accepted: bool) {
+    if let Some(commands) = COMMANDS.lock().unwrap().as_ref() {
+        let _ = commands.send(Command::TextOver(accepted));
+    }
 }
 /// The selection owner writes into the stream; `bool` asks for CRLF
 /// normalization.
@@ -285,6 +311,7 @@ impl NativeData {
                     shm: None,
                     outgoing: None,
                     drag: None,
+                    text: None,
                     completion: None,
                     activation: None,
                     exit: false,
@@ -326,6 +353,7 @@ impl NativeData {
                                 point,
                                 send,
                             } => state.start_drag(window, data, icon, point, send),
+                            Command::TextOver(accepted) => state.answer_text(accepted),
                         }
                         let _ = state.connection.flush();
                     })
@@ -341,6 +369,7 @@ impl NativeData {
                 }
                 while !state.exit {
                     let timeout = (state.drag.as_ref().is_some_and(|d| d.read.is_some())
+                        || state.text.as_ref().is_some_and(|t| t.read.is_some())
                         || state.completion.is_some())
                     .then_some(Duration::from_millis(20));
                     if event_loop.dispatch(timeout, &mut state).is_err() {
@@ -451,6 +480,23 @@ struct Transfer {
     bytes: Vec<u8>,
     deadline: Instant,
 }
+/// Another app's drag carrying text (and no files) over one of the app's
+/// windows.
+struct TextDrag {
+    offer: wl_data_offer::WlDataOffer,
+    /// The window's host.
+    token: u64,
+    /// The enter's: the offer's accepts name it.
+    serial: u32,
+    /// The text type it is read in, an index into `TEXT_TYPES`.
+    kind: usize,
+    x: f32,
+    y: f32,
+    /// Whether the window would take it where it last was.
+    accepted: bool,
+    /// Let go of: its text being read.
+    read: Option<Transfer>,
+}
 struct Drag {
     offer: wl_data_offer::WlDataOffer,
     token: u64,
@@ -523,6 +569,7 @@ struct State {
     /// The app's own drag, handed to the compositor (`start_drag`).
     outgoing: Option<Outgoing>,
     drag: Option<Drag>,
+    text: Option<TextDrag>,
     completion: Option<Completion>,
     activation: Option<XdgActivation>,
     exit: bool,
@@ -826,6 +873,10 @@ impl State {
         if let Some(done) = self.completion.take() {
             done.offer.destroy();
         }
+        if let Some(text) = self.text.take() {
+            (self.handler)(text.token, FileEvent::TextOut);
+            text.offer.destroy();
+        }
         if let Some(drag) = self.drag.take() {
             if !drag.left {
                 (self.handler)(drag.token, FileEvent::Leave);
@@ -846,7 +897,69 @@ impl State {
         }
         self.cancel();
     }
+    /// The window's answer to where the text drag last was: the offer is
+    /// accepted (its text type) there, or not.
+    fn answer_text(&mut self, accepted: bool) {
+        if let Some(text) = &mut self.text
+            && text.read.is_none()
+        {
+            text.accepted = accepted;
+            text.offer
+                .accept(text.serial, accepted.then(|| TEXT_TYPES[text.kind].into()));
+        }
+    }
+    /// The text drag let go of: read its text if the window would take it
+    /// there, else it is over.
+    fn drop_text(&mut self) {
+        let Some(text) = &mut self.text else { return };
+        let pair = text
+            .accepted
+            .then(UnixStream::pair)
+            .and_then(Result::ok)
+            .filter(|(read, _)| read.set_nonblocking(true).is_ok());
+        let Some((read, write)) = pair else {
+            self.cancel();
+            return;
+        };
+        text.offer
+            .receive(TEXT_TYPES[text.kind].into(), write.as_fd());
+        drop(write);
+        text.read = Some(Transfer {
+            stream: read,
+            bytes: Vec::new(),
+            deadline: Instant::now() + Duration::from_secs(3),
+        });
+    }
+    /// The text drag's text, read as it arrives: it drops then.
+    fn read_text(&mut self) {
+        let Some(read) = self.text.as_mut().and_then(|text| text.read.as_mut()) else {
+            return;
+        };
+        let bytes = match read.poll() {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => return,
+            Err(_) => return self.cancel(),
+        };
+        let text = self.text.take().unwrap();
+        let (accepted, reply) = std::sync::mpsc::channel();
+        (self.handler)(
+            text.token,
+            FileEvent::TextDrop {
+                x: text.x,
+                y: text.y,
+                text: String::from_utf8_lossy(&bytes).into_owned(),
+                accepted,
+            },
+        );
+        // Finished only once the window took it (`read_transfer`).
+        self.completion = Some(Completion {
+            offer: text.offer,
+            accepted: reply,
+            deadline: Instant::now() + Duration::from_secs(3),
+        });
+    }
     fn read_transfer(&mut self) {
+        self.read_text();
         if let Some(done) = &self.completion {
             let accepted = match done.accepted.try_recv() {
                 Ok(value) => Some(value),
@@ -1400,6 +1513,31 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for State {
                     .unwrap()
                     .get(&surface.id().protocol_id())
                     .copied();
+                // Text, and no files: the window says where it drops, as
+                // its host answers (`answer_text`).
+                if let Some(token) = token
+                    && !offer.uris
+                    && let Some(kind) = offer.text
+                {
+                    offer.proxy.accept(serial, None);
+                    if offer.proxy.version() >= 3 {
+                        offer.proxy.set_actions(DndAction::Copy, DndAction::Copy);
+                    }
+                    let (x, y) = (x as f32, y as f32);
+                    state.text = Some(TextDrag {
+                        offer: offer.proxy,
+                        token,
+                        serial,
+                        kind,
+                        x,
+                        y,
+                        accepted: false,
+                        read: None,
+                    });
+                    (state.handler)(token, FileEvent::TextOver { x, y });
+                    let _ = connection.flush();
+                    return;
+                }
                 let Some(token) = token.filter(|_| offer.uris) else {
                     offer.proxy.accept(serial, None);
                     offer.proxy.destroy();
@@ -1485,6 +1623,19 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for State {
                     }
                 }
             }
+            wl_data_device::Event::Motion { x, y, .. } if state.text.is_some() => {
+                let text = state.text.as_mut().expect("checked above");
+                if text.read.is_none() {
+                    (text.x, text.y) = (x as f32, y as f32);
+                    (state.handler)(
+                        text.token,
+                        FileEvent::TextOver {
+                            x: text.x,
+                            y: text.y,
+                        },
+                    );
+                }
+            }
             wl_data_device::Event::Motion { x, y, .. } => {
                 if let Some(drag) = &mut state.drag {
                     drag.x = x as f32;
@@ -1503,11 +1654,18 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for State {
                     }
                 }
             }
+            wl_data_device::Event::Drop if state.text.is_some() => state.drop_text(),
             wl_data_device::Event::Drop => {
                 if let Some(drag) = &mut state.drag {
                     drag.dropped = true;
                 }
                 state.finish();
+            }
+            // Its text being read, it is not gone yet.
+            wl_data_device::Event::Leave if state.text.is_some() => {
+                if state.text.as_ref().is_some_and(|text| text.read.is_none()) {
+                    state.cancel();
+                }
             }
             wl_data_device::Event::Leave => {
                 if let Some(drag) = &mut state.drag {

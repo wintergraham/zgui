@@ -1,0 +1,28 @@
+---
+// Where zgx fares worst on Windows: the run's `worst_ratios`, one row a metric.
+import { worstRatios } from '@/lib/perf-windows';
+
+const ratios = worstRatios();
+---
+
+<p>For each metric, zgx's median over the lowest rival's, in the test where it fares worst. Under 1, zgx uses less than every rival even there.</p>
+<table>
+  <thead>
+    <tr><th scope="col">Metric</th><th scope="col">Ratio</th><th scope="col">Test</th><th scope="col">zgx</th><th scope="col">Lowest rival</th></tr>
+  </thead>
+  <tbody>
+    {
+      ratios.map((r) => (
+        <tr>
+          <td>{r.metric}</td>
+          <td>{r.ratio.toFixed(2)}×</td>
+          <td>{r.where}</td>
+          <td>{r.ours}</td>
+          <td>
+            {r.rival} {r.theirs}
+          </td>
+        </tr>
+      ))
+    }
+  </tbody>
+</table>

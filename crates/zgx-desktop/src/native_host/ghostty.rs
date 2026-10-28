@@ -905,6 +905,10 @@ pub(crate) struct ViewState {
     /// since, waiting (`set_frame_size`).
     resized_at: Cell<Option<std::time::Instant>>,
     wanted: Cell<Option<(f64, f64)>>,
+    /// The window's zoom (`Ui::zoom`): Ghostty draws at the backing scale
+    /// times it, so its text grows with the window's, crisply; its points
+    /// are the window's divided by it.
+    zoom: Cell<f64>,
 }
 /// How often a size an animation changes every frame (the sidebar easing,
 /// panes easing to a new split) reaches the view: each one makes Ghostty
@@ -1348,6 +1352,7 @@ impl TerminalView {
             size: Cell::new((0., 0.)),
             resized_at: Cell::new(None),
             wanted: Cell::new(None),
+            zoom: Cell::new(1.),
         });
         // A non-zero first size: Ghostty sizes its first frame from it.
         let frame = NSRect::new(NSPoint::new(0., 0.), NSSize::new(800., 600.));
@@ -1517,15 +1522,23 @@ impl TerminalView {
             }
         });
     }
+    /// Follow the window's zoom (`Ui::zoom`): text and cells grow with it.
+    pub(crate) fn set_zoom(&self, zoom: f64) {
+        if self.ivars().zoom.replace(zoom) != zoom {
+            self.scale_changed();
+        }
+    }
     fn scale_changed(&self) {
         let scale = self.backing_scale();
         if let Some(layer) = self.layer() {
             let _transaction = super::macos::Transaction::begin();
             layer.setContentsScale(scale);
         }
+        // Its pixels stay the backing's; its points are the zoom's.
+        let content = scale * self.ivars().zoom.get();
         // SAFETY: `with_surface` passes a live surface; main thread.
         self.with_surface(|surface| unsafe {
-            g::ghostty_surface_set_content_scale(surface, scale, scale)
+            g::ghostty_surface_set_content_scale(surface, content, content)
         });
         self.ivars().size.set((0., 0.));
         self.size_changed();
@@ -1632,11 +1645,12 @@ impl TerminalView {
         let point = self.convertPoint_fromView(event.locationInWindow(), None);
         let height = self.frame().size.height;
         let flags = mods(event.modifierFlags());
+        // Ghostty's points and zgx's are the window's over its zoom.
+        let zoom = self.ivars().zoom.get();
+        let (x, y) = (point.x / zoom, (height - point.y) / zoom);
         // SAFETY: `with_surface` passes a live surface; main thread.
-        self.with_surface(|surface| unsafe {
-            g::ghostty_surface_mouse_pos(surface, point.x, height - point.y, flags)
-        });
-        self.report_pointer(Some((point.x as f32, (height - point.y) as f32)));
+        self.with_surface(|surface| unsafe { g::ghostty_surface_mouse_pos(surface, x, y, flags) });
+        self.report_pointer(Some((x as f32, y as f32)));
     }
     /// Tell the controller where the pointer is (scripts show affordances
     /// near an edge from it).
@@ -1942,6 +1956,9 @@ impl TerminalView {
         // SAFETY: non-null, so live (`free` nulls it first); main thread.
         // It writes one `f64` through each pointer, all writable locals.
         unsafe { g::ghostty_surface_ime_point(surface, &mut x, &mut y, &mut width, &mut height) };
+        // In Ghostty's points: the window's are the zoom's times them.
+        let zoom = self.ivars().zoom.get();
+        let (mut x, y, mut width, height) = (x * zoom, y * zoom, width * zoom, height * zoom);
         if range.length == 0 && width > 0. {
             x += width * (range.location + range.length) as f64;
             width = 0.;
@@ -2073,6 +2090,10 @@ impl MacTerminal {
     }
     pub fn view(&self) -> &NSView {
         &self.view
+    }
+    /// Follow the window's zoom (see `TerminalView::set_zoom`).
+    pub(crate) fn set_zoom(&self, zoom: f64) {
+        self.view.set_zoom(zoom);
     }
     fn free(&self) {
         let surface = self.view.ivars().surface.replace(std::ptr::null_mut());

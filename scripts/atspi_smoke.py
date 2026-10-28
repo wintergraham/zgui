@@ -166,6 +166,24 @@ def main():
                 assert Atspi.Text.get_text(text, 0, -1) == "Ada", "selection update must preserve full text"
                 subprocess.run(["xdotool", "type", "--clearmodifiers", "Grace"], check=True)
                 wait_for(lambda: Atspi.Text.get_text(text, 0, -1) == "Grace", "native typing updates AT-SPI text")
+                # Where each character shows (327749e0): what a screen
+                # reader's review cursor and a magnifier follow. One line,
+                # left to right, each box inside the field, and the point at
+                # a box's middle names its character.
+                field = Atspi.Component.get_extents(entry, Atspi.CoordType.SCREEN)
+                def characters():
+                    boxes = [Atspi.Text.get_character_extents(text, i, Atspi.CoordType.SCREEN) for i in range(5)]
+                    return boxes if all(b.width > 0 for b in boxes) else None
+                boxes = wait_for(characters, "the text's characters placed")
+                record_boxes = [(b.x, b.y, b.width, b.height) for b in boxes]
+                print("CHARACTERS", record_boxes, flush=True)
+                assert all(a.x + a.width <= b.x + 1 and b.x > a.x for a, b in zip(boxes, boxes[1:])), record_boxes
+                assert len({(b.y, b.height) for b in boxes}) == 1 and boxes[0].height > 0, record_boxes
+                assert all(field.x <= b.x and b.x + b.width <= field.x + field.width and field.y <= b.y
+                           and b.y + b.height <= field.y + field.height for b in boxes), (record_boxes, field.x, field.y, field.width, field.height)
+                for i, b in enumerate(boxes):
+                    at = Atspi.Text.get_offset_at_point(text, b.x + b.width // 2, b.y + b.height // 2, Atspi.CoordType.SCREEN)
+                    assert at == i, (i, at, record_boxes)
                 activate(count)
                 value = slider.get_value_iface()
                 assert Atspi.Value.get_minimum_value(value) == 0 and Atspi.Value.get_maximum_value(value) == 100

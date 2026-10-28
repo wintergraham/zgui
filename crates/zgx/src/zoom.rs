@@ -1,0 +1,241 @@
+//! A window's zoom, as a browser's page zoom: Command-plus and Command-minus
+//! (Control elsewhere) step through Chrome's levels, Command-0 goes back to
+//! 100%. The host folds it into the window's scale (its content scale is
+//! the display's times the zoom), so layout reflows in a larger or smaller
+//! logical viewport and text and paths draw crisply at the scale they show
+//! at; at 100% the scale is the display's, untouched.
+//!
+//! A step costs what a change of display does (one reflow and one
+//! re-rasterization); nothing runs while the zoom stays. Scroll views keep
+//! what was at their top in place across it. An app's keymap or menu taking
+//! the keys keeps them; `Ui::set_zoomable(false)` turns zoom off.
+//!
+//! On Windows and Linux Control with the wheel zooms too, a level a notch,
+//! as browsers there do: the wheel goes to the nodes first, and zooms if
+//! none took it (scroll views leave it). macOS browsers zoom with neither
+//! wheel nor pinch, and neither does zgx there.
+use crate::{
+    input::{InputEvent, Key, Modifiers},
+    scene::NodeId,
+    widgets::Ui,
+};
+use std::{cell::Cell, rc::Rc};
+
+thread_local! {
+    /// A Control-wheel being dispatched (`wheel`): scroll views leave it.
+    static WHEEL: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Run `dispatch`, a Control-wheel's scroll going to the nodes, with the
+/// window's scroll views leaving it to the zoom (`Ui::zoom_wheel`).
+#[doc(hidden)]
+pub fn wheel<R>(dispatch: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            WHEEL.with(|wheel| wheel.set(false));
+        }
+    }
+    WHEEL.with(|wheel| wheel.set(true));
+    let _reset = Reset;
+    dispatch()
+}
+/// Whether the scroll being dispatched is a Control-wheel's zoom: a scroll
+/// view leaves it.
+pub(crate) fn wheel_zooms() -> bool {
+    WHEEL.with(Cell::get)
+}
+
+/// Chrome's zoom levels.
+pub const LEVELS: [f64; 17] = [
+    0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1., 1.1, 1.25, 1.5, 1.75, 2., 2.5, 3., 4., 5.,
+];
+
+/// What scroll views had at their top before a zoom: each viewport, the
+/// node there and how far below the viewport's top it was.
+#[doc(hidden)]
+pub struct Anchors(Vec<(NodeId, NodeId, f32)>);
+
+impl Ui {
+    /// The window's zoom: 1 at 100%.
+    pub fn zoom(&self) -> f64 {
+        self.storage.zoom.get()
+    }
+    /// Zoom the window to `zoom` (1 is 100%), kept within Chrome's 25% to
+    /// 500%. The host reflows the window at it, as a browser's page zoom.
+    pub fn set_zoom(&self, zoom: f64) {
+        if !zoom.is_finite() {
+            return;
+        }
+        let zoom = zoom.clamp(LEVELS[0], LEVELS[LEVELS.len() - 1]);
+        if self.storage.zoom.replace(zoom) == zoom {
+            return;
+        }
+        let told = self.storage.zoom_host.borrow().clone();
+        for tell in told {
+            tell();
+        }
+    }
+    /// One of Chrome's levels in: the next above the zoom.
+    pub fn zoom_in(&self) {
+        let zoom = self.zoom();
+        let next = LEVELS
+            .iter()
+            .copied()
+            .find(|level| *level > zoom + 1e-6)
+            .unwrap_or(LEVELS[LEVELS.len() - 1]);
+        self.set_zoom(next);
+    }
+    /// One of Chrome's levels out: the next below the zoom.
+    pub fn zoom_out(&self) {
+        let zoom = self.zoom();
+        let next = LEVELS
+            .iter()
+            .rev()
+            .copied()
+            .find(|level| *level < zoom - 1e-6)
+            .unwrap_or(LEVELS[0]);
+        self.set_zoom(next);
+    }
+    /// Back to 100%.
+    pub fn reset_zoom(&self) {
+        self.set_zoom(1.);
+    }
+    /// Whether Command-plus, minus and 0 (Control elsewhere) zoom this
+    /// window: on unless the app turns it off, or binds the keys itself.
+    pub fn set_zoomable(&self, zoomable: bool) {
+        self.storage.zoom_off.set(!zoomable);
+    }
+    /// Whether the zoom keys zoom this window (`set_zoomable`).
+    pub fn zoomable(&self) -> bool {
+        !self.storage.zoom_off.get()
+    }
+    /// Whether a Control-wheel zooms this window (the host asks before
+    /// dispatching one: `wheel`, then `zoom_wheel`).
+    #[doc(hidden)]
+    pub fn wheel_zooms(&self) -> bool {
+        self.zoomable() && !self.storage.zoom_host.borrow().is_empty()
+    }
+    /// A Control-wheel nothing took turned `notches` (up, away from the
+    /// user, is positive): a level in or out for each whole notch, a
+    /// touchpad's fractions adding up.
+    #[doc(hidden)]
+    pub fn zoom_wheel(&self, notches: f32) {
+        if !notches.is_finite() {
+            return;
+        }
+        let mut turned = self.storage.zoom_wheel.get() + notches;
+        while turned >= 1. {
+            self.zoom_in();
+            turned -= 1.;
+        }
+        while turned <= -1. {
+            self.zoom_out();
+            turned += 1.;
+        }
+        self.storage.zoom_wheel.set(turned);
+    }
+    /// `told` each time the zoom changes: the host, to apply it; a script,
+    /// to show it.
+    #[doc(hidden)]
+    pub fn on_zoom(&self, told: impl Fn() + 'static) {
+        self.storage.zoom_host.borrow_mut().push(Rc::new(told));
+    }
+    /// What each scrolled view shows at its top, to keep there through a
+    /// zoom (`restore_zoom_anchors`).
+    #[doc(hidden)]
+    pub fn zoom_anchors(&self) -> Anchors {
+        let scene = self.scene.borrow();
+        let mut anchors = Vec::new();
+        let mut pending = vec![scene.root()];
+        while let Some(id) = pending.pop() {
+            if scene.is_scroll_content(id)
+                && scene.transform(id).y < 0.
+                && let Some(viewport) = scene.parent(id)
+            {
+                let top = scene.bounds(viewport).y;
+                // The innermost node reaching past the viewport's top.
+                let mut anchor = None;
+                let mut within = id;
+                while let Some(child) = scene.children(within).iter().copied().find(|child| {
+                    let b = scene.bounds(*child);
+                    b.y + b.height > top
+                }) {
+                    anchor = Some(child);
+                    within = child;
+                }
+                if let Some(anchor) = anchor {
+                    anchors.push((viewport, anchor, scene.bounds(anchor).y - top));
+                }
+            }
+            pending.extend(scene.children(id).iter().rev().copied());
+        }
+        Anchors(anchors)
+    }
+    /// Scroll each view so what was at its top (`zoom_anchors`) is there
+    /// again, once the zoom's layout is done.
+    #[doc(hidden)]
+    pub fn restore_zoom_anchors(&mut self, anchors: Anchors) {
+        for (viewport, anchor, was) in anchors.0 {
+            let delta = {
+                let scene = self.scene.borrow();
+                if !scene.contains(anchor) || !scene.contains(viewport) {
+                    continue;
+                }
+                scene.bounds(anchor).y - scene.bounds(viewport).y - was
+            };
+            if delta.abs() < 0.5 {
+                continue;
+            }
+            self.input.dispatch_to(
+                &self.scene,
+                anchor,
+                InputEvent::Scroll {
+                    x: 0.,
+                    y: 0.,
+                    delta_x: 0.,
+                    delta_y: delta,
+                },
+            );
+            self.prepare_frame();
+        }
+    }
+}
+
+/// Whether `key` with `modifiers` zooms a window: Command (Control
+/// elsewhere) with plus or equals, minus, or 0 (not with Shift), never with
+/// Option or the other of Command and Control. An app's binding of one
+/// keeps it from zoom (a menu's, too: the zoom items stay out); the chords
+/// with Option or both (Command-Option-=, Command-Control-=) are the app's.
+pub fn is_zoom_key(key: &Key, modifiers: Modifiers) -> bool {
+    let Key::Character(key) = key else {
+        return false;
+    };
+    let both = modifiers.meta && modifiers.control;
+    modifiers.primary_shortcut()
+        && !modifiers.alt
+        && !both
+        && match key.as_str() {
+            "=" | "+" | "-" | "_" => true,
+            "0" => !modifiers.shift,
+            _ => false,
+        }
+}
+
+/// The window's zoom keys (`is_zoom_key`), for keys nothing else took: in
+/// with plus or equals, out with minus, back to 100% with 0. Whether it
+/// took the key.
+pub(crate) fn after_dispatch(ui: &Ui, event: &InputEvent) -> bool {
+    let InputEvent::KeyDown { key, modifiers, .. } = event else {
+        return false;
+    };
+    if !is_zoom_key(key, *modifiers) || !ui.zoomable() || ui.storage.zoom_host.borrow().is_empty() {
+        return false;
+    }
+    match key {
+        Key::Character(key) if matches!(key.as_str(), "=" | "+") => ui.zoom_in(),
+        Key::Character(key) if matches!(key.as_str(), "-" | "_") => ui.zoom_out(),
+        _ => ui.reset_zoom(),
+    }
+    true
+}

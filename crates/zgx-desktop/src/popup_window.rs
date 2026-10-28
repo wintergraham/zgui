@@ -102,6 +102,33 @@ pub(crate) use other::{
     PopupHost, content_origin, enabled, popup_screens, warm, window_at, window_number,
 };
 
+thread_local! {
+    /// Windows zoomed (`Ui::zoom`), each its zoom; one at 100% is not here.
+    static ZOOMS: std::cell::RefCell<std::collections::HashMap<winit::window::WindowId, f64>> =
+        Default::default();
+}
+/// Window `window`'s content is zoomed `zoom` (1: 100%).
+pub(crate) fn set_zoom(window: winit::window::WindowId, zoom: f64) {
+    ZOOMS.with(|zooms| {
+        let mut zooms = zooms.borrow_mut();
+        if zoom == 1. {
+            zooms.remove(&window);
+        } else {
+            zooms.insert(window, zoom);
+        }
+    });
+}
+/// Window `window`'s zoom: what its content points are of its own.
+pub(crate) fn zoom_of(window: winit::window::WindowId) -> f64 {
+    ZOOMS.with(|zooms| {
+        let zooms = zooms.borrow();
+        if zooms.is_empty() {
+            1.
+        } else {
+            zooms.get(&window).copied().unwrap_or(1.)
+        }
+    })
+}
 /// Global units (`content_origin`, `window_at`, a platform drag's points)
 /// per logical point of `window`. Windows: the screen's pixels, exact
 /// between windows of different scales, each window's scale apart. Elsewhere
@@ -1123,15 +1150,17 @@ mod macos {
         let frame = parent.convertRectToScreen(content.convertRect_toView(content.bounds(), None));
         // Screen space runs bottom-up, the window's top-down.
         let top = frame.origin.y + frame.size.height;
+        // In the content's points, its zoom's.
+        let zoom = super::zoom_of(window.id()) as f32;
         objc2_app_kit::NSScreen::screens(MainThreadMarker::from(&*parent))
             .iter()
             .map(|screen| {
                 let screen = screen.visibleFrame();
                 Rect::new(
-                    (screen.origin.x - frame.origin.x) as f32,
-                    (top - (screen.origin.y + screen.size.height)) as f32,
-                    screen.size.width as f32,
-                    screen.size.height as f32,
+                    (screen.origin.x - frame.origin.x) as f32 / zoom,
+                    (top - (screen.origin.y + screen.size.height)) as f32 / zoom,
+                    screen.size.width as f32 / zoom,
+                    screen.size.height as f32 / zoom,
                 )
             })
             .collect()
@@ -1639,7 +1668,8 @@ mod x11 {
         let Ok(origin) = window.inner_position() else {
             return Vec::new();
         };
-        let scale = window.scale_factor();
+        // Pixels per point of its content, its zoom's.
+        let scale = window.scale_factor() * super::zoom_of(window.id());
         // Each monitor less the panels on it (the current desktop's work
         // area, `_NET_WORKAREA`), as menus keep off a panel.
         let work = crate::x11_work_area::current();
@@ -2309,7 +2339,8 @@ mod x11 {
             if popup.rect == Some(frame) {
                 return;
             }
-            place(&popup.window, origin, frame, parent.scale_factor() as f32);
+            let scale = parent.scale_factor() * super::zoom_of(parent.id());
+            place(&popup.window, origin, frame, scale as f32);
             popup.rect = Some(frame);
             TARGETS.with(|targets| {
                 if let Some(target) = targets.borrow().get(&popup.window.id()) {

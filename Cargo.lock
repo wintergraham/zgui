@@ -3365,6 +3365,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b09c83c3c29d37506a3e260c08c03743a6bb66a9cd432c6934ab501a190571f"
 
 [[package]]
+name = "unicode-normalization"
+version = "0.1.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75cd3fb03d5288b3ba9a1ee103ac7e9cbb59f0b03d64f8ddfcc04dd42758a85d"
+dependencies = [
+ "tinyvec",
+]
+
+[[package]]
 name = "unicode-script"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4409,21 +4418,23 @@ dependencies = [
 
 [[package]]
 name = "zgx"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
+ "foldhash 0.2.0",
  "objc2-core-foundation",
  "objc2-core-video",
  "rustc-hash 2.1.3",
  "smallvec",
  "stacker",
  "unicode-linebreak",
+ "unicode-normalization",
  "unicode-segmentation",
  "zgx-taffy",
 ]
 
 [[package]]
 name = "zgx-components"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "zgx",
  "zgx-desktop",
@@ -4431,7 +4442,7 @@ dependencies = [
 
 [[package]]
 name = "zgx-cosmic-text"
-version = "0.19.1"
+version = "0.19.2"
 dependencies = [
  "bitflags 2.13.2",
  "fontdb",
@@ -4453,7 +4464,7 @@ dependencies = [
 
 [[package]]
 name = "zgx-demo"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "softbuffer",
  "winit",
@@ -4465,7 +4476,7 @@ dependencies = [
 
 [[package]]
 name = "zgx-desktop"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "accesskit",
  "accesskit_atspi_common",
@@ -4522,11 +4533,11 @@ dependencies = [
 
 [[package]]
 name = "zgx-ghostty-sys"
-version = "0.1.2"
+version = "0.1.3"
 
 [[package]]
 name = "zgx-gpu"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "bytemuck",
  "gif",
@@ -4567,7 +4578,7 @@ dependencies = [
 
 [[package]]
 name = "zgx-mlua"
-version = "0.12.3"
+version = "0.12.4"
 dependencies = [
  "bstr",
  "either",
@@ -4581,7 +4592,7 @@ dependencies = [
 
 [[package]]
 name = "zgx-run"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "png 0.18.1",
  "serde_json",
@@ -4592,7 +4603,7 @@ dependencies = [
 
 [[package]]
 name = "zgx-script"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "libc",
  "memchr",
