@@ -135,6 +135,19 @@ pub(crate) fn apply(
     }
 }
 
+/// Blur what lies behind `window`'s transparent areas by `radius` (macOS's
+/// window-server blur, `WindowOptions::background_blur`; 0 none). Elsewhere
+/// it does nothing.
+pub(crate) fn set_background_blur(window: &winit::window::Window, radius: u32) {
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::WindowExtMacOS;
+        window.set_blur_radius(radius);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, radius);
+}
+
 /// The title bar's free area and the window's buttons in it, in points
 /// (`WindowInfo::titlebar_area`, `controls`): `None` for a standard title
 /// bar and in fullscreen.

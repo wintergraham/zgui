@@ -978,15 +978,7 @@ impl WindowDelegate {
     pub fn set_blur(&self, blur: bool) {
         // NOTE: in general we want to specify the blur radius, but the choice of 80
         // should be a reasonable default.
-        let radius = if blur { 80 } else { 0 };
-        let window_number = unsafe { self.window().windowNumber() };
-        unsafe {
-            ffi::CGSSetWindowBackgroundBlurRadius(
-                ffi::CGSMainConnectionID(),
-                window_number,
-                radius,
-            );
-        }
+        self.set_blur_radius(if blur { 80 } else { 0 });
     }
 
     pub fn set_visible(&self, visible: bool) {
@@ -1954,6 +1946,17 @@ impl WindowExtMacOS for WindowDelegate {
 
     fn is_borderless_game(&self) -> bool {
         self.ivars().is_borderless_game.get()
+    }
+
+    fn set_blur_radius(&self, radius: u32) {
+        let window_number = unsafe { self.window().windowNumber() };
+        unsafe {
+            ffi::CGSSetWindowBackgroundBlurRadius(
+                ffi::CGSMainConnectionID(),
+                window_number,
+                radius as i64,
+            );
+        }
     }
 }
 

@@ -94,6 +94,11 @@ pub struct WindowOptions {
     /// primary), rather than in a fullscreen space of its own: transparent
     /// and frameless, a layer over the desktop and the windows on it.
     pub covers_display: bool,
+    /// The window server's blur of what lies behind the window where it is
+    /// transparent, as a radius (macOS; 0 none). Unlike `glass`, it isn't
+    /// cut to the window's rounded corners, and it takes any strength. Kept
+    /// through fullscreen and Space changes.
+    pub background_blur: u32,
 }
 impl WindowOptions {
     /// Whether the window is transparent where zgx paints nothing.
@@ -124,6 +129,7 @@ impl Default for WindowOptions {
             level: crate::WindowLevel::Normal,
             shadow: true,
             covers_display: false,
+            background_blur: 0,
         }
     }
 }
@@ -172,6 +178,7 @@ enum WindowCommand {
     PointerPassthrough(bool),
     Level(crate::WindowLevel),
     Shadow(bool),
+    BackgroundBlur(u32),
     Fullscreen(bool),
     Decorations(bool),
     MinSize(Option<(f64, f64)>),
@@ -217,6 +224,7 @@ impl WindowState {
             WindowCommand::PointerPassthrough(_) => {}
             WindowCommand::Level(level) => options.level = *level,
             WindowCommand::Shadow(value) => options.shadow = *value,
+            WindowCommand::BackgroundBlur(radius) => options.background_blur = *radius,
             WindowCommand::MinSize(value) => options.min_size = *value,
             WindowCommand::Drag
             | WindowCommand::RefreshInfo
@@ -319,6 +327,11 @@ impl WindowHandle {
     /// Show or drop the platform's shadow (see `WindowOptions::shadow`).
     pub fn set_shadow(&self, shadow: bool) {
         self.command(WindowCommand::Shadow(shadow));
+    }
+    /// Blur what lies behind the window's transparent areas by `radius`, or
+    /// stop with 0 (see `WindowOptions::background_blur`).
+    pub fn set_background_blur(&self, radius: u32) {
+        self.command(WindowCommand::BackgroundBlur(radius));
     }
     /// The smallest logical client size the person can resize to; `None`
     /// removes the limit. A size that isn't finite and positive is ignored.
@@ -2573,6 +2586,9 @@ impl Host {
         self.state.maximized |= placed.maximized;
         let radius =
             crate::window_chrome::apply(&window, self.options.titlebar, self.options.glass);
+        if self.options.background_blur > 0 {
+            crate::window_chrome::set_background_blur(&window, self.options.background_blur);
+        }
         // A saved frame keeps its size.
         if self.options.titlebar != crate::Titlebar::Standard && !placed.restored {
             // Content now spans the title bar: the window shrinks to give
@@ -2910,6 +2926,9 @@ impl Host {
             }
             WindowCommand::Level(level) => window.set_window_level(level.winit()),
             WindowCommand::Shadow(value) => crate::window_info::set_shadow(window, value),
+            WindowCommand::BackgroundBlur(radius) => {
+                crate::window_chrome::set_background_blur(window, radius)
+            }
             WindowCommand::MinSize(value) => {
                 window.set_min_inner_size(value.map(|(w, h)| LogicalSize::new(w, h)))
             }
@@ -3213,6 +3232,11 @@ impl Host {
             let fullscreen = window.fullscreen().is_some();
             if std::mem::replace(&mut self.popups_fullscreen, fullscreen) != fullscreen {
                 self.context.ui.dismiss_popups();
+                // The window server can drop the blur as the window moves to
+                // or from its fullscreen Space.
+                if self.options.background_blur > 0 {
+                    crate::window_chrome::set_background_blur(window, self.options.background_blur);
+                }
             }
             if !fullscreen && !maximized {
                 let bounds = crate::WindowBounds::read(window);
@@ -3243,6 +3267,12 @@ impl Host {
             }
             WindowEvent::Occluded(false) => {
                 self.native_occluded = false;
+                // Shown again on its Space: the blur too.
+                if self.options.background_blur > 0
+                    && let Some(window) = &self.window
+                {
+                    crate::window_chrome::set_background_blur(window, self.options.background_blur);
+                }
                 self.context
                     .ui
                     .set_presented(self.state.visible && !self.state.minimized);
@@ -6604,13 +6634,15 @@ mod tests {
             WindowCommand::Focus,
             WindowCommand::Level(crate::WindowLevel::AlwaysOnTop),
             WindowCommand::Shadow(false),
+            WindowCommand::BackgroundBlur(24),
         ] {
             state.apply(&mut options, &command);
         }
         assert_eq!(options.title, "Document — saved");
-        // A window made again keeps its level and shadow.
+        // A window made again keeps its level, shadow and blur.
         assert_eq!(options.level, crate::WindowLevel::AlwaysOnTop);
         assert!(!options.shadow);
+        assert_eq!(options.background_blur, 24);
         assert_eq!((options.width, options.height), (640., 480.));
         assert!(!state.visible);
         assert!(state.minimized && state.maximized && state.focus_requested);

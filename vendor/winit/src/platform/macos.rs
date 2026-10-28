@@ -170,6 +170,10 @@ pub trait WindowExtMacOS {
 
     /// Getter for the [`WindowExtMacOS::set_borderless_game`].
     fn is_borderless_game(&self) -> bool;
+
+    /// Blur what lies behind the window's transparent areas by `radius` (the window server's
+    /// units; `0` turns it off). [`Window::set_blur`] is this at a radius of 80.
+    fn set_blur_radius(&self, radius: u32);
 }
 
 impl WindowExtMacOS for Window {
@@ -251,6 +255,11 @@ impl WindowExtMacOS for Window {
     #[inline]
     fn is_borderless_game(&self) -> bool {
         self.window.maybe_wait_on_main(|w| w.is_borderless_game())
+    }
+
+    #[inline]
+    fn set_blur_radius(&self, radius: u32) {
+        self.window.maybe_queue_on_main(move |w| w.set_blur_radius(radius))
     }
 }
 
