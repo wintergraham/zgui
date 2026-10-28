@@ -645,6 +645,16 @@ impl ClickTracker {
         count
     }
 }
+/// An event that found its target removed (`route_pointer`): said once a
+/// process in debug builds, where it points at state kept past a rebuild.
+fn stale_target(target: NodeId, event: &InputEvent) {
+    if cfg!(debug_assertions) {
+        static SAID: std::sync::Once = std::sync::Once::new();
+        SAID.call_once(|| {
+            eprintln!("zgx: {event:?} skipped node {target:?}, removed since it was chosen");
+        });
+    }
+}
 #[derive(Default)]
 struct State {
     /// Views that take keys while nothing is focused (`take_unfocused_keys`),
@@ -1664,6 +1674,23 @@ impl InputDispatcher {
         } else {
             Modifiers::default()
         };
+        let key_code = matches!(event, InputEvent::KeyDown { .. } | InputEvent::KeyUp { .. })
+            .then(|| self.state.borrow().key_code.clone())
+            .flatten();
+        let mut ctx = EventContext {
+            pointer_modifiers,
+            click_count,
+            drag_threshold: self.drag_threshold(),
+            key_code,
+            ..EventContext::new(event, target)
+        };
+        // A node removed since it was chosen (a capture, press, hover or
+        // focus kept from before a rebuild, or one a handler earlier in this
+        // dispatch removed) hears nothing: its id may name another node now.
+        if !scene.borrow().contains(target) {
+            stale_target(target, &ctx.event);
+            return ctx;
+        }
         let mut path = vec![target];
         if !alone {
             let scene = scene.borrow();
@@ -1676,16 +1703,6 @@ impl InputDispatcher {
                 id = parent;
             }
         }
-        let key_code = matches!(event, InputEvent::KeyDown { .. } | InputEvent::KeyUp { .. })
-            .then(|| self.state.borrow().key_code.clone())
-            .flatten();
-        let mut ctx = EventContext {
-            pointer_modifiers,
-            click_count,
-            drag_threshold: self.drag_threshold(),
-            key_code,
-            ..EventContext::new(event, target)
-        };
         let phases = path
             .iter()
             .skip(1)
@@ -2143,6 +2160,10 @@ impl InputDispatcher {
             }
         }
         let _unwinding = Unwinding(&self.state);
+        // A node removed since the last event without `Ui::remove` (or by a
+        // handler of the last one) leaves no capture, press, focus or
+        // click behind for this one to route to.
+        self.forget_removed(&scene.borrow());
         if let Some(held) = modifiers {
             self.state.borrow_mut().modifiers = held;
         }
@@ -2862,6 +2883,99 @@ mod tests {
             y,
             button: PointerButton::Primary,
         }
+    }
+    fn moved_to(x: f32, y: f32) -> InputEvent {
+        InputEvent::PointerMove { x, y }
+    }
+    fn centre(scene: &Rc<RefCell<Scene>>, id: NodeId) -> (f32, f32) {
+        let b = scene.borrow().bounds(id);
+        (b.x + b.width / 2., b.y + b.height / 2.)
+    }
+    #[test]
+    fn a_node_removed_between_press_and_move_or_release_frees_the_pointer() {
+        let (scene, a, b) = setup();
+        let d = InputDispatcher::new();
+        let heard = Rc::new(RefCell::new(Vec::new()));
+        let log = heard.clone();
+        let _a = d.register(a, NodeInput::default(), move |cx| {
+            if let InputEvent::PointerDown { .. } = cx.event {
+                cx.capture_pointer();
+            }
+            log.borrow_mut().push(("a", format!("{:?}", cx.event)));
+        });
+        let log = heard.clone();
+        let _b = d.register(b, NodeInput::default(), move |cx| {
+            log.borrow_mut().push(("b", format!("{:?}", cx.event)));
+        });
+        let (ax, ay) = centre(&scene, a);
+        d.dispatch(&scene, down(ax, ay));
+        assert_eq!(d.captured(), Some(a));
+        // A rebuild removes it before the release, its listeners not yet
+        // dropped (a window drag swallowed the release, say).
+        scene.borrow_mut().remove(a);
+        scene.borrow_mut().flush();
+        let (bx, by) = centre(&scene, b);
+        heard.borrow_mut().clear();
+        d.dispatch(&scene, moved_to(bx, by));
+        d.dispatch(&scene, up(bx, by));
+        assert_eq!(d.captured(), None);
+        assert!(
+            heard.borrow().iter().all(|(who, _)| *who == "b"),
+            "{heard:?}"
+        );
+        heard.borrow_mut().clear();
+        d.dispatch(&scene, down(bx, by));
+        assert!(
+            heard
+                .borrow()
+                .iter()
+                .any(|(who, e)| *who == "b" && e.starts_with("PointerDown")),
+            "the next press reaches what it is on: {heard:?}"
+        );
+    }
+    #[test]
+    fn a_hovered_node_removed_before_the_next_move_is_left_without_routing_to_it() {
+        let (scene, a, b) = setup();
+        let d = InputDispatcher::new();
+        let entered = Rc::new(std::cell::Cell::new(0));
+        let count = entered.clone();
+        let _a = d.register(a, NodeInput::default(), |_| {});
+        let _b = d.register(b, NodeInput::default(), move |cx| {
+            if let InputEvent::PointerEnter = cx.event {
+                count.set(count.get() + 1);
+            }
+        });
+        let (ax, ay) = centre(&scene, a);
+        d.dispatch(&scene, moved_to(ax, ay));
+        assert_eq!(d.hovered(), Some(a));
+        scene.borrow_mut().remove(a);
+        scene.borrow_mut().flush();
+        // `b` moves up into its place; the next move enters it.
+        let (bx, by) = centre(&scene, b);
+        d.dispatch(&scene, moved_to(bx, by));
+        assert_eq!(d.hovered(), Some(b));
+        assert_eq!(entered.get(), 1);
+    }
+    #[test]
+    fn a_node_its_own_enter_handler_removes_hears_nothing_more_of_the_move() {
+        let (scene, a, _) = setup();
+        let d = InputDispatcher::new();
+        let s = scene.clone();
+        let moves = Rc::new(std::cell::Cell::new(0));
+        let count = moves.clone();
+        let _a = d.register(a, NodeInput::default(), move |cx| match cx.event {
+            InputEvent::PointerEnter => s.borrow_mut().remove(a),
+            InputEvent::PointerMove { .. } => count.set(count.get() + 1),
+            _ => {}
+        });
+        let (x, y) = centre(&scene, a);
+        // The move hit-tested `a` before its enter handler removed it.
+        d.dispatch(&scene, moved_to(x, y));
+        assert!(!scene.borrow().contains(a));
+        assert_eq!(moves.get(), 0);
+        d.dispatch(&scene, moved_to(x, y + 1.));
+        d.dispatch(&scene, down(x, y + 1.));
+        d.dispatch(&scene, up(x, y + 1.));
     }
     #[test]
     fn removal_during_dispatch_does_not_leave_stale_focus() {

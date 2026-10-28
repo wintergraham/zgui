@@ -11,6 +11,7 @@ What Ask adds to upstream:
 - Menu bar: an app's items in macOS's application menu (`AppMenu::APPLICATION`), its own Window and Help menus around AppKit's standard items, and `StandardItem::ToggleFullScreen`.
 - Frames drawn every refresh or unlimited (`FrameMode`), counted as presented; a press through a child keeps the pointer; a script's focus or selection set in a handler survives the event's default action; work deferred outside an event waits for its batch.
 - A presence's box lets the pointer through while what it shows is hidden; opened documents arrive as file URLs on macOS; native views and cached layers stay on the device pixel grid.
+- An input event whose target was removed after it was chosen is dropped rather than panicking ("stale scene node"), and each dispatch forgets the capture, press and focus that name removed nodes.
 - Box shadows drawn as CSS's: the exact blurred rounded box, outside the element only.
 - Truncated text shrinks past its longest word (an ellipsis clips, as `overflow: hidden` does in CSS).
 - The Ask UI runner (`examples/ask_ui.rs`), the snapshot runner (`tests/ask_ui_snapshots.rs`) and the Ask labs (Controls, Navbar, Quick ask, Sidebar PiP).
