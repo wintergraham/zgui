@@ -1,5 +1,6 @@
-//! Scripts' input placeholders, selection API, select-on-focus, window drag
-//! regions, and hover's enter/leave semantics.
+//! Scripts' input placeholders, selection API, steps of their own in an
+//! input's undo, select-on-focus, window drag regions, and hover's
+//! enter/leave semantics.
 mod common;
 
 use common::Harness;
@@ -103,6 +104,51 @@ fn selection_api_counts_characters() {
     assert_eq!(editor.selection(), (7, 2));
     h.click("caret");
     assert_eq!(h.text("log"), "3-3");
+}
+
+/// A script's step (`push_history`) undoes and redoes in order with the
+/// typing around it, told to `on_history`; the text stays as it is.
+#[test]
+fn script_steps_undo_and_redo_with_the_typing_around_them() {
+    let mut h = Harness::inline(
+        r##"local text = ui.state("text", "")
+        local log = ui.state("log", "")
+        local field
+        return ui.column {
+            ui.textarea { id = "field", label = "Message", value = text, w = 200, h = 80,
+                on_mount = function(el) field = el end,
+                on_history = function(token, how) log:set(log:get() .. how .. token .. " ") end },
+            ui.button { id = "attach", w = 10, h = 10, on_click = function()
+                assert(field:push_history(3))
+                field:focus()
+            end },
+            ui.text { "{log}", id = "log" },
+            ui.text { "{text}", id = "text" },
+        }"##,
+    );
+    h.type_text("field", "ab");
+    h.click("attach");
+    h.ui.dispatch(InputEvent::Text("c".into()));
+    h.settle();
+    assert_eq!(h.text("text"), "abc");
+    h.keys("cmd+z");
+    assert_eq!((h.text("text"), h.text("log")), ("ab".into(), "".into()));
+    h.keys("cmd+z");
+    assert_eq!(
+        (h.text("text"), h.text("log")),
+        ("ab".into(), "undo3 ".into())
+    );
+    h.keys("cmd+z");
+    assert_eq!(h.text("text"), "");
+    h.keys("cmd+shift+z");
+    h.keys("cmd+shift+z");
+    assert_eq!(
+        (h.text("text"), h.text("log")),
+        ("ab".into(), "undo3 redo3 ".into())
+    );
+    h.keys("cmd+shift+z");
+    assert_eq!(h.text("text"), "abc");
+    assert_eq!(h.error(), None);
 }
 
 #[test]

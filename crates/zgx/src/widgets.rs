@@ -5,7 +5,7 @@ use crate::{
     scene::{Color, Insets, Layout, NodeId, NodeKind, Rect, Scene, Style, Transform},
     semantics::{Role, SemanticNode, Semantics},
     text::{Text, TextValue},
-    text_edit::TextEditor,
+    text_edit::{HistoryStep, TextEditor},
     text_layout::{FontStyle, TextAffinity, TextLayout, TextPosition},
     theme::{ColorToken, ThemeScope, Themes, tok},
 };
@@ -176,7 +176,8 @@ struct EditorHint {
 }
 /// What a code editor adds to an editor's hint: its long text's lines,
 /// marks behind its selection, its current line, Tab's indent, and who is
-/// told where its caret is.
+/// told where its caret is (and, an app keeping steps of its own in the
+/// editor's undo, when one is undone or redone).
 #[derive(Default)]
 struct CodeHint {
     /// Ranges of the text marked with a colour behind them (a search's
@@ -200,6 +201,9 @@ struct CodeHint {
     /// Where it was last drawn, and last told.
     caret_drawn: Cell<Option<Caret>>,
     caret_told: Cell<Option<Caret>>,
+    /// Told when undo or redo reaches an app's step
+    /// (`EditorHandle::on_history`).
+    on_history: RefCell<Option<HistoryListener>>,
 }
 impl EditorHint {
     fn new(value: EditorValue) -> Self {
@@ -238,6 +242,18 @@ impl EditorHint {
 }
 /// What an editor tells where its caret is (`EditorHandle::on_caret`).
 type CaretListener = Box<dyn FnMut(Caret)>;
+/// What an editor tells of an app's step undone or redone
+/// (`EditorHandle::on_history`).
+type HistoryListener = Box<dyn FnMut(u64, HistoryDirection)>;
+/// Which way an app's step in an editor's history went
+/// (`EditorHandle::on_history`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryDirection {
+    /// Undone: the app takes back what it did.
+    Undo,
+    /// Redone: the app does it again.
+    Redo,
+}
 /// Where an editor's caret is (`EditorHandle::on_caret`): its line and
 /// column, from 1 (the column in characters), and the selection as UTF-8
 /// byte offsets.
@@ -461,6 +477,19 @@ impl EditorHandle {
         code.caret_told.set(None);
         self.refresh();
     }
+    /// Record an app's own step in the editor's undo history, between the
+    /// edits of its text (an attachment added beside a message being
+    /// typed): see `TextEditor::push_app_step`. When the editor's undo or
+    /// redo reaches it, `on_history` is told `token` and the direction.
+    pub fn push_history(&self, token: u64) {
+        self.editor.borrow_mut().push_app_step(token);
+    }
+    /// Call `told` with an app step's token (`push_history`) and which way
+    /// it went when the editor's undo or redo reaches it, after the key is
+    /// handled (nothing borrowed): the app undoes or redoes its change.
+    pub fn on_history(&self, told: impl FnMut(u64, HistoryDirection) + 'static) {
+        *self.hint.code_made().on_history.borrow_mut() = Some(Box::new(told));
+    }
     /// A colour behind the caret's row (a code editor's current line).
     pub fn set_current_line(&self, color: Option<Color>) {
         if self.hint.code_made().current_line.replace(color) != color {
@@ -576,6 +605,9 @@ impl EditorHandle {
         self.refresh();
     }
 }
+/// How a [`LayoutFeedbackError`] reads: hosts recognise it by this start and carry on with the last allocation rather
+/// than treating it as fatal.
+pub const LAYOUT_FEEDBACK: &str = "layout allocation did not settle";
 /// Layout notifications repeatedly changed their own allocation without settling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LayoutFeedbackError {
@@ -586,7 +618,7 @@ impl std::fmt::Display for LayoutFeedbackError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "layout allocation did not settle after {} passes; check size-dependent view mutations",
+            "{LAYOUT_FEEDBACK} after {} passes; check size-dependent view mutations",
             self.passes
         )
     }
@@ -4473,6 +4505,8 @@ impl Ui {
                 preferred_x.set(None);
             }
             let mut changed = false;
+            // An app's step undo or redo reached, told once the key is done.
+            let mut app_step = None;
             match event {
                 InputEvent::Focus => {
                     *focused.borrow_mut() = true;
@@ -5094,11 +5128,23 @@ impl Ui {
                             Key::Character(ref k) if command && k.eq_ignore_ascii_case("a") => {
                                 e.select_all()
                             }
-                            Key::Character(ref k) if command && k.eq_ignore_ascii_case("z") => {
-                                changed = if modifiers.shift { e.redo() } else { e.undo() };
-                            }
-                            Key::Character(ref k) if command && k.eq_ignore_ascii_case("y") => {
-                                changed = e.redo();
+                            Key::Character(ref k)
+                                if command
+                                    && (k.eq_ignore_ascii_case("z") || k.eq_ignore_ascii_case("y")) =>
+                            {
+                                let how = if modifiers.shift || k.eq_ignore_ascii_case("y") {
+                                    HistoryDirection::Redo
+                                } else {
+                                    HistoryDirection::Undo
+                                };
+                                let step = match how {
+                                    HistoryDirection::Undo => e.undo_step(),
+                                    HistoryDirection::Redo => e.redo_step(),
+                                };
+                                changed = step == Some(HistoryStep::Text);
+                                if let Some(HistoryStep::App(token)) = step {
+                                    app_step = Some((token, how));
+                                }
                             }
                             // A composition to cancel takes it; otherwise it goes
                             // on (a dialog around the field closes).
@@ -5116,6 +5162,19 @@ impl Ui {
                     affinity: TextAffinity::After,
                 });
                 tab_indent.value.write(&editor);
+            }
+            if let Some((token, how)) = app_step
+                && let Some(code) = tab_indent.code()
+            {
+                // The callback is out while it runs (it may set another).
+                let callback = code.on_history.borrow_mut().take();
+                if let Some(mut callback) = callback {
+                    callback(token, how);
+                    let mut slot = code.on_history.borrow_mut();
+                    if slot.is_none() {
+                        *slot = Some(callback);
+                    }
+                }
             }
             draw();
             arm();

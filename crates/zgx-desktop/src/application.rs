@@ -940,6 +940,7 @@ impl Application {
             factory,
             active: false,
             error: None,
+            layout_feedback_logged: None,
             timers,
         };
         event_loop.run_app(&mut host)?;
@@ -4718,6 +4719,8 @@ struct WindowManager {
     factory: WindowFactory,
     active: bool,
     error: Option<String>,
+    /// When a layout that would not settle was last reported (`fail` carries on past it).
+    layout_feedback_logged: Option<std::time::Instant>,
     timers: zgx::timer::Hosted,
 }
 /// The app's window a drag is over, and the pointer in its coordinates.
@@ -5130,8 +5133,19 @@ impl WindowManager {
         }
     }
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: impl std::fmt::Display) {
+        let message = error.to_string();
+        // A layout that keeps changing its own size is a bug in what the views do on resize, not a reason to close
+        // the app: the frame keeps its last allocation and the next one tries again. Said at most every few seconds.
+        if message.starts_with(zgx::widgets::LAYOUT_FEEDBACK) {
+            let now = std::time::Instant::now();
+            if self.layout_feedback_logged.is_none_or(|at| now.duration_since(at).as_secs() >= 5) {
+                self.layout_feedback_logged = Some(now);
+                eprintln!("zgx: {message}");
+            }
+            return;
+        }
         if self.error.is_none() {
-            self.error = Some(error.to_string());
+            self.error = Some(message);
         }
         event_loop.exit();
     }
@@ -6918,6 +6932,7 @@ mod tests {
             factory,
             active: false,
             error: None,
+            layout_feedback_logged: None,
             timers: zgx::timer::host(|| {}),
         };
         assert!(retained.clipboard.borrow().is_some());
@@ -7279,6 +7294,7 @@ mod tests {
             factory,
             active: false,
             error: None,
+            layout_feedback_logged: None,
             timers: zgx::timer::host(|| {}),
         };
         let mut probe = Probe {

@@ -344,6 +344,7 @@ pub(crate) struct CodeOptions {
     current_line: Option<Box<dyn FnMut() -> Option<crate::scene::Color>>>,
     indent: Option<String>,
     on_caret: Option<Box<dyn FnMut(crate::widgets::Caret)>>,
+    on_history: Option<Box<dyn FnMut(u64, crate::widgets::HistoryDirection)>>,
 }
 /// `View`'s fields few views set (`View::rare`).
 #[derive(Default)]
@@ -1234,6 +1235,17 @@ impl View {
     /// status bar's line and column); see `EditorHandle::on_caret`.
     pub fn on_caret(mut self, told: impl FnMut(crate::widgets::Caret) + 'static) -> Self {
         self.code_mut().on_caret = Some(Box::new(told));
+        self
+    }
+    /// Call `told` when a text input's undo or redo reaches a step the app
+    /// recorded in its history (`EditorHandle::push_history`), with that
+    /// step's token and which way it went: the app undoes or redoes its own
+    /// change (an attachment) in order with the typing around it.
+    pub fn on_history(
+        mut self,
+        told: impl FnMut(u64, crate::widgets::HistoryDirection) + 'static,
+    ) -> Self {
+        self.code_mut().on_history = Some(Box::new(told));
         self
     }
     /// Make the view a window drag region, like CSS's
@@ -4291,6 +4303,7 @@ fn open_element(
                 current_line,
                 indent,
                 on_caret,
+                on_history,
             } = *code;
             if highlighter.is_some() {
                 editor.set_highlighter(highlighter);
@@ -4308,6 +4321,9 @@ fn open_element(
             }
             if let Some(told) = on_caret {
                 editor.on_caret(told);
+            }
+            if let Some(told) = on_history {
+                editor.on_history(told);
             }
             editor.set_indent(indent.as_deref());
             if let Some(mut ranges) = decorations {

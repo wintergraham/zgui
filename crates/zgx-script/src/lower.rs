@@ -3685,6 +3685,18 @@ fn code_editor(
             }
         });
     }
+    if let Some(told) = &code.on_history {
+        let (told, vm) = (told.clone(), vm.clone());
+        view = view.on_history(move |token, how| {
+            let how = match how {
+                zgx::widgets::HistoryDirection::Undo => "undo",
+                zgx::widgets::HistoryDirection::Redo => "redo",
+            };
+            if let Err(error) = vm.call::<()>(&told, (token as f64, how)) {
+                vm.report(error);
+            }
+        });
+    }
     view
 }
 /// What a computed colour returned: a colour parsed from its text while

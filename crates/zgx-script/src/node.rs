@@ -1099,6 +1099,10 @@ pub(crate) struct CodeProps {
     /// `on_caret = function(line, column, anchor, focus)`: where the caret
     /// is, whenever it moves.
     pub on_caret: Option<Function>,
+    /// `on_history = function(token, how)`: undo (`how` is `"undo"`) or
+    /// redo (`"redo"`) reached a step the script recorded in the editor's
+    /// history with `el:push_history(token)`.
+    pub on_history: Option<Function>,
     /// `find = { query, case, current, limit, color, current_color }`: a
     /// search's matches marked behind the text, found where the text is
     /// held (no list of them made in the script).
@@ -2152,6 +2156,7 @@ const WIDGET_FIELDS: &[&str] = &[
     "current_line",
     "tab",
     "on_caret",
+    "on_history",
     "animate",
     "size",
     "vertical",
@@ -3464,6 +3469,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
                         let current_line = optional("current_line", Ty::Color)?;
                         let tab = table.get::<Option<String>>("tab")?;
                         let on_caret = table.get::<Option<Function>>("on_caret")?;
+                        let on_history = table.get::<Option<Function>>("on_history")?;
                         let find = match table.get::<Option<Table>>("find")? {
                             None => None,
                             Some(find) => {
@@ -3492,6 +3498,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
                             || current_line.is_some()
                             || tab.is_some()
                             || on_caret.is_some()
+                            || on_history.is_some()
                             || find.is_some())
                         .then(|| {
                             Rc::new(CodeProps {
@@ -3500,6 +3507,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
                                 current_line,
                                 tab,
                                 on_caret,
+                                on_history,
                                 find,
                             })
                         })

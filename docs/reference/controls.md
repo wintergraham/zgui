@@ -65,8 +65,31 @@ A text editor bound to a string state: selection, undo, clipboard and IME includ
 | `current_line` | `Reactive<Color>` | none | `textarea`: the colour behind the caret's row |
 | `tab` | `string` | none | `textarea`: what Tab inserts (`"    "`) instead of moving focus; with lines selected it indents each, Shift+Tab outdents, one step of undo |
 | `on_caret` | `(line, column, anchor, focus) -> ()` | none | `textarea`: where the caret is whenever it moves (a status bar): line and column from 1, the selection in bytes from 0 |
+| `on_history` | `(token: number, how: "undo" \| "redo") -> ()` | none | undo (⌘Z) or redo (⇧⌘Z, ⌘Y) reached a step the script recorded with `el:push_history(token)`: the script undoes or redoes its own change. The text is left as it is |
 
 Its element (`on_mount`, a [ref](state.md#refs)) selects text: `el:select_all()`, `el:set_selection(a, b)`, `local a, b = el:selection()`, in characters, or in bytes from 0 as `string.find` counts them, `el:set_selection_bytes(a, b)` and `el:selection_bytes()` (a selection set so scrolls into view, focused or not); `el:replace_selection(text)` types `text` over the selection, one step of undo ([events](events.md#elements)). Each sees the text a handler just set, and leaves its state holding what it changed.
+
+A change of the app's beside the text (an attachment added to a message, or removed) can be a step of the input's own undo, in order with the typing around it: `el:push_history(token)` records one, `token` a whole number from 0 that the script maps to what it did. It ends a run of typing, clears what could be redone and counts toward the history's 100 steps, as an edit does. When ⌘Z (or ⇧⌘Z) reaches it, nothing in the text changes and `on_history(token, how)` is called, `how` `"undo"` or `"redo"`; the script undoes or redoes its change. Undo goes to the focused input, so put focus back in the input after a change made from a menu or a button. A step dropped from the history (a new edit after undoing it, or the limit) is never told: the script's map may keep a token that is never asked for.
+
+```luau
+local field = ui.ref()
+local steps, next_step = {}, 0
+local function attach(file)
+	files:push(file)
+	next_step += 1
+	steps[next_step] = file
+	field.element:push_history(next_step)
+end
+ui.textarea {
+	ref = field,
+	value = draft,
+	on_history = function(token, how)
+		local file = steps[token]
+		if not file then return end
+		if how == "undo" then remove(file) else files:push(file) end
+	end,
+}
+```
 
 A long text (more than 64 KiB, or 2,000 lines), or one with `highlight`, is laid out by its lines: the lines in view are shaped and drawn, a line keeps its shape until it changes, and where each line starts is a few bytes a line, so a file of 100,000 lines opens in about 20 ms and a keystroke costs about a millisecond ([the code editor example](../../crates/zgx-script/examples/code_editor), `code_editor_bench`). A string over 64 KiB in state is held in chunks of a few kilobytes: the state, the textarea bound to it, its layout and its accessibility value share one copy, and a keystroke's new value shares every chunk but the one it changed (a script reading the state still reads a string). Assistive technology reads such a text a page at a time, as browsers' code editors give it: the lines in view and a page each side (or around the caret, scrolled away), a text run a line, so a keystroke sends the runs of the line it changed.
 

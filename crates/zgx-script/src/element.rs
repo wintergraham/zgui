@@ -1246,6 +1246,23 @@ impl UserData for ElementUd {
             settle(lua);
             Ok(true)
         });
+        // A step of the script's own in the input's undo history, between
+        // the edits of its text (an attachment added beside a message):
+        // undo and redo reaching it call the input's `on_history(token,
+        // how)`. `token` is a whole number the script maps to its change.
+        methods.add_method("push_history", |lua, e, token: f64| {
+            if !(token.is_finite() && token >= 0. && token.fract() == 0. && token < 2f64.powi(53)) {
+                return Err(mlua::Error::runtime(
+                    "push_history takes a whole number from 0 (a token for the step)",
+                ));
+            }
+            settle(lua);
+            let Some(editor) = e.0.handle.get().and_then(NodeHandle::editor) else {
+                return Ok(false);
+            };
+            editor.push_history(token as u64);
+            Ok(true)
+        });
         // A picture of the element as the window last showed it, at most
         // `max_width` pixels wide (480 if not given): the `src` of an image
         // showing it, replaced on each call; nil if it is not laid out, or

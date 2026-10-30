@@ -691,6 +691,11 @@ declare extern type Element with
 	-- The selection replaced by `text`, as typing it would (one step of
 	-- undo): a search's Replace.
 	function replace_selection(self, text: string): boolean
+	-- A step of the script's own in an input's undo history, between the
+	-- edits of its text (an attachment added beside a message): undo and
+	-- redo reaching it call the input's `on_history(token, how)`. `token`
+	-- is a whole number from 0 the script maps to its change.
+	function push_history(self, token: number): boolean
 	-- A picture of it as the window last showed it, at most `max_width`
 	-- pixels wide (480 if not given): the `src` of an image showing it,
 	-- replaced on each call. Nil if it is not laid out or the host takes
@@ -5602,6 +5607,10 @@ export type InputProps = {
 	-- column in characters) and the selection's anchor and focus in bytes
 	-- from 0 (as `selection_bytes`).
 	on_caret: ((line: number, column: number, anchor: number, focus: number) -> ())?,
+	-- Undo or redo reached a step recorded with `el:push_history(token)`:
+	-- the script undoes (`how` is "undo") or redoes ("redo") its change;
+	-- the text is left as it is.
+	on_history: ((token: number, how: "undo" | "redo") -> ())?,
 }
 -- `value` from 0 to 1, or nil: indeterminate (work of unknown size), a
 -- stretch of the bar sweeping across.

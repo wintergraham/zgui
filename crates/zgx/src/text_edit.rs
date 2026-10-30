@@ -148,6 +148,19 @@ struct Edit {
     inserted: String,
     before: Selection,
     after: Selection,
+    /// An app's own step (`push_app_step`): no text changed, `deleted`
+    /// and `inserted` are empty, and undoing it tells the app this.
+    app: Option<u64>,
+}
+/// What `undo_step` took back or `redo_step` did again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryStep {
+    /// An edit of the text: its text and selection changed.
+    Text,
+    /// An app's step (`push_app_step`), carrying its token: the text and
+    /// selection are as they were, and the app undoes or redoes its own
+    /// change (an attachment added beside the text).
+    App(u64),
 }
 /// A plain-text editing model: the text, its selection, IME preedit
 /// and a bounded undo history.
@@ -405,6 +418,7 @@ impl TextEditor {
                 inserted: value.to_owned(),
                 before,
                 after: self.selection,
+                app: None,
             });
         }
         self.run = run;
@@ -488,6 +502,7 @@ impl TextEditor {
             inserted,
             before,
             after: self.selection,
+            app: None,
         });
         Self::trim(
             &mut self.undo,
@@ -847,18 +862,55 @@ impl TextEditor {
         self.replace("", None);
         value
     }
-    /// Undo the last step, restoring the selection from before it. False
-    /// when there is none.
-    pub fn undo(&mut self) -> bool {
+    /// Record an app's own step in the history, between the edits of the
+    /// text around it: `token` names it to the app, which keeps what it
+    /// means (an attachment added or removed). It changes no text; like an
+    /// edit it ends a run of typing, clears what can be redone and counts
+    /// toward the history's entries (its payload is no bytes). Undoing or
+    /// redoing it changes nothing here and gives the token back
+    /// (`undo_step`, `redo_step`), for the app to undo or redo.
+    pub fn push_app_step(&mut self, token: u64) {
         self.run = None;
-        let Some(edit) = self.undo.pop_back() else {
-            return false;
+        self.redo.clear();
+        self.redo_bytes = 0;
+        self.undo.push_back(Edit {
+            start: self.selection.focus,
+            deleted: String::new(),
+            inserted: String::new(),
+            before: self.selection,
+            after: self.selection,
+            app: Some(token),
+        });
+        Self::trim(
+            &mut self.undo,
+            &mut self.undo_bytes,
+            self.history_limit,
+            self.history_bytes,
+        );
+    }
+    /// Undo the last step, restoring the selection from before it. False
+    /// when there is none. An app's step is undone too (see `undo_step`).
+    pub fn undo(&mut self) -> bool {
+        self.undo_step().is_some()
+    }
+    /// Undo the last step: an edit of the text, its selection restored
+    /// from before it, or an app's step (`push_app_step`), which changes
+    /// nothing here and is given back for the app to undo. `None` when
+    /// there is none.
+    pub fn undo_step(&mut self) -> Option<HistoryStep> {
+        self.run = None;
+        let edit = self.undo.pop_back()?;
+        let step = match edit.app {
+            Some(token) => HistoryStep::App(token),
+            None => {
+                self.text
+                    .replace_range(edit.start..edit.start + edit.inserted.len(), &edit.deleted);
+                self.revision = self.revision.wrapping_add(1);
+                self.selection = edit.before;
+                self.cancel_preedit();
+                HistoryStep::Text
+            }
         };
-        self.text
-            .replace_range(edit.start..edit.start + edit.inserted.len(), &edit.deleted);
-        self.revision = self.revision.wrapping_add(1);
-        self.selection = edit.before;
-        self.cancel_preedit();
         let bytes = edit.deleted.len() + edit.inserted.len();
         self.undo_bytes -= bytes;
         self.redo_bytes += bytes;
@@ -869,20 +921,31 @@ impl TextEditor {
             self.history_limit,
             self.history_bytes,
         );
-        true
+        Some(step)
     }
     /// Redo the last undone step, restoring the selection after it. False
-    /// when there is none; any new edit clears what can be redone.
+    /// when there is none; any new edit clears what can be redone. An
+    /// app's step is redone too (see `redo_step`).
     pub fn redo(&mut self) -> bool {
+        self.redo_step().is_some()
+    }
+    /// Redo the last undone step: an edit of the text, its selection
+    /// restored from after it, or an app's step, given back for the app to
+    /// redo. `None` when there is none.
+    pub fn redo_step(&mut self) -> Option<HistoryStep> {
         self.run = None;
-        let Some(edit) = self.redo.pop_back() else {
-            return false;
+        let edit = self.redo.pop_back()?;
+        let step = match edit.app {
+            Some(token) => HistoryStep::App(token),
+            None => {
+                self.text
+                    .replace_range(edit.start..edit.start + edit.deleted.len(), &edit.inserted);
+                self.revision = self.revision.wrapping_add(1);
+                self.selection = edit.after;
+                self.cancel_preedit();
+                HistoryStep::Text
+            }
         };
-        self.text
-            .replace_range(edit.start..edit.start + edit.deleted.len(), &edit.inserted);
-        self.revision = self.revision.wrapping_add(1);
-        self.selection = edit.after;
-        self.cancel_preedit();
         let bytes = edit.deleted.len() + edit.inserted.len();
         self.redo_bytes -= bytes;
         self.undo_bytes += bytes;
@@ -893,7 +956,7 @@ impl TextEditor {
             self.history_limit,
             self.history_bytes,
         );
-        true
+        Some(step)
     }
     /// Preedit is ephemeral: it never changes committed text or enters undo history.
     pub fn set_preedit(&mut self, text: impl Into<String>, cursor: Option<(usize, usize)>) {
