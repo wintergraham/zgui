@@ -27,7 +27,18 @@ impl View {
 
     /// Begin a primary-button drag after moving four logical pixels. A simple
     /// press/release retains ordinary click behavior. Payloads stay window-local.
-    pub fn on_drag<T: 'static>(self, mut payload: impl FnMut() -> T + 'static) -> Self {
+    pub fn on_drag<T: 'static>(self, payload: impl FnMut() -> T + 'static) -> Self {
+        self.on_drag_when(|_, _| true, payload)
+    }
+    /// `on_drag`, beginning only once `when(dx, dy)` (the pointer's offset
+    /// from the press) says so: until then the press keeps the pointer and
+    /// the view's own pointer moves see it, so a tab can slide along its strip
+    /// and only lift into a drag once it is pulled well away.
+    pub fn on_drag_when<T: 'static>(
+        self,
+        mut when: impl FnMut(f32, f32) -> bool + 'static,
+        mut payload: impl FnMut() -> T + 'static,
+    ) -> Self {
         let mut origin = None;
         self.on_event(move |cx| {
             if cx.phase == EventPhase::Capture {
@@ -44,7 +55,9 @@ impl View {
                 }
                 InputEvent::PointerMove { x, y } => {
                     let far = cx.drag_threshold();
-                    if let Some((px, py)) = origin.filter(|(px, py)| (x - px).hypot(y - py) > far) {
+                    if let Some((px, py)) = origin
+                        .filter(|(px, py)| (x - px).hypot(y - py) > far && when(x - px, y - py))
+                    {
                         origin = None;
                         cx.start_drag_from(payload(), px, py);
                     }

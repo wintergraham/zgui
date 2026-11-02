@@ -164,6 +164,45 @@ fn fade_sides_reach_descendants_as_four_bands() {
 }
 
 #[test]
+fn a_fade_inside_a_fade_keeps_the_outer_ones_edges() {
+    // A strip fading at its sides, holding a title that fades at its end:
+    // the title's text still fades with the strip.
+    let mut ui = Ui::new(400., 300.);
+    let view = ui.mount(
+        column().child(
+            row()
+                .w(200.)
+                .h(40.)
+                .overflow_hidden()
+                .fade_sides(0., 40., 0., 40.)
+                .child(div().w(150.).h(40.))
+                .child(
+                    row()
+                        .w(100.)
+                        .h(40.)
+                        .shrink_0()
+                        .overflow_hidden()
+                        .fade_sides(0., 12., 0., 0.)
+                        .child(div().id("title").w(300.).h(40.)),
+                ),
+        ),
+    );
+    ui.prepare_frame();
+    let node = view.find("title").unwrap();
+    let scene = ui.scene.borrow();
+    let item = scene
+        .layer_items(None)
+        .into_iter()
+        .find(|item| item.id == node)
+        .unwrap();
+    let (rect, bands) = item.mask().expect("faded");
+    // The left from the strip; the right fading from where the strip starts
+    // (160) to where the title ends (150 + 100 clipped to 200).
+    assert_eq!(bands, [0., 40., 0., 40.]);
+    assert_eq!(rect, zgx::scene::Rect::new(0., 0., 200., 40.));
+}
+
+#[test]
 fn clip_inset_styles_reach_the_scene_and_animate_alone() {
     use zgx::layout::Length::{Percent, Px};
     let mut ui = Ui::new(400., 300.);

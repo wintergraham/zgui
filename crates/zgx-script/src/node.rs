@@ -538,6 +538,7 @@ impl Node {
             || !self.refs.is_empty()
             || self.events().mount.is_some()
             || self.events().resize.is_some()
+            || self.events().bounds.is_some()
             || self.events().visible.is_some()
     }
     pub fn events(&self) -> &Events {
@@ -644,6 +645,10 @@ pub(crate) struct Events {
     /// `fn({ w, h }, element)` when layout gives the node a new size (and
     /// once at first layout), as a ResizeObserver reports.
     pub resize: Option<Function>,
+    /// `fn({ x, y, w, h }, element)` when layout moves or resizes the node
+    /// in the window (and once at first layout): for what hangs from it, a
+    /// popover under a field that moves without changing size.
+    pub bounds: Option<Function>,
     /// `fn(visible, element)` when any of the node comes into view or all
     /// of it leaves, and once at first layout.
     pub visible: Option<Function>,
@@ -652,6 +657,10 @@ pub(crate) struct Events {
     /// `drag_preview(payload) -> node` follows the pointer;
     /// `on_drag_end(payload, accepted)` on the source when it ends.
     pub drag: Option<Function>,
+    /// `drag_when({ dx, dy }) -> boolean`: the drag starts only once this says
+    /// so (the pointer's offset from the press); until then the press keeps
+    /// the pointer, and `on_pointer_move` sees it.
+    pub drag_when: Option<Function>,
     pub drag_preview: Option<Function>,
     /// `drag_preview_anchor = { 0.5, 0 }`, `drag_preview_offset = { 0, 16 }`:
     /// that point of the preview (fractions of its size) that far from the
@@ -718,8 +727,10 @@ impl Events {
         pinch: None,
         mount: None,
         resize: None,
+        bounds: None,
         visible: None,
         drag: None,
+        drag_when: None,
         drag_preview: None,
         drag_preview_anchor: None,
         drag_preview_offset: None,
@@ -2203,6 +2214,7 @@ fn set_handler(
         || matches!(
             key,
             "context_menu"
+                | "drag_when"
                 | "drag_preview"
                 | "drag_preview_anchor"
                 | "drag_preview_offset"
@@ -2259,6 +2271,13 @@ fn set_handler(
             events.resize = Some(f);
             return Ok(None);
         }
+        "on_bounds" => {
+            let mlua::Value::Function(f) = value else {
+                return Err(mlua::Error::runtime("on_bounds takes a function"));
+            };
+            events.bounds = Some(f);
+            return Ok(None);
+        }
         "on_visible" => {
             let mlua::Value::Function(f) = value else {
                 return Err(mlua::Error::runtime("on_visible takes a function"));
@@ -2273,7 +2292,7 @@ fn set_handler(
             events.context_menu = Some(f);
             return Ok(None);
         }
-        "on_drag" | "drag_preview" | "on_drag_end" | "drag_export" | "on_drag_outside"
+        "on_drag" | "drag_when" | "drag_preview" | "on_drag_end" | "drag_export" | "on_drag_outside"
         | "drag_moves_window" | "on_drop" | "drop_when" | "on_drag_over" | "on_drag_leave"
         | "on_drag_spring" => {
             let mlua::Value::Function(f) = value else {
@@ -2281,6 +2300,7 @@ fn set_handler(
             };
             *match key {
                 "on_drag" => &mut events.drag,
+                "drag_when" => &mut events.drag_when,
                 "drag_preview" => &mut events.drag_preview,
                 "on_drag_end" => &mut events.drag_end,
                 "drag_export" => &mut events.drag_export,

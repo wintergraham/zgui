@@ -118,6 +118,34 @@ fn a_drag_starts_past_the_systems_drag_threshold() {
     up(&ui, 50., 20.);
 }
 #[test]
+fn a_gated_drag_waits_for_its_gate_and_its_moves_reach_the_source() {
+    let mut ui = Ui::new(400., 300.);
+    let moves = Rc::new(RefCell::new(Vec::new()));
+    let seen = moves.clone();
+    ui.mount(
+        button()
+            .size(100., 40.)
+            // Slides along its row; lifts into a drag 40 points off it.
+            .on_drag_when(|_, dy| dy.abs() > 40., || Card(2))
+            .on_event(move |cx| {
+                if let InputEvent::PointerMove { x, .. } = cx.event {
+                    if cx.phase != zgx::input::EventPhase::Capture {
+                        seen.borrow_mut().push(x);
+                    }
+                }
+            }),
+    );
+    ui.prepare_frame();
+    down(&ui, 20., 20.);
+    moved(&ui, 80., 25.);
+    moved(&ui, 160., 30.);
+    assert!(!ui.input.is_dragging());
+    assert_eq!(*moves.borrow(), vec![80., 160.]);
+    moved(&ui, 160., 90.);
+    assert!(ui.input.is_dragging());
+    up(&ui, 160., 90.);
+}
+#[test]
 fn rejected_outside_and_escape_drags_end_without_drop() {
     let mut ui = Ui::new(400., 200.);
     let ends = Rc::new(RefCell::new(Vec::new()));

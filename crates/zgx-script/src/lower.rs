@@ -2288,9 +2288,10 @@ fn styled(
             let depth = if node.sizes_layout() { 2 } else { 0 };
             (node.layout_id.clone(), timing, depth)
         });
-        let (mount, resize, visible, vm) = (
+        let (mount, resize, bounds, visible, vm) = (
             node.events().mount.clone(),
             node.events().resize.clone(),
+            node.events().bounds.clone(),
             node.events().visible.clone(),
             vm.clone(),
         );
@@ -2338,6 +2339,37 @@ fn styled(
                         size.set("h", h)?;
                         let el = vm.lua.create_userdata(ElementUd(element.clone()))?;
                         vm.call::<()>(&f, (size, el))
+                    };
+                    if let Err(e) = vm.runtime.untracked(call) {
+                        vm.report(e);
+                    }
+                });
+                mounted.retain(effect);
+            }
+            // Moves too: the world bounds, republished after each frame's layout.
+            if let Some(f) = bounds.clone()
+                && let Some(rects) = mounted.observe_bounds()
+            {
+                let (vm, element, runtime) = (vm.clone(), element.clone(), vm.runtime.clone());
+                let last = std::cell::Cell::new(None::<(f32, f32, f32, f32)>);
+                let effect = runtime.effect(move || {
+                    let r = rects.get();
+                    let rect = (r.x, r.y, r.width, r.height);
+                    // Nothing to report before the first layout.
+                    if last.get().is_none() && r.width == 0. && r.height == 0. {
+                        return;
+                    }
+                    if last.replace(Some(rect)) == Some(rect) {
+                        return;
+                    }
+                    let call = || -> mlua::Result<()> {
+                        let t = vm.lua.create_table()?;
+                        t.set("x", r.x)?;
+                        t.set("y", r.y)?;
+                        t.set("w", r.width)?;
+                        t.set("h", r.height)?;
+                        let el = vm.lua.create_userdata(ElementUd(element.clone()))?;
+                        vm.call::<()>(&f, (t, el))
                     };
                     if let Err(e) = vm.runtime.untracked(call) {
                         vm.report(e);
@@ -3281,12 +3313,33 @@ fn with_drag(
             })
     }
     if let Some(drag) = events.drag.clone() {
-        let vm = vm.clone();
-        view = view.on_drag(move || -> Value {
-            call(&vm, &drag, ())
-                .and_then(|v| Value::from_lua(v, &vm.lua).ok())
-                .unwrap_or(Value::Nil)
-        });
+        let payload = {
+            let vm = vm.clone();
+            move || -> Value {
+                call(&vm, &drag, ())
+                    .and_then(|v| Value::from_lua(v, &vm.lua).ok())
+                    .unwrap_or(Value::Nil)
+            }
+        };
+        view = match events.drag_when.clone() {
+            None => view.on_drag(payload),
+            Some(when) => {
+                let vm = vm.clone();
+                view.on_drag_when(
+                    move |dx, dy| {
+                        let at = vm.lua.create_table().ok();
+                        if let Some(at) = &at {
+                            let _ = at.set("dx", dx);
+                            let _ = at.set("dy", dy);
+                        }
+                        call(&vm, &when, at).is_some_and(|v| {
+                            !matches!(v, mlua::Value::Nil | mlua::Value::Boolean(false))
+                        })
+                    },
+                    payload,
+                )
+            }
+        };
     }
     if let Some(preview) = events.drag_preview.clone() {
         let (vm, low) = (vm.clone(), low.clone());

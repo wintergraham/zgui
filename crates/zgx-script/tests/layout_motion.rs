@@ -175,6 +175,37 @@ fn a_reorder_mid_move_continues_from_where_rows_show() {
 }
 
 #[test]
+fn a_row_its_script_keeps_in_place_does_not_slide() {
+    // `a` follows a "pointer" (its own translation); moved past `b`, it makes
+    // up for the move, as a dragged tab does, so it stays where it shows.
+    let mut h = Harness::inline(&format!(
+        r##"local rows = ui.state("rows", {{ {ABC} }})
+        local drag = ui.state("drag", 30)
+        return ui.column {{
+            ui.column {{
+                ui.each(rows, function(r)
+                    return ui.div {{ id = r.id, w = 40, h = r.h, shrink = 0,
+                        y = r.id == "a" and function() return drag:get() end or nil }}
+                end, {{ key = function(r) return r.id end, {LINEAR} }}),
+            }},
+            ui.button {{ id = "past_b", w = 4, h = 4, on_click = function()
+                ui.batch(function()
+                    rows:set({{ {{ id = "b", h = 20 }}, {{ id = "a", h = 20 }}, {{ id = "c", h = 20 }} }})
+                    drag:set(10)
+                end)
+            end }},
+        }}"##
+    ));
+    close(h.y("a"), 30., "a shows at the pointer");
+    h.change("past_b");
+    close(h.y("a"), 30., "a stays at the pointer");
+    close(h.y("b"), 20., "b starts where it was");
+    h.run_ms(200.);
+    close(h.y("a"), 30., "a never slid");
+    close(h.y("b"), 0., "b slid up");
+}
+
+#[test]
 fn rows_enter_and_leave_with_presence_parameters() {
     let options = format!(
         r#"{LINEAR},

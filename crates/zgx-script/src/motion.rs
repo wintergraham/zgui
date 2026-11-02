@@ -252,6 +252,16 @@ fn placed(scene: &Scene, node: zgx::scene::NodeId, origin: Rect) -> Option<(f32,
     (b != Rect::default()).then(|| offset(scene, node, origin))
 }
 
+/// Where a row shows by its own doing: its place, and the translation its
+/// script gives it (a tab following the pointer along its strip), a move's
+/// hold left out. A row whose script moves it to make up for the move (the
+/// dragged tab, still under the pointer) has nowhere to slide from.
+fn shown_at(scene: &Scene, element: &Element, node: zgx::scene::NodeId, origin: Rect) -> Option<(f32, f32)> {
+    let (x, y) = placed(scene, node, origin)?;
+    let (tx, ty) = element.translate();
+    Some((x + tx, y + ty))
+}
+
 /// The list's identities, as the plain `ui.each` keys them.
 fn identities(
     list: &Value,
@@ -330,7 +340,7 @@ pub(crate) fn each(
                             .filter(|(k, _)| !st.exiting.contains(k))
                             .filter_map(|(k, e)| {
                                 let node = e.node().filter(|n| scene.contains(*n))?;
-                                Some((k.clone(), placed(&scene, node, origin)?))
+                                Some((k.clone(), shown_at(&scene, e, node, origin)?))
                             })
                             .collect();
                         st.before = Some(before);
@@ -522,7 +532,7 @@ fn slide_rows(rows: &RefCell<Rows>, region: &NodeHandle, motion: &EachMotion, vm
             let Some(node) = element.node().filter(|n| scene.contains(*n)) else {
                 continue;
             };
-            let Some((x1, y1)) = placed(&scene, node, origin) else {
+            let Some((x1, y1)) = shown_at(&scene, element, node, origin) else {
                 continue;
             };
             let (dx, dy) = (x0 - x1, y0 - y1);

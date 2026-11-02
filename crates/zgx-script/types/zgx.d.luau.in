@@ -652,7 +652,7 @@ export type Resource<T> = {
 	reload: () -> (),
 }
 
--- A mounted node a script reaches: through `on_mount`, `on_resize`, a ref
+-- A mounted node a script reaches: through `on_mount`, `on_resize`, a ref (two handles on one node compare `==`)
 -- or an animation's function values.
 declare extern type Element with
 	id: string?
@@ -1542,6 +1542,8 @@ export type NodeProps = {
 	on_mount: ((element: Element) -> ...unknown)?,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: ((bounds: { x: number, y: number, w: number, h: number }, element: Element) -> ...unknown)?,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -1551,6 +1553,9 @@ export type NodeProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: (() -> any)?,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: ((at: { dx: number, dy: number }) -> boolean)?,
 	drag_preview: ((payload: any) -> Node)?,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`

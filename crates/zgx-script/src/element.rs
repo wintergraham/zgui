@@ -1106,6 +1106,11 @@ impl UserData for ElementUd {
         });
     }
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        // `a == b`: the same node, however each handle reached the script
+        // (each handler call makes a new one).
+        methods.add_meta_method(mlua::MetaMethod::Eq, |_, e, other: mlua::AnyUserData| {
+            Ok(other.borrow::<ElementUd>().is_ok_and(|o| Rc::ptr_eq(&e.0, &o.0)))
+        });
         // Keyboard focus to the node or its first focusable descendant, once
         // the handler's writes have settled: an input the same handler
         // reveals can take it.
