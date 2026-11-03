@@ -255,6 +255,46 @@ fn a_clipping_layout_box_clips_to_the_space() {
     );
 }
 
+/// A clipping layout box around one that eases (a trace around a step
+/// opening) takes each new size at once: easing after the inner box would
+/// lag it and cut off what follows it until it caught up.
+#[test]
+fn a_layout_box_follows_one_easing_inside_it() {
+    let mut h = Harness::inline(
+        r##"local open = ui.state("open", false)
+        return ui.column {
+            ui.column { id = "outer", layout = "height", layout_clip = true, layout_ease = "linear", layout_duration = 100,
+                ui.column { id = "inner", layout = "height", layout_clip = true, layout_ease = "linear", layout_duration = 100,
+                    ui.div { w = 50, h = function() return open:get() and 100 or 20 end } },
+                ui.div { id = "after", w = 50, h = 20 },
+            },
+            ui.button { id = "go", w = 1, h = 1, absolute = true, on_click = ui.set(open, true) },
+        }"##,
+    );
+    h.click("go");
+    h.frame();
+    for _ in 0..3 {
+        h.frame();
+        let node = h.find("outer").unwrap();
+        let scene = h.ui.scene.borrow();
+        let wrapper = scene.parent(node).unwrap();
+        let cut = match scene.clip_inset(wrapper).map(|i| i.bottom) {
+            Some(zgx::layout::Length::Px(v)) => v,
+            _ => 0.,
+        };
+        assert!(
+            cut.abs() < 0.5,
+            "the outer box cuts nothing while the inner one eases: {cut}"
+        );
+    }
+    // The inner box itself still eases: what follows it is on its way down.
+    let after = h.rect("after").y;
+    assert!(
+        after > 20.5 && after < 99.5,
+        "`after` slides with the inner box: {after}"
+    );
+}
+
 #[test]
 fn a_presence_box_showing_nothing_lets_the_pointer_through() {
     use zgx::input::{InputEvent, PointerButton};

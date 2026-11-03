@@ -2609,6 +2609,38 @@ fn layout_ease(layout: &LayoutAnim) -> (crate::anime::ease::Ease, f64) {
     .resolve()
 }
 
+thread_local! {
+    /// Layout boxes easing now: their scene, their content's node and the
+    /// tween. A box whose content changes because one inside it eases takes
+    /// each new size at once rather than easing after it, which would lag a
+    /// frame behind every step and (clipping) cut off what follows the inner
+    /// box until it caught up.
+    static EASING: std::cell::RefCell<Vec<(usize, zgx::scene::NodeId, std::rc::Weak<crate::anime::engine::Clip>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether a layout box inside `node` (not `node` itself) is easing now.
+fn inner_box_easing(
+    scene: &Rc<std::cell::RefCell<zgx::scene::Scene>>,
+    node: zgx::scene::NodeId,
+) -> bool {
+    let key = Rc::as_ptr(scene) as usize;
+    EASING.with(|easing| {
+        let mut easing = easing.borrow_mut();
+        easing.retain(|(_, _, clip)| {
+            clip.upgrade()
+                .is_some_and(|c| !c.is_completed() && !c.is_paused())
+        });
+        let scene = scene.borrow();
+        easing.iter().any(|(at, inner, _)| {
+            *at == key
+                && *inner != node
+                && scene.contains(*inner)
+                && scene.ancestors(*inner).any(|n| n == node)
+        })
+    })
+}
+
 /// Wraps `inner` in a box whose size follows the inner content's, animated.
 /// The box is a contents node: `inner` lays out exactly as it would without
 /// it, at its new size at once (its percentages, `grow` and the scroll views
@@ -2630,6 +2662,7 @@ fn layout_box(inner: View, layout: &LayoutAnim, vm: &Rc<Vm>, low: &Rc<Lowering>)
         let (Some(sizes), Some(engine)) = (handle.observe_size(), engine) else {
             return;
         };
+        let (node, scene) = (handle.node(), handle.scene());
         let last: std::cell::Cell<Option<(f32, f32)>> = Default::default();
         let runtime = engine.runtime.clone();
         let effect = runtime.effect(move || {
@@ -2669,6 +2702,11 @@ fn layout_box(inner: View, layout: &LayoutAnim, vm: &Rc<Vm>, low: &Rc<Lowering>)
                     let (dw, dh) = (size.0 - width, size.1 - height);
                     dw.abs() > 0.5 && dw * dh <= 0.
                 });
+            // A box inside eases: follow it at once (see `EASING`).
+            let following = previous.is_some()
+                && scene
+                    .as_ref()
+                    .is_some_and(|scene| inner_box_easing(scene, node));
             for (on, prop, side, now, before) in [
                 (
                     grow_h,
@@ -2688,7 +2726,7 @@ fn layout_box(inner: View, layout: &LayoutAnim, vm: &Rc<Vm>, low: &Rc<Lowering>)
                 if !on {
                     continue;
                 }
-                if reflowed && prop == Prop::Mb {
+                if following || (reflowed && prop == Prop::Mb) {
                     snap.push((element.clone(), Property::Style(prop), V::Num(0.), None));
                     if clip {
                         snap.push((element.clone(), side, V::Num(0.), None));
@@ -2719,7 +2757,16 @@ fn layout_box(inner: View, layout: &LayoutAnim, vm: &Rc<Vm>, low: &Rc<Lowering>)
             }
             engine.set_now(from);
             let (ease, duration) = layout_ease(&layout);
-            engine.tween(vm2.clone(), to, duration, ease, Default::default());
+            let clip = engine.tween(vm2.clone(), to, duration, ease, Default::default());
+            if let Some(scene) = &scene {
+                EASING.with(|easing| {
+                    easing.borrow_mut().push((
+                        Rc::as_ptr(scene) as usize,
+                        node,
+                        Rc::downgrade(&clip),
+                    ))
+                });
+            }
         });
         handle.retain(effect);
     });

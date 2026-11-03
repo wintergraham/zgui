@@ -59,3 +59,33 @@ fn a_diagonal_swipe_over_a_horizontal_view_still_scrolls_the_page() {
     assert_eq!(carousel.get(), 10., "the carousel takes its axis");
     assert_eq!(page.get(), 15., "the page the other");
 }
+
+#[test]
+fn sideways_jitter_on_a_swipe_over_an_inner_view_stays_with_it() {
+    let mut ui = Ui::new(400., 400.);
+    let (outer, inner) = (ui.signal(0.), ui.signal(0.));
+    ui.mount(
+        scroll(outer.clone()).w(300.).h(300.).child(
+            column()
+                .child(
+                    virtual_list(
+                        inner.clone(),
+                        20.,
+                        1,
+                        || 10,
+                        |n| n,
+                        |_, n, _| text(format!("Row {n}")),
+                    )
+                    .w(300.)
+                    .h(100.),
+                )
+                .children((0..40).map(|i| text(format!("Outer {i}")).h(20.))),
+        ),
+    );
+    ui.prepare_frame();
+    for _ in 0..6 {
+        wheel(&mut ui, 50., 50., 1., 25.);
+    }
+    assert_eq!(inner.get(), 100.);
+    assert_eq!(outer.get(), 0., "latched to the list");
+}

@@ -5138,7 +5138,10 @@ impl WindowManager {
         // the app: the frame keeps its last allocation and the next one tries again. Said at most every few seconds.
         if message.starts_with(zgx::widgets::LAYOUT_FEEDBACK) {
             let now = std::time::Instant::now();
-            if self.layout_feedback_logged.is_none_or(|at| now.duration_since(at).as_secs() >= 5) {
+            if self
+                .layout_feedback_logged
+                .is_none_or(|at| now.duration_since(at).as_secs() >= 5)
+            {
                 self.layout_feedback_logged = Some(now);
                 eprintln!("zgx: {message}");
             }
@@ -5461,7 +5464,12 @@ impl WindowManager {
                 let menus = self.factory.menus();
                 // A menu bar still to be made is made from them then.
                 #[cfg(target_os = "macos")]
-                if self.menu_bar_due.is_none() {
+                if self.menu_bar_due.is_none()
+                    && !self
+                        .native_menu
+                        .as_mut()
+                        .is_some_and(|menu| menu.update_states(&menus))
+                {
                     let replacement = match crate::app_menu::NativeMenu::new(&menus) {
                         Ok(menu) => menu,
                         Err(error) => {
