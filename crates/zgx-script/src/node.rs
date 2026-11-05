@@ -682,6 +682,10 @@ pub(crate) struct Events {
     /// accepted drag hovers, `on_drag_leave(payload)` when it leaves,
     /// `on_drop(payload, { ... })` on release.
     pub drop: Option<Function>,
+    /// A file dragged from outside the app: `on_files_hover(path)` while it's over the node (or a child), and
+    /// `on_files_hover(nil)` when it leaves or the drag is cancelled; `on_files_drop({ path, … })` on release.
+    pub files_hover: Option<Function>,
+    pub files_drop: Option<Function>,
     pub drop_when: Option<Function>,
     pub drag_over: Option<Function>,
     pub drag_leave: Option<Function>,
@@ -739,6 +743,8 @@ impl Events {
         drag_outside: None,
         drag_moves_window: None,
         drop: None,
+        files_hover: None,
+        files_drop: None,
         drop_when: None,
         drag_over: None,
         drag_leave: None,
@@ -754,6 +760,8 @@ impl Events {
     pub fn any_drag(&self) -> bool {
         self.drag.is_some()
             || self.drop.is_some()
+            || self.files_hover.is_some()
+            || self.files_drop.is_some()
             || self.drag_over.is_some()
             || self.drag_leave.is_some()
             || self.drag_spring.is_some()
@@ -2294,7 +2302,7 @@ fn set_handler(
         }
         "on_drag" | "drag_when" | "drag_preview" | "on_drag_end" | "drag_export" | "on_drag_outside"
         | "drag_moves_window" | "on_drop" | "drop_when" | "on_drag_over" | "on_drag_leave"
-        | "on_drag_spring" => {
+        | "on_drag_spring" | "on_files_hover" | "on_files_drop" => {
             let mlua::Value::Function(f) = value else {
                 return Err(mlua::Error::runtime(format!("{key} takes a function")));
             };
@@ -2307,6 +2315,8 @@ fn set_handler(
                 "on_drag_outside" => &mut events.drag_outside,
                 "drag_moves_window" => &mut events.drag_moves_window,
                 "on_drop" => &mut events.drop,
+                "on_files_hover" => &mut events.files_hover,
+                "on_files_drop" => &mut events.files_drop,
                 "drop_when" => &mut events.drop_when,
                 "on_drag_over" => &mut events.drag_over,
                 "on_drag_leave" => &mut events.drag_leave,

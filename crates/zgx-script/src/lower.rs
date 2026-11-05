@@ -3451,6 +3451,35 @@ fn with_drag(
             })
         });
     }
+    if events.files_hover.is_some() || events.files_drop.is_some() {
+        let (hover, dropped, vm) = (events.files_hover.clone(), events.files_drop.clone(), vm.clone());
+        view = view.on_event(move |cx| {
+            if cx.phase == EventPhase::Capture {
+                return;
+            }
+            match cx.event.clone() {
+                InputEvent::FileHover { path, .. } => {
+                    if let Some(hover) = &hover {
+                        call(&vm, hover, path.to_string_lossy().into_owned());
+                    }
+                }
+                InputEvent::FileHoverCancelled => {
+                    if let Some(hover) = &hover {
+                        call(&vm, hover, mlua::Value::Nil);
+                    }
+                }
+                InputEvent::FilesDrop { paths, .. } => {
+                    if let Some(dropped) = &dropped {
+                        let paths: Vec<String> = paths.iter().map(|path| path.to_string_lossy().into_owned()).collect();
+                        call(&vm, dropped, paths);
+                        cx.prevent_default();
+                        cx.stop_propagation();
+                    }
+                }
+                _ => {}
+            }
+        });
+    }
     let (drop, accept, over, leave, spring) = (
         events.drop.clone(),
         events.drop_when.clone(),
