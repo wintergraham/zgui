@@ -4218,14 +4218,20 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     ui.set(
         "invoke",
         lua.create_function(|lua, (name, arg): (String, Option<Value>)| {
-            let action = {
+            let (action, vm) = {
                 let env = env(lua)?;
                 env.permits(&env.exposed_actions, &name, "ui.invoke")?;
-                env.actions.borrow().get(&name).cloned()
+                (env.actions.borrow().get(&name).cloned(), env.vm.upgrade())
             };
             match action {
                 Some(action) => {
-                    action(arg.unwrap_or(Value::Nil));
+                    // The app's work, off the script's clock: a slow action
+                    // mustn't stop the handler that asked for it.
+                    let arg = arg.unwrap_or(Value::Nil);
+                    match vm {
+                        Some(vm) => vm.off_clock(|| action(arg)),
+                        None => action(arg),
+                    }
                     Ok(())
                 }
                 None => Err(mlua::Error::runtime(format!(
@@ -4238,13 +4244,19 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     ui.set(
         "call_sync",
         lua.create_function(|lua, (name, arg): (String, Option<Value>)| {
-            let function = {
+            let (function, vm) = {
                 let env = env(lua)?;
                 env.permits(&env.exposed_actions, &name, "ui.call_sync")?;
-                env.functions.borrow().get(&name).cloned()
+                (env.functions.borrow().get(&name).cloned(), env.vm.upgrade())
             };
             match function {
-                Some(function) => Ok(function(arg.unwrap_or(Value::Nil))),
+                Some(function) => {
+                    let arg = arg.unwrap_or(Value::Nil);
+                    Ok(match vm {
+                        Some(vm) => vm.off_clock(|| function(arg)),
+                        None => function(arg),
+                    })
+                }
                 None => Err(mlua::Error::runtime(format!(
                     "no host function named `{name}`"
                 ))),

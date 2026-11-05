@@ -191,6 +191,36 @@ fn runaway_scripts_hit_their_time_budget() {
 }
 
 #[test]
+fn a_slow_host_action_is_off_the_handlers_clock() {
+    // The app's work isn't the script's: a handler goes on after an action
+    // that took longer than its whole budget.
+    let mut h = Harness::inline(
+        r#"local draft = ui.state("draft", "typed")
+        return ui.column {
+            ui.button { id = "send", w = 80, h = 30, on_click = function()
+                ui.batch(function()
+                    ui.invoke("send")
+                    -- The clock is looked at one call in 64: past one for sure.
+                    for _ = 1, 64 do tostring(0) end
+                    draft:set("cleared")
+                end)
+            end },
+            ui.text { "{draft}", id = "draft" },
+        }"#,
+    );
+    let budget = Limits::default().call;
+    h.host.action("send", move |_| {
+        let started = Instant::now();
+        while started.elapsed() < budget * 2 {
+            std::hint::black_box(0);
+        }
+    });
+    h.click("send");
+    assert_eq!(h.host.error().get(), None);
+    assert_eq!(h.text("draft"), "cleared");
+}
+
+#[test]
 fn a_script_short_of_its_budget_is_never_stopped() {
     // Budgets start from a CPU reading up to 1 ms old, so a script is
     // stopped up to 1 ms short of its budget at most: one running 5 ms
