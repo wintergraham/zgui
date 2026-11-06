@@ -1253,6 +1253,8 @@ struct Host {
     /// When to try making a renderer again after the GPU device was lost
     /// (`recover_renderer`), while none could be made.
     renderer_retry: Option<std::time::Instant>,
+    /// When a frame over the texture budget was last reported.
+    over_budget_logged: Option<std::time::Instant>,
     /// The banner saying something failed (`show_error`), once one has.
     error_banner: Option<(Signal<String>, zgx::compose::ViewHandle)>,
     adapter: Option<accesskit_winit::Adapter>,
@@ -1585,6 +1587,7 @@ impl Host {
             window: None,
             renderer: None,
             renderer_retry: None,
+            over_budget_logged: None,
             error_banner: None,
             adapter: None,
             tree: AccessibilityTree::new(),
@@ -1892,6 +1895,24 @@ impl Host {
             {
                 eprintln!("zgx: {error}; making a new renderer");
                 self.recover_renderer();
+                Ok(())
+            }
+            // Not worth closing the app over: the window keeps what it shows,
+            // and input still works. Whatever wakes it next paints it all again.
+            Err(error)
+                if error
+                    .downcast_ref::<zgx_gpu::GpuError>()
+                    .is_some_and(zgx_gpu::GpuError::is_over_texture_budget) =>
+            {
+                let now = std::time::Instant::now();
+                if self
+                    .over_budget_logged
+                    .is_none_or(|at| now.duration_since(at).as_secs() >= 5)
+                {
+                    self.over_budget_logged = Some(now);
+                    eprintln!("zgx: {error}; skipping the frame");
+                }
+                self.force = true;
                 Ok(())
             }
             other => other,

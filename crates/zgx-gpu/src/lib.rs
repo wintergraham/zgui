@@ -2424,6 +2424,7 @@ impl GpuContext {
         self.inner.text_cache.clone()
     }
 }
+const TEXTURE_BUDGET: &str = "texture budget: ";
 impl GpuError {
     /// The device was lost (`GpuContext::lost`): `reason` says why.
     pub fn device_lost(reason: &str) -> Self {
@@ -2433,6 +2434,15 @@ impl GpuError {
     /// a new context.
     pub fn is_device_lost(&self) -> bool {
         self.0.starts_with("GPU device lost")
+    }
+    /// A frame wants more textures than the budget allows: `what` says which.
+    pub fn over_texture_budget(what: &str) -> Self {
+        Self(format!("{TEXTURE_BUDGET}{what}"))
+    }
+    /// Whether only this frame failed: the renderer is still good, and a later
+    /// frame draws once what is visible fits.
+    pub fn is_over_texture_budget(&self) -> bool {
+        self.0.starts_with(TEXTURE_BUDGET)
     }
     /// Whether a window's surface can't be drawn with the context's adapter
     /// (make a context for that window instead).
@@ -3807,10 +3817,14 @@ impl GpuRenderer {
             used = self.layers.values().map(|l| l.bytes).sum();
         }
         if !self.layers.contains_key(&id) && self.layers.len() >= 1024 {
-            return Err(GpuError("isolated layers exceed 1024 texture limit".into()));
+            return Err(GpuError::over_texture_budget(
+                "isolated layers exceed 1024 texture limit",
+            ));
         }
         if bytes > 64 * 1024 * 1024 || used - existing + bytes > 64 * 1024 * 1024 {
-            return Err(GpuError("isolated layers exceed 64 MiB budget".into()));
+            return Err(GpuError::over_texture_budget(
+                "isolated layers exceed 64 MiB budget",
+            ));
         }
         if width > limit || height > limit {
             return Err(GpuError(
@@ -5710,8 +5724,8 @@ impl GpuRenderer {
                         if bytes + self.images.values().map(|e| e.1).sum::<usize>()
                             > 64 * 1024 * 1024
                         {
-                            return Err(GpuError(
-                                "visible image and native surface textures exceed 64 MiB".into(),
+                            return Err(GpuError::over_texture_budget(
+                                "visible image and native surface textures exceed 64 MiB",
                             ));
                         }
                         if self.native_surfaces.is_none() {
@@ -8123,12 +8137,12 @@ impl GpuRenderer {
     fn upload_image(&mut self, image: &zgx::image::ImageData) -> Result<(), GpuError> {
         let bytes = image.pixels().len();
         if bytes + self.images.values().map(|entry| entry.1).sum::<usize>() > 64 * 1024 * 1024 {
-            return Err(GpuError(
-                "visible image textures exceed the 64 MiB budget".into(),
+            return Err(GpuError::over_texture_budget(
+                "visible image textures exceed the 64 MiB budget",
             ));
         }
         if self.images.len() >= MAX_IMAGES {
-            return Err(GpuError(format!(
+            return Err(GpuError::over_texture_budget(&format!(
                 "visible images exceed the budget of {MAX_IMAGES}"
             )));
         }

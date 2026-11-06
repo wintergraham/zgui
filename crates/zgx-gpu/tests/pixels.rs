@@ -781,6 +781,35 @@ fn image_count_budget_fails_the_frame_and_recovers_after_removal() {
 }
 
 #[test]
+fn images_over_the_byte_budget_fail_only_the_frame() {
+    let _gpu_fixture = gpu_fixture();
+    let mut gpu = GpuRenderer::new(8, 8).unwrap();
+    let mut scene = Scene::new(8., 8.);
+    let stack = scene.append(
+        scene.root(),
+        NodeKind::Container(Layout::Overlay),
+        fixed(8., 8.),
+    );
+    let large = || {
+        let pixels = [255, 0, 0, 255].repeat(4096 * 2100);
+        NodeKind::Image(std::sync::Arc::new(
+            zgx::image::ImageData::new(4096, 2100, pixels).unwrap(),
+        ))
+    };
+    let (_first, second) = (
+        scene.append(stack, large(), fixed(8., 8.)),
+        scene.append(stack, large(), fixed(8., 8.)),
+    );
+    let d = scene.flush().damage;
+    assert!(gpu.render(&scene, &d).unwrap_err().is_over_texture_budget());
+    scene.remove(second);
+    scene.flush();
+    // As the app does after a failed frame: the whole window, not just what changed.
+    gpu.render(&scene, &[scene.bounds(scene.root())]).unwrap();
+    assert_eq!(gpu.readback().unwrap()[..4], [255, 0, 0, 255]);
+}
+
+#[test]
 fn blur_inside_isolated_layer_rebuilds_on_backdrop_mutation() {
     let _gpu_fixture = gpu_fixture();
     let mut gpu = GpuRenderer::new(48, 32).unwrap();
