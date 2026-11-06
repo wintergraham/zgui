@@ -605,6 +605,10 @@ impl EditorHandle {
         self.refresh();
     }
 }
+/// How many layout passes run before sizes within [`SETTLED`] of what was published count as settled.
+const SETTLE_PASSES: usize = 8;
+/// Points: less than any display shows, and more than the float noise of a flex allocation.
+const SETTLED: f32 = 1. / 64.;
 /// How a [`LayoutFeedbackError`] reads: hosts recognise it by this start and carry on with the last allocation rather
 /// than treating it as fatal.
 pub const LAYOUT_FEEDBACK: &str = "layout allocation did not settle";
@@ -2475,7 +2479,7 @@ impl Ui {
         } else {
             self.reclaim(RECLAIM_BUDGET);
         }
-        for _ in 0..64 {
+        for pass in 0..64 {
             self.scene.borrow_mut().prepare_layout();
             self.input.validate_drag(&self.scene);
             let (layout_revision, geometry_revision) = {
@@ -2487,16 +2491,7 @@ impl Ui {
                 self.storage.bounds_geometry_revision.get() != Some(geometry_revision);
             if !layout_changed && !geometry_changed {
                 if !self.run_after_layout() {
-                    // Settled: a removed focused node's focus falls to its
-                    // ancestor, unless something (a list revealing a row)
-                    // focused since.
-                    if let Some(id) = self.storage.refocus.take()
-                        && self.input.focused().is_none()
-                        && self.scene.borrow().contains(id)
-                    {
-                        self.input.focus(&self.scene, Some(id));
-                    }
-                    self.sync_selection();
+                    self.finish_settling();
                     return Ok(());
                 }
                 continue;
@@ -2549,6 +2544,32 @@ impl Ui {
                 };
                 (sizes, bounds)
             };
+            // Past the passes real feedback needs, what only rounds differently isn't a change: flex fractions can flip
+            // between two neighbouring floats forever, and telling anyone would lay out again.
+            if pass >= SETTLE_PASSES
+                && sizes.iter().all(|(_, signal, size)| {
+                    signal.with_untracked(|was| {
+                        (was.0 - size.0).abs() < SETTLED && (was.1 - size.1).abs() < SETTLED
+                    })
+                })
+                && bounds.iter().all(|(_, signal, b)| {
+                    signal.with_untracked(|was| {
+                        (was.x - b.x).abs() < SETTLED
+                            && (was.y - b.y).abs() < SETTLED
+                            && (was.width - b.width).abs() < SETTLED
+                            && (was.height - b.height).abs() < SETTLED
+                    })
+                })
+            {
+                self.storage
+                    .editor_layout_revision
+                    .set(Some(layout_revision));
+                self.storage
+                    .bounds_geometry_revision
+                    .set(Some(geometry_revision));
+                self.finish_settling();
+                return Ok(());
+            }
             let visibility: Vec<_> = if geometry_changed {
                 let scene = self.scene.borrow();
                 self.storage
@@ -2594,6 +2615,17 @@ impl Ui {
             // A second pass also prepares editors mounted by virtual rows.
         }
         Err(LayoutFeedbackError { passes: 64 })
+    }
+    /// Settled: a removed focused node's focus falls to its ancestor, unless something (a list revealing a row) focused
+    /// since.
+    fn finish_settling(&self) {
+        if let Some(id) = self.storage.refocus.take()
+            && self.input.focused().is_none()
+            && self.scene.borrow().contains(id)
+        {
+            self.input.focus(&self.scene, Some(id));
+        }
+        self.sync_selection();
     }
     /// Recompute editor geometry after changing the font backend or display scale.
     pub(crate) fn observe_text_geometry_revision(&self) -> Signal<u64> {
@@ -5729,6 +5761,20 @@ mod layout_feedback_tests {
         ui.try_prepare_frame().unwrap();
         assert_eq!(previous, updates.get());
         assert_eq!(ui.scene.borrow().bounds(node).width, 150.);
+    }
+
+    #[test]
+    fn allocation_flipping_between_neighbouring_floats_settles() {
+        let mut ui = Ui::new(1000., 200.);
+        let node = ui.container(ui.root(), Layout::Overlay, fixed(100., 40.));
+        let size = ui.observe_content_size(node);
+        let scene = ui.scene.clone();
+        ui.bind(node, move || {
+            let width = size.get().0;
+            let next = if width == 100.0001 { 100.0002 } else { 100.0001 };
+            scene.borrow_mut().set_style(node, fixed(next, 40.));
+        });
+        assert!(ui.try_prepare_frame().is_ok());
     }
 
     #[test]
