@@ -61,7 +61,7 @@ pub(crate) struct NativeHost {
     #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
     placed: Rc<PlaneSplit>,
     /// The window's zoom (`Ui::zoom`) at the last plan.
-    #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+    #[cfg(any(target_os = "macos", windows))]
     zoom: f32,
     /// The window's DirectComposition tree, made with its renderer.
     #[cfg(all(windows, feature = "webview2"))]
@@ -121,7 +121,7 @@ impl NativeHost {
             split: Rc::new(PlaneSplit::default()),
             #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
             placed: Rc::new(PlaneSplit::default()),
-            #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
+            #[cfg(any(target_os = "macos", windows))]
             zoom: 1.,
             #[cfg(all(windows, feature = "webview2"))]
             composition: None,
@@ -491,6 +491,7 @@ impl NativeHost {
         window: &winit::window::Window,
         renderer: &mut zgx_gpu::GpuRenderer,
         scale: f32,
+        zoom: f32,
     ) -> Result<Vec<Rect>, zgx_gpu::GpuError> {
         if !self.active() || !self.natives.supported() {
             return Ok(Vec::new());
@@ -508,7 +509,13 @@ impl NativeHost {
         let (split, damage) = PlaneSplit::compute(scene, &self.natives.nodes(), &self.split);
         let split = Rc::new(split);
         let surfaces = self.surfaces.as_mut().expect("made above");
-        if surfaces.differs(&split, &self.split) {
+        // A new zoom moves every view without the split changing.
+        let rezoomed = self.zoom != zoom;
+        if rezoomed {
+            self.zoom = zoom;
+            surfaces.set_zoom(zoom);
+        }
+        if surfaces.differs(&split, &self.split) || rezoomed {
             self.pending = true;
         }
         if surfaces.cut_outs(scene, &self.input, &split) {

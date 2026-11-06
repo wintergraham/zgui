@@ -70,6 +70,8 @@ pub(crate) struct Surfaces {
     focus: Option<NodeId>,
     /// zgx's keyboard focus at the last check.
     zgx_focus: Option<NodeId>,
+    /// The window's zoom (`Ui::zoom`): placements stay in zgx's points, each `zoom` window points.
+    zoom: f32,
 }
 
 fn rect_region(left: i32, top: i32, right: i32, bottom: i32) -> HRGN {
@@ -181,6 +183,7 @@ impl Surfaces {
             holes: Vec::new(),
             focus: None,
             zgx_focus: None,
+            zoom: 1.,
         })
     }
     fn composition(parent: HWND) -> windows::core::Result<Composition> {
@@ -202,11 +205,17 @@ impl Surfaces {
         }
     }
     /// The window's scale (device pixels per point).
+    /// Device pixels per zgx point.
     fn scale(&self) -> f32 {
-        match unsafe { GetDpiForWindow(self.parent) } {
-            0 => 1.,
-            dpi => dpi as f32 / 96.,
-        }
+        self.zoom
+            * match unsafe { GetDpiForWindow(self.parent) } {
+                0 => 1.,
+                dpi => dpi as f32 / 96.,
+            }
+    }
+    /// Follow the window's zoom: native views keep their place in it.
+    pub fn set_zoom(&mut self, zoom: f32) {
+        self.zoom = zoom;
     }
     /// The overlay plane's renderer, presenting into the topmost target's
     /// visual (shown by `show_overlay`); none without the composition.
@@ -454,6 +463,7 @@ impl Surfaces {
                             (rect.height - 2. * inset).max(0.),
                         ),
                         radii: round.radii.map(|radius| (radius - inset).max(0.)),
+                        feather: Default::default(),
                     };
                     let hole = round_region(&inner, scale, origin);
                     if let Some(within) = within {
