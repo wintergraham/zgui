@@ -609,6 +609,11 @@ impl EditorHandle {
 const SETTLE_PASSES: usize = 8;
 /// Points: less than any display shows, and more than the float noise of a flex allocation.
 const SETTLED: f32 = 1. / 64.;
+/// Whether a size hasn't really moved. Equal first: an unbounded allocation stays infinite, and infinity less itself is
+/// NaN, which is near nothing.
+fn settled(was: f32, now: f32) -> bool {
+    was == now || (was - now).abs() < SETTLED
+}
 /// How a [`LayoutFeedbackError`] reads: hosts recognise it by this start and carry on with the last allocation rather
 /// than treating it as fatal.
 pub const LAYOUT_FEEDBACK: &str = "layout allocation did not settle";
@@ -2548,16 +2553,14 @@ impl Ui {
             // between two neighbouring floats forever, and telling anyone would lay out again.
             if pass >= SETTLE_PASSES
                 && sizes.iter().all(|(_, signal, size)| {
-                    signal.with_untracked(|was| {
-                        (was.0 - size.0).abs() < SETTLED && (was.1 - size.1).abs() < SETTLED
-                    })
+                    signal.with_untracked(|was| settled(was.0, size.0) && settled(was.1, size.1))
                 })
                 && bounds.iter().all(|(_, signal, b)| {
                     signal.with_untracked(|was| {
-                        (was.x - b.x).abs() < SETTLED
-                            && (was.y - b.y).abs() < SETTLED
-                            && (was.width - b.width).abs() < SETTLED
-                            && (was.height - b.height).abs() < SETTLED
+                        settled(was.x, b.x)
+                            && settled(was.y, b.y)
+                            && settled(was.width, b.width)
+                            && settled(was.height, b.height)
                     })
                 })
             {
@@ -5775,6 +5778,14 @@ mod layout_feedback_tests {
             scene.borrow_mut().set_style(node, fixed(next, 40.));
         });
         assert!(ui.try_prepare_frame().is_ok());
+    }
+
+    #[test]
+    fn an_infinite_allocation_counts_as_settled() {
+        assert!(settled(f32::INFINITY, f32::INFINITY));
+        assert!(settled(100.0001, 100.0002));
+        assert!(!settled(100., 101.));
+        assert!(!settled(f32::INFINITY, 100.));
     }
 
     #[test]
