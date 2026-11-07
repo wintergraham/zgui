@@ -818,7 +818,8 @@ struct Glyph {
     y: f32,
 }
 /// A text's cached quad, in its own place: its box, atlas cell, colour and
-/// paint (corner radius, glyph flag, rounded-background flag). The rest of
+/// paint (corner radius, glyph flag, colour glyph flag, rounded-background
+/// flag). The rest of
 /// the GPU `Quad` is the same for every one of a text's and is made where it
 /// is placed (`render_flat`): half the bytes cached, copied and read.
 #[derive(Clone, Copy)]
@@ -868,6 +869,9 @@ struct Shaped {
     scale: f32,
     glyphs: Vec<Glyph>,
     quads: Vec<TextQuad>,
+    /// Whether `quads` holds a colour glyph, which keeps its own colours:
+    /// other text takes one colour for all its quads.
+    color_glyphs: bool,
     atlas_epoch: u64,
     last_used: u64,
     /// The prepared text these glyphs were laid out from, kept while drawn.
@@ -930,6 +934,9 @@ struct AtlasEntry {
     height: u32,
     left: i32,
     top: i32,
+    /// Its cell holds its colours (an emoji), which the text's colour must
+    /// not tint, rather than coverage.
+    color: bool,
 }
 struct LayerCache {
     texture: wgpu::Texture,
@@ -6023,6 +6030,8 @@ impl GpuRenderer {
                             height: bounds.height,
                             scale: self.scale,
                             glyphs,
+                            // (A twin's quads, if it had them placed.)
+                            color_glyphs: spare_quads.iter().any(|quad| quad.paint[2] > 0.5),
                             quads: spare_quads,
                             atlas_epoch: epoch.unwrap_or(0),
                             last_used: self.frame,
@@ -6106,9 +6115,9 @@ impl GpuRenderer {
                     // Its quads from the shape's, placed and coloured.
                     // (One extend, written straight into the room it makes: a
                     // push a glyph would check that room each time.)
-                    let place = |quads: &mut Vec<Quad>, source: &[TextQuad]| {
+                    let place = |quads: &mut Vec<Quad>, source: &[TextQuad], color_glyphs: bool| {
                         // Plain and unselected: one colour, chosen once.
-                        if selected.is_none() && rich.is_none() {
+                        if selected.is_none() && rich.is_none() && !color_glyphs {
                             place_text_quads(
                                 quads,
                                 source,
@@ -6127,8 +6136,10 @@ impl GpuRenderer {
                                 fade,
                                 item.effects.edge_fade,
                                 |cached| {
-                                    let recolor =
-                                        selected.filter(|_| cached.paint[1] > 0.5).and_then(|h| {
+                                    let own_colors = cached.paint[2] > 0.5;
+                                    let recolor = selected
+                                        .filter(|_| cached.paint[1] > 0.5 && !own_colors)
+                                        .and_then(|h| {
                                             h.glyph_color(
                                                 cached.rect[0] + cached.rect[2] * 0.5,
                                                 cached.rect[1] + cached.rect[3] * 0.5,
@@ -6136,6 +6147,8 @@ impl GpuRenderer {
                                         });
                                     if let Some(color) = recolor {
                                         rgba(color, item.effects.opacity)
+                                    } else if own_colors && rich.is_none() {
+                                        [1., 1., 1., plain_color[3]]
                                     } else if rich.is_some() {
                                         [
                                             cached.color[0],
@@ -6159,7 +6172,7 @@ impl GpuRenderer {
                             fresh.take_if(|shaped| shaped.atlas_epoch == self.atlas_epoch)
                     {
                         // (A twin's, placed in this atlas already.)
-                        place(&mut quads, &shaped.quads);
+                        place(&mut quads, &shaped.quads, shaped.color_glyphs);
                         glyphs_alone = marks.is_empty()
                             && highlight.is_none()
                             && shaped.decorations.is_empty();
@@ -6171,7 +6184,7 @@ impl GpuRenderer {
                         && let Some(shaped) = self.shapes.get_mut(&item.id)
                         && shaped.atlas_epoch == self.atlas_epoch
                     {
-                        place(&mut quads, &shaped.quads);
+                        place(&mut quads, &shaped.quads, shaped.color_glyphs);
                         glyphs_alone = marks.is_empty()
                             && highlight.is_none()
                             && shaped.decorations.is_empty();
@@ -6196,6 +6209,7 @@ impl GpuRenderer {
                             )?;
                         if !partial && shaped.atlas_epoch != self.atlas_epoch {
                             shaped.quads.clear();
+                            shaped.color_glyphs = false;
                             shaped.quads.extend(
                                 shaped
                                     .decorations
@@ -6219,9 +6233,10 @@ impl GpuRenderer {
                                             a.width as f32 / self.atlas_size as f32,
                                             a.height as f32 / self.atlas_size as f32,
                                         ],
-                                        color: glyph.color.map_or([0.; 4], |c| rgba(c, 1.)),
-                                        paint: [0., 1., 0., 0.],
+                                        color: glyph_color(glyph.color, a.color),
+                                        paint: glyph_paint(a.color),
                                     });
+                                    shaped.color_glyphs |= a.color;
                                 }
                             }
                             shaped.quads.extend(
@@ -6235,7 +6250,12 @@ impl GpuRenderer {
                             stats.geometry_rebuilds += 1;
                         }
                         let visible = std::mem::take(&mut self.visible_glyphs);
-                        place(&mut quads, if partial { &visible } else { &shaped.quads });
+                        if partial {
+                            let color_glyphs = visible.iter().any(|quad| quad.paint[2] > 0.5);
+                            place(&mut quads, &visible, color_glyphs);
+                        } else {
+                            place(&mut quads, &shaped.quads, shaped.color_glyphs);
+                        }
                         glyphs_alone = marks.is_empty()
                             && highlight.is_none()
                             && shaped.decorations.is_empty();
@@ -8358,6 +8378,20 @@ impl GpuRenderer {
                 "glyph metadata exceeds 8192 entries in one frame".into(),
             ));
         }
+        // A colour glyph has one image wherever it falls between pixels: its
+        // cell, under the key with no subpixel offset, serves all four bins.
+        let whole = CacheKey {
+            x_bin: cosmic_text::SubpixelBin::Zero,
+            y_bin: cosmic_text::SubpixelBin::Zero,
+            ..key
+        };
+        if let Some(Some(entry)) = self.entries.get(&AtlasKey::from(whole))
+            && entry.color
+        {
+            let entry = *entry;
+            self.entries.insert(AtlasKey::from(key), Some(entry));
+            return Ok(Some(entry));
+        }
         let Some(image) = self
             .swash
             .get_image_uncached(&mut self.fonts.borrow_mut(), key)
@@ -8365,6 +8399,7 @@ impl GpuRenderer {
             self.entries.insert(AtlasKey::from(key), None);
             return Ok(None);
         };
+        let color = image.content == SwashContent::Color;
         let p = image.placement;
         if p.width == 0 || p.height == 0 {
             self.entries.insert(AtlasKey::from(key), None);
@@ -8419,8 +8454,12 @@ impl GpuRenderer {
             height: p.height,
             left: p.left,
             top: p.top,
+            color,
         };
         self.entries.insert(AtlasKey::from(key), Some(entry));
+        if color {
+            self.entries.insert(AtlasKey::from(whole), Some(entry));
+        }
         stats.glyph_uploads += 1;
         Ok(Some(entry))
     }
@@ -9672,9 +9711,24 @@ fn glyph_quad(glyph: &Glyph, a: AtlasEntry, scale: f32, atlas_size: u32) -> Text
             a.width as f32 / atlas_size as f32,
             a.height as f32 / atlas_size as f32,
         ],
-        color: glyph.color.map_or([0.; 4], |c| rgba(c, 1.)),
-        paint: [0., 1., 0., 0.],
+        color: glyph_color(glyph.color, a.color),
+        paint: glyph_paint(a.color),
     }
+}
+/// A glyph quad's colour: a colour glyph takes only the text's alpha, its
+/// texels multiplied by white.
+#[inline]
+fn glyph_color(color: Option<zgx::scene::Color>, own_colors: bool) -> [f32; 4] {
+    let color = color.map_or([0.; 4], |c| rgba(c, 1.));
+    if own_colors {
+        [1., 1., 1., color[3]]
+    } else {
+        color
+    }
+}
+#[inline]
+fn glyph_paint(own_colors: bool) -> [f32; 4] {
+    [0., 1., if own_colors { 1. } else { 0. }, 0.]
 }
 fn rich_decoration_quad(d: &text::RichDecoration) -> TextQuad {
     let rect = [d.bounds.x, d.bounds.y, d.bounds.width, d.bounds.height];
