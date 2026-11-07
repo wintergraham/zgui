@@ -96,8 +96,9 @@ pub struct WindowOptions {
     pub covers_display: bool,
     /// The window server's blur of what lies behind the window where it is
     /// transparent, as a radius (macOS; 0 none). Unlike `glass`, it takes
-    /// any strength; it's cut to the window's rounded corners too. Kept
-    /// through fullscreen and Space changes.
+    /// any strength; it's cut to the window's rounded corners too (it holds
+    /// AppKit's corner radius while it blurs). Kept through fullscreen and
+    /// Space changes.
     pub background_blur: u32,
 }
 impl WindowOptions {

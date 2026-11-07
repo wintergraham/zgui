@@ -143,10 +143,8 @@ pub(crate) fn set_background_blur(window: &winit::window::Window, radius: u32) {
     {
         use winit::platform::macos::WindowExtMacOS;
         window.set_blur_radius(radius);
-        if radius > 0
-            && let Some(window) = mac::ns_window(window)
-        {
-            mac::round_blur(&window);
+        if let Some(window) = mac::ns_window(window) {
+            mac::hold_corner(&window, radius > 0);
         }
     }
     #[cfg(not(target_os = "macos"))]
@@ -1884,57 +1882,38 @@ mod mac {
         }
     }
 
-    thread_local! {
-        static BLUR_ROUNDING: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    }
-
-    /// Cut the window server's blur (`set_background_blur`) to the window's
-    /// rounded corners. The server clips it to the corner shape it has when
-    /// the blur starts, and a visible window's blur turned on or changed
-    /// later spans its square bounds until a corner shape reaches the server
-    /// again. Pinning AppKit's radius at its current value sends one; after
-    /// the server has drawn a few frames with it (eight at 60 Hz; one or two
-    /// weren't always enough), 0 hands the radius back to AppKit. The
-    /// radius never changes, so nothing else moves. A newer call's pin
-    /// outlives the older's release. Private AppKit, sent only where it
-    /// exists.
-    pub(super) fn round_blur(window: &NSWindow) {
+    /// Keep the window server's blur (`set_background_blur`) to the window's
+    /// rounded corners while it blurs (`blurred`), and give the corner back
+    /// to AppKit once it stops. Without a radius of its own the server
+    /// clips a transparent window's blur, and draws its outline and shadow,
+    /// to a corner of its own: square for a blur turned on while the window
+    /// shows, and on macOS 26 and later tighter than the 16-point corner
+    /// AppKit cuts the content to, so blurred desktop showed in a crescent
+    /// at each corner, outside the content but inside the outline. Pinning
+    /// AppKit's radius at its current value gives the server the content's
+    /// corner, and the pin holds as long as the blur does: handed back (0),
+    /// the server went back to its own corner. In fullscreen, where the
+    /// window has no corners, the radius is AppKit's. Private AppKit, sent
+    /// only where it exists.
+    pub(super) fn hold_corner(window: &NSWindow, blurred: bool) {
         let (get, set) = (sel!(_cornerRadius), sel!(_setCornerRadius:));
-        if !window.isVisible()
-            || !window.class().responds_to(get)
-            || !window.class().responds_to(set)
-        {
+        if !window.class().responds_to(get) || !window.class().responds_to(set) {
             return;
         }
+        let fullscreen = window.styleMask().contains(NSWindowStyleMask::FullScreen);
         // SAFETY: AppKit's private getter and setter, sent only where they
         // exist, taking and returning a CGFloat (their declaration in other
-        // apps' use, not checked here).
+        // apps' use, not checked here). 0 returns the radius to AppKit.
         unsafe {
+            if !blurred || fullscreen {
+                let _: () = msg_send![window, _setCornerRadius: 0_f64];
+                return;
+            }
+            // Pinned already, this reads the pin: the corner AppKit gave
+            // the window when the blur started.
             let radius: f64 = msg_send![window, _cornerRadius];
             let _: () = msg_send![window, _setCornerRadius: radius];
         }
-        let generation = BLUR_ROUNDING.with(|n| {
-            n.set(n.get() + 1);
-            n.get()
-        });
-        let window = dispatch2::MainThreadBound::new(objc2::rc::Weak::new(window), window.mtm());
-        let release = move || {
-            let Some(mtm) = objc2::MainThreadMarker::new() else {
-                return;
-            };
-            if BLUR_ROUNDING.with(|n| n.get()) != generation {
-                return;
-            }
-            if let Some(window) = window.get(mtm).load() {
-                // SAFETY: as above; 0 returns the radius to AppKit.
-                unsafe {
-                    let _: () = msg_send![&*window, _setCornerRadius: 0_f64];
-                }
-            }
-        };
-        let when = dispatch2::DispatchTime::try_from(std::time::Duration::from_millis(200))
-            .unwrap_or(dispatch2::DispatchTime::NOW);
-        let _ = dispatch2::DispatchQueue::main().after(when, release);
     }
 
     /// The window's corner radius: it varies by macOS version and toolbar
