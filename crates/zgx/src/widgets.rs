@@ -1001,6 +1001,7 @@ pub(crate) struct UiStorage {
     observed_visibility: RefCell<crate::scene::NodeMap<Signal<bool>>>,
     /// Run once after the next frame preparation's layout.
     after_layout: RefCell<Vec<Box<dyn FnOnce()>>>,
+    after_settled: RefCell<Vec<Box<dyn FnOnce()>>>,
     /// Run after every layout pass that changes the layout, by owning node.
     layout_listeners: RefCell<crate::scene::NodeMap<Vec<LayoutListener>>>,
     mount_initialization: RefCell<Option<Rc<MountInitialization>>>,
@@ -1234,6 +1235,7 @@ impl Ui {
             observed_bounds: RefCell::default(),
             observed_visibility: RefCell::default(),
             after_layout: RefCell::new(Vec::new()),
+            after_settled: RefCell::new(Vec::new()),
             layout_listeners: RefCell::default(),
             mount_initialization: RefCell::new(None),
             mounting: Cell::new(0),
@@ -2013,6 +2015,11 @@ impl Ui {
     pub(crate) fn after_layout(&self, f: Box<dyn FnOnce()>) {
         self.storage.after_layout.borrow_mut().push(f);
     }
+    /// Run `f` once when the frame's layout has settled: no pass left to run
+    /// and nothing waiting on one, what a mid-settling size is not.
+    pub(crate) fn after_settled(&self, f: Box<dyn FnOnce()>) {
+        self.storage.after_settled.borrow_mut().push(f);
+    }
     /// Run `f` after every layout pass that changes the layout, until `node`
     /// is removed.
     pub(crate) fn on_layout(&self, node: NodeId, f: Box<dyn FnMut()>) {
@@ -2022,6 +2029,19 @@ impl Ui {
             .entry(node)
             .or_default()
             .push(Rc::new(RefCell::new(f)));
+    }
+    /// Whether any after-settled work ran.
+    fn run_after_settled(&self) -> bool {
+        let pending = std::mem::take(&mut *self.storage.after_settled.borrow_mut());
+        if pending.is_empty() {
+            return false;
+        }
+        self.runtime.batch(|| {
+            for f in pending {
+                f();
+            }
+        });
+        true
     }
     /// Whether any after-layout work ran.
     fn run_after_layout(&self) -> bool {
@@ -2495,7 +2515,7 @@ impl Ui {
             let geometry_changed =
                 self.storage.bounds_geometry_revision.get() != Some(geometry_revision);
             if !layout_changed && !geometry_changed {
-                if !self.run_after_layout() {
+                if !self.run_after_layout() && !self.run_after_settled() {
                     self.finish_settling();
                     return Ok(());
                 }

@@ -4742,6 +4742,9 @@ fn mount_scroll(
     let wheel_size = size.clone();
     let wheel_extent = extent.clone();
     let wheel_offset = offset.clone();
+    // For `follow_end`: whether the view stays at its end as its content changes.
+    let pinned = std::rc::Rc::new(std::cell::Cell::new(true));
+    let wheel_pinned = pinned.clone();
     let weak = ui.downgrade();
     ui.on_event(root, false, move |cx| {
         if cx.phase == EventPhase::Capture {
@@ -4829,6 +4832,10 @@ fn mount_scroll(
             let limit =
                 (main_size(wheel_extent.get()) as f64 - main_size(wheel_size.get()) as f64).max(0.);
             let after = (before as f64 + delta as f64).clamp(0., limit) as f32;
+            // Down at the end, even with nowhere further to go: stay there.
+            if delta > 0. && after as f64 >= limit - 0.5 {
+                wheel_pinned.set(true);
+            }
             if before != after {
                 wheel_offset.set(after);
                 cx.scrolled(horizontal);
@@ -4836,27 +4843,62 @@ fn mount_scroll(
         }
     });
     let scene = ui.scene.clone();
-    // For `follow_end`: the position last applied, and whether it was the
-    // end. Only growth moves a pinned view; a new offset (a wheel, a script)
-    // is taken as it is and decides whether the view stays pinned.
-    let (applied, pinned) = (std::cell::Cell::new(0_f32), std::cell::Cell::new(true));
+    // For `follow_end`, the position last applied. A pinned view stays at its
+    // end as its content changes; a new offset (a wheel, a script) is taken as
+    // it is and alone decides whether the view stays pinned. The content
+    // shrinking under a view left elsewhere clamps it, and that isn't asking
+    // to follow: more content leaves it where it was put. Nor does a shorter
+    // layout that a frame passes through on its way to settling (a row
+    // arriving measures before it animates) move it: until layout settles
+    // the clamp only shows, and then only if it still holds is it kept.
+    let applied = std::rc::Rc::new(std::cell::Cell::new(0_f32));
+    let settling = std::rc::Rc::new(std::cell::Cell::new(false));
+    let weak = ui.downgrade();
     ui.bind(root, move || {
         let (width, height) = size.get();
         let limit = (main_size(extent.get()) - main_size((width, height))).max(0.);
         let requested = offset.get();
+        let moved = requested != applied.get();
         let position = if requested.is_nan() {
             0.
-        } else if follow_end && pinned.get() && requested == applied.get() {
+        } else if follow_end && pinned.get() && !moved {
             limit
         } else {
             requested.clamp(0., limit)
         };
-        if follow_end {
-            applied.set(position);
-            pinned.set(position >= limit - 0.5);
-        }
-        if requested != position {
-            offset.set(position);
+        let provisional = follow_end && !moved && !pinned.get() && requested != position;
+        if provisional {
+            if !settling.replace(true)
+                && let Some(ui) = weak.upgrade()
+            {
+                let (settling, applied, offset, extent, size) = (
+                    settling.clone(),
+                    applied.clone(),
+                    offset.clone(),
+                    extent.clone(),
+                    size.clone(),
+                );
+                ui.after_settled(Box::new(move || {
+                    settling.set(false);
+                    let limit =
+                        (main_size(extent.get()) - main_size(size.get())).max(0.);
+                    let left = offset.get();
+                    if left == applied.get() && left > limit {
+                        applied.set(limit);
+                        offset.set(limit);
+                    }
+                }));
+            }
+        } else {
+            if follow_end {
+                applied.set(position);
+                if moved {
+                    pinned.set(position >= limit - 0.5);
+                }
+            }
+            if requested != position {
+                offset.set(position);
+            }
         }
         let mut scene = scene.borrow_mut();
         // Scrolling across with no height of its own, it is as tall as what
