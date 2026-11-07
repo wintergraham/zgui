@@ -107,6 +107,8 @@ struct Anchor {
     /// the row starts lower, in view).
     within: f32,
     at_end: bool,
+    /// `index` and `within` are from before a clamp not yet settled.
+    held: bool,
 }
 
 /// Mount only visible variable-height keyed rows and an overscan margin.
@@ -356,6 +358,10 @@ fn variable_list<K: Eq + std::hash::Hash + Clone + 'static>(
             let wheel_offset = offset.clone();
             let wheel_size = size.clone();
             let wheel_extent = extent.clone();
+            // A wheel down at the end, with nowhere further to go: an end-anchored
+            // list stays there from here on.
+            let repin = Rc::new(Cell::new(false));
+            let wheel_repin = repin.clone();
             ui.on_event(root, false, move |cx| {
                 if cx.phase == EventPhase::Capture || cx.default_prevented() {
                     return;
@@ -366,9 +372,11 @@ fn variable_list<K: Eq + std::hash::Hash + Clone + 'static>(
                         return;
                     }
                     let before = wheel_offset.get();
-                    let after = (before + delta_y)
-                        .max(0.0)
-                        .min((wheel_extent.get() - wheel_size.get().1).max(0.0));
+                    let limit = (wheel_extent.get() - wheel_size.get().1).max(0.0);
+                    let after = (before + delta_y).max(0.0).min(limit);
+                    if delta_y > 0. && limit - after <= 0.5 {
+                        wheel_repin.set(true);
+                    }
                     if before != after {
                         wheel_offset.set(after);
                         cx.scrolled(false);
@@ -407,6 +415,12 @@ fn variable_list<K: Eq + std::hash::Hash + Clone + 'static>(
             // focus goes with it (the keyboard's, not a scroll's).
             let mut pending_reveal: Option<(usize, RowAlign, f32, Option<NodeId>, bool)> = None;
             let mut anchor: Option<Anchor> = None;
+            // A view left away from the end, clamped by content shorter than it
+            // was: until layout settles that may only be a pass on the way (a row
+            // measures before it animates), so its anchor is kept and the clamp
+            // only shows; once settled, the clamp is where it is.
+            let clamp_settled = Rc::new(Cell::new(false));
+            let clamp_waiting = Rc::new(Cell::new(false));
             ui.bind(root, move || {
                 heights.revision.get();
                 mounted_revision.get();
@@ -461,7 +475,9 @@ fn variable_list<K: Eq + std::hash::Hash + Clone + 'static>(
                 let (serial, row, align) = reveal.get();
                 let asked = (serial != handled_reveal).then_some((row, align, false));
                 handled_reveal = serial;
-                let (length, total, position, target, geometry, next_anchor) = {
+                let settled_clamp = clamp_settled.replace(false);
+                let held_at_end = repin.replace(false);
+                let (length, total, position, target, geometry, next_anchor, holding) = {
                     let model = heights.index.borrow();
                     let length = model.count();
                     let total = model.content_height();
@@ -472,10 +488,27 @@ fn variable_list<K: Eq + std::hash::Hash + Clone + 'static>(
                         0.
                     }
                     .min(limit);
+                    // Whether it was left at the end: a move says, and only a move.
+                    let moved = anchor.as_ref().is_none_or(|p| requested != p.position);
+                    let at_end = if moved {
+                        limit - position <= 0.5
+                    } else {
+                        held_at_end || anchor.as_ref().is_some_and(|p| p.at_end)
+                    };
+                    let mut holding = None;
+                    if let Some(previous) = &anchor
+                        && !moved
+                        && !at_end
+                        && previous.held
+                        && !settled_clamp
+                        && previous.revision == revision
+                    {
+                        holding = Some((previous.index, previous.within));
+                    }
                     if let Some(previous) = &anchor
                         && previous.revision != revision
                         && requested == previous.position
-                        && previous.at_end
+                        && at_end
                         && heights.end.get()
                     {
                         position = limit;
@@ -490,11 +523,12 @@ fn variable_list<K: Eq + std::hash::Hash + Clone + 'static>(
                         // Clamp the final coordinate, too: adding a sub-height
                         // intra-row offset can round up to the following row.
                         let last = bottom.next_down().max(top);
-                        position =
-                            ((top as f64 + previous.within as f64).clamp(0., f32::MAX as f64)
-                                as f32)
-                                .min(last)
-                                .min(limit);
+                        let wanted = (top as f64 + previous.within as f64).clamp(0., f32::MAX as f64)
+                            as f32;
+                        position = wanted.min(last).min(limit);
+                        if heights.end.get() && position < wanted && !settled_clamp {
+                            holding = Some((previous.index, previous.within));
+                        }
                     }
                     // A row asked for, else the keyboard's, else one followed.
                     let target = asked
@@ -574,9 +608,10 @@ fn variable_list<K: Eq + std::hash::Hash + Clone + 'static>(
                         position,
                         index,
                         within: (position - model.row_offset(index)).max(0.),
-                        at_end: limit - position <= 0.5,
+                        at_end: if target.is_some() { limit - position <= 0.5 } else { at_end },
+                        held: false,
                     });
-                    (length, total, position, target, geometry, next_anchor)
+                    (length, total, position, target, geometry, next_anchor, holding)
                 };
                 // Release the index borrow before application key/build callbacks.
                 let keys: Vec<_> = geometry
@@ -619,7 +654,11 @@ fn variable_list<K: Eq + std::hash::Hash + Clone + 'static>(
                                 })
                             })
                     };
-                    if measured
+                    if let Some((index, within)) = holding {
+                        anchor.index = index;
+                        anchor.within = within;
+                        anchor.held = true;
+                    } else if measured
                         && let Some((_, index, top, _)) =
                             keys.iter().find(|(key, _, top, row_height)| {
                                 top + row_height > anchor.position && measured_row(key)
@@ -630,6 +669,18 @@ fn variable_list<K: Eq + std::hash::Hash + Clone + 'static>(
                     }
                     anchor
                 });
+                if holding.is_some()
+                    && !clamp_waiting.replace(true)
+                    && let Some(ui) = weak.upgrade()
+                {
+                    let (settled, waiting, revision) =
+                        (clamp_settled.clone(), clamp_waiting.clone(), mounted_revision.clone());
+                    ui.after_settled(Box::new(move || {
+                        waiting.set(false);
+                        settled.set(true);
+                        revision.update(|value| *value = value.wrapping_add(1));
+                    }));
+                }
                 let Some(mut ui) = weak.upgrade() else {
                     return;
                 };
