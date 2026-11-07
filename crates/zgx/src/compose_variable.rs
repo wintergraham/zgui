@@ -98,6 +98,9 @@ impl VariableHeights {
         self.index.borrow().row_at(offset)
     }
 }
+/// How many built rows past its range an end-anchored measured list keeps on either side.
+const KEPT_PAST_RANGE: usize = 6;
+
 struct Anchor {
     revision: u64,
     length: usize,
@@ -600,6 +603,19 @@ fn variable_list<K: Eq + std::hash::Hash + Clone + 'static>(
                         discovery = Some((first, range.start, range.end));
                     } else {
                         discovery = None;
+                    }
+                    // A transcript's rows built already stay a while past the range: a row in view growing
+                    // and shrinking (a fold, a step arriving) moves the range by a row or two, and mounting
+                    // what just left is what's slow.
+                    if measured && heights.end.get() && !range.is_empty() {
+                        let (mut low, mut high) = (usize::MAX, 0);
+                        for entry in entries.values() {
+                            let index = entry.index.with_untracked(|i| *i);
+                            low = low.min(index);
+                            high = high.max(index + 1);
+                        }
+                        range.start = low.max(range.start.saturating_sub(KEPT_PAST_RANGE)).min(range.start);
+                        range.end = high.min(range.end.saturating_add(KEPT_PAST_RANGE)).min(length).max(range.end);
                     }
                     let geometry: Vec<_> = model.rows(range).collect();
                     let next_anchor = first.map(|index| Anchor {
