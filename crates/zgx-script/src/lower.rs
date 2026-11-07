@@ -2737,7 +2737,9 @@ fn layout_box(inner: View, layout: &LayoutAnim, vm: &Rc<Vm>, low: &Rc<Lowering>)
                     // Entering grows from nothing; a first size otherwise holds.
                     None if enter => 0.,
                     None => continue,
-                    Some(before) if before == now => continue,
+                    // Under a hundredth of a point is rounding (text measured, a shrinking parent): chasing it
+                    // re-lays the box out each frame, and may never settle.
+                    Some(before) if (before - now).abs() < 0.01 => continue,
                     Some(before) => before + current(prop).unwrap_or(0.),
                 };
                 let margin = (shown - now) as f64;
@@ -5795,7 +5797,9 @@ fn presence(
 }
 
 /// A box whose one in-flow child fills it in both directions unless it
-/// sizes itself: a one-cell grid, whose items stretch.
+/// sizes itself. An overlay, not a one-cell grid: every `ui.presence` with
+/// sizing of its own is one of these, nested a few deep around each paragraph
+/// of a chat, and a grid made each level a taffy layout run.
 fn cell() -> View {
-    column().grid().grid_cols(1).grid_rows(1).items_stretch()
+    overlay()
 }
