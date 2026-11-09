@@ -7985,9 +7985,13 @@ mod ownership_tests {
 /// what was laid out afresh, so a reader of the size that dirties layout
 /// would flip it each pass, for ever (#1027). What creeps is still told,
 /// as this compares with what was told last.
+/// Equal first: an unbounded allocation stays infinite, and infinity less
+/// itself is NaN, which is near nothing (a hidden icon in a row sized by
+/// its content would otherwise be told it moved every pass, for ever).
 #[inline]
 fn resized(told: (f32, f32), now: (f32, f32)) -> bool {
-    !((told.0 - now.0).abs() < SIZE_NOISE && (told.1 - now.1).abs() < SIZE_NOISE)
+    let same = |a: f32, b: f32| a == b || (a - b).abs() < SIZE_NOISE;
+    !(same(told.0, now.0) && same(told.1, now.1))
 }
 
 fn allocated_content_size(scene: &Scene, node: NodeId) -> (f32, f32) {

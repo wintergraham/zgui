@@ -11861,12 +11861,16 @@ impl Scene {
             if !self.contains(id) || self.node(id).dirty & LAYOUT == 0 {
                 continue;
             }
-            let Some((constraints, size)) = self
+            let measurement = self
                 .node(id)
                 .measurement
                 .as_ref()
-                .map(|m| (m.constraints, m.size))
-            else {
+                .map(|m| (m.constraints, m.size));
+            // Under a hidden ancestor its measurement is from before it
+            // was hidden: laid out alone with it, it would take the size it
+            // had, which the next whole pass takes away again, for ever if
+            // what it holds reads its size. Laid out with the tree instead.
+            let Some((constraints, size)) = measurement.filter(|_| self.layout_visible(id)) else {
                 relayout_all = true;
                 self.invalidate_layout_to_root(id);
                 continue;
@@ -13185,8 +13189,7 @@ fn fades(style: &Style) -> bool {
         .any(|band| band.is_finite() && *band > 0.)
 }
 /// The mask a node passes to its children: its own when it fades its edges
-/// (over its clip, less `fade_insets`), joined with the one it inherited,
-/// otherwise the inherited one.
+/// (over its clip, less `fade_insets`), otherwise the one it inherited.
 fn fade_mask(
     inherited: Option<FadeMask>,
     clip: Option<Rect>,
@@ -13211,38 +13214,10 @@ fn fade_mask(
                 (clip.width - left - right).max(0.),
                 (clip.height - top - bottom).max(0.),
             );
-            Some(match inherited {
-                Some(outer) => join_masks(outer, (rect, bands)),
-                None => (rect, bands),
-            })
+            Some((rect, bands))
         }
         _ => inherited,
     }
-}
-/// One mask for content inside two: a title fading at its end, in a strip
-/// fading at its sides, still fades with the strip. Each edge takes the band
-/// of whichever mask fades it; where both do, it fades from where the first
-/// starts to where the first ends (never more opaque than either).
-fn join_masks((a, a_bands): FadeMask, (b, b_bands): FadeMask) -> FadeMask {
-    // Each edge as a coordinate that grows inward: top, right, bottom, left.
-    let inward = |r: Rect| [r.y, -(r.x + r.width), -(r.y + r.height), r.x];
-    let (a_edges, b_edges) = (inward(a), inward(b));
-    let mut edges = [0.; 4];
-    let mut bands = [0.; 4];
-    for i in 0..4 {
-        (edges[i], bands[i]) = match (a_bands[i] > 0., b_bands[i] > 0.) {
-            (_, false) => (a_edges[i], a_bands[i]),
-            (false, true) => (b_edges[i], b_bands[i]),
-            (true, true) => {
-                let end = a_edges[i].max(b_edges[i]);
-                let start = (a_edges[i] + a_bands[i]).max(b_edges[i] + b_bands[i]);
-                (end, start - end)
-            }
-        };
-    }
-    let [top, right, bottom, left] = edges;
-    let rect = Rect::new(left, top, (-right - left).max(0.), (-bottom - top).max(0.));
-    (rect, bands)
 }
 /// The rounded clips a node passes to its children: its own box first when
 /// it clips both axes with rounded corners, otherwise those it inherited.
