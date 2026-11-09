@@ -7817,10 +7817,16 @@ impl Scene {
                 continue;
             }
             // Other changes inside the clip also land where the copy moves
-            // them; the strip the copy cannot fill is exposed.
+            // them; the strip the copy cannot fill is exposed. Past
+            // `DAMAGE_RECTS` they are on the grid, not in the list.
+            let gridded = match &self.damage_grid {
+                Some(grid) => grid.rects(self.viewport),
+                None => Vec::new(),
+            };
             let inside: Vec<Rect> = self
                 .damage
                 .iter()
+                .chain(&gridded)
                 .filter_map(|rect| rect.intersection(scroll.clip))
                 .collect();
             for rect in inside {

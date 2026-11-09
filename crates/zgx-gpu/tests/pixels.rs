@@ -5016,6 +5016,151 @@ fn fractional_scrolls_on_the_pixel_grid_copy_and_match_a_fresh_render() {
     assert_eq!(copies, expected);
 }
 
+/// Content of a scroll view that moves on its own as the view scrolls: a
+/// header held still against the scroll (translated by the offset) over a
+/// backdrop held with it, a list of small marks rising at a different rate
+/// (enough of them to damage past a list of rectangles, onto the grid), and
+/// a box fading and shrinking. Each frame, the previous one moved as the scene reports and
+/// repainted where it says, as a copying renderer draws it, matches a full
+/// repaint; and so does the renderer's own frame.
+#[test]
+fn scroll_content_moving_on_its_own_matches_a_full_repaint() {
+    let _gpu_fixture = gpu_fixture();
+    use zgx::{compose::prelude::*, widgets::Ui};
+    let (w, h) = (160_usize, 120_usize);
+    for marks in [2, 12] {
+        let mut gpu = GpuRenderer::new(w as u32, h as u32).unwrap();
+        let mut ui = Ui::new(w as f32, h as f32);
+        ui.scene.borrow_mut().set_pixel_scale(1.);
+        let offset = ui.signal(0_f32);
+        let held = offset.clone();
+        let backdrop = offset.clone();
+        let faster = offset.clone();
+        let fading = offset.clone();
+        let row = |i: usize| {
+            row()
+                .w(144.)
+                .h(10.)
+                .gap(6.)
+                .children((0..marks).map(move |m| {
+                    div().size(4., 4.).bg(if (i + m).is_multiple_of(2) {
+                        rgb(0xffcc00)
+                    } else {
+                        rgb(0x00ccff)
+                    })
+                }))
+        };
+        ui.mount(
+            overlay().w(w as f32).h(h as f32).bg(rgb(0x000000)).child(
+                scroll(offset.clone())
+                    .w(w as f32)
+                    .h(h as f32)
+                    .bg(rgb(0x101820))
+                    .child(
+                        div()
+                            .w(w as f32)
+                            .h(40.)
+                            .bg(rgb(0x404040))
+                            .reactive_style(move || Styles::new().translate(0., backdrop.get())),
+                    )
+                    .child(
+                        div()
+                            .w(120.)
+                            .h(20.)
+                            .bg(rgb(0xe0e0e0))
+                            .reactive_style(move || Styles::new().translate(0., held.get() - 40.)),
+                    )
+                    .child(column().children((0..40).map(row)).reactive_style(move || {
+                        Styles::new().translate(0., -0.5 * faster.get().round())
+                    }))
+                    .child(
+                        div()
+                            .w(60.)
+                            .h(16.)
+                            .bg(rgb(0xff4080))
+                            .reactive_style(move || {
+                                let o = fading.get();
+                                Styles::new().opacity(1. - o / 100.).scale(1. - o / 200.)
+                            }),
+                    )
+                    .children((0..40).map(|i| {
+                        div().w(144.).h(12.).bg(if i % 2 == 0 {
+                            rgb(0x223344)
+                        } else {
+                            rgb(0x334455)
+                        })
+                    })),
+            ),
+        );
+        let full = Rect::new(0., 0., w as f32, h as f32);
+        let fresh = |ui: &Ui| {
+            let mut fresh = GpuRenderer::new(w as u32, h as u32).unwrap();
+            fresh.render(&ui.scene.borrow(), &[full]).unwrap();
+            fresh.readback().unwrap()
+        };
+        ui.prepare_frame();
+        let damage = ui.scene.borrow_mut().flush().damage;
+        gpu.render(&ui.scene.borrow(), &damage).unwrap();
+        let mut previous = fresh(&ui);
+        let mut moved = 0;
+        for scroll in [6., 14., 20., 33., 41., 60., 61., 75., 70., 52.] {
+            offset.set(scroll);
+            ui.prepare_frame();
+            let damage = ui.scene.borrow_mut().flush().damage;
+            let moves = ui.scene.borrow().scroll_moves().to_vec();
+            moved += moves.len();
+            let expected = fresh(&ui);
+            // The previous frame, each move's pixels shifted within its clip,
+            // then the damage repainted.
+            let mut copied = previous.clone();
+            for m in &moves {
+                let (dx, dy) = (m.dx as isize, m.dy as isize);
+                for y in m.clip.y as isize..(m.clip.y + m.clip.height) as isize {
+                    for x in m.clip.x as isize..(m.clip.x + m.clip.width) as isize {
+                        let (sx, sy) = (x - dx, y - dy);
+                        let inside = sx >= m.clip.x as isize
+                            && sy >= m.clip.y as isize
+                            && sx < (m.clip.x + m.clip.width) as isize
+                            && sy < (m.clip.y + m.clip.height) as isize;
+                        if inside {
+                            let (to, from) = (
+                                (y as usize * w + x as usize) * 4,
+                                (sy as usize * w + sx as usize) * 4,
+                            );
+                            copied[to..to + 4].copy_from_slice(&previous[from..from + 4]);
+                        }
+                    }
+                }
+            }
+            for r in &damage {
+                for y in r.y.floor() as usize..((r.y + r.height).ceil() as usize).min(h) {
+                    for x in r.x.floor() as usize..((r.x + r.width).ceil() as usize).min(w) {
+                        let at = (y * w + x) * 4;
+                        copied[at..at + 4].copy_from_slice(&expected[at..at + 4]);
+                    }
+                }
+            }
+            let wrong = copied
+                .chunks(4)
+                .zip(expected.chunks(4))
+                .position(|(a, b)| a != b);
+            assert!(
+                wrong.is_none(),
+                "{marks} marks a row, scroll {scroll}: copied frame stale at {:?}",
+                wrong.map(|p| (p % w, p / w))
+            );
+            gpu.render(&ui.scene.borrow(), &damage).unwrap();
+            assert!(
+                gpu.readback().unwrap() == expected,
+                "{marks} marks a row, scroll {scroll}: renderer's frame"
+            );
+            previous = expected;
+        }
+        // Plain moves: the scene still offers them as copies.
+        assert!(moved > 0, "{marks} marks a row");
+    }
+}
+
 /// A chat transcript: a measured, end-anchored virtual list of wrapped text
 /// rows with estimated heights, fading edges and a scrollbar. Scrolling in
 /// uneven steps mounts, measures and unmounts rows; every partial frame must

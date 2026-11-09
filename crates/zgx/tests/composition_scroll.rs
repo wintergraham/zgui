@@ -142,6 +142,70 @@ fn disabled_scroll_blocks_input_and_unmount_releases_observers() {
     assert_eq!(offset.get(), 900.);
 }
 #[test]
+fn content_moving_on_its_own_is_damaged_where_the_copy_carries_it() {
+    // Marks inside the scroll content rising faster than the page: a copy
+    // of the last frame carries each by the scroll, so where it lands must
+    // repaint, however many places the frame damaged (past a list of
+    // rectangles, the damage is a grid). Rows lie far enough apart that the
+    // grid's cells around where they were and are don't cover it by chance.
+    let mut ui = Ui::new(200., 200.);
+    let offset = ui.signal(0.);
+    let read = offset.clone();
+    let view = ui.mount(
+        scroll(offset.clone())
+            .w(200.)
+            .h(150.)
+            .child(
+                column()
+                    .gap(20.)
+                    .children((0..40).map(|r| {
+                        row().gap(6.).children((0..12).map(move |m| {
+                            div().id(format!("{r}.{m}")).size(4., 4.).bg(rgb(0xffffff))
+                        }))
+                    }))
+                    .reactive_style(move || Styles::new().translate(0., -0.5 * read.get())),
+            )
+            .child(div().h(800.)),
+    );
+    ui.prepare_frame();
+    ui.scene.borrow_mut().flush();
+    let marks: Vec<_> = (0..40)
+        .flat_map(|r| (0..12).map(move |m| format!("{r}.{m}")))
+        .map(|id| view.find(&id).unwrap())
+        .collect();
+    let before: Vec<zgx::scene::Rect> =
+        marks.iter().map(|m| ui.scene.borrow().bounds(*m)).collect();
+    offset.set(10.);
+    ui.prepare_frame();
+    let damage = ui.scene.borrow_mut().flush().damage;
+    let moves = ui.scene.borrow().scroll_moves().to_vec();
+    let [scroll] = &moves[..] else {
+        panic!("one move: {moves:?}");
+    };
+    assert_eq!(scroll.dy, -10.);
+    let covered = |x: f32, y: f32| {
+        damage
+            .iter()
+            .any(|d| x >= d.x && y >= d.y && x < d.x + d.width && y < d.y + d.height)
+    };
+    for (mark, was) in marks.iter().zip(before) {
+        let carried = zgx::scene::Rect {
+            y: was.y + scroll.dy,
+            ..was
+        };
+        let Some(r) = carried.intersection(scroll.clip) else {
+            continue;
+        };
+        for (x, y) in [(r.x, r.y), (r.x + r.width - 0.5, r.y + r.height - 0.5)] {
+            assert!(
+                covered(x, y),
+                "{mark:?} carried to {r:?}, not repainted: {} damage rects",
+                damage.len()
+            );
+        }
+    }
+}
+#[test]
 fn fractional_scrolling_moves_content_by_whole_device_pixels() {
     // A trackpad's deltas are fractions of a point: the offset keeps them,
     // while what shows moves by whole device pixels (as Safari's does), so
