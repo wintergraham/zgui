@@ -164,3 +164,27 @@ fn fixed_fill_source_aspect_change_repaints_without_relayout_but_intrinsic_and_f
     let bounds = ui.scene.borrow().bounds(intrinsic.node());
     assert_eq!((bounds.width, bounds.height), (30., 50.));
 }
+#[test]
+fn absolute_insets_size_an_image_over_its_pixels() {
+    let mut ui = Ui::new(400., 300.);
+    // A 2x capture, twice the box it is pinned to: the insets size it, and
+    // cover fits its pixels into them.
+    let view = ui.mount(
+        column().size(300., 200.).child(
+            image("Snapshot", source(600, 400))
+                .absolute()
+                .left(0.)
+                .top(0.)
+                .right(0.)
+                .bottom(0.),
+        ),
+    );
+    ui.prepare_frame();
+    let scene = ui.scene.borrow();
+    let image = scene.children(view.node())[0];
+    let bounds = scene.bounds(image);
+    assert_eq!((bounds.width, bounds.height), (300., 200.));
+    let bitmap = scene.children(scene.children(image)[0])[0];
+    let bitmap = scene.bounds(bitmap);
+    assert_eq!((bitmap.width, bitmap.height), (300., 200.));
+}

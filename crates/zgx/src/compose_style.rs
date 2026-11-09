@@ -1554,10 +1554,26 @@ fn apply_resolved(
         let padding = style
             .padding_edges
             .unwrap_or(crate::scene::Insets::all(style.padding));
-        if resolved.width.is_none() && resolved.width_percent.is_none() {
+        // An absolute view inset from both sides of an axis is sized by them
+        // there (CSS), not by its pixels.
+        let (inset_x, inset_y) = if style.absolute {
+            let set = |length: Option<crate::layout::Length>| {
+                length.is_some_and(|l| l != crate::layout::Length::Auto)
+            };
+            style.layout_options.as_deref().map_or((false, false), |o| {
+                (
+                    (set(o.inset.left) || set(o.inset_inline.start))
+                        && (set(o.inset.right) || set(o.inset_inline.end)),
+                    set(o.inset.top) && set(o.inset.bottom),
+                )
+            })
+        } else {
+            (false, false)
+        };
+        if resolved.width.is_none() && resolved.width_percent.is_none() && !inset_x {
             style.width = Some(width + padding.left.max(0.) + padding.right.max(0.));
         }
-        if resolved.height.is_none() && resolved.height_percent.is_none() {
+        if resolved.height.is_none() && resolved.height_percent.is_none() && !inset_y {
             style.height = Some(height + padding.top.max(0.) + padding.bottom.max(0.));
         }
     }
