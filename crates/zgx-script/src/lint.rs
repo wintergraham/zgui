@@ -10,6 +10,9 @@
 //! Rules (each is also in [`RULES`]):
 //! - `untracked-get`: `state:get()` while an element is built. The interface
 //!   is built once, untracked, so the element shows the value it had then.
+//! - `list-row-get`: `state:get()` in a `ui.list`'s `row` builder, where the
+//!   list has `count` and no `data` or `key`: a row is built once per index,
+//!   so it keeps what it read then as the list changes under it.
 //! - `state-in-builder`: `ui.state` in a component, `each` row or `list` row.
 //!   Its key is the script's, so every instance shares one state.
 //! - `timer-interval`: `ui.every` faster than a display refresh.
@@ -28,20 +31,80 @@
 //! - `list-measured`: a `ui.list` of fixed heights whose rows wrap text: a
 //!   row's lines depend on its text and the width, which a script can't
 //!   measure; `measured = true` gives each row its content's height.
+//! - `reserved-system-key`: a `ui.command` with `reserved = true` on an
+//!   editing or system key (`cmd+c`, `cmd+v`, `cmd+z`, `cmd+q`…): reserved,
+//!   it is the app's even in a web page or terminal, which then can't use it.
 //! - `canvas-view`: a `ui.canvas` without `view` whose `draw` reads a zoom:
 //!   panning and zooming by drawing again runs the script for every mark;
 //!   `view` places what it drew instead.
 //! - `draw-item-state`: a `ui.canvas` `draw_item` reading state. Each item's
 //!   drawing is kept until that item is written, so what it read goes stale.
+//! - `animated-zoom`: a `zoom` given a tween or a spring, or animated by
+//!   `anime`: a zoom lays its subtree out again, so every frame of the
+//!   animation does; `scale` only composites.
+//! - `zoomable-zoom`: an element given both `zoom` and `zoomable`. Its
+//!   zoomable state sets its zoom; a `zoom` beside it fights that state.
+//! - `list-marker-hidden`: a `role = "listitem"` whose first child is a
+//!   text marker ("•", "3.") not `aria_hidden`. A marker hidden from
+//!   assistive technology is the list's: selection and plain text leave it
+//!   out and copied HTML makes it a `<ul>` or `<ol>`; one that isn't is
+//!   copied, and read, as text.
+//! - `window-size-layout`: an element's size or place (`w`, `max_w`, `x`…)
+//!   a function computes from `ui.window.size`, which runs Luau on every
+//!   frame of a resize. Layout says it without the script (a percentage,
+//!   `grow`, `max_w`); the window's size is for decisions (a sidebar
+//!   collapsing).
+//! - `unknown-token`: a `"$…"` token in a style, a `hover` table or a
+//!   computed style that neither zgx nor the app's `ui.theme.tokens`
+//!   declares (`"$app.crad"`: did you mean `$app.card`?), one of the wrong
+//!   kind for its field (`p = "$app.accent"`), or a theme file setting an
+//!   undeclared name. Unlike the rest it reads the app's scripts together
+//!   (`lint_app`): one may declare what another uses.
+//! - `unknown-target`: a `ui.contribute` or `ui.filter` target `"#id"` or `"hook:name"`
+//!   that no script declares with a literal `id` or `hook` (`"#sav"`: did
+//!   you mean `#save`?). Read across the app's and its plugins' scripts as
+//!   `unknown-token` is; for an app past luau-lsp's union limit (where
+//!   `zgx types` leaves `target` a string) and for plugins nobody
+//!   type-checks. A selector (`ui.selector(…)`) is not checked.
+//! - `unknown-route`: a literal route name given to a router's `navigate`,
+//!   `replace` or `is`, or a case of its `view`, that no literal
+//!   `ui.router { routes = … }` declares (`"thraed"`: did you mean
+//!   `thread`?). Types catch the calls; a misspelled `view` case they
+//!   don't (Luau takes a table's extra fields), nor an app past their
+//!   limit.
 
 use crate::check::{CheckError, Diagnostic, Report, Severity, scripts};
 use std::path::{Path, PathBuf};
 
+/// What `ui.window { … }` reads (`WindowOptions`).
+const WINDOW_OPTIONS: &[&str] = &[
+    "id",
+    "title",
+    "width",
+    "height",
+    "open",
+    "frame_autosave",
+    "under_pointer",
+    "tabbing",
+];
+
 /// Every rule's name and a one-line summary.
 pub const RULES: &[(&str, &str)] = &[
     (
+        "window-option",
+        "a ui.window option that doesn't exist, which types can't catch",
+    ),
+    (
+        "component-id",
+        "an id given to a component replaces the one set on its root",
+    ),
+    (
         "untracked-get",
         "state:get() while an element is built is read once",
+    ),
+    (
+        "list-row-get",
+        "state:get() in a positional ui.list's row is read once per index",
     ),
     (
         "state-in-builder",
@@ -65,7 +128,11 @@ pub const RULES: &[(&str, &str)] = &[
     ),
     (
         "update-copy",
-        "state:update(fn) copying the whole value for one change",
+        "state:update(fn), or table.clone(state:peek()) and state:set, copying the whole value for one change",
+    ),
+    (
+        "append-concat",
+        "state:set(state:get() .. text): the whole string copied into Luau and back for a token",
     ),
     (
         "computed-sort",
@@ -80,12 +147,62 @@ pub const RULES: &[(&str, &str)] = &[
         "a ui.list of fixed heights whose rows wrap text",
     ),
     (
+        "reserved-system-key",
+        "a reserved command on an editing or system key, taken from every page and terminal",
+    ),
+    (
         "canvas-view",
         "a ui.canvas that pans or zooms by drawing again rather than by `view`",
     ),
     (
         "draw-item-state",
         "a ui.canvas draw_item reading state, kept until its item changes",
+    ),
+    (
+        "animated-zoom",
+        "a zoom animated frame by frame lays its subtree out on every frame",
+    ),
+    (
+        "zoomable-zoom",
+        "an element given both `zoom` and `zoomable`: its state sets the zoom",
+    ),
+    (
+        "list-marker-hidden",
+        "a list item's marker text not `aria_hidden`: copied and read as text",
+    ),
+    (
+        "window-size-layout",
+        "an element's size computed from ui.window.size rather than laid out",
+    ),
+    (
+        "unknown-token",
+        "a \"$…\" token nothing declares, or of the wrong kind for its field",
+    ),
+    ("i18n-parse", "a locale file or message that doesn't parse"),
+    (
+        "i18n-missing",
+        "a key the source locale has and this locale lacks",
+    ),
+    (
+        "i18n-extra",
+        "a key a locale has and the source locale lacks",
+    ),
+    (
+        "i18n-args",
+        "a message naming other arguments than the source locale's",
+    ),
+    (
+        "i18n-plural",
+        "a plural lacking a category the locale's numbers need",
+    ),
+    ("i18n-key", "ui.t with a key the source locale lacks"),
+    (
+        "unknown-target",
+        "a ui.contribute or ui.filter target `#id` or `hook:name` no element declares",
+    ),
+    (
+        "unknown-route",
+        "a route name given to a router's navigate, replace, is or view that no ui.router declares",
     ),
 ];
 
@@ -102,6 +219,11 @@ const NOT_ELEMENTS: &[&str] = &[
     "computed",
     "sorted",
     "resource",
+    "paged",
+    "debounced",
+    "socket",
+    "sleep",
+    "editor",
     "form",
     "try",
     "effect",
@@ -109,6 +231,9 @@ const NOT_ELEMENTS: &[&str] = &[
     "every",
     "after",
     "shortcut_text",
+    "shortcut_owner",
+    "window_rect",
+    "windows",
     "set",
     "toggle",
     "add",
@@ -125,9 +250,11 @@ const NOT_ELEMENTS: &[&str] = &[
     "shader",
     "layer_shader",
     "bitmap",
+    "image_size",
     "raw",
     "tween",
     "spring",
+    "spring_to",
     "loop",
     "web",
     "term",
@@ -143,10 +270,21 @@ const NOT_ELEMENTS: &[&str] = &[
     "object",
     "call_sync",
     "task",
+    "router",
+    "async",
+    "optimistic",
+    "actions",
     "open_files",
+    "open_folder",
+    "remembered_folder",
     "save_file",
+    "notify",
+    "badge",
     "read_file",
     "write_file",
+    "i18n",
+    "t",
+    "selector",
 ];
 
 /// Lint every `.luau` script at `paths` (files, or directories searched).
@@ -157,58 +295,339 @@ pub fn lint(paths: &[PathBuf]) -> Result<Report, CheckError> {
         if files.is_empty() {
             return Err(CheckError::NoScripts(path.clone()));
         }
+        let mut sources = Vec::new();
         for file in files {
             let source = std::fs::read_to_string(&file).map_err(CheckError::Io)?;
-            report.diagnostics.extend(lint_source(&file, &source));
+            sources.push((file, source));
             report.files += 1;
         }
+        report.diagnostics.extend(lint_app(&sources));
     }
     Ok(report)
 }
 
-/// Lint one script's source; `file` names it in the findings.
+/// Lint an app's scripts together: each on its own, and what one names
+/// against what the others declare (`unknown-token`).
+pub fn lint_app(sources: &[(PathBuf, String)]) -> Vec<Diagnostic> {
+    let read: Vec<_> = sources
+        .iter()
+        .map(|(file, source)| (file, tokenize(source)))
+        .collect();
+    let mut found = Vec::new();
+    for (file, (tokens, comments)) in &read {
+        found.extend(lint_tokens(file, tokens, comments));
+    }
+    let files: Vec<_> = read
+        .iter()
+        .map(|(path, (tokens, _))| crate::token_lint::File { path, tokens })
+        .collect();
+    let mut tokens = crate::token_lint::unknown_tokens(&files);
+    tokens.extend(crate::hook_targets::unknown_targets(&files));
+    tokens.extend(crate::routes::unknown_routes(&files));
+    tokens.retain(|d| {
+        read.iter()
+            .find(|(file, _)| **file == d.file)
+            .is_none_or(|(_, (_, comments))| !allowed(comments, d.line, &d.code))
+    });
+    tokens.sort_by_key(|d| (d.line, d.column));
+    found.extend(tokens);
+    let mut locales = lint_locales(&files);
+    locales.retain(|d| {
+        read.iter()
+            .find(|(file, _)| **file == d.file)
+            .is_none_or(|(_, (_, comments))| !allowed(comments, d.line, &d.code))
+    });
+    found.extend(locales);
+    found
+}
+
+/// Whether a `-- zgx-lint: allow(rule)` comment on `line`, or the line
+/// above it, accepts a finding of `rule` there.
+fn allowed(comments: &[(u32, String)], line: u32, rule: &str) -> bool {
+    comments.iter().any(|(at, text)| {
+        (*at == line || *at + 1 == line)
+            && text
+                .split_once("zgx-lint:")
+                .and_then(|(_, rest)| rest.trim().strip_prefix("allow("))
+                .and_then(|rest| rest.split_once(')'))
+                .is_some_and(|(names, _)| names.split(',').any(|name| name.trim() == rule))
+    })
+}
+
+/// What the scripts ask of `ui.i18n` and `ui.t`: each catalog (its
+/// directory and source locale), and each literal key with where it is.
+#[derive(Default)]
+struct Asked {
+    catalogs: Vec<(PathBuf, String)>,
+    keys: Vec<(PathBuf, u32, u32, String)>,
+}
+fn asked(file: &Path, tokens: &[Token], into: &mut Asked) {
+    let base = file.parent().unwrap_or(Path::new("."));
+    let call = |at: usize, name: &str| {
+        tokens.get(at).is_some_and(|t| t.is("ui"))
+            && tokens.get(at + 1).is_some_and(|t| t.is("."))
+            && tokens.get(at + 2).is_some_and(|t| t.is(name))
+    };
+    for at in 0..tokens.len() {
+        if call(at, "i18n") {
+            // `ui.i18n { dir = "…", source = "…" }`, or `({ … })`.
+            let (mut dir, mut locale) = ("locales".to_owned(), "en".to_owned());
+            let mut i = at + 3;
+            let mut depth = 0;
+            while let Some(t) = tokens.get(i) {
+                if t.is("{") || t.is("(") {
+                    depth += 1;
+                } else if t.is("}") || t.is(")") {
+                    depth -= 1;
+                    if depth <= 0 {
+                        break;
+                    }
+                } else if depth == 1
+                    && (t.is("dir") || t.is("source"))
+                    && tokens.get(i + 1).is_some_and(|t| t.is("="))
+                    && let Some(value) = tokens.get(i + 2).filter(|v| v.kind == Kind::Str)
+                {
+                    let target = if t.is("dir") { &mut dir } else { &mut locale };
+                    *target = unquote(&value.text).to_owned();
+                }
+                i += 1;
+            }
+            into.catalogs
+                .push((crate::normalize(&base.join(dir)), locale));
+        } else if call(at, "t")
+            && tokens.get(at + 3).is_some_and(|t| t.is("("))
+            && let Some(key) = tokens.get(at + 4).filter(|t| t.kind == Kind::Str)
+        {
+            into.keys.push((
+                file.to_path_buf(),
+                key.line,
+                key.column,
+                unquote(&key.text).to_owned(),
+            ));
+        }
+    }
+}
+
+/// The `i18n` rules: each catalog's locale files against its source
+/// locale, and `ui.t`'s literal keys against the source.
+/// The keys of the first catalog `files` load (`ui.i18n`), in its source
+/// locale, sorted: what `zgx types` writes as `MessageKey`.
+pub(crate) fn source_keys(files: &[crate::token_lint::File]) -> Option<Vec<String>> {
+    let mut asked_for = Asked::default();
+    for file in files {
+        asked(file.path, file.tokens, &mut asked_for);
+    }
+    let (dir, source) = asked_for.catalogs.first()?;
+    let text = std::fs::read_to_string(dir.join(format!("{source}.json"))).ok()?;
+    let (catalog, _) = zgx::i18n::Catalog::parse(source, &text);
+    let mut keys: Vec<String> = catalog.keys().map(|(key, _)| key.to_owned()).collect();
+    keys.sort();
+    Some(keys)
+}
+fn lint_locales(files: &[crate::token_lint::File]) -> Vec<Diagnostic> {
+    use zgx::i18n::{ArgumentKind, Catalog};
+    let mut asked_for = Asked::default();
+    for file in files {
+        asked(file.path, file.tokens, &mut asked_for);
+    }
+    asked_for.catalogs.sort();
+    asked_for.catalogs.dedup();
+    let mut found = Vec::new();
+    let mut report =
+        |file: &Path, (line, column): (u32, u32), severity, code: &str, message: String| {
+            found.push(Diagnostic {
+                file: file.to_path_buf(),
+                line,
+                column,
+                severity,
+                code: code.into(),
+                message,
+            })
+        };
+    for (dir, source_locale) in &asked_for.catalogs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        let mut files: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "json"))
+            .collect();
+        files.sort();
+        let mut locales = Vec::new();
+        for path in files {
+            let Some(locale) = path.file_stem().and_then(|s| s.to_str()).map(str::to_owned) else {
+                continue;
+            };
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let (catalog, errors) = Catalog::parse(&locale, &text);
+            for error in errors {
+                let at = match error.key.as_str() {
+                    "" => (error.line.max(1) as u32, error.column.max(1) as u32),
+                    key => key_position(&text, key),
+                };
+                report(&path, at, Severity::Error, "i18n-parse", error.to_string());
+            }
+            let keys: std::collections::BTreeMap<String, Vec<zgx::i18n::Argument>> = catalog
+                .keys()
+                .map(|(key, args)| (key.to_owned(), args))
+                .collect();
+            locales.push((locale, path, text, keys));
+        }
+        let Some(source) = locales.iter().position(|(l, ..)| l == source_locale) else {
+            continue;
+        };
+        let source_keys = locales[source].3.clone();
+        let names = |args: &[zgx::i18n::Argument]| {
+            let mut names: Vec<String> = args.iter().map(|a| a.name.clone()).collect();
+            names.sort();
+            names.dedup();
+            names
+        };
+        for (locale, path, text, keys) in &locales {
+            for (key, args) in keys {
+                let Some(source_args) = source_keys.get(key) else {
+                    report(
+                        path,
+                        key_position(text, key),
+                        Severity::Warning,
+                        "i18n-extra",
+                        format!("{key} isn't in {source_locale}.json, the source locale"),
+                    );
+                    continue;
+                };
+                if names(args) != names(source_args) {
+                    report(
+                        path,
+                        key_position(text, key),
+                        Severity::Warning,
+                        "i18n-args",
+                        format!(
+                            "{key} names {{{}}}, where {source_locale} names {{{}}}",
+                            names(args).join("}, {"),
+                            names(source_args).join("}, {")
+                        ),
+                    );
+                }
+                for arg in args {
+                    let (cases, ordinal) = match &arg.kind {
+                        ArgumentKind::Plural(cases) => (cases, false),
+                        ArgumentKind::Ordinal(cases) => (cases, true),
+                        _ => continue,
+                    };
+                    let lacking: Vec<&str> = plural_categories(locale, ordinal)
+                        .into_iter()
+                        .filter(|c| !cases.iter().any(|have| have == c))
+                        .collect();
+                    if !lacking.is_empty() {
+                        report(
+                            path,
+                            key_position(text, key),
+                            Severity::Warning,
+                            "i18n-plural",
+                            format!(
+                                "{key}'s {{{}}} needs {} in {locale}",
+                                arg.name,
+                                lacking.join(", ")
+                            ),
+                        );
+                    }
+                }
+            }
+            if locale != source_locale {
+                for key in source_keys.keys().filter(|k| !keys.contains_key(*k)) {
+                    report(
+                        path,
+                        (1, 1),
+                        Severity::Warning,
+                        "i18n-missing",
+                        format!("{locale} lacks {key} (it shows {source_locale}'s)"),
+                    );
+                }
+            }
+        }
+        for (file, line, column, key) in &asked_for.keys {
+            if file.starts_with(dir.parent().unwrap_or(dir)) && !source_keys.contains_key(key) {
+                report(
+                    file,
+                    (*line, *column),
+                    Severity::Warning,
+                    "i18n-key",
+                    format!("ui.t(\"{key}\"): {source_locale}.json has no such key"),
+                );
+            }
+        }
+    }
+    found
+}
+/// A string literal's text without its quotes (`"x"`, `'x'`, `` `x` ``).
+fn unquote(literal: &str) -> &str {
+    let quoted = literal.len() >= 2
+        && ['"', '\'', '`']
+            .iter()
+            .any(|q| literal.starts_with(*q) && literal.ends_with(*q));
+    if quoted {
+        &literal[1..literal.len() - 1]
+    } else {
+        literal
+    }
+}
+/// Where in a locale file `key` (dotted, `inbox.count`) is: its last part's
+/// name, quoted, the first time it is a key; else the file's start.
+fn key_position(text: &str, key: &str) -> (u32, u32) {
+    let last = key.rsplit('.').next().unwrap_or(key);
+    let quoted = format!("\"{last}\"");
+    for (n, line) in text.lines().enumerate() {
+        if let Some(at) = line.find(&quoted)
+            && line[at + quoted.len()..].trim_start().starts_with(':')
+        {
+            return (n as u32 + 1, at as u32 + 1);
+        }
+    }
+    (1, 1)
+}
+
+/// Lint one script's source on its own; `file` names it in the findings.
 pub fn lint_source(file: &Path, source: &str) -> Vec<Diagnostic> {
     let (tokens, comments) = tokenize(source);
+    lint_tokens(file, &tokens, &comments)
+}
+
+fn lint_tokens(file: &Path, tokens: &[Token], comments: &[(u32, String)]) -> Vec<Diagnostic> {
     let mut linter = Linter {
         file,
-        tokens: &tokens,
+        tokens,
         found: Vec::new(),
     };
     linter.run();
     linter.list_key();
+    linter.component_id();
     linter.list_measured();
+    linter.reserved_system_key();
     linter.canvas_view();
     linter.draw_item_state();
-    let allowed = |line: u32, rule: &str| {
-        comments.iter().any(|(at, text)| {
-            (*at == line || *at + 1 == line)
-                && text
-                    .split_once("zgx-lint:")
-                    .and_then(|(_, rest)| rest.trim().strip_prefix("allow("))
-                    .and_then(|rest| rest.split_once(')'))
-                    .is_some_and(|(names, _)| names.split(',').any(|name| name.trim() == rule))
-        })
-    };
     let mut found = linter.found;
-    found.retain(|d| !allowed(d.line, &d.code));
+    found.retain(|d| !allowed(comments, d.line, &d.code));
     found.sort_by_key(|d| (d.line, d.column));
     found.dedup();
     found
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Kind {
+pub(crate) enum Kind {
     Name,
     Number,
     Str,
     Punct,
 }
 #[derive(Clone, Debug)]
-struct Token {
-    kind: Kind,
-    text: String,
-    line: u32,
-    column: u32,
+pub(crate) struct Token {
+    pub(crate) kind: Kind,
+    pub(crate) text: String,
+    pub(crate) line: u32,
+    pub(crate) column: u32,
 }
 impl Token {
     fn is(&self, text: &str) -> bool {
@@ -218,7 +637,7 @@ impl Token {
 
 /// Luau source as tokens, and its comments by line. Strings (long and
 /// interpolated ones too) are single tokens; this lint does not look inside.
-fn tokenize(source: &str) -> (Vec<Token>, Vec<(u32, String)>) {
+pub(crate) fn tokenize(source: &str) -> (Vec<Token>, Vec<(u32, String)>) {
     let chars: Vec<char> = source.chars().collect();
     let (mut tokens, mut comments) = (Vec::new(), Vec::new());
     let (mut i, mut line, mut column) = (0, 1u32, 1u32);
@@ -353,6 +772,12 @@ struct Frame {
     params: Vec<String>,
 }
 
+/// Element fields layout sizes and places by itself.
+const LAID_OUT: &[&str] = &[
+    "w", "h", "size", "min_w", "max_w", "min_h", "max_h", "basis", "x", "y", "left", "right",
+    "top", "bottom",
+];
+
 const KEYWORDS: &[&str] = &[
     "and", "break", "continue", "do", "else", "elseif", "end", "false", "for", "function", "if",
     "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
@@ -431,7 +856,81 @@ impl Linter<'_> {
             _ => false,
         }
     }
+    /// In the element table opened at `table`, its first child when that
+    /// is a `ui.text` of a list marker ("•", "-", "3.", "b)", `` `{i}.` ``)
+    /// without `aria_hidden = true`: the marker's string.
+    fn unhidden_marker(&self, table: usize) -> Option<usize> {
+        let end = self.closing(table);
+        let mut depth = 0;
+        let mut j = table + 1;
+        // The first `ui.name` call among its fields.
+        let call = loop {
+            if j >= end {
+                return None;
+            }
+            match self.tokens[j].text.as_str() {
+                "(" | "{" | "[" if self.tokens[j].kind == Kind::Punct => depth += 1,
+                ")" | "}" | "]" if self.tokens[j].kind == Kind::Punct => depth -= 1,
+                _ => {}
+            }
+            if depth == 0 && self.is(j, "ui") && self.is(j + 1, ".") && self.name(j + 2).is_some() {
+                break j;
+            }
+            j += 1;
+        };
+        if !self.is(call + 2, "text") || !(self.is(call + 3, "{") || self.is(call + 3, "(")) {
+            return None;
+        }
+        let close = self.closing(call + 3);
+        let marker = (call + 4..close).find(|&k| self.tokens[k].kind == Kind::Str)?;
+        let text = &self.tokens[marker].text;
+        let inner = text.get(1..text.len().saturating_sub(1))?.trim();
+        let bullet = [
+            "•", "◦", "▪", "‣", "·", "-", "–", "—", "*", "○", "●", "■", "□",
+        ]
+        .contains(&inner);
+        let numbered = inner.len() > 1 && inner.ends_with(['.', ')']) && {
+            let head = &inner[..inner.len() - 1];
+            head.chars().all(|c| c.is_ascii_digit())
+                || (head.chars().count() == 1 && head.chars().all(|c| c.is_ascii_alphabetic()))
+                || (text.starts_with('`') && head.starts_with('{') && head.ends_with('}'))
+        };
+        if !bullet && !numbered {
+            return None;
+        }
+        let mut depth = 0;
+        let hidden = (call + 4..close).any(|k| {
+            match self.tokens[k].text.as_str() {
+                "(" | "{" | "[" if self.tokens[k].kind == Kind::Punct => depth += 1,
+                ")" | "}" | "]" if self.tokens[k].kind == Kind::Punct => depth -= 1,
+                _ => {}
+            }
+            depth == 0 && self.is(k, "aria_hidden") && self.is(k + 1, "=") && self.is(k + 2, "true")
+        });
+        (!hidden).then_some(marker)
+    }
     /// The index of the bracket that closes the one opened at `at`.
+    /// Whether the table opened at `open` has one of `fields` at its own
+    /// level (`data = …`), not in a table or call inside it.
+    fn table_has(&self, open: usize, fields: &[&str]) -> bool {
+        let close = self.closing(open);
+        let mut depth = 0;
+        for j in open + 1..close {
+            let token = &self.tokens[j];
+            if token.kind == Kind::Punct {
+                match token.text.as_str() {
+                    "(" | "{" | "[" => depth += 1,
+                    ")" | "}" | "]" => depth -= 1,
+                    _ => {}
+                }
+                continue;
+            }
+            if depth == 0 && fields.contains(&token.text.as_str()) && self.is(j + 1, "=") {
+                return true;
+            }
+        }
+        false
+    }
     fn closing(&self, at: usize) -> usize {
         let mut depth = 0;
         for (j, token) in self.tokens.iter().enumerate().skip(at) {
@@ -452,6 +951,77 @@ impl Linter<'_> {
         self.tokens.len()
     }
 
+    /// A component given an `id` where its own root, in this file, sets one:
+    /// the root's goes unseen (`ui.component`). Other files' components
+    /// reach the warning as they mount.
+    fn component_id(&mut self) {
+        let mut rooted: Vec<(String, String)> = Vec::new();
+        for at in 2..self.tokens.len() {
+            if !(self.is(at, "ui")
+                && self.is(at + 1, ".")
+                && self.is(at + 2, "component")
+                && self.is(at + 3, "(")
+                && self.is(at - 1, "="))
+            {
+                continue;
+            }
+            let Some(name) = self.name(at - 2).map(str::to_string) else {
+                continue;
+            };
+            let end = self.closing(at + 3);
+            let Some(table) = (at + 4..end).find(|&j| {
+                self.is(j, "return")
+                    && self.is(j + 1, "ui")
+                    && self.is(j + 2, ".")
+                    && self.is(j + 4, "{")
+            }) else {
+                continue;
+            };
+            if let Some(id) = self.direct_field(table + 4, "id") {
+                rooted.push((name, self.tokens[id].text.clone()));
+            }
+        }
+        for at in 1..self.tokens.len() {
+            if !self.is(at, "{") {
+                continue;
+            }
+            let Some(name) = self.name(at - 1) else {
+                continue;
+            };
+            let Some((name, own)) = rooted.iter().find(|(n, _)| n == name).cloned() else {
+                continue;
+            };
+            if let Some(id) = self.direct_field(at, "id") {
+                self.report(
+                    id,
+                    "component-id",
+                    format!(
+                        "`{name} {{ id = … }}` replaces the `id = {own}` set on its root. An `id` \
+                         prop names the element: give data another name."
+                    ),
+                );
+            }
+        }
+    }
+    /// The token after `key =` directly in the table opening at `open`.
+    fn direct_field(&self, open: usize, key: &str) -> Option<usize> {
+        let close = self.closing(open);
+        let mut depth = 0;
+        for at in open + 1..close {
+            let token = &self.tokens[at];
+            if token.kind == Kind::Punct {
+                match token.text.as_str() {
+                    "{" | "(" | "[" => depth += 1,
+                    "}" | ")" | "]" => depth -= 1,
+                    _ => {}
+                }
+            }
+            if depth == 0 && self.is(at, key) && self.is(at + 1, "=") {
+                return Some(at + 2);
+            }
+        }
+        None
+    }
     /// A `ui.list` without `key` in a file that reads a list state by index
     /// (`rows:get()[i]`, `rows:at(i)`) and removes from it or inserts into
     /// it: rows by position are each written again when one goes or comes.
@@ -617,6 +1187,67 @@ impl Linter<'_> {
         }
     }
 
+    /// A `ui.command` with `reserved = true` on an editing or system key
+    /// (`cmd+c`, `cmd+v`, `cmd+z`, `cmd+q`…): reserved, it is the app's
+    /// even in a page or terminal, which then can neither copy nor paste.
+    fn reserved_system_key(&mut self) {
+        let field = |linter: &Self, open: usize, close: usize, name: &str| {
+            (open + 1..close).find(|&j| {
+                linter.is(j, name)
+                    && linter.is(j + 1, "=")
+                    && (linter.is(j - 1, ",") || linter.is(j - 1, "{"))
+            })
+        };
+        for at in 0..self.tokens.len() {
+            if !(self.is(at, "command")
+                && self.is(at.wrapping_sub(1), ".")
+                && self.is(at.wrapping_sub(2), "ui"))
+            {
+                continue;
+            }
+            let open = if self.is(at + 1, "{") {
+                at + 1
+            } else if self.is(at + 1, "(") && self.is(at + 2, "{") {
+                at + 2
+            } else {
+                continue;
+            };
+            let close = self.closing(open);
+            if !field(self, open, close, "reserved").is_some_and(|j| self.is(j + 2, "true")) {
+                continue;
+            }
+            let Some(key) = field(self, open, close, "key")
+                .and_then(|j| self.tokens.get(j + 2))
+                .filter(|t| t.kind == Kind::Str)
+                .map(|t| t.text.trim_matches(['"', '\'']).to_ascii_lowercase())
+            else {
+                continue;
+            };
+            let mut parts: Vec<&str> = key.split('+').map(str::trim).collect();
+            let letter = parts.pop().unwrap_or_default();
+            let primary = parts
+                .iter()
+                .any(|p| matches!(*p, "cmd" | "ctrl" | "control"));
+            // Shift only with Z: ⌘⇧Z is redo.
+            let other = parts
+                .iter()
+                .any(|p| matches!(*p, "alt" | "option") || (*p == "shift" && letter != "z"));
+            let editing = matches!(letter, "c" | "v" | "x" | "z" | "a" | "y");
+            let system = parts.contains(&"cmd") && matches!(letter, "q" | "h" | "m");
+            if primary && !other && (editing || system) {
+                self.report(
+                    at,
+                    "reserved-system-key",
+                    format!(
+                        "`{key}` reserved is the app's even in a web page or a terminal, which \
+                         then cannot use it (copy, paste, undo, quit…). Leave it unreserved: \
+                         a page or terminal leaves alone what it does not use."
+                    ),
+                );
+            }
+        }
+    }
+
     /// A `ui.canvas` without `view` whose `draw` (written there, or a local
     /// function by name) reads a `.zoom`: it pans and zooms by drawing again.
     fn canvas_view(&mut self) {
@@ -706,6 +1337,35 @@ impl Linter<'_> {
         })
     }
 
+    /// `x:set(x:get() .. token)` (or `:peek()`) at the call opened at
+    /// `open`: the whole string read into Luau, a copy made with the token
+    /// and written back, for each token of a stream. `x:append(token)`
+    /// adds it in Rust, and an editor bound to `x` takes the token alone.
+    fn append_concat(&mut self, open: usize) {
+        let Some(state) = open.checked_sub(3).and_then(|at| self.name(at)) else {
+            return;
+        };
+        let reads = self.is(open - 2, ":")
+            && self.is(open - 1, "set")
+            && self.name(open + 1) == Some(state)
+            && self.is(open + 2, ":")
+            && (self.is(open + 3, "get") || self.is(open + 3, "peek"))
+            && self.is(open + 4, "(")
+            && self.is(open + 5, ")")
+            && self.is(open + 6, "..");
+        if reads {
+            let state = state.to_string();
+            self.report(
+                open - 3,
+                "append-concat",
+                format!(
+                    "`{state}:set({state}:get() .. …)` copies the whole string into Luau and \
+                     back for each piece; `{state}:append(…)` adds it in Rust, and an editor \
+                     bound to `{state}` takes the piece alone."
+                ),
+            );
+        }
+    }
     fn run(&mut self) {
         let mut stack: Vec<Frame> = Vec::new();
         for at in 0..self.tokens.len() {
@@ -715,6 +1375,7 @@ impl Linter<'_> {
             }
             match token.text.as_str() {
                 "(" | "{" | "[" => {
+                    self.append_concat(at);
                     let open = match token.text.as_str() {
                         "(" => Open::Paren,
                         "{" => Open::Brace,
@@ -791,7 +1452,98 @@ impl Linter<'_> {
     }
 
     /// Rules about a call or field at `at`, given the frames around it.
+    /// `local copy = table.clone(state:peek())` at `at` (its `table`), one
+    /// change to the copy, then `state:set(copy)`: what `update-copy` says of
+    /// `state:update`, written out. What does the change alone, if it's that.
+    fn cloned_for_one_change(&self, at: usize) -> Option<&'static str> {
+        if !(self.is(at, "table") && self.is(at + 1, ".") && self.is(at + 2, "clone")) {
+            return None;
+        }
+        if !(self.is(at + 3, "(")
+            && self.is(at.checked_sub(1)?, "=")
+            && self.is(at.checked_sub(3)?, "local"))
+        {
+            return None;
+        }
+        let copy = self.name(at - 2)?;
+        // The state: `state` or `a.b`, up to `:peek()` or `:get()`.
+        let path = at + 4;
+        let mut colon = path;
+        while self.name(colon).is_some() && self.is(colon + 1, ".") {
+            colon += 2;
+        }
+        self.name(colon)?;
+        colon += 1;
+        if !(self.is(colon, ":")
+            && (self.is(colon + 1, "peek") || self.is(colon + 1, "get"))
+            && self.is(colon + 2, "(")
+            && self.is(colon + 3, ")")
+            && self.is(colon + 4, ")"))
+        {
+            return None;
+        }
+        let state = &self.tokens[path..colon];
+        let mut next = colon + 5;
+        // The one change, and what does it alone.
+        let method = if self.is(next, copy) && self.is(next + 1, "[") {
+            next = self.closing(next + 1) + 1;
+            "`:set_key({ key }, value)`"
+        } else if self.is(next, copy) && self.is(next + 1, ".") && self.name(next + 2).is_some() {
+            next += 3;
+            "`:set_key({ \"field\" }, value)` or `:patch({ … })`"
+        } else if self.is(next, "table")
+            && self.is(next + 1, ".")
+            && self.is(next + 2, "insert")
+            && self.is(next + 3, "(")
+            && self.is(next + 4, copy)
+        {
+            let close = self.closing(next + 3);
+            // (A move, the value taken from the copy, isn't one insert.)
+            return ((next + 5..close).all(|j| !self.is(j, copy))
+                && self.sets_after(close + 1, state, copy))
+            .then_some("`:push(value)` or `:insert(at, value)`");
+        } else {
+            return None;
+        };
+        // (Taking a key away isn't setting one: no method does it alone.)
+        if !self.is(next, "=") || self.is(next + 1, "nil") {
+            return None;
+        }
+        // Past the value, which never reads the copy, to the write.
+        let end = (next + 1..next + 64).find(|j| self.sets_after(*j, state, copy))?;
+        (next + 1..end)
+            .all(|j| {
+                !self.is(j, copy)
+                    && !["local", "if", "for", "while", "function", "return", "end"]
+                        .iter()
+                        .any(|keyword| self.is(j, keyword))
+            })
+            .then_some(method)
+    }
+    /// Whether `state:set(copy)` starts at `at`.
+    fn sets_after(&self, at: usize, state: &[Token], copy: &str) -> bool {
+        let n = state.len();
+        state
+            .iter()
+            .enumerate()
+            .all(|(i, token)| self.is(at + i, &token.text))
+            && self.is(at + n, ":")
+            && self.is(at + n + 1, "set")
+            && self.is(at + n + 2, "(")
+            && self.is(at + n + 3, copy)
+            && self.is(at + n + 4, ")")
+    }
     fn token_rules(&mut self, at: usize, stack: &[Frame]) {
+        if let Some(method) = self.cloned_for_one_change(at) {
+            self.report(
+                at,
+                "update-copy",
+                format!(
+                    "this copies the whole value into Luau and back for one change; \
+                     {method} copies only what it changes."
+                ),
+            );
+        }
         let function = stack.iter().rposition(|f| f.open == Open::Function);
         let inside = |from: Option<usize>| &stack[from.map_or(0, |f| f + 1)..];
         // `state:get()` built into an element, with no function between.
@@ -819,6 +1571,139 @@ impl Linter<'_> {
                     break;
                 }
             }
+        }
+        // `state:get()` straight in a positional `ui.list`'s `row`.
+        if self.is(at, ":")
+            && self.is(at + 1, "get")
+            && self.is(at + 2, "(")
+            && let Some(f) = function
+            && f > 0
+            && stack[f].key.as_deref() == Some("row")
+            && stack[f - 1].open == Open::Brace
+            && stack[f - 1].callee.as_deref() == Some("ui.list")
+            && !self.table_has(stack[f - 1].at, &["data", "key"])
+        {
+            let state = self.name(at.wrapping_sub(1)).unwrap_or("state").to_string();
+            self.report(
+                at - 1,
+                "list-row-get",
+                format!(
+                    "`{state}:get()` is read once, while a row is built, so the row shows the \
+                     value of that moment and never updates: a positional `ui.list` builds a \
+                     row once per index and keeps it as the list changes under it. Give the \
+                     list `data = {state}` and a `key`, so each row follows its item, or read \
+                     it in a function the row's elements take."
+                ),
+            );
+        }
+        // `zoom = ui.tween(…)` or `ui.spring(…)`, or `zoom` animated by `anime`.
+        if self.is(at, "zoom") && self.is(at + 1, "=") && self.field(at + 2).is_some() {
+            let tweened = self.is(at + 2, "ui")
+                && self.is(at + 3, ".")
+                && (self.is(at + 4, "tween") || self.is(at + 4, "spring"))
+                && self.is(at + 5, "(");
+            let animated = stack.len() >= 2
+                && stack[stack.len() - 1].open == Open::Brace
+                && matches!(
+                    stack[stack.len() - 2].callee.as_deref(),
+                    Some("anime.animate" | "anime.createAnimatable")
+                );
+            if tweened || animated {
+                self.report(
+                    at,
+                    "animated-zoom",
+                    "an animated `zoom` lays its subtree out again on every frame of the \
+                     animation, as CSS's does: text wraps anew and everything inside moves. \
+                     Animate `scale` instead (drawn scaled, without layout), and set `zoom` \
+                     once, where it settles."
+                        .into(),
+                );
+            }
+        }
+        // A misspelled option of `ui.window`, which types can't catch: it's
+        // called through `__call`, so its table takes extra fields.
+        if let Some(frame) = stack.last()
+            && frame.open == Open::Brace
+            && frame.callee.as_deref() == Some("ui.window")
+            && self.is(at + 1, "=")
+            && let Some(key) = self.name(at)
+            && !WINDOW_OPTIONS.contains(&key)
+        {
+            let known = WINDOW_OPTIONS.join("`, `");
+            self.report(
+                at,
+                "window-option",
+                format!("`ui.window` has no option `{key}`: it takes `{known}`."),
+            );
+        }
+        // `w = function() … ui.window.size … end`: a size from the window's.
+        if self.is(at, "ui")
+            && self.is(at + 1, ".")
+            && self.is(at + 2, "window")
+            && self.is(at + 3, ".")
+            && self.is(at + 4, "size")
+            && !self.is(at.wrapping_sub(1), ".")
+            && let Some(f) = function
+            && let Some(key) = stack[f].key.as_deref()
+            && LAID_OUT.contains(&key)
+        {
+            self.report(
+                at,
+                "window-size-layout",
+                format!(
+                    "`{key}` computed from `ui.window.size` runs Luau on every frame of a \
+                     resize, for what layout does without the script: a percentage \
+                     (`{key} = \"30%\"`), `grow`, `min_w` and `max_w`. Read the window's size \
+                     for decisions layout can't make (collapsing a sidebar to icons), and a \
+                     ref's `width` for the room one element has."
+                ),
+            );
+        }
+        // `zoomable = state` in a table that also gives `zoom`.
+        if self.is(at, "zoomable")
+            && self.is(at + 1, "=")
+            && self.field(at + 2).is_some()
+            && let Some(table) = stack.last().filter(|frame| frame.open == Open::Brace)
+        {
+            let end = self.closing(table.at);
+            let mut depth = 0;
+            let zoom = (table.at + 1..end).any(|j| {
+                match self.tokens[j].text.as_str() {
+                    "(" | "{" | "[" => depth += 1,
+                    ")" | "}" | "]" => depth -= 1,
+                    _ => {}
+                }
+                depth == 0 && self.is(j, "zoom") && self.is(j + 1, "=") && !self.is(j - 1, ".")
+            });
+            if zoom {
+                self.report(
+                    at,
+                    "zoomable-zoom",
+                    "this element's `zoomable` state sets its zoom, and the `zoom` beside it \
+                     sets it again each time its style applies. Give the zoom to the state \
+                     alone (`ui.state(\"zoom\", 1.5)`) and drop `zoom`."
+                        .into(),
+                );
+            }
+        }
+        // `role = "listitem"` whose first child is a marker text not hidden.
+        if self.is(at, "role")
+            && self.is(at + 1, "=")
+            && self.tokens.get(at + 2).is_some_and(|t| {
+                t.kind == Kind::Str && t.text.trim_matches(['"', '\'']) == "listitem"
+            })
+            && let Some(table) = stack.last().filter(|frame| frame.open == Open::Brace)
+            && let Some(marker) = self.unhidden_marker(table.at)
+        {
+            self.report(
+                marker,
+                "list-marker-hidden",
+                "this list item's marker shows as text: selecting the item takes it, its \
+                 plain text copies it, and screen readers read it. Give it \
+                 `aria_hidden = true`: the list then draws it, as a browser draws an `<li>`'s \
+                 marker (copied HTML makes the list a `<ul>`, or an `<ol>` from the number)."
+                    .into(),
+            );
         }
         // `ui.state(...)` inside a component, `each` row or `list` row.
         // A key built from the instance (`\`file:{pane}\``) is deliberate.
@@ -1079,14 +1964,57 @@ fn is_element(callee: &str) -> bool {
     }
 }
 
+/// The plural categories CLDR gives `locale` (cardinal, or `ordinal`): what
+/// its messages' plurals need cases for. Chinese, Japanese, Korean, Thai
+/// and Vietnamese have `other` alone; English `one` and `other`; Arabic all
+/// six. From ICU4X's data in every build, whether or not the formatters'
+/// `i18n` feature is on (without it they pick English's cases, and a
+/// missing one shows `other`'s text). A locale ICU can't read needs
+/// `other` alone.
+fn plural_categories(locale: &str, ordinal: bool) -> Vec<&'static str> {
+    use icu_plurals::PluralCategory::*;
+    let Ok(locale) = icu_locale_core::Locale::try_from_str(locale) else {
+        return vec!["other"];
+    };
+    let prefs = (&locale).into();
+    let rules = match ordinal {
+        true => icu_plurals::PluralRules::try_new_ordinal(prefs),
+        false => icu_plurals::PluralRules::try_new_cardinal(prefs),
+    };
+    let Ok(rules) = rules else {
+        return vec!["other"];
+    };
+    rules
+        .categories()
+        .map(|category| match category {
+            Zero => "zero",
+            One => "one",
+            Two => "two",
+            Few => "few",
+            Many => "many",
+            Other => "other",
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// Functions of `ui` that return no `Node` yet whose arguments are read
     /// while the interface is built: a window's options, a contribution, a
-    /// document parsed into blocks.
-    const BUILDS: &[&str] = &["window", "contribute", "markdown"];
+    /// document parsed into blocks, a 3D scene's objects.
+    const BUILDS: &[&str] = &[
+        "window",
+        "contribute",
+        "filter",
+        "override",
+        "markdown",
+        "mesh",
+        "light",
+        "group",
+        "model",
+    ];
 
     /// A function added to `ui` is either an element or listed in
     /// `NOT_ELEMENTS`, so `untracked-get` neither flags a file written in a
@@ -1139,6 +2067,33 @@ mod tests {
         assert_eq!(found, Vec::new());
     }
 
+    #[test]
+    fn a_misspelled_window_option_is_reported() {
+        let source = r##"
+ui.window { id = "a", titel = "A", open = open, ui.text { "x", color = "#fff" } }
+ui.window { id = "b", title = "B", width = 300, height = 200, open = open, tabbing = "preferred" }
+"##;
+        assert_eq!(rules(source), one(2, "window-option"));
+    }
+
+    #[test]
+    fn an_id_replacing_one_on_a_components_root_is_reported() {
+        let source = r##"
+local Panel = ui.component(function(props)
+    return ui.column { id = "detail", ui.text { "x", id = "inner" } }
+end)
+local Plain = ui.component(function(props)
+    return ui.column { ui.text { "x", id = "inner" } }
+end)
+return ui.column {
+    Panel { id = 5 },
+    Panel { issue = 5 },
+    Plain { id = 5 },
+}
+"##;
+        assert_eq!(rules(source), one(9, "component-id"));
+    }
+
     fn rules(source: &str) -> Vec<(u32, String)> {
         lint_source(Path::new("app.luau"), source)
             .into_iter()
@@ -1147,6 +2102,77 @@ mod tests {
     }
     fn one(line: u32, rule: &str) -> Vec<(u32, String)> {
         vec![(line, rule.to_string())]
+    }
+
+    #[test]
+    fn a_list_items_marker_not_hidden_is_reported() {
+        let source = r##"
+ui.row { role = "listitem", ui.text { "•" }, ui.text { "one" } }
+ui.row { role = "listitem", ui.text { `{i}.`, color = "$text.tertiary" }, ui.text { "two" } }
+ui.row { role = "listitem", ui.text { "•", aria_hidden = true }, ui.text { "three" } }
+ui.row { role = "listitem", ui.text { "Name" }, ui.text { "four" } }
+ui.row { role = "listitem", ui.image { src = "dot.png" }, ui.text { "five" } }
+ui.row { role = "option", ui.text { "•" } }
+"##;
+        assert_eq!(
+            rules(source),
+            vec![
+                (2, "list-marker-hidden".to_string()),
+                (3, "list-marker-hidden".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn a_size_from_the_window_is_reported_and_a_decision_is_not() {
+        let source = r##"
+ui.div { w = function() return ui.window.size:get().width * 0.3 end }
+ui.div { max_w = function() return ui.window.size:get().height - 40 end }
+local narrow = ui.computed(function() return ui.window.size:get().width < 700 end)
+ui.div { visible = function() return ui.window.size:get().width >= 700 end }
+ui.div { w = function() return if narrow:get() then 48 else 240 end }
+ui.div { w = "30%", grow = 1 }
+"##;
+        assert_eq!(
+            rules(source),
+            [
+                (2, "window-size-layout".to_string()),
+                (3, "window-size-layout".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn a_zoom_beside_a_zoomable_is_reported() {
+        let source = r##"
+local z = ui.state("z", 1)
+ui.column { zoomable = z, zoom = 2 }
+ui.column { zoomable = z, ui.div { zoom = 2 } }
+ui.column { zoomable = z }
+"##;
+        assert_eq!(rules(source), one(3, "zoomable-zoom"));
+    }
+
+    #[test]
+    fn an_animated_zoom_is_reported_and_a_set_one_is_not() {
+        let source = r##"
+local big = ui.state("big", false)
+ui.div { zoom = ui.tween(function() return big:get() and 2 or 1 end) }
+ui.div { zoom = ui.spring(function() return big:get() and 2 or 1 end) }
+anime.animate("#panel", { zoom = 2, duration = 300 })
+ui.div { zoom = 1.5, zoom_fixed = true }
+ui.div { zoom = function() return big:get() and 2 or 1 end }
+ui.div { scale = ui.tween(function() return big:get() and 2 or 1 end) }
+local zoom = ui.tween(big)
+"##;
+        assert_eq!(
+            rules(source),
+            [
+                (3, "animated-zoom".to_string()),
+                (4, "animated-zoom".to_string()),
+                (5, "animated-zoom".to_string()),
+            ]
+        );
     }
 
     #[test]
@@ -1182,6 +2208,26 @@ local plain = ui.list { count = 10, row = function(i) return ui.text "x" end }
         assert_eq!(
             rules(source),
             vec![(6, "list-measured".into()), (7, "list-measured".into())]
+        );
+    }
+
+    #[test]
+    fn a_reserved_editing_or_system_key_is_reported() {
+        let source = r##"
+ui.command { id = "copy", key = "cmd+c", reserved = true, run = function() end }
+ui.command { id = "quit", key = "Cmd+Q", reserved = true, run = function() end }
+ui.command { id = "tab", key = "cmd+t", reserved = true, run = function() end }
+ui.command { id = "paste", key = "cmd+v", run = function() end }
+ui.command { id = "redo", key = "cmd+shift+z", reserved = true, run = function() end }
+ui.command { id = "undo", key = "ctrl+z", reserved = false, run = function() end }
+"##;
+        assert_eq!(
+            rules(source),
+            vec![
+                (2, "reserved-system-key".into()),
+                (3, "reserved-system-key".into()),
+                (6, "reserved-system-key".into())
+            ]
         );
     }
 
@@ -1279,6 +2325,33 @@ end, { key = function(item) return item.id end })
     }
 
     #[test]
+    fn a_positional_list_rows_read_of_state_is_read_once() {
+        let source = r##"
+local files = ui.state("files", {})
+return ui.column {
+    ui.list { count = function() return #files:get() end, row = function(i)
+        local f = files:get()[i]
+        return ui.text { f.title, literal = true }
+    end },
+    ui.list { data = files, key = function(f) return f.id end, row = function(f)
+        return ui.text { files:get()[1].title, literal = true }
+    end },
+    ui.list { count = 3, row = function(i)
+        return ui.text { function() return files:get()[i].title end }
+    end },
+}
+"##;
+        // The keyed list's read is in an element: the read-once rule's.
+        assert_eq!(
+            rules(source),
+            [
+                (5, "list-row-get".to_string()),
+                (9, "untracked-get".to_string())
+            ]
+        );
+    }
+
+    #[test]
     fn literal_state_keys_in_builders_are_shared() {
         let source = r##"
 local Row = ui.component(function(props)
@@ -1330,6 +2403,24 @@ anime.animate("#c", { x = 100, onComplete = function() done:set(true) end })
     }
 
     #[test]
+    fn a_string_set_to_itself_and_a_piece_is_an_append() {
+        let source = r##"
+reply:set(reply:get() .. token)
+reply:set(reply:peek() .. "\n")
+reply:set(other:get() .. token)
+reply:set(token .. reply:get())
+reply:append(token)
+"##;
+        assert_eq!(
+            rules(source),
+            [
+                (2, "append-concat".to_string()),
+                (3, "append-concat".to_string()),
+            ]
+        );
+    }
+
+    #[test]
     fn updates_that_one_method_does() {
         let source = r##"
 items:update(function(list) table.insert(list, item) end)
@@ -1346,6 +2437,64 @@ items:update(function(list) return sort(list) end)
                 (4, "update-copy".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn a_clone_for_one_change_is_an_update_written_out() {
+        let source = r##"
+local a = table.clone(map:peek())
+a[key] = value
+map:set(a)
+local b = table.clone(config:get())
+b.theme = "dark"
+config:set(b)
+local c = table.clone(items:peek())
+table.insert(c, row)
+items:set(c)
+local d = table.clone(state.volumes:peek())
+d[id] = level + 1
+state.volumes:set(d)
+"##;
+        assert_eq!(
+            rules(source),
+            [
+                (2, "update-copy".to_string()),
+                (5, "update-copy".to_string()),
+                (8, "update-copy".to_string()),
+                (11, "update-copy".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_clone_for_more_than_one_change_is_a_clone() {
+        // Two changes, a loop, a key taken away, a value read from the copy,
+        // a copy written elsewhere, or kept: none does it alone.
+        let source = r##"
+local a = table.clone(map:peek())
+a.x = 1
+a.y = 2
+map:set(a)
+local b = table.clone(map:peek())
+for k in other do b[k] = true end
+map:set(b)
+local c = table.clone(map:peek())
+c[key] = nil
+map:set(c)
+local d = table.clone(map:peek())
+d.x = d.y
+map:set(d)
+local e = table.clone(map:peek())
+e[key] = value
+other:set(e)
+local f = table.clone(map:peek())
+f[key] = value
+return f
+local g = table.clone(list:peek())
+table.insert(g, to, table.remove(g, from))
+list:set(g)
+"##;
+        assert_eq!(rules(source), Vec::<(u32, String)>::new());
     }
 
     #[test]

@@ -378,3 +378,227 @@ fn replay_respects_custom_key_prevention_and_explicit_disabled_binding() {
     native_text(&mut ui, "q");
     assert_eq!(value.get(), "");
 }
+/// What a host asks of a key a native view would otherwise keep: whether a
+/// binding where focus is, or above it, takes it, as dispatch would.
+#[test]
+fn binds_key_answers_as_dispatch_would_without_dispatching() {
+    use zgx::actions::NoAction;
+    let mut ui = Ui::new(400., 200.);
+    let command = Modifiers {
+        meta: true,
+        ..Default::default()
+    };
+    let at = |key: &str| Keystroke::new(character(key), command);
+    let mounted = ui.mount(
+        column()
+            .keymap(
+                Keymap::new()
+                    .bind(KeyBinding::new([at("l")], Action::new(Save("app"))).unwrap())
+                    .bind(KeyBinding::new([at("k"), at("p")], Action::new(Save("chord"))).unwrap())
+                    .bind(
+                        KeyBinding::new([at("e")], Action::new(Save("editing")))
+                            .unwrap()
+                            .when("editor"),
+                    ),
+            )
+            .child(div().id("pane").focusable(true).keymap(
+                Keymap::new().bind(KeyBinding::new([at("l")], Action::new(NoAction)).unwrap()),
+            ))
+            .child(div().id("other").focusable(true)),
+    );
+    ui.prepare_frame();
+    let binds = |ui: &Ui, key: &str| {
+        ui.input
+            .binds_key(&ui.scene.borrow(), &character(key), command)
+    };
+    ui.input.focus(&ui.scene, mounted.find("other"));
+    assert!(binds(&ui, "l"), "the app's binding above focus");
+    assert!(binds(&ui, "k"), "a sequence's first stroke");
+    assert!(!binds(&ui, "e"), "a binding whose context does not hold");
+    assert!(!binds(&ui, "j"), "nothing bound");
+    assert!(
+        !ui.input
+            .binds_key(&ui.scene.borrow(), &character("l"), Modifiers::default()),
+        "other modifiers"
+    );
+    ui.input.focus(&ui.scene, mounted.find("pane"));
+    assert!(!binds(&ui, "l"), "unbound nearer focus");
+    assert!(binds(&ui, "k"));
+    // Asking changes nothing: the chord still starts afresh.
+    assert!(!ui.input.has_pending_keys());
+}
+/// A reserved binding is the app's before a native view's: a host asks
+/// whether the binding that takes a key is reserved.
+#[test]
+fn reserves_key_answers_for_the_binding_that_takes_the_key() {
+    use zgx::actions::NoAction;
+    let mut ui = Ui::new(400., 200.);
+    let command = Modifiers {
+        meta: true,
+        ..Default::default()
+    };
+    let at = |key: &str| Keystroke::new(character(key), command);
+    let mounted = ui.mount(
+        column()
+            .keymap(
+                Keymap::new()
+                    .bind(
+                        KeyBinding::new([at("t")], Action::new(Save("tab")))
+                            .unwrap()
+                            .reserved(),
+                    )
+                    .bind(
+                        KeyBinding::new([at("w")], Action::new(Save("close")))
+                            .unwrap()
+                            .reserved(),
+                    )
+                    .bind(KeyBinding::new([at("u")], Action::new(Save("plain"))).unwrap()),
+            )
+            .child(
+                div().id("pane").focusable(true).keymap(
+                    Keymap::new()
+                        .bind(KeyBinding::new([at("w")], Action::new(NoAction)).unwrap())
+                        .bind(KeyBinding::new([at("t")], Action::new(Save("pane tab"))).unwrap()),
+                ),
+            )
+            .child(div().id("other").focusable(true)),
+    );
+    ui.prepare_frame();
+    let reserves = |ui: &Ui, key: &str| {
+        ui.input
+            .reserves_key(&ui.scene.borrow(), &character(key), command)
+    };
+    ui.input.focus(&ui.scene, mounted.find("other"));
+    assert!(reserves(&ui, "t") && reserves(&ui, "w"));
+    assert!(!reserves(&ui, "u"), "bound, not reserved");
+    assert!(!reserves(&ui, "j"), "unbound");
+    assert!(
+        ui.input
+            .binds_key(&ui.scene.borrow(), &character("u"), command)
+    );
+    ui.input.focus(&ui.scene, mounted.find("pane"));
+    assert!(!reserves(&ui, "t"), "a nearer unreserved binding takes it");
+    assert!(!reserves(&ui, "w"), "unbound nearer focus");
+}
+#[test]
+fn a_binding_by_physical_key_tells_the_keypad_from_the_digit_row() {
+    let mut ui = Ui::new(400., 200.);
+    let trace = Rc::new(RefCell::new(Vec::new()));
+    let log = trace.clone();
+    let mounted = ui.mount(
+        column()
+            .keymap(
+                Keymap::new()
+                    .bind(binding(vec![Key::Character("1".into())], "digit"))
+                    .bind(KeyBinding::code(
+                        "Numpad1",
+                        Modifiers::default(),
+                        Action::new(Save("keypad")),
+                    ))
+                    .bind(KeyBinding::code(
+                        "NumpadEnter",
+                        Modifiers {
+                            shift: true,
+                            ..Default::default()
+                        },
+                        Action::new(Save("keypad enter")),
+                    )),
+            )
+            .on_action(move |action: &Save, cx| {
+                log.borrow_mut().push(action.0);
+                cx.prevent_default();
+            })
+            .child(button().id("focus")),
+    );
+    ui.input.focus(&ui.scene, mounted.find("focus"));
+    // The same key ("1") from the keypad and from the digit row.
+    ui.input.set_key_code(Some("Numpad1".into()));
+    ui.dispatch(down(Key::Character("1".into())));
+    ui.input.set_key_code(Some("Digit1".into()));
+    ui.dispatch(down(Key::Character("1".into())));
+    // A code binds with exactly its modifiers.
+    ui.input.set_key_code(Some("NumpadEnter".into()));
+    ui.dispatch(down(Key::Enter));
+    ui.dispatch(InputEvent::KeyDown {
+        key: Key::Enter,
+        modifiers: Modifiers {
+            shift: true,
+            ..Default::default()
+        },
+        repeat: false,
+    });
+    assert_eq!(*trace.borrow(), vec!["keypad", "digit", "keypad enter"]);
+    // A host asking whether zgx binds it sees the code binding too.
+    ui.input.set_key_code(Some("Numpad1".into()));
+    assert!(ui.input.binds_key(
+        &ui.scene.borrow(),
+        &Key::Character("x".into()),
+        Modifiers::default()
+    ));
+}
+
+/// A node that records a shortcut (`View::capture_keys`): while focus is
+/// in it, a key a binding takes (the menus' ⌘J) goes to what is focused
+/// instead, and the host is told no binding takes it; out of it, the
+/// binding works again.
+#[test]
+fn a_node_capturing_keys_takes_them_from_the_bindings() {
+    let mut ui = Ui::new(400., 200.);
+    let ran = Rc::new(RefCell::new(Vec::new()));
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let (log, keys) = (ran.clone(), heard.clone());
+    let command = Modifiers {
+        meta: true,
+        ..Default::default()
+    };
+    let at = |key: &str| Keystroke::new(character(key), command);
+    let mounted = ui.mount(
+        column()
+            .keymap(
+                Keymap::new().bind(KeyBinding::new([at("j")], Action::new(Save("run"))).unwrap()),
+            )
+            .on_action(move |action: &Save, cx| {
+                log.borrow_mut().push(action.0);
+                cx.prevent_default();
+            })
+            .child(
+                div()
+                    .id("recorder")
+                    .focusable(true)
+                    .capture_keys(true)
+                    .on_event(move |cx| {
+                        if let InputEvent::KeyDown {
+                            key: Key::Character(k),
+                            modifiers,
+                            ..
+                        } = &cx.event
+                        {
+                            keys.borrow_mut().push((k.to_string(), modifiers.meta));
+                        }
+                    }),
+            )
+            .child(div().id("other").focusable(true)),
+    );
+    ui.prepare_frame();
+    let press = |ui: &mut Ui| {
+        ui.dispatch(InputEvent::KeyDown {
+            key: character("j"),
+            modifiers: command,
+            repeat: false,
+        })
+    };
+    ui.input.focus(&ui.scene, mounted.find("recorder"));
+    assert!(ui.input.captures_keys(&ui.scene.borrow()));
+    assert!(
+        !ui.input
+            .binds_key(&ui.scene.borrow(), &character("j"), command)
+    );
+    press(&mut ui);
+    assert!(ran.borrow().is_empty(), "the binding ran while recording");
+    assert_eq!(*heard.borrow(), vec![("j".to_string(), true)]);
+    // Focus elsewhere: shortcuts as ever.
+    ui.input.focus(&ui.scene, mounted.find("other"));
+    assert!(!ui.input.captures_keys(&ui.scene.borrow()));
+    press(&mut ui);
+    assert_eq!(*ran.borrow(), vec!["run"]);
+}

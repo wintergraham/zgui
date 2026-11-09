@@ -135,6 +135,7 @@ pub(crate) fn animate(
     targets_value: mlua::Value,
     params: Table,
 ) -> mlua::Result<ClipUd> {
+    crate::reloads::top_level(lua, "anime.animate");
     let ctx = ctx(lua)?;
     scoped(&ctx.engine, &params, None)?;
     // Milliseconds, unless the script set `engine.timeUnit = "s"`.
@@ -159,12 +160,15 @@ pub(crate) fn animate(
         )
     };
     let autoplay = timing.autoplay;
-    let (lua2, engine, own) = (lua.clone(), ctx.engine.clone(), params.clone());
+    // The state through the clip's owner: a clip lives in the state (its
+    // userdata), and a handle of its own there would keep it from closing.
+    let (engine, own) = (ctx.engine.clone(), params.clone());
     let builder: super::engine::Builder = Box::new(move |clip| {
         let params = &own;
+        let vm = clip.owner.upgrade().ok_or("script unloaded")?;
         let ctx = Ctx {
-            lua: lua2.clone(),
-            vm: clip.owner.upgrade().ok_or("script unloaded")?,
+            lua: vm.lua.clone(),
+            vm,
             engine: engine.clone(),
         };
         let targets = targets(&ctx, targets_value.clone())?;
@@ -196,27 +200,23 @@ pub(crate) fn animate(
         clip.start();
         clip.prime();
     }
-    link_scroll(lua, &ctx.engine, &clip, &params)?;
+    link_scroll(&ctx.engine, &clip, &params)?;
     scoped(&ctx.engine, &params, Some(&clip))?;
     Ok(ClipUd(clip))
 }
 
 /// `autoplay = anime.onScroll(…)`.
-fn link_scroll(
-    lua: &Lua,
-    engine: &Rc<Engine>,
-    clip: &Rc<Clip>,
-    params: &Table,
-) -> mlua::Result<()> {
+fn link_scroll(engine: &Rc<Engine>, clip: &Rc<Clip>, params: &Table) -> mlua::Result<()> {
     if let mlua::Value::UserData(ud) = params.raw_get::<mlua::Value>("autoplay")?
         && let Ok(scroll) = ud.borrow::<super::scroll::ScrollUd>()
     {
-        super::scroll::link(lua, engine, clip.clone(), scroll.0.clone());
+        super::scroll::link(engine, clip.clone(), scroll.0.clone());
     }
     Ok(())
 }
 
 fn timeline(lua: &Lua, params: Option<Table>) -> mlua::Result<ClipUd> {
+    crate::reloads::top_level(lua, "anime.createTimeline");
     let ctx = ctx(lua)?;
     let params = match params {
         Some(p) => p,
@@ -228,11 +228,12 @@ fn timeline(lua: &Lua, params: Option<Table>) -> mlua::Result<ClipUd> {
     };
     let timing = build::timing(&ctx, &p).map_err(rt)?;
     let autoplay = timing.autoplay;
-    let (lua2, engine) = (lua.clone(), ctx.engine.clone());
+    let engine = ctx.engine.clone();
     let builder: super::engine::Builder = Box::new(move |clip| {
+        let vm = clip.owner.upgrade().ok_or("script unloaded")?;
         let ctx = Ctx {
-            lua: lua2.clone(),
-            vm: clip.owner.upgrade().ok_or("script unloaded")?,
+            lua: vm.lua.clone(),
+            vm,
             engine: engine.clone(),
         };
         let ops = std::mem::take(&mut *clip.ops.borrow_mut());
@@ -250,11 +251,12 @@ fn timeline(lua: &Lua, params: Option<Table>) -> mlua::Result<ClipUd> {
     if autoplay {
         clip.start();
     }
-    link_scroll(lua, &ctx.engine, &clip, &params)?;
+    link_scroll(&ctx.engine, &clip, &params)?;
     Ok(ClipUd(clip))
 }
 
 fn timer(lua: &Lua, params: Option<Table>) -> mlua::Result<ClipUd> {
+    crate::reloads::top_level(lua, "anime.createTimer");
     let ctx = ctx(lua)?;
     let params = match params {
         Some(p) => p,
@@ -781,6 +783,12 @@ fn utils_set(lua: &Lua, (targets_value, props): (mlua::Value, Table)) -> mlua::R
                 !taken
             });
         }
+        if let Target::Element(e) = &track.target
+            && e.hits_at_target()
+        {
+            let goal = track.segs.last().and_then(|seg| seg.to.num());
+            e.anime_goal(&track.key, goal.map(|goal| goal as f32));
+        }
         if let Some(last) = track.segs.last() {
             writes.push((
                 track.target.clone(),
@@ -1030,9 +1038,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     let text = lua.create_table()?;
     text.set(
         "split",
-        lua.load(TEXT_SPLIT)
-            .set_name("=anime.text.split")
-            .eval::<mlua::Function>()?,
+        crate::lazy::builtin(lua, "=anime.text.split", TEXT_SPLIT)?.eval::<mlua::Function>()?,
     )?;
     anime.set("text", text)?;
     anime.set(
@@ -1127,7 +1133,16 @@ fn install_math(lua: &Lua, utils: &Table) -> mlua::Result<()> {
     utils.set(
         "clamp",
         lua.create_function(|_, (v, min, max): (f64, f64, f64)| {
-            Ok(v.clamp(min.min(max), max.max(min)))
+            // As anime.js compares: a NaN bound clamps nothing (`f64::clamp`
+            // panics on one).
+            let (low, high) = (min.min(max), max.max(min));
+            Ok(if v < low {
+                low
+            } else if v > high {
+                high
+            } else {
+                v
+            })
         })?,
     )?;
     utils.set(
@@ -1181,12 +1196,20 @@ fn install_math(lua: &Lua, utils: &Table) -> mlua::Result<()> {
     )?;
     utils.set(
         "roundPad",
-        lua.create_function(|_, (v, decimals): (f64, usize)| Ok(format!("{v:.decimals$}")))?,
+        lua.create_function(|_, (v, decimals): (f64, usize)| {
+            // `toFixed`'s range: more digits than that is no number.
+            if decimals > 100 {
+                return Err(mlua::Error::runtime(format!(
+                    "anime.utils.roundPad: 0 to 100 decimals, not {decimals}"
+                )));
+            }
+            Ok(format!("{v:.decimals$}"))
+        })?,
     )?;
     utils.set(
         "padStart",
         lua.create_function(
-            |_, (v, width, fill): (mlua::Value, usize, Option<String>)| {
+            |lua, (v, width, fill): (mlua::Value, usize, Option<String>)| {
                 let s = match v {
                     mlua::Value::String(s) => s.to_string_lossy(),
                     other => value::format_number(match other {
@@ -1196,11 +1219,10 @@ fn install_math(lua: &Lua, utils: &Table) -> mlua::Result<()> {
                     }),
                 };
                 let fill = fill.unwrap_or_else(|| " ".into());
-                let pad: String = fill
-                    .chars()
-                    .cycle()
-                    .take(width.saturating_sub(s.chars().count()))
-                    .collect();
+                let count = width.saturating_sub(s.chars().count());
+                let widest = fill.chars().map(char::len_utf8).max().unwrap_or(0);
+                crate::room_for(lua, "anime.utils.padStart", count.saturating_mul(widest))?;
+                let pad: String = fill.chars().cycle().take(count).collect();
                 Ok(pad + &s)
             },
         )?,
@@ -1208,7 +1230,7 @@ fn install_math(lua: &Lua, utils: &Table) -> mlua::Result<()> {
     utils.set(
         "padEnd",
         lua.create_function(
-            |_, (v, width, fill): (mlua::Value, usize, Option<String>)| {
+            |lua, (v, width, fill): (mlua::Value, usize, Option<String>)| {
                 let s = match v {
                     mlua::Value::String(s) => s.to_string_lossy(),
                     other => value::format_number(match other {
@@ -1218,11 +1240,10 @@ fn install_math(lua: &Lua, utils: &Table) -> mlua::Result<()> {
                     }),
                 };
                 let fill = fill.unwrap_or_else(|| " ".into());
-                let pad: String = fill
-                    .chars()
-                    .cycle()
-                    .take(width.saturating_sub(s.chars().count()))
-                    .collect();
+                let count = width.saturating_sub(s.chars().count());
+                let widest = fill.chars().map(char::len_utf8).max().unwrap_or(0);
+                crate::room_for(lua, "anime.utils.padEnd", count.saturating_mul(widest))?;
+                let pad: String = fill.chars().cycle().take(count).collect();
                 Ok(s + &pad)
             },
         )?,
@@ -1312,21 +1333,39 @@ impl Engine {
     /// Drops every track of these targets from every clip.
     pub(crate) fn remove_targets(&self, targets: &[Target]) {
         for clip in self.playing_clips() {
-            let mut tracks = clip.tracks.borrow_mut();
-            let had = tracks.len();
-            tracks.retain(|t| !targets.iter().any(|g| g.same(&t.target)));
             // A clip left with nothing to animate ends; one that never had
             // a track (a timer) is not about these targets and plays on.
-            let emptied = had > 0 && tracks.is_empty();
-            drop(tracks);
+            let emptied = {
+                let tracks = clip.tracks.borrow();
+                !tracks.is_empty()
+                    && tracks
+                        .iter()
+                        .all(|t| targets.iter().any(|g| g.same(&t.target)))
+            };
+            // (Its tracks still there: a loop a renderer plays is taken back
+            // through its target.)
             if emptied && !clip.is_timeline.get() {
                 clip.cancel();
             }
+            clip.tracks
+                .borrow_mut()
+                .retain(|t| !targets.iter().any(|g| g.same(&t.target)));
         }
         for target in targets {
             if let Target::Element(e) = target {
-                for (_, owner) in e.owners.borrow_mut().drain(..) {
-                    owner.track.set(true);
+                let keys: Vec<Key> = e
+                    .owners
+                    .borrow_mut()
+                    .drain(..)
+                    .map(|(key, owner)| {
+                        owner.track.set(true);
+                        key
+                    })
+                    .collect();
+                if e.hits_at_target() {
+                    for key in &keys {
+                        e.anime_goal(key, None);
+                    }
                 }
             }
         }

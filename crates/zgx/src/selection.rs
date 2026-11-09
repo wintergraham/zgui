@@ -12,8 +12,8 @@
 //! whose highlight changed (`Scene::set_text_highlight`).
 use crate::{
     input::{EventPhase, InputEvent, Key, Modifiers, PointerButton},
-    scene::{Color, NodeId, NodeKind, Rect, Scene, TextHighlight, TextLeaf},
-    semantics::Role,
+    scene::{Color, Direction, NodeId, NodeKind, Rect, Scene, TextHighlight, TextLeaf},
+    semantics::{Role, Semantics},
     text_layout::{FontStyle, TextLayout},
     theme::tok,
     widgets::{Ui, WeakUi},
@@ -165,7 +165,8 @@ impl Source {
 struct Shaped {
     node: NodeId,
     source: Source,
-    width: u32,
+    /// Its box's width and the width it wraps at, by their bits.
+    width: u64,
     revision: u64,
     layout: Rc<dyn TextLayout>,
 }
@@ -209,7 +210,7 @@ pub(crate) struct State {
     /// The region last pressed in: what select-all selects.
     active_root: Option<NodeId>,
     /// The window is in the background: highlights take the inactive colour.
-    inactive: bool,
+    pub(crate) inactive: bool,
     /// Bumped by every change of selection.
     revision: u64,
     /// A press in this dispatch went to a selectable region.
@@ -409,12 +410,14 @@ impl Palette {
     }
 }
 
-/// A region's own highlight colours (`View::selection_color`,
-/// `selected_text_color`), over the theme's, in either window state.
+/// A region's own highlight look (`View::selection_color`,
+/// `selected_text_color`, `selection_radius`), over the theme's, in either
+/// window state.
 #[derive(Default)]
 pub(crate) struct SelectionStyle {
     pub(crate) background: Option<Box<dyn FnMut() -> Color>>,
     pub(crate) text: Option<Box<dyn FnMut() -> Color>>,
+    pub(crate) radius: Option<Box<dyn FnMut() -> f32>>,
 }
 
 /// Make `root` a selectable region (`View::selectable(true)`).
@@ -455,6 +458,9 @@ pub(crate) fn mount_root(ui: &mut Ui, root: NodeId, mut style: SelectionStyle) {
         };
         if let Some(background) = &mut style.background {
             colors.background = [background(); 2];
+        }
+        if let Some(radius) = &mut style.radius {
+            colors.radius = radius().max(0.);
         }
         if let Some(color) = &mut style.text {
             colors.text = [text(color()); 2];
@@ -689,7 +695,8 @@ impl Ui {
         let unit = match count {
             _ if extend => Unit::Character,
             2 => Unit::Word,
-            3 => Unit::Paragraph,
+            // A triple click's, and any after it in a row, as Chrome's.
+            3.. => Unit::Paragraph,
             _ => Unit::Character,
         };
         let edges = hit.edges(unit);
@@ -777,6 +784,17 @@ impl Ui {
     fn point_at(&self, root: NodeId, x: f32, y: f32) -> Option<Hit> {
         self.point_near(root, x, y, true)
     }
+    /// The text a selection in region `root` takes, in document order
+    /// (`Scene::selectable_text`): not an editor's, which selects on its
+    /// own, nor a list's markers.
+    fn selectable_leaves(&self, scene: &Scene, root: NodeId, visit: impl FnMut(TextLeaf)) {
+        let semantics = self.semantics.borrow();
+        scene.selectable_text(
+            root,
+            |id| self.is_editor(id) || list_marker(scene, &semantics, id).is_some(),
+            visit,
+        );
+    }
     /// `point_at`; not `visible`, over all the region's laid-out text, at a
     /// point already in its layout space: the keyboard's steps, which reach
     /// text scrolled out of view.
@@ -786,44 +804,40 @@ impl Ui {
         // The nearest text, its distance and the pointer in its space.
         type Nearest = (TextLeaf, (f32, f32), (f32, f32));
         let mut best: Option<Nearest> = None;
-        scene.selectable_text(
-            root,
-            |id| self.is_editor(id),
-            |leaf| {
-                let Some(visible) = (if only_visible {
-                    leaf.visible
+        self.selectable_leaves(&scene, root, |leaf| {
+            let Some(visible) = (if only_visible {
+                leaf.visible
+            } else {
+                Some(leaf.bounds)
+            }) else {
+                return;
+            };
+            // The pointer where the text is laid out, through scales
+            // and rotations on the way.
+            let Some((x, y)) = (match only_visible {
+                true => scene.point_in(leaf.id, x, y),
+                false => Some((x, y)),
+            }) else {
+                return;
+            };
+            let distance = |at: f32, start: f32, extent: f32| {
+                if at < start {
+                    start - at
+                } else if at >= start + extent {
+                    at - (start + extent) + 0.01
                 } else {
-                    Some(leaf.bounds)
-                }) else {
-                    return;
-                };
-                // The pointer where the text is laid out, through scales
-                // and rotations on the way.
-                let Some((x, y)) = (match only_visible {
-                    true => scene.point_in(leaf.id, x, y),
-                    false => Some((x, y)),
-                }) else {
-                    return;
-                };
-                let distance = |at: f32, start: f32, extent: f32| {
-                    if at < start {
-                        start - at
-                    } else if at >= start + extent {
-                        at - (start + extent) + 0.01
-                    } else {
-                        0.
-                    }
-                };
-                let key = (
-                    distance(y, visible.y, visible.height),
-                    distance(x, visible.x, visible.width),
-                );
-                // Ties go to what paints later, over the rest.
-                if best.is_none_or(|(_, best, _)| key <= best) {
-                    best = Some((leaf, key, (x, y)));
+                    0.
                 }
-            },
-        );
+            };
+            let key = (
+                distance(y, visible.y, visible.height),
+                distance(x, visible.x, visible.width),
+            );
+            // Ties go to what paints later, over the rest.
+            if best.is_none_or(|(_, best, _)| key <= best) {
+                best = Some((leaf, key, (x, y)));
+            }
+        });
         let (leaf, _, (x, y)) = best?;
         let bounds = leaf.bounds;
         let visible = match only_visible {
@@ -872,11 +886,14 @@ impl Ui {
     pub(crate) fn selection_layout(&self, scene: &Scene, id: NodeId) -> Option<Rc<dyn TextLayout>> {
         let source = Source::of(scene, id)?;
         let width = scene.layout_bounds(id).width;
+        // Its box's width, and the width it wraps at in it (balanced).
+        let widths =
+            (u64::from(width.to_bits()) << 32) | u64::from(scene.text_wrap(id, width).0.to_bits());
         let revision = scene.text_shaper_revision();
         let mut state = self.selection_state().borrow_mut();
         if let Some(index) = state.layouts.iter().position(|s| s.node == id) {
             let kept = &state.layouts[index];
-            if kept.width == width.to_bits() && kept.revision == revision && kept.source == source {
+            if kept.width == widths && kept.revision == revision && kept.source == source {
                 return Some(kept.layout.clone());
             }
             state.layouts.remove(index);
@@ -890,7 +907,7 @@ impl Ui {
         state.layouts.push(Shaped {
             node: id,
             source,
-            width: width.to_bits(),
+            width: widths,
             revision,
             layout: layout.clone(),
         });
@@ -995,7 +1012,7 @@ impl Ui {
                 (anchor, focus)
             };
             leaves.clear();
-            scene.selectable_text(root, |id| self.is_editor(id), |leaf| leaves.push(leaf));
+            self.selectable_leaves(&scene, root, |leaf| leaves.push(leaf));
             // The leaves from the start to the end: an end that does not show
             // (hidden, or in an unmounted row) by where it would be.
             let first = match &start {
@@ -1191,6 +1208,8 @@ impl Ui {
     /// Keep highlights on the text as it is laid out again, and drop a
     /// selection whose text is gone. Frame preparation calls this; it
     /// returns at once unless a selection shows and the scene changed.
+    /// (Inlined: a second, cold caller would outline it from every frame.)
+    #[inline(always)]
     pub(crate) fn sync_selection(&self) {
         let synced = {
             let state = self.selection_state().borrow();
@@ -1351,7 +1370,7 @@ impl Ui {
         self.selection_state().borrow().gesture.is_some()
     }
     /// Whether window point `x`, `y` is on selected text.
-    fn on_selected_text(&self, x: f32, y: f32) -> bool {
+    pub(crate) fn on_selected_text(&self, x: f32, y: f32) -> bool {
         let shown = self.selection_state().borrow().shown.clone();
         let scene = self.scene.borrow();
         shown.iter().any(|part| {
@@ -1443,14 +1462,10 @@ impl Ui {
     fn region_ends(&self, root: NodeId) -> (Option<TextPoint>, Option<TextPoint>) {
         let scene = self.scene.borrow();
         let (mut first, mut last) = (None, None);
-        scene.selectable_text(
-            root,
-            |id| self.is_editor(id),
-            |leaf| {
-                first.get_or_insert(leaf.id);
-                last = Some(leaf.id);
-            },
-        );
+        self.selectable_leaves(&scene, root, |leaf| {
+            first.get_or_insert(leaf.id);
+            last = Some(leaf.id);
+        });
         let end = last
             .and_then(|id| text_of(&scene, id))
             .map_or(0, |text| text.len());
@@ -1695,50 +1710,126 @@ impl Ui {
             .collect()
     }
     /// The selected text as HTML, for pasting into rich text: paragraphs,
-    /// headings (`<h1>`…) and line breaks where `selected_text` has them;
+    /// headings (`<h1>`…), preformatted blocks (`<pre>`: monospace text of
+    /// more than one line) and line breaks where `selected_text` has them;
     /// bold, italic, monospace (code), underline and strikethrough runs;
-    /// links with their targets; and the rows of virtual lists with row
-    /// text that they have not mounted, as `selected_text` copies them.
+    /// runs coloured apart from the text the selection starts in; links
+    /// with their targets; lists (`Role::List`, `Role::ListItem`) as `<ul>`
+    /// or `<ol start>` (as their markers read), their markers left to the
+    /// list; and the rows of virtual lists with row text that they have
+    /// not mounted, as `selected_text` copies them.
     pub fn selected_html(&self) -> String {
         let shown = self.selection_state().borrow().shown.clone();
         let provided = self.provided_rows(&shown);
         let state = self.selection_state().borrow();
         let scene = self.scene.borrow();
         let semantics = self.semantics.borrow();
-        // The block a text node is in: a heading's level, or a paragraph.
-        let heading = |id: NodeId| -> Option<usize> {
-            std::iter::once(id)
-                .chain(scene.ancestors(id))
-                .take_while(|at| state.root != Some(*at))
+        // The lists a text node is in, outermost first: each list, the item
+        // of it the node is in, and the list's tag (`ol` as its marker reads
+        // a number, with that number to start from).
+        // A node's ancestors up to the selectable root, the root among them:
+        // a list that is itself the root is the list its items are in.
+        let root = state.root;
+        let up_to_root = |id: NodeId| {
+            let mut past = false;
+            scene.ancestors(id).take_while(move |at| {
+                let inside = !past;
+                past |= root == Some(*at);
+                inside
+            })
+        };
+        let items_of = |id: NodeId| -> Vec<(NodeId, NodeId)> {
+            let mut items: Vec<(NodeId, NodeId)> = up_to_root(id)
+                .filter(|at| semantics.get(*at).is_some_and(|n| n.role == Role::ListItem))
+                .filter_map(|item| {
+                    let list = up_to_root(item)
+                        .find(|at| semantics.get(*at).is_some_and(|n| n.role == Role::List))?;
+                    Some((list, item))
+                })
+                .collect();
+            items.reverse();
+            items
+        };
+        let list_tag = |item: NodeId| -> (&'static str, Option<usize>) {
+            // Its marker: the leading text that `list_marker` takes for it.
+            let mut at = item;
+            while let Some(&first) = scene.children(at).first() {
+                at = first;
+            }
+            let number = (list_marker(&scene, &semantics, at) == Some(item))
+                .then(|| text_of(&scene, at))
+                .flatten()
+                .and_then(|marker| {
+                    let marker = marker.trim().trim_end_matches(['.', ')']);
+                    marker.parse::<usize>().ok()
+                });
+            match number {
+                Some(start) => ("ol", Some(start)),
+                None => ("ul", None),
+            }
+        };
+        // The block a text node is in: a heading, preformatted text, a list
+        // item's, or a paragraph.
+        let block_of = |id: NodeId| -> HtmlBlock {
+            // The node, then its ancestors up to the root, the root among
+            // them: a heading that is itself the root is the block.
+            let heading = std::iter::once(id)
+                .chain(up_to_root(id).filter(|_| root != Some(id)))
                 .find_map(|at| {
                     semantics
                         .get(at)
                         .filter(|n| n.role == Role::Heading)
                         .map(|n| n.level.unwrap_or(1).clamp(1, 6))
-                })
+                });
+            let monospace =
+                |font: &FontStyle| font.family == crate::text_layout::FontFamily::Monospace;
+            let preformatted = match scene.kind(id) {
+                NodeKind::Text { text, .. } => monospace(scene.font(id)) && text.contains('\n'),
+                NodeKind::RichText { text } => {
+                    text.runs().iter().all(|run| monospace(&run.font)) && text.text().contains('\n')
+                }
+                _ => false,
+            };
+            match heading {
+                Some(level) => HtmlBlock::Heading(level),
+                None if preformatted => HtmlBlock::Pre,
+                // A list item's text is the item's, inline in its `<li>`.
+                None if !items_of(id).is_empty() => HtmlBlock::Item,
+                None => HtmlBlock::Paragraph,
+            }
         };
-        let tag = |level: Option<usize>| match level {
-            Some(level) => format!("h{level}"),
-            None => "p".to_owned(),
-        };
+        // The colour of the text the selection starts in: runs coloured
+        // otherwise say theirs.
+        let base = shown.iter().find_map(|part| match scene.kind(part.node) {
+            NodeKind::Text { color, .. } => Some(*color),
+            NodeKind::RichText { text } => text
+                .runs()
+                .iter()
+                .find(|run| run.range.end > part.range.start)
+                .map(|run| run.color),
+            _ => None,
+        });
+        let apart = |color: Color| (Some(color) != base).then_some(color);
         let mut out = String::from("<meta charset=\"utf-8\">");
         // The block open now, if any.
-        let mut block: Option<Option<usize>> = None;
-        let enter = |out: &mut String, block: &mut Option<Option<usize>>, level| {
+        let mut block: Option<HtmlBlock> = None;
+        let enter = |out: &mut String, block: &mut Option<HtmlBlock>, next: HtmlBlock| {
             if let Some(open) = block.take() {
-                out.push_str(&format!("</{}>", tag(open)));
+                out.push_str(&open.close());
             }
-            out.push_str(&format!("<{}>", tag(level)));
-            *block = Some(level);
+            out.push_str(&next.open());
+            *block = Some(next);
         };
+        // The lists open now: each, its item open in it, and its tag.
+        let mut open: Vec<(NodeId, NodeId, &'static str)> = Vec::new();
         let mut previous: Option<(NodeId, f32)> = None;
         let mut provided = provided.into_iter().peekable();
-        let row = |out: &mut String, block: &mut Option<Option<usize>>, text: &str| {
+        let row = |out: &mut String, block: &mut Option<HtmlBlock>, text: &str| {
             match block {
                 Some(_) => out.push_str("<br>"),
-                None => enter(out, block, None),
+                None => enter(out, block, HtmlBlock::Paragraph),
             }
-            html_run(out, text, &FontStyle::default(), None, false, false);
+            html_run(out, text, &FontStyle::default(), None, None, false, false);
         };
         for (at, part) in shown.into_iter().enumerate() {
             while let Some((_, text)) = provided.next_if(|(before, _)| *before == at) {
@@ -1749,11 +1840,55 @@ impl Ui {
                 continue;
             }
             let size = font_size(&scene, part.node);
-            let level = heading(part.node);
+            let level = block_of(part.node);
+            // Into another list item: the block and the items and lists it
+            // leaves close, and those it enters open.
+            let items = items_of(part.node);
+            let kept = open
+                .iter()
+                .zip(&items)
+                .take_while(|((list, item, _), (l, i))| list == l && item == i)
+                .count();
+            if kept < open.len() || kept < items.len() {
+                if let Some(done) = block.take() {
+                    out.push_str(&done.close());
+                }
+                previous = None;
+                // A list the next item is in, at the level it left, stays open.
+                let mut reopened = None;
+                while open.len() > kept {
+                    let (list, _, tag) = open.pop().unwrap();
+                    out.push_str("</li>");
+                    if open.len() == kept && items.get(kept).is_some_and(|(l, _)| *l == list) {
+                        reopened = Some(tag);
+                    } else {
+                        out.push_str(&format!("</{tag}>"));
+                    }
+                }
+                for &(list, item) in &items[kept..] {
+                    let tag = match reopened.take() {
+                        Some(tag) => tag,
+                        None => {
+                            let (tag, start) = list_tag(item);
+                            match start {
+                                Some(start) if start != 1 => {
+                                    out.push_str(&format!("<ol start=\"{start}\">"))
+                                }
+                                _ => out.push_str(&format!("<{tag}>")),
+                            }
+                            tag
+                        }
+                    };
+                    out.push_str("<li>");
+                    open.push((list, item, tag));
+                }
+            }
             match (block, previous) {
                 (Some(open), Some((before, before_size))) if open == level => {
                     match separator(&scene, before, part.node, before_size.min(size)) {
                         "\t" => out.push(' '),
+                        // An item's paragraphs break within its `<li>`.
+                        "\n\n" if level == HtmlBlock::Item => out.push_str("<br>"),
                         "\n\n" => enter(&mut out, &mut block, level),
                         _ => out.push_str("<br>"),
                     }
@@ -1763,13 +1898,14 @@ impl Ui {
             }
             let links = state.links.get(&part.node);
             match scene.kind(part.node) {
-                NodeKind::Text { text, .. } if !scene.font(part.node).masked => {
+                NodeKind::Text { text, color, .. } if !scene.font(part.node).masked => {
                     let range = part.range.start.min(text.len())..part.range.end.min(text.len());
                     html_run(
                         &mut out,
                         &text[range],
                         scene.font(part.node),
                         None,
+                        apart(*color),
                         false,
                         false,
                     );
@@ -1790,6 +1926,8 @@ impl Ui {
                                 &text.text()[start..end],
                                 &run.font,
                                 href,
+                                // A link's colour is the link's.
+                                href.is_none().then(|| apart(run.color)).flatten(),
                                 run.underline.is_some(),
                                 run.strikethrough.is_some(),
                             );
@@ -1804,14 +1942,23 @@ impl Ui {
             row(&mut out, &mut block, &text);
         }
         match block {
-            Some(open) => out.push_str(&format!("</{}>", tag(open))),
-            None => out.push_str("<p></p>"),
+            Some(done) => out.push_str(&done.close()),
+            None if open.is_empty() => out.push_str("<p></p>"),
+            None => {}
+        }
+        for (_, _, tag) in open.into_iter().rev() {
+            out.push_str(&format!("</li></{tag}>"));
         }
         out
     }
     /// The window was activated or sent to the back: selections show the
     /// active or inactive colour.
     pub fn set_window_active(&self, active: bool) {
+        if let Some(window_active) = self.window_active_observed()
+            && window_active.with_untracked(|was| *was != active)
+        {
+            window_active.set(active);
+        }
         let changed = {
             let mut state = self.selection_state().borrow_mut();
             let changed = state.inactive == active;
@@ -1842,7 +1989,7 @@ impl Ui {
                 return false;
             }
             let mut leaves = Vec::new();
-            scene.selectable_text(root, |id| self.is_editor(id), |leaf| leaves.push(leaf));
+            self.selectable_leaves(&scene, root, |leaf| leaves.push(leaf));
             let Some(at) = leaves.iter().position(|leaf| leaf.id == focus.node) else {
                 return false;
             };
@@ -1856,6 +2003,9 @@ impl Ui {
             match step {
                 Step::Character(forward) | Step::Word(forward) => {
                     let word = matches!(step, Step::Word(_));
+                    // Right and Left go the way the block runs, as Chrome
+                    // extends: Right back through a right-to-left one.
+                    let forward = forward != (scene.direction(focus.node) == Direction::Rtl);
                     let within = if forward {
                         next_boundary(&own, offset, word)
                     } else {
@@ -1948,14 +2098,29 @@ impl Ui {
             });
             let bounds = scene.bounds(focus.node);
             let (top, bottom) = (bounds.y + caret.y, bounds.y + caret.y + caret.height);
-            let Some(visible) = scene
+            let Some((viewport, shown)) = scene
                 .ancestors(focus.node)
                 .find(|id| scene.is_scroll_content(*id))
                 .and_then(|content| scene.parent(content))
-                .and_then(|viewport| scene.visible_bounds(viewport))
+                .and_then(|viewport| Some((viewport, scene.visible_bounds(viewport)?)))
             else {
                 return;
             };
+            // What of it shows, in the window, back in its own points (a zoom
+            // or a scale around it undone): the focus is in them, and the
+            // scroll it takes is too.
+            let (Some(start), Some(end)) = (
+                scene.point_in(viewport, shown.x, shown.y),
+                scene.point_in(viewport, shown.x + shown.width, shown.y + shown.height),
+            ) else {
+                return;
+            };
+            let visible = crate::scene::Rect::new(
+                start.0.min(end.0),
+                start.1.min(end.1),
+                (end.0 - start.0).abs(),
+                (end.1 - start.1).abs(),
+            );
             if top < visible.y {
                 top - visible.y
             } else if bottom > visible.y + visible.height {
@@ -2054,7 +2219,7 @@ pub(crate) fn context_menu(
     platform: Option<Rc<crate::platform::PlatformService>>,
 ) -> crate::compose_context_menu::ContextMenuBuilder {
     let weak = ui.downgrade();
-    Box::new(move |event| {
+    Box::new(move |event, _| {
         let Some(ui) = weak.upgrade() else {
             return Vec::new();
         };
@@ -2242,16 +2407,39 @@ fn stamp(scene: &Scene, id: NodeId) -> Option<(u32, u32, usize, usize, u64)> {
 }
 
 fn shape(scene: &Scene, id: NodeId, width: f32) -> Option<Rc<dyn TextLayout>> {
-    // Renderers lay text out at its box's width, wrapping or not.
-    Some(match scene.kind(id) {
-        NodeKind::Text {
-            text, font_size, ..
-        } => scene
-            .shape_text_with_font(text, *font_size, Some(width), scene.font(id))
-            .into(),
-        NodeKind::RichText { text } => scene.shape_rich_text(text, Some(width)).into(),
-        _ => return None,
-    })
+    // As renderers lay it out: at its box's width (narrower, balanced),
+    // wrapping or not.
+    scene.shape_node_text(id, width).map(Rc::from)
+}
+
+/// The list item whose marker `id` is: text hidden from assistive
+/// technology that leads a list item ("•", "3."), as markdown draws one.
+/// The list shows it, as a browser draws an `<li>`'s marker: a selection
+/// takes no part of it, its plain text leaves it out, and its HTML says
+/// `<ul>` or `<ol>` instead.
+fn list_marker(scene: &Scene, semantics: &Semantics, id: NodeId) -> Option<NodeId> {
+    if !matches!(
+        scene.kind(id),
+        NodeKind::Text { .. } | NodeKind::RichText { .. }
+    ) || !semantics.get(id).is_some_and(|s| s.hidden)
+    {
+        return None;
+    }
+    // Leading: on the way up to its item, each node its parent's first.
+    let mut at = id;
+    while let Some(parent) = scene.parent(at) {
+        if scene.children(parent).first() != Some(&at) {
+            return None;
+        }
+        if semantics
+            .get(parent)
+            .is_some_and(|s| s.role == Role::ListItem)
+        {
+            return Some(parent);
+        }
+        at = parent;
+    }
+    None
 }
 
 pub(crate) fn text_of(scene: &Scene, id: NodeId) -> Option<Arc<str>> {
@@ -2336,11 +2524,43 @@ fn scene_offset(scene: &Scene, id: NodeId, semantic: usize) -> usize {
 }
 
 /// One styled run of `selected_html`: escaped, with its line breaks.
+/// A block of copied HTML: a paragraph, a heading of a level,
+/// preformatted text, or a list item's text (inline in its `<li>`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HtmlBlock {
+    Paragraph,
+    Heading(usize),
+    Pre,
+    Item,
+}
+impl HtmlBlock {
+    fn tag(self) -> String {
+        match self {
+            Self::Paragraph => "p".to_owned(),
+            Self::Heading(level) => format!("h{level}"),
+            Self::Pre => "pre".to_owned(),
+            Self::Item => String::new(),
+        }
+    }
+    fn open(self) -> String {
+        match self {
+            Self::Item => String::new(),
+            _ => format!("<{}>", self.tag()),
+        }
+    }
+    fn close(self) -> String {
+        match self {
+            Self::Item => String::new(),
+            _ => format!("</{}>", self.tag()),
+        }
+    }
+}
 fn html_run(
     out: &mut String,
     text: &str,
     font: &FontStyle,
     href: Option<&str>,
+    color: Option<Color>,
     underline: bool,
     strike: bool,
 ) {
@@ -2348,6 +2568,15 @@ fn html_run(
         out.push_str("<a href=\"");
         escape_html(out, href);
         out.push_str("\">");
+    }
+    if let Some(Color(r, g, b, a)) = color {
+        out.push_str(&match a {
+            255 => format!("<span style=\"color:#{r:02x}{g:02x}{b:02x}\">"),
+            _ => format!(
+                "<span style=\"color:rgba({r},{g},{b},{:.3})\">",
+                f32::from(a) / 255.
+            ),
+        });
     }
     let tags = [
         (font.weight >= 600, "b"),
@@ -2369,6 +2598,9 @@ fn html_run(
     escape_html(out, text);
     for (_, tag) in tags.iter().rev().filter(|(on, _)| *on) {
         out.push_str(&format!("</{tag}>"));
+    }
+    if color.is_some() {
+        out.push_str("</span>");
     }
     if href.is_some() {
         out.push_str("</a>");

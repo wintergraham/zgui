@@ -1,5 +1,7 @@
 //! Placement for a retained popover portal; ownership and focus live in compose_modal.
 use crate::{
+    input::{InputEvent, PointerButton},
+    reactive::Signal,
     scene::{Direction, NodeId, Rect, Transform},
     widgets::Ui,
 };
@@ -71,6 +73,7 @@ pub(crate) struct Arrow {
 /// it flips and clamps to the screen its anchor is on.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn mount(
+    screens: Signal<Vec<Rect>>,
     ui: &mut Ui,
     owner: NodeId,
     anchor: NodeId,
@@ -83,6 +86,7 @@ pub(crate) fn mount(
     arrow: Option<Arrow>,
 ) {
     mount_placement(
+        screens,
         ui,
         owner,
         anchor,
@@ -97,6 +101,7 @@ pub(crate) fn mount(
 
 /// A submenu starts beside its trigger, flipping left when the right side lacks room.
 pub(crate) fn mount_submenu(
+    screens: Signal<Vec<Rect>>,
     ui: &mut Ui,
     owner: NodeId,
     anchor: NodeId,
@@ -105,12 +110,100 @@ pub(crate) fn mount_submenu(
     panel: NodeId,
 ) {
     mount_placement(
-        ui, owner, anchor, overlay, position, panel, None, None, None,
+        screens, ui, owner, anchor, overlay, position, panel, None, None, None,
     );
+}
+
+/// A popover closes on a press anywhere outside it and its trigger, and the
+/// press goes on to what it lands on, as the web's and AppKit's popovers let
+/// it: a field under it takes focus, a button acts, a parent popover's row
+/// acts (and the parent's backdrop closes the parent in turn). Its backdrop
+/// lets the pointer through; and as a parent popover may reach past the
+/// window (popup windows, `Ui::set_popup_screens`), past any backdrop, the
+/// document hears each press to tell where it lands.
+pub(crate) fn mount_dismissing(
+    ui: &mut Ui,
+    owner: NodeId,
+    anchor: NodeId,
+    panel: NodeId,
+    overlay: NodeId,
+    open: Signal<bool>,
+    visible: Signal<bool>,
+) {
+    let mut options = ui.input.options(overlay).unwrap_or_default();
+    options.pass_through = true;
+    ui.input.set_options(overlay, options);
+    ui.input.set_scope_trigger(overlay, Some(anchor));
+    // Forgotten with it (rather than looked for at every node's removal).
+    struct Trigger(crate::input::InputDispatcher, NodeId);
+    impl Drop for Trigger {
+        fn drop(&mut self) {
+            self.0.set_scope_trigger(self.1, None);
+        }
+    }
+    let trigger = Trigger(ui.input.clone(), overlay);
+    ui.retain(owner, trigger);
+    let weak = ui.downgrade();
+    ui.on_document_event(owner, move |event| {
+        let InputEvent::PointerDown {
+            x,
+            y,
+            button: PointerButton::Primary,
+        } = *event
+        else {
+            return;
+        };
+        if !visible.with_untracked(|visible| *visible) {
+            return;
+        }
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
+        // In its panel (its blank space hits nothing, its backdrop letting
+        // the pointer through), or on what is in its overlay (a popover
+        // opened from it) or its trigger.
+        let inside = {
+            let scene = ui.scene.borrow();
+            let in_panel = scene.contains(panel) && {
+                let b = scene.world_bounds(panel);
+                x >= b.x && y >= b.y && x < b.x + b.width && y < b.y + b.height
+            };
+            let target = ui
+                .input
+                .pointer_target(&scene, x, y)
+                .filter(|target| scene.contains(*target));
+            let on_it = target.is_some_and(|target| {
+                scene.is_within(target, overlay) || scene.is_within(target, anchor)
+            });
+            in_panel || on_it
+        };
+        // On its trigger, the trigger's own click answers (an app toggling
+        // it closes it, rather than it closing here and opening again).
+        if inside {
+            return;
+        }
+        open.set(false);
+        // Closed now, though in a batch: what the press lands on takes it (a
+        // field its focus; a parent's backdrop, under the same press, finds
+        // its own focus scope back on top). Landing on nothing that takes
+        // focus, the press leaves focus on the trigger, where closing gave
+        // it back.
+        crate::compose_modal::deactivate(&ui, overlay);
+        // (Asked with its scope gone: under it, what lies outside wasn't
+        // live to the pointer.)
+        let lands = {
+            let scene = ui.scene.borrow();
+            ui.input.press_focus(&scene, x, y).is_some()
+        };
+        if !lands {
+            ui.input.keep_focus_for_press();
+        }
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
 fn mount_placement(
+    screens: Signal<Vec<Rect>>,
     ui: &mut Ui,
     owner: NodeId,
     anchor: NodeId,
@@ -126,7 +219,6 @@ fn mount_placement(
     let viewport = ui.observe_bounds(overlay);
     let panel_bounds = ui.observe_bounds(panel);
     let position_bounds = ui.observe_bounds(position);
-    let screens = ui.popup_screens();
     let flips = ui.popup_flips();
     let weak = ui.downgrade();
     let anchor_node = anchor;
@@ -189,8 +281,12 @@ fn mount_placement(
             return;
         }
         let previous = scene.transform(position);
-        let dx = desired.0 - current.x;
-        let dy = desired.1 - current.y;
+        // From where it is now, not where it was last published: run twice
+        // before a frame publishes it (a mount's geometry settling), it
+        // moves once.
+        let now = scene.bounds(position);
+        let dx = desired.0 - now.x;
+        let dy = desired.1 - now.y;
         // Avoid introducing an allocation feedback cycle through float rounding.
         if dx.abs() > 0.01 || dy.abs() > 0.01 {
             scene.set_transform(

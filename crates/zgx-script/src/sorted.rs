@@ -698,7 +698,7 @@ impl Kept {
         let judge = match &self.judge_all {
             Some(f) => f.clone(),
             None => {
-                let f: Function = vm.lua.load(JUDGE_ALL).set_name("=ui.sorted").eval()?;
+                let f: Function = crate::lazy::builtin(&vm.lua, "=ui.sorted", JUDGE_ALL)?.eval()?;
                 self.judge_all = Some(f.clone());
                 f
             }
@@ -1075,7 +1075,7 @@ fn permute(
 
 /// `ui.sorted(list, spec)`.
 pub(crate) fn sorted(lua: &Lua, (list, spec): (mlua::Value, mlua::Value)) -> mlua::Result<State> {
-    let source = crate::node::expect_state(&list, "ui.sorted's list")?;
+    let source = crate::node::expect_readable(&list, "ui.sorted's list")?;
     follow_writes(&source);
     let followed = source.clone();
     let spec = match spec {

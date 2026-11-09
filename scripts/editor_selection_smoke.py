@@ -24,7 +24,7 @@ def main():
         try:
             with (args.output / "xvfb.log").open("w") as log:
                 xvfb = subprocess.Popen(["Xvfb", "-r", "-noreset", "-displayfd", "1", "-screen", "0", "1200x900x24", "-ac"], stdout=subprocess.PIPE, stderr=log, text=True)
-                if not select.select([xvfb.stdout], [], [], 8)[0]:
+                if not select.select([xvfb.stdout], [], [], 30)[0]:
                     raise RuntimeError("owned Xvfb startup timed out")
                 display = ":" + xvfb.stdout.readline().strip()
             env = dict(os.environ, DISPLAY=display, WINIT_X11_SCALE_FACTOR="1", XDG_RUNTIME_DIR=runtime, XDG_CONFIG_HOME=runtime + "/config", XDG_CACHE_HOME=runtime + "/cache", GSETTINGS_BACKEND="memory", DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent")
@@ -128,9 +128,12 @@ def main():
                 assert (line["anchor"],line["focus"]) == (target["paragraph_start"],target["paragraph_end"]), reports
                 assert line["focus"] - line["anchor"] > target["line_end"] - target["line_start"], reports
                 capture("triple-click")
+                # Four in a row: the fourth keeps the paragraph, as Chrome's
+                # clicks past a triple's do, not a caret again.
                 click(target["bx"],target["y"],4)
                 reports["fourth_click"] = report()
-                assert reports["fourth_click"]["anchor"] == reports["fourth_click"]["focus"] == 8, reports
+                fourth = reports["fourth_click"]
+                assert (fourth["anchor"],fourth["focus"]) == (target["paragraph_start"],target["paragraph_end"]), reports
                 click(90,264)
                 click(target["bx"],target["y"],2)
                 reports["readonly"] = report()

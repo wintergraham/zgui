@@ -27,6 +27,9 @@ impl View {
 
     /// Begin a primary-button drag after moving four logical pixels. A simple
     /// press/release retains ordinary click behavior. Payloads stay window-local.
+    /// A descendant that takes presses and covers at least three quarters of
+    /// this node doesn't stop it: moved, the press drags instead of clicking.
+    /// A smaller one keeps its press, as a tab's close button does.
     pub fn on_drag<T: 'static>(self, payload: impl FnMut() -> T + 'static) -> Self {
         self.on_drag_when(|_, _| true, payload)
     }
@@ -49,7 +52,7 @@ impl View {
                     x,
                     y,
                     button: PointerButton::Primary,
-                } if !cx.capture_requested() => {
+                } if !cx.keeps_press_from_drag() => {
                     origin = Some((x, y));
                     cx.capture_pointer();
                 }
@@ -59,7 +62,9 @@ impl View {
                         .filter(|(px, py)| (x - px).hypot(y - py) > far && when(x - px, y - py))
                     {
                         origin = None;
-                        cx.start_drag_from(payload(), px, py);
+                        let source = cx.current_target;
+                        let payload = crate::input::starting_drag(source, &mut payload);
+                        cx.start_drag_from(payload, px, py);
                     }
                 }
                 InputEvent::PointerUp { .. } | InputEvent::PointerCancel | InputEvent::Blur => {

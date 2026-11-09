@@ -106,3 +106,178 @@ fn names_from_state_wait_for_assistive_technology() {
     ui.prepare_frame();
     assert_eq!(calls.get(), before);
 }
+
+/// Text a binding changes names its node and the button it is in only for
+/// assistive technology: with none listening neither is written, and once
+/// one listens both are the text as it is now, before the tree is read. A
+/// node removed meanwhile is passed over.
+#[test]
+fn labels_from_changing_text_wait_for_assistive_technology() {
+    let mut ui = Ui::new(400., 200.);
+    ui.set_assistive_technology(false);
+    let caption = ui.signal("Draft 1".to_string());
+    let view = ui.mount(
+        column()
+            .child(button().id("save").child(text_signal({
+                let caption = caption.clone();
+                move || caption.get()
+            })))
+            .child(
+                text_signal({
+                    let caption = caption.clone();
+                    move || format!("{} saved", caption.get())
+                })
+                .id("note"),
+            ),
+    );
+    ui.prepare_frame();
+    let label = |ui: &Ui| {
+        let node = view.find("save").unwrap();
+        ui.semantics.borrow().get(node).unwrap().label.clone()
+    };
+    let named = label(&ui);
+    for n in 2..6 {
+        caption.set(format!("Draft {n}"));
+        ui.prepare_frame();
+    }
+    assert_eq!(label(&ui), named, "not written with no reader");
+    // A pending node goes before anyone listens.
+    let note = view.find("note").unwrap();
+    ui.remove(note);
+    ui.prepare_frame();
+    ui.set_assistive_technology(true);
+    assert_eq!(label(&ui), "Draft 5", "the text's now, at once");
+    caption.set("Draft 6".into());
+    ui.prepare_frame();
+    assert_eq!(label(&ui), "Draft 6", "followed while listened to");
+}
+
+/// With no reader, text nodes removed while their labels wait are not kept
+/// waiting: rows mounted and removed for a long session leave about as
+/// many pending as live, and the ones still shown are right once one
+/// listens.
+#[test]
+fn removed_text_leaves_no_label_waiting() {
+    let mut ui = Ui::new(400., 200.);
+    ui.set_assistive_technology(false);
+    let round = ui.signal(0_u32);
+    let caption = ui.signal(0_u32);
+    let view = ui.mount(column().id("rows").child(switch(
+        {
+            let round = round.clone();
+            move || round.get()
+        },
+        {
+            let caption = caption.clone();
+            move |_, _| {
+                let mut rows = column();
+                for i in 0..10 {
+                    let caption = caption.clone();
+                    rows = rows.child(
+                        button()
+                            .id(format!("row{i}"))
+                            .child(text_signal(move || format!("row {i} at {}", caption.get()))),
+                    );
+                }
+                rows
+            }
+        },
+    )));
+    for n in 1..300 {
+        round.set(n);
+        caption.set(n);
+        ui.prepare_frame();
+    }
+    assert!(
+        ui.pending_label_count() <= 2048,
+        "{}",
+        ui.pending_label_count()
+    );
+    ui.set_assistive_technology(true);
+    let row = view.find("row3").unwrap();
+    assert_eq!(
+        ui.semantics.borrow().get(row).unwrap().label,
+        "row 3 at 299"
+    );
+}
+
+#[test]
+fn what_is_said_outside_a_component_reaches_the_node_it_builds() {
+    // A component's own view names itself; whoever places it may rename it,
+    // or hide it where something else already speaks for it.
+    let switch = || {
+        component(|_| {
+            div()
+                .id("inner")
+                .role(Role::Switch)
+                .accessible_label("Inner name")
+                .size(40., 20.)
+        })
+    };
+    let mut ui = Ui::new(400., 200.);
+    let view = ui.mount(
+        column()
+            .child(
+                div()
+                    .id("renamed")
+                    .child(switch().accessible_label("Wi-Fi")),
+            )
+            .child(div().id("hidden").child(switch().accessible_hidden())),
+    );
+    ui.prepare_frame();
+    let semantics = ui.semantics.borrow();
+    let scene = ui.scene.borrow();
+    let inner = |parent: &str| {
+        let parent = view.find(parent).unwrap();
+        let node = scene.children(parent)[0];
+        semantics.get(node).cloned().unwrap()
+    };
+    assert_eq!(inner("renamed").label, "Wi-Fi");
+    assert_eq!(inner("renamed").role, Role::Switch, "its own role kept");
+    assert!(inner("hidden").hidden, "hidden as asked");
+}
+
+#[test]
+fn a_hint_from_state_said_outside_a_component_reaches_the_node_it_builds() {
+    // A sheet's grabber: what a double tap does depends on where the sheet
+    // rests, and whoever places the grabber knows that, not the grabber.
+    let mut ui = Ui::new(400., 200.);
+    ui.set_assistive_technology(true);
+    let large = ui.signal(false);
+    let read = large.clone();
+    let view = ui.mount(
+        column().child(
+            div().id("holder").child(
+                component(|_| {
+                    div()
+                        .role(Role::Button)
+                        .accessible_label("Sheet Grabber")
+                        .size(40., 10.)
+                })
+                .description_when(move || {
+                    if read.get() {
+                        "Double tap to collapse the sheet.".to_string()
+                    } else {
+                        "Double tap to expand the sheet.".to_string()
+                    }
+                }),
+            ),
+        ),
+    );
+    let hint = |ui: &mut Ui| {
+        ui.prepare_frame();
+        let semantics = ui.semantics.borrow();
+        let scene = ui.scene.borrow();
+        let node = scene.children(view.find("holder").unwrap())[0];
+        semantics.get(node).and_then(|n| n.description.clone())
+    };
+    assert_eq!(
+        hint(&mut ui).as_deref(),
+        Some("Double tap to expand the sheet.")
+    );
+    large.set(true);
+    assert_eq!(
+        hint(&mut ui).as_deref(),
+        Some("Double tap to collapse the sheet.")
+    );
+}

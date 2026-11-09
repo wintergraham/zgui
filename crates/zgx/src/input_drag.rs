@@ -82,8 +82,10 @@ pub struct DragEvent {
 #[derive(Debug)]
 pub struct DraggedText {
     text: String,
-    /// The editor it was selected in, and where: a drop there moves it.
-    pub(crate) from: Option<(NodeId, std::ops::Range<usize>)>,
+    /// The editor it was selected in (its scene's `identity`, as node ids
+    /// are each window's own, and its node), and where: a drop there moves
+    /// it.
+    pub(crate) from: Option<(u64, NodeId, std::ops::Range<usize>)>,
     /// A destination took it to keep (moved, not copied): its source lets
     /// it go as the drag ends.
     pub(crate) taken: std::cell::Cell<bool>,
@@ -97,12 +99,25 @@ impl DraggedText {
             taken: std::cell::Cell::new(false),
         }
     }
-    pub(crate) fn from_editor(text: String, editor: NodeId, range: std::ops::Range<usize>) -> Self {
+    pub(crate) fn from_editor(
+        text: String,
+        scene: u64,
+        editor: NodeId,
+        range: std::ops::Range<usize>,
+    ) -> Self {
         Self {
             text,
-            from: Some((editor, range)),
+            from: Some((scene, editor, range)),
             taken: std::cell::Cell::new(false),
         }
+    }
+    /// Where in editor `editor` of the scene `scene` (its `identity`) it was
+    /// selected, if there.
+    pub(crate) fn taken_from(&self, scene: u64, editor: NodeId) -> Option<&std::ops::Range<usize>> {
+        self.from
+            .as_ref()
+            .filter(|(of, node, _)| *of == scene && *node == editor)
+            .map(|(.., range)| range)
     }
     /// The text.
     pub fn text(&self) -> &str {
@@ -253,6 +268,17 @@ impl InputDispatcher {
         if let Some(drag) = &mut self.state.borrow_mut().drag {
             drag.preview_origin = origin;
         }
+    }
+    /// The node a drag under way started from, or one starting: its source's
+    /// `on_drag` asked for its payload, and what that changed is applied
+    /// before the drag begins (`starting_drag`).
+    pub(crate) fn drag_source(&self) -> Option<NodeId> {
+        self.state
+            .borrow()
+            .drag
+            .as_ref()
+            .map(|drag| drag.source)
+            .or_else(|| DRAG_STARTING.with(std::cell::Cell::get))
     }
     /// The drag under way, if any.
     pub fn drag_state(&self) -> Option<DragState> {
@@ -447,7 +473,8 @@ impl InputDispatcher {
         if !self.enabled(&scene.borrow(), source) {
             return;
         }
-        let origin = scene.borrow().bounds(source);
+        // From where it shows: a preview goes in the window's points.
+        let origin = scene.borrow().transformed_bounds(source);
         let drag = DragSession {
             source,
             payload,
@@ -487,7 +514,8 @@ impl InputDispatcher {
         'hits: for hit in scene.hit_test_all(x, y) {
             if preview.is_some_and(|preview| {
                 hit == preview || scene.ancestors(hit).any(|id| id == preview)
-            }) {
+            }) || self.boxless(scene, hit)
+            {
                 continue;
             }
             if !self.receives_pointer(scene, hit) {
@@ -498,7 +526,7 @@ impl InputDispatcher {
                 // `pointer_events = "none"`: drops land on what is under it.
                 if self
                     .options(id)
-                    .is_some_and(|options| options.passes(scene, id))
+                    .is_some_and(|options| self.passes(scene, id, &options))
                 {
                     continue 'hits;
                 }
@@ -744,4 +772,22 @@ impl InputDispatcher {
             _ => false,
         }
     }
+}
+
+thread_local! {
+    /// The node whose drag is starting, while its `on_drag` makes the payload.
+    static DRAG_STARTING: std::cell::Cell<Option<NodeId>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run `payload`, a drag from `source` starting: a list it's in keeps its
+/// row while what the payload changes folds that row's place away.
+pub(crate) fn starting_drag<R>(source: NodeId, payload: impl FnOnce() -> R) -> R {
+    struct Reset(Option<NodeId>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            DRAG_STARTING.with(|starting| starting.set(self.0));
+        }
+    }
+    let _reset = Reset(DRAG_STARTING.with(|starting| starting.replace(Some(source))));
+    payload()
 }

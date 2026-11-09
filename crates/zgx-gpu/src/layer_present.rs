@@ -19,7 +19,9 @@
 //! CoreMedia thread wakes about 55 times a second while it lives, and its
 //! queue holds a third surface.
 use crate::{FORMAT, GpuError};
+use objc2::runtime::ProtocolObject;
 use objc2::{Encoding, Message, RefEncode, msg_send, rc::Retained, runtime::AnyObject};
+use objc2_core_foundation::CGSize;
 use objc2_core_foundation::{
     CFDictionary, CFNull, CFNumber, CFRetained, CFString, CFType, kCFNull,
 };
@@ -28,11 +30,14 @@ use objc2_io_surface::{
     IOSurfaceRef, kIOSurfaceBytesPerElement, kIOSurfaceColorSpace, kIOSurfaceHeight,
     kIOSurfacePixelFormat, kIOSurfaceWidth,
 };
+use objc2_metal::{MTLCommandBuffer, MTLCommandQueue, MTLDrawable, MTLTexture};
 use objc2_metal::{
     MTLDevice, MTLPixelFormat, MTLStorageMode, MTLTextureDescriptor, MTLTextureType,
     MTLTextureUsage,
 };
-use objc2_quartz_core::{CAAutoresizingMask, CALayer, CATransaction};
+use objc2_quartz_core::{
+    CAAutoresizingMask, CALayer, CAMetalDrawable, CAMetalLayer, CATransaction,
+};
 use std::{cell::Cell, ffi::c_void, ptr::null, rc::Rc};
 
 /// A surface the renderer draws into and a layer shows.
@@ -49,8 +54,26 @@ pub(crate) struct Buffer {
     pub metal: crate::metal_frame::Texture,
     /// Reading it to bring another surface up to date (copy_offset.wgsl).
     pub copy_source: std::cell::OnceCell<wgpu::BindGroup>,
+    /// A `CAMetalLayer` drawable's (`Drawables`): presented by Metal, never a
+    /// tile; the layer's pool reuses it.
+    pub drawable: bool,
 }
 impl Buffer {
+    /// Whether the surface is tagged sRGB, as every frame's is.
+    pub(crate) fn tagged_srgb(&self) -> bool {
+        let wanted = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB }))
+            .and_then(|space| CGColorSpace::property_list(&space));
+        // SAFETY: IOSurface's own key, on the buffer's live surface.
+        let tag = unsafe { self.surface.value(kIOSurfaceColorSpace) };
+        match (tag, wanted) {
+            (Some(tag), Some(wanted)) => {
+                let tag: &CFType = &tag;
+                let wanted: &CFType = &wanted;
+                tag == wanted
+            }
+            _ => false,
+        }
+    }
     /// The surface as a sample buffer, made on first use.
     fn sample(&self) -> Option<&Sample> {
         self.sample
@@ -111,6 +134,25 @@ impl Buffer {
             .newTextureWithDescriptor_iosurface_plane(&descriptor, &surface, 0)
             .ok_or_else(|| GpuError("Metal texture over an IOSurface failed".into()))?;
         drop(hal);
+        Ok(Self::wrap(device, surface, metal, width, height, false))
+    }
+    /// A drawable's texture (and the surface under it) as a buffer.
+    pub fn from_drawable(
+        device: &wgpu::Device,
+        surface: CFRetained<IOSurfaceRef>,
+        metal: crate::metal_frame::Texture,
+    ) -> Self {
+        let (width, height) = (metal.width() as u32, metal.height() as u32);
+        Self::wrap(device, surface, metal, width, height, true)
+    }
+    fn wrap(
+        device: &wgpu::Device,
+        surface: CFRetained<IOSurfaceRef>,
+        metal: crate::metal_frame::Texture,
+        width: u32,
+        height: u32,
+        drawable: bool,
+    ) -> Self {
         // SAFETY: Metal made this texture on this device with this format and
         // size, one mip level and layer; it retains the IOSurface backing it.
         let raw = unsafe {
@@ -154,14 +196,15 @@ impl Buffer {
             )
         };
         let view = texture.create_view(&Default::default());
-        Ok(Self {
+        Self {
             surface,
             sample: std::cell::OnceCell::new(),
             texture,
             view,
             metal,
             copy_source: Default::default(),
-        })
+            drawable,
+        }
     }
 }
 
@@ -368,6 +411,385 @@ pub(crate) struct Layer {
     video: Option<Video>,
     /// What the layers were last given, so a frame sets only what changed.
     opaque: Cell<bool>,
+    /// The caret the host draws itself (`Layer::set_caret`), above the
+    /// frames, and what it was last given.
+    caret: Option<(Retained<CALayer>, Option<Caret>)>,
+    /// Looping animations' layers (`sync_loops`), by key.
+    loops: Vec<(u64, Retained<CALayer>, u32)>,
+    /// What `set_loops` left for the next frame.
+    loops_due: Option<(Vec<u64>, Vec<LoopShown>)>,
+    /// Full-rate frames presented as `CAMetalLayer` drawables
+    /// (`ZGX_PRESENT_DRAWABLE`), above the plain layer.
+    drawables: Option<Drawables>,
+    /// While the full-rate trial judges tiles by frames lost
+    /// (`ZGX_TRIAL_RULE=frames`): a 1×1 drawable presented in each tile
+    /// flip's transaction, whose presented time says when that flip reached
+    /// the screen (tiles have no feedback of their own).
+    probe: Option<Probe>,
+    /// GPU views shown on layers of their own (`viewport`), by view and box:
+    /// above the frames, under the caret. Empty without such a view.
+    planes: Vec<Plane>,
+}
+/// A GPU view's own layer: its painter draws into the layer's drawables,
+/// the window server composites them as it does any Metal layer.
+struct Plane {
+    key: (u64, u64),
+    layer: Retained<CAMetalLayer>,
+    /// Its box in the host's points from the top left, while shown.
+    rect: Option<(f64, f64, f64, f64)>,
+    /// Its drawables, waited for on a thread of its own: a frame is drawn
+    /// when one is free, never waiting for one on the main thread.
+    drawables: crate::plane_drawables::Drawables,
+    /// When its drawables showed, while read (a log), as the window's; how
+    /// many it has drawn, and when it last logged, and how many had shown.
+    feedback: std::sync::Arc<Feedback>,
+    frames: u64,
+    logged: Option<(std::time::Instant, u64, u64)>,
+}
+/// A plane's drawables: the one shown and two on their way, as wgpu's own
+/// surfaces have. With two, frames came a refresh sooner but more were late
+/// (M5 Max: 0.9% against 0.6%, bursts of 36 in two seconds; M1 Max 0.5%
+/// against 0.2%).
+const PLANE_POOL: usize = 3;
+/// A GPU view plane's drawable to draw a frame into, and how to present it.
+pub(crate) struct PlaneFrame {
+    pub key: (u64, u64),
+    pub drawable: Retained<ProtocolObject<dyn CAMetalDrawable>>,
+    /// Its box (the host's points from the top left).
+    rect: (f64, f64, f64, f64),
+    /// Its box moved or showed this frame: presented in the frame's
+    /// transaction, with the layer's new geometry, not by Metal on its own.
+    pub moved: bool,
+}
+impl PlaneFrame {
+    /// Its box (the host's points from the top left).
+    pub fn rect(&self) -> (f64, f64, f64, f64) {
+        self.rect
+    }
+}
+/// A caret drawn by Core Animation over the window's frames
+/// (`zgx::caret_blink::NativeCaret`): a box of one colour, shown or hidden as
+/// the document's blink says, so the window draws no frame for a blink.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Caret {
+    /// Its box in the host layer's points, from the top left.
+    pub rect: (f64, f64, f64, f64),
+    /// Its colour, sRGB, each 0 to 1.
+    pub color: [f64; 4],
+    /// Whether it shows now (a blink's phase).
+    pub shown: bool,
+}
+/// A loop's layer as it stands (`Layer::loop_state`).
+pub(crate) struct LoopState {
+    pub at: (f64, f64),
+    pub hidden: bool,
+    pub opacity: f32,
+    pub on_screen: Option<(f64, f64)>,
+}
+/// A looping animation's sheet, as a layer plays it (loops.rs).
+pub(crate) struct LoopShown {
+    pub key: u64,
+    pub surface: CFRetained<IOSurfaceRef>,
+    /// Its box, in the host's points from the top left.
+    pub rect: (f64, f64, f64, f64),
+    /// The opacity of what holds it.
+    pub opacity: f32,
+    /// Its node shows nothing now.
+    pub hidden: bool,
+    /// Each cell of the sheet, in its unit square.
+    pub rects: Vec<[f64; 4]>,
+    /// When each starts in the loop, 0 to 1, and a last 1.
+    pub times: Vec<f64>,
+    pub duration: f64,
+    /// How far into the loop it is now, in seconds.
+    pub phase: f64,
+    /// A frame's length, in seconds.
+    pub frame: f64,
+}
+unsafe extern "C" {
+    fn CACurrentMediaTime() -> f64;
+}
+/// A layer's `contentsRect` keyframes stepping through `shown`'s cells.
+fn loop_animation(shown: &LoopShown) -> Option<Retained<AnyObject>> {
+    let string = |text: &str| objc2_foundation::NSString::from_str(text);
+    let list = || -> Option<Retained<AnyObject>> {
+        let class = objc2::runtime::AnyClass::get(c"NSMutableArray")?;
+        // SAFETY: NSMutableArray's class method, returning an array.
+        Some(unsafe { msg_send![class, array] })
+    };
+    let value_class = objc2::runtime::AnyClass::get(c"NSValue")?;
+    let number_class = objc2::runtime::AnyClass::get(c"NSNumber")?;
+    let (values, times) = (list()?, list()?);
+    for [x, y, width, height] in &shown.rects {
+        let rect = objc2_core_foundation::CGRect::new(
+            objc2_core_foundation::CGPoint::new(*x, *y),
+            CGSize::new(*width, *height),
+        );
+        // SAFETY: NSValue's class method for a rect; the array keeps it.
+        unsafe {
+            let value: Retained<AnyObject> = msg_send![value_class, valueWithRect: rect];
+            let _: () = msg_send![&*values, addObject: &*value];
+        }
+    }
+    for time in &shown.times {
+        // SAFETY: NSNumber's class method; the array keeps it.
+        unsafe {
+            let value: Retained<AnyObject> = msg_send![number_class, numberWithDouble: *time];
+            let _: () = msg_send![&*times, addObject: &*value];
+        }
+    }
+    let class = objc2::runtime::AnyClass::get(c"CAKeyframeAnimation")?;
+    // SAFETY: CAKeyframeAnimation's class method and properties, with the
+    // types its header gives.
+    unsafe {
+        let animation: Retained<AnyObject> =
+            msg_send![class, animationWithKeyPath: &*string("contentsRect")];
+        let _: () = msg_send![&*animation, setValues: &*values];
+        let _: () = msg_send![&*animation, setKeyTimes: &*times];
+        let _: () = msg_send![&*animation, setCalculationMode: &*string("discrete")];
+        let _: () = msg_send![&*animation, setDuration: shown.duration];
+        let _: () = msg_send![&*animation, setRepeatCount: f32::INFINITY];
+        let _: () = msg_send![&*animation, setRemovedOnCompletion: false];
+        // On one clock: every loop at a rate steps at the same moments, so
+        // the window server composites them once, as one tick drew them.
+        let begin = ((CACurrentMediaTime() - shown.phase) / shown.frame).round() * shown.frame;
+        let _: () = msg_send![&*animation, setBeginTime: begin];
+        Some(animation)
+    }
+}
+/// See `Layer::probe`.
+struct Probe {
+    layer: Retained<CAMetalLayer>,
+    queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    feedback: std::sync::Arc<Feedback>,
+}
+impl Probe {
+    fn new(
+        host: &CALayer,
+        device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+        queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    ) -> Self {
+        let layer = CAMetalLayer::new();
+        layer.setDevice(Some(device));
+        layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+        layer.setPresentsWithTransaction(true);
+        layer.setDrawableSize(CGSize::new(1., 1.));
+        layer.setOpaque(false);
+        layer.setFrame(objc2_core_foundation::CGRect::new(
+            objc2_core_foundation::CGPoint::new(0., 0.),
+            CGSize::new(1., 1.),
+        ));
+        transaction(|| host.addSublayer(&layer));
+        crate::present_log::log(|| "tile-probe-start".into());
+        Self {
+            layer,
+            queue,
+            feedback: Default::default(),
+        }
+    }
+    /// Present a cleared (transparent) drawable in the caller's transaction,
+    /// its work scheduled first, recording when it showed.
+    fn present(&self) {
+        let Some(drawable) = self.layer.nextDrawable() else {
+            return;
+        };
+        let Some(buffer) = self.queue.commandBuffer() else {
+            return;
+        };
+        let pass = objc2_metal::MTLRenderPassDescriptor::new();
+        // SAFETY: Index 0 of a render pass descriptor's colour attachments.
+        let color = unsafe { pass.colorAttachments().objectAtIndexedSubscript(0) };
+        color.setTexture(Some(&drawable.texture()));
+        color.setLoadAction(objc2_metal::MTLLoadAction::Clear);
+        color.setClearColor(objc2_metal::MTLClearColor {
+            red: 0.,
+            green: 0.,
+            blue: 0.,
+            alpha: 0.,
+        });
+        color.setStoreAction(objc2_metal::MTLStoreAction::Store);
+        if let Some(encoder) = buffer.renderCommandEncoderWithDescriptor(&pass) {
+            use objc2_metal::MTLCommandEncoder;
+            encoder.endEncoding();
+        }
+        let feedback = self.feedback.clone();
+        let handler = block2::RcBlock::new(
+            move |shown: std::ptr::NonNull<ProtocolObject<dyn MTLDrawable>>| {
+                // SAFETY: Metal passes the drawable presented, alive for the call.
+                feedback.record(unsafe { shown.as_ref() }.presentedTime());
+            },
+        );
+        // SAFETY: A live block taking the drawable, as the handler's type
+        // declares; Metal copies it.
+        unsafe { drawable.addPresentedHandler(block2::RcBlock::as_ptr(&handler)) };
+        buffer.commit();
+        buffer.waitUntilScheduled();
+        drawable.present();
+    }
+}
+/// When the window server showed each drawable (`addPresentedHandler`), as
+/// the gaps between successive presented drawables and the count it skipped:
+/// what the screen did, not what the renderer handed over.
+#[derive(Default)]
+pub(crate) struct Feedback {
+    state: std::sync::Mutex<FeedbackState>,
+}
+#[derive(Default)]
+struct FeedbackState {
+    presented: u64,
+    skipped: u64,
+    /// The last presented time (host seconds), and the latest gaps (ms).
+    last: f64,
+    gaps: std::collections::VecDeque<f64>,
+    /// The latest frames' start (the host's) to their showing (ms).
+    latency: std::collections::VecDeque<f64>,
+    /// A tick skipped on purpose (`Layer::take_rephase`): the gap it leaves
+    /// is not a frame shown late.
+    forgive: bool,
+    /// Shown frames that came over 1.5 refreshes after the one before: a
+    /// refresh missed (the refresh, the shortest of the 8 gaps before).
+    late: u64,
+}
+/// Record when the window server shows `drawable` in `feedback`, and, from
+/// `started` (host seconds), how long after its frame began.
+fn watch_presented(
+    drawable: &ProtocolObject<dyn CAMetalDrawable>,
+    feedback: &std::sync::Arc<Feedback>,
+    started: Option<f64>,
+) {
+    let feedback = feedback.clone();
+    let handler = block2::RcBlock::new(
+        move |shown: std::ptr::NonNull<ProtocolObject<dyn MTLDrawable>>| {
+            // SAFETY: Metal passes the drawable presented, alive for the call.
+            let presented = unsafe { shown.as_ref() }.presentedTime();
+            feedback.record(presented);
+            if let Some(started) = started {
+                feedback.record_latency(started, presented);
+            }
+        },
+    );
+    // SAFETY: A live block taking the drawable, as the handler's type
+    // declares; Metal copies it.
+    unsafe { drawable.addPresentedHandler(block2::RcBlock::as_ptr(&handler)) };
+}
+/// A point in a `Feedback`'s record (`Feedback::mark`).
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Mark {
+    presented: u64,
+    skipped: u64,
+    late: u64,
+}
+impl Feedback {
+    /// The next frame comes a tick later on purpose (a rephase).
+    fn forgive_next(&self) {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).forgive = true;
+    }
+    /// A frame begun at `started` (host seconds) shown at `presented`.
+    fn record_latency(&self, started: f64, presented: f64) {
+        if presented <= 0. || started <= 0. || presented < started {
+            return;
+        }
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.latency.push_back((presented - started) * 1e3);
+        if state.latency.len() > 600 {
+            state.latency.pop_front();
+        }
+    }
+    /// The latest frames' start to their showing: median and 99th
+    /// percentile (ms), none before any.
+    pub(crate) fn latency(&self) -> Option<(f64, f64)> {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut latency: Vec<f64> = state.latency.iter().copied().collect();
+        latency.sort_by(f64::total_cmp);
+        let at = |q: f64| {
+            latency
+                .get(((latency.len() as f64 - 1.) * q) as usize)
+                .copied()
+        };
+        Some((at(0.5)?, at(0.99)?))
+    }
+    fn record(&self, presented: f64) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if presented <= 0. {
+            state.skipped += 1;
+            return;
+        }
+        state.presented += 1;
+        if state.last > 0. && presented > state.last {
+            let gap = (presented - state.last) * 1e3;
+            let forgiven = std::mem::take(&mut state.forgive);
+            let recent = state.gaps.iter().rev().take(8);
+            let refresh = recent.clone().copied().fold(f64::INFINITY, f64::min);
+            if recent.count() >= 3 && gap > refresh * 1.5 && !forgiven {
+                state.late += 1;
+            }
+            state.gaps.push_back(gap);
+            if state.gaps.len() > 600 {
+                state.gaps.pop_front();
+            }
+        }
+        state.last = presented;
+    }
+    /// Where the record stands now.
+    pub(crate) fn mark(&self) -> Mark {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        Mark {
+            presented: state.presented,
+            skipped: state.skipped,
+            late: state.late,
+        }
+    }
+    /// Frames shown since `from`.
+    pub(crate) fn shown_since(&self, from: Mark) -> u64 {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.presented - from.presented
+    }
+    /// Shown frames since `from` that came late (`FeedbackState::late`).
+    pub(crate) fn late_since(&self, from: Mark) -> u64 {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.late - from.late
+    }
+    /// Since `from`: frames handed over (shown or skipped), and those the
+    /// window server skipped. (Gaps between shown ones are not counted: the
+    /// probe's presented times come with its transaction's, which batch.)
+    pub(crate) fn lost_since(&self, from: Mark) -> (u64, u64) {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let skipped = state.skipped - from.skipped;
+        (state.presented - from.presented + skipped, skipped)
+    }
+    /// Drawables presented and skipped so far, and the latest gaps' median,
+    /// 99th percentile and count over 1.5 of the median (a refresh missed).
+    pub(crate) fn summary(&self) -> (u64, u64, f64, f64, usize) {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut gaps: Vec<f64> = state.gaps.iter().copied().collect();
+        gaps.sort_by(f64::total_cmp);
+        let at = |q: f64| {
+            gaps.get(((gaps.len() as f64 - 1.) * q) as usize)
+                .copied()
+                .unwrap_or(0.)
+        };
+        let median = at(0.5);
+        let late = gaps.iter().filter(|gap| **gap > median * 1.5).count();
+        (state.presented, state.skipped, median, at(0.99), late)
+    }
+}
+/// A `CAMetalLayer` whose drawables are the surfaces full-rate frames draw
+/// into, presented by Metal, which hands each to the window server for the
+/// refresh after its work completes: the system schedules them, as GPUI's.
+/// Each drawable's surface keeps what it held, so a frame repaints what
+/// changed since that drawable was last presented (`Buffer::drawable`).
+struct Drawables {
+    layer: Retained<CAMetalLayer>,
+    /// The drawable the frame being drawn presents.
+    pending: Option<Retained<ProtocolObject<dyn CAMetalDrawable>>>,
+    /// Whether the layer shows (its frames, over the hidden tiles).
+    shown: bool,
+    /// When each drawable was shown (`Feedback`).
+    feedback: std::sync::Arc<Feedback>,
+    /// Whether frames wait for drawables a refresh behind (`phase_watch`),
+    /// and, once they do, the last wait, until the host skips a tick.
+    watch: crate::phase_watch::PhaseWatch,
+    rephase: Option<std::time::Duration>,
 }
 /// Hides the plain layer's tiles once the video layer above it shows a
 /// frame: until then they show the frame before; after, under a window's
@@ -607,7 +1029,7 @@ fn hide_tiles(plain: &CALayer, shown: Option<&CALayer>) {
     }
 }
 /// Run `change` as one Core Animation transaction, without animation.
-fn transaction(change: impl FnOnce()) {
+pub(crate) fn transaction(change: impl FnOnce()) {
     CATransaction::begin();
     CATransaction::setDisableActions(true);
     change();
@@ -708,11 +1130,580 @@ impl Layer {
             video: None,
             tiles: Vec::new(),
             opaque: Cell::new(false),
+            caret: None,
+            loops: Vec::new(),
+            loops_due: None,
+            drawables: None,
+            probe: None,
+            planes: Vec::new(),
         }
+    }
+    /// The next drawable of GPU view plane `key`, `size` pixels, its box
+    /// `rect` (the host's points from the top left): the layer made on first
+    /// use, placed in the caller's transaction (moved: `PlaneFrame::moved`).
+    /// `None` if Metal gives none. While the present log reads it, when it
+    /// shows, from `started` (the frame's start, host seconds), is logged.
+    pub fn plane_frame(
+        &mut self,
+        key: (u64, u64),
+        device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+        size: (u32, u32),
+        rect: (f64, f64, f64, f64),
+        started: Option<f64>,
+        wake: Option<&crate::PlaneWaker>,
+    ) -> Option<PlaneFrame> {
+        let host = &self.host;
+        let at = match self.planes.iter().position(|plane| plane.key == key) {
+            Some(at) => at,
+            None => {
+                let layer = CAMetalLayer::new();
+                layer.setDevice(Some(device));
+                // sRGB: the painter shades in linear light, the window server
+                // reads it as the tiles' tagged sRGB.
+                layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm_sRGB);
+                layer.setMaximumDrawableCount(PLANE_POOL);
+                layer.setPresentsWithTransaction(false);
+                // SAFETY: CoreGraphics' constant CFString, read only.
+                if let Some(space) = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB })) {
+                    layer.setColorspace(Some(&space));
+                }
+                fill(&layer, host, true);
+                layer.setAutoresizingMask(CAAutoresizingMask::empty());
+                layer.setHidden(true);
+                // Over the frames (tiles, drawables), under the caret.
+                layer.setZPosition(0.5);
+                host.addSublayer(&layer);
+                crate::present_log::log(|| format!("plane-start {key:?}"));
+                self.planes.push(Plane {
+                    key,
+                    drawables: crate::plane_drawables::Drawables::new(layer.clone(), wake.cloned()),
+                    layer,
+                    rect: None,
+                    feedback: Default::default(),
+                    frames: 0,
+                    logged: None,
+                });
+                self.planes.len() - 1
+            }
+        };
+        let plane = &mut self.planes[at];
+        let drawable_size = CGSize::new(size.0 as f64, size.1 as f64);
+        if plane.layer.drawableSize() != drawable_size {
+            plane.layer.setDrawableSize(drawable_size);
+        }
+        // Moved or shown: its geometry changes in the frame's transaction
+        // (`show_plane`), with the frame.
+        let moved = plane.rect != Some(rect);
+        // The one its thread waited for (`plane_defers`); else, its layer
+        // hidden or new, its pool has one free now.
+        let asked = std::time::Instant::now();
+        let drawable = match plane.drawables.take() {
+            Some(drawable) => drawable,
+            None => plane.layer.nextDrawable()?,
+        };
+        let waited = asked.elapsed();
+        if waited > std::time::Duration::from_millis(1) {
+            crate::present_log::log(|| {
+                format!("plane-wait {key:?} {:.2} ms", waited.as_secs_f64() * 1e3)
+            });
+        }
+        let logging = crate::present_log::enabled();
+        if logging {
+            watch_presented(&drawable, &plane.feedback, started);
+            plane.frames += 1;
+            if plane.frames.is_multiple_of(240) {
+                let (shown, skipped, median, p99, late) = plane.feedback.summary();
+                let now = std::time::Instant::now();
+                // Frames shown, and drawables its thread handed over, a
+                // second since the last line.
+                let handed = plane.drawables.handed();
+                let (rate, waited) = plane.logged.map_or((0., 0.), |(at, before, had)| {
+                    let seconds = now.duration_since(at).as_secs_f64();
+                    (
+                        shown.saturating_sub(before) as f64 / seconds,
+                        handed.saturating_sub(had) as f64 / seconds,
+                    )
+                });
+                plane.logged = Some((now, shown, handed));
+                let (latency, latency_p99) = plane.feedback.latency().unwrap_or_default();
+                crate::present_log::log(|| {
+                    format!(
+                        "plane {key:?} shown={shown} shown_fps={rate:.1} handed_per_s={waited:.1} skipped={skipped} gap_p50={median:.2}ms gap_p99={p99:.2}ms late={late} start_to_shown_p50={latency:.2}ms p99={latency_p99:.2}ms"
+                    )
+                });
+            }
+        }
+        Some(PlaneFrame {
+            key,
+            drawable,
+            rect,
+            moved,
+        })
+    }
+    /// Present `frame` after the work on `queue` (its painter's) by Metal,
+    /// on its own: a frame of the view alone, its box where it was.
+    pub fn present_plane_now(
+        &self,
+        frame: PlaneFrame,
+        queue: &ProtocolObject<dyn MTLCommandQueue>,
+    ) {
+        let Some(plane) = self.planes.iter().find(|plane| plane.key == frame.key) else {
+            return;
+        };
+        let Some(buffer) = queue.commandBuffer() else {
+            return;
+        };
+        if plane.layer.presentsWithTransaction() {
+            plane.layer.setPresentsWithTransaction(false);
+        }
+        buffer.presentDrawable(ProtocolObject::<dyn MTLDrawable>::from_ref(
+            &*frame.drawable,
+        ));
+        buffer.commit();
+    }
+    /// Whether plane `key`'s next frame waits for a drawable: its thread
+    /// then waits for one (`Drawables::want`), the plane showing its last
+    /// frame meanwhile, and the host is woken to draw it when it comes, so
+    /// the main thread never waits for one.
+    pub fn plane_defers(&mut self, key: (u64, u64)) -> bool {
+        let Some(plane) = self.planes.iter_mut().find(|plane| plane.key == key) else {
+            return false;
+        };
+        // Waited for on its thread; with none (it could not be made), taken
+        // as the frame is drawn (`plane_frame`).
+        !plane.drawables.ready() && plane.drawables.want()
+    }
+    /// Whether a shown plane has a drawable for the frame it owes.
+    pub fn planes_room(&self) -> bool {
+        self.planes
+            .iter()
+            .any(|plane| plane.rect.is_some() && plane.drawables.ready())
+    }
+    /// Before the frame's transaction: the work on `queue` (the painters' of
+    /// planes moving with it, and the frame's own) committed and scheduled,
+    /// so presents in the transaction wait for nothing there (the window's
+    /// commit keeps its time).
+    pub fn schedule_plane(queue: &ProtocolObject<dyn MTLCommandQueue>) {
+        if let Some(buffer) = queue.commandBuffer() {
+            buffer.commit();
+            buffer.waitUntilScheduled();
+        }
+    }
+    /// In the frame's transaction: `frame`'s box placed and shown, and its
+    /// drawable presented with it (`schedule_plane` first).
+    pub fn show_plane(&mut self, frame: PlaneFrame) {
+        let host = &self.host;
+        let Some(plane) = self.planes.iter_mut().find(|plane| plane.key == frame.key) else {
+            return;
+        };
+        if plane.rect != Some(frame.rect) {
+            let (x, y, width, height) = frame.rect;
+            let y = if host.isGeometryFlipped() || host.contentsAreFlipped() {
+                y
+            } else {
+                host.bounds().size.height - y - height
+            };
+            plane.layer.setFrame(objc2_core_foundation::CGRect::new(
+                objc2_core_foundation::CGPoint::new(x, y),
+                CGSize::new(width, height),
+            ));
+            plane.rect = Some(frame.rect);
+        }
+        if plane.layer.isHidden() {
+            plane.layer.setHidden(false);
+        }
+        if !plane.layer.presentsWithTransaction() {
+            plane.layer.setPresentsWithTransaction(true);
+        }
+        frame.drawable.present();
+    }
+    /// Hide plane `key` (its view draws into the window again), in the
+    /// caller's transaction.
+    pub fn hide_plane(&mut self, key: (u64, u64)) {
+        if let Some(plane) = self.planes.iter_mut().find(|plane| plane.key == key)
+            && plane.rect.take().is_some()
+        {
+            plane.drawables.cancel();
+            plane.layer.setHidden(true);
+            // Its last frame goes too: shown again, it shows nothing (the
+            // window's newer frame under it) until its next drawable does,
+            // never that old frame.
+            // SAFETY: `contents` is an id property; nil clears it.
+            unsafe { plane.layer.setContents(None) };
+            crate::present_log::log(|| format!("plane-hide {key:?}"));
+        }
+    }
+    /// Drop the planes `keep` says go, in the caller's transaction.
+    pub fn retain_planes(&mut self, mut keep: impl FnMut((u64, u64)) -> bool) {
+        self.planes.retain(|plane| {
+            let kept = keep(plane.key);
+            if !kept {
+                plane.layer.removeFromSuperlayer();
+            }
+            kept
+        });
+    }
+    /// Start the tile probe (`Layer::probe`), if not yet.
+    pub fn start_probe(
+        &mut self,
+        device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+        queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    ) {
+        if self.probe.is_none() {
+            self.probe = Some(Probe::new(&self.host, device, queue));
+        }
+    }
+    /// Stop the tile probe and drop its layer.
+    pub fn stop_probe(&mut self) {
+        if let Some(probe) = self.probe.take() {
+            transaction(|| probe.layer.removeFromSuperlayer());
+            crate::present_log::log(|| "tile-probe-stop".into());
+        }
+    }
+    /// What the tile probe saw, if it runs.
+    pub fn probe_feedback(&self) -> Option<std::sync::Arc<Feedback>> {
+        self.probe.as_ref().map(|probe| probe.feedback.clone())
+    }
+    /// The next drawable for a full-rate frame of `width` by `height`
+    /// pixels: its texture and the surface under it (the layer made, above
+    /// the plain one, on first use). `None` if Metal gives none.
+    pub fn next_drawable(
+        &mut self,
+        device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+        width: u32,
+        height: u32,
+        feedback: bool,
+        started: Option<f64>,
+    ) -> Option<(crate::metal_frame::Texture, CFRetained<IOSurfaceRef>)> {
+        let opaque = self.opaque.get();
+        let drawables = self.drawables.get_or_insert_with(|| {
+            let layer = CAMetalLayer::new();
+            layer.setDevice(Some(device));
+            layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+            // Read as the shown frame to bring other surfaces up to date.
+            layer.setFramebufferOnly(false);
+            // Metal presents each when its work completes, not in a
+            // transaction: no commit a frame.
+            layer.setPresentsWithTransaction(false);
+            // Two: in phase (`phase_watch`), a frame shows a refresh sooner
+            // than with three, and holds a surface less: the frame's start to
+            // its showing 16 ms against 24.5 (M5 Max), 25 against 33 (M1 Max),
+            // 10 MiB less, the window server's CPU alike (2026-10-27). Out of
+            // phase, on the CVDisplayLink, two had cost it 3-4 points.
+            layer.setMaximumDrawableCount(2);
+            // sRGB, as the tiles' surfaces are tagged.
+            // SAFETY: CoreGraphics' constant CFString, read only.
+            if let Some(space) = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB })) {
+                layer.setColorspace(Some(&space));
+            }
+            fill(&layer, &self.host, opaque);
+            layer.setHidden(true);
+            transaction(|| self.host.addSublayer(&layer));
+            crate::present_log::log(|| "drawables-start".into());
+            Drawables {
+                layer,
+                pending: None,
+                shown: false,
+                feedback: Default::default(),
+                watch: Default::default(),
+                rephase: None,
+            }
+        });
+        let size = CGSize::new(width as f64, height as f64);
+        if drawables.layer.drawableSize() != size {
+            drawables.layer.setDrawableSize(size);
+        }
+        if drawables.layer.isOpaque() != opaque {
+            transaction(|| drawables.layer.setOpaque(opaque));
+        }
+        let asked = std::time::Instant::now();
+        let drawable = drawables.layer.nextDrawable()?;
+        let waited = asked.elapsed();
+        if drawables.watch.observe(waited) {
+            drawables.rephase = Some(waited);
+        }
+        // Feedback only while it is read (the trial, a log): a handler a
+        // frame is work on Core Animation's thread.
+        if feedback {
+            watch_presented(&drawable, &drawables.feedback, started);
+        }
+        let texture = drawable.texture();
+        let surface = texture.iosurface()?;
+        drawables.pending = Some(drawable);
+        Some((texture, surface.into()))
+    }
+    /// Whether drawables show (full-rate frames present through them).
+    pub fn drawables_shown(&self) -> bool {
+        self.drawables
+            .as_ref()
+            .is_some_and(|drawables| drawables.shown)
+    }
+    /// Frames wait for drawables a refresh behind (`phase_watch`): the last
+    /// wait, once, for the host to skip a tick.
+    pub fn take_rephase(&mut self) -> Option<std::time::Duration> {
+        let drawables = self.drawables.as_mut()?;
+        let waited = drawables.rephase.take()?;
+        drawables.feedback.forgive_next();
+        Some(waited)
+    }
+    /// The pending drawable, for the frame's own command buffer to present
+    /// (`metal_frame::Frame::commit_presenting`).
+    pub fn take_drawable(&mut self) -> Option<Retained<ProtocolObject<dyn CAMetalDrawable>>> {
+        let drawables = self.drawables.as_mut()?;
+        // By Metal: not with a transaction (one a plane's move left set).
+        if drawables.layer.presentsWithTransaction() {
+            drawables.layer.setPresentsWithTransaction(false);
+        }
+        drawables.pending.take()
+    }
+    /// Present the frame drawn into the pending drawable, if its command
+    /// buffer did not (a frame wgpu encoded, or one a GPU view's plane moves
+    /// with), after the work already on `queue`; the drawable layer shows
+    /// over the hidden tiles. `transactional`: in the caller's transaction,
+    /// once that work is scheduled (a plane moving with it), not by Metal on
+    /// its own: the main thread waits for the commit on such a frame.
+    pub fn present_drawable(
+        &mut self,
+        queue: Option<&ProtocolObject<dyn MTLCommandQueue>>,
+        transactional: bool,
+    ) {
+        let Some(drawables) = &mut self.drawables else {
+            return;
+        };
+        if drawables.layer.presentsWithTransaction() != transactional {
+            drawables.layer.setPresentsWithTransaction(transactional);
+        }
+        if let Some(drawable) = drawables.pending.take() {
+            if transactional {
+                // Its work scheduled before the transaction (`schedule_plane`
+                // on the same queue): shown with it, no wait in it.
+                drawable.present();
+            } else if let Some(buffer) = queue.and_then(|queue| queue.commandBuffer()) {
+                buffer.presentDrawable(ProtocolObject::<dyn MTLDrawable>::from_ref(&*drawable));
+                buffer.commit();
+            }
+        }
+        if !drawables.shown {
+            drawables.shown = true;
+            let layer = drawables.layer.clone();
+            transaction(|| {
+                layer.setHidden(false);
+                hide_tiles(&self.plain, None);
+            });
+            self.plain_shows.set(false);
+        }
+    }
+    /// What the window server did with the drawables (`Feedback`), if any.
+    pub fn drawable_feedback(&self) -> Option<std::sync::Arc<Feedback>> {
+        self.drawables
+            .as_ref()
+            .map(|drawables| drawables.feedback.clone())
+    }
+    /// Hide the drawable layer (the plain layer shows frames again), in the
+    /// caller's transaction.
+    fn hide_drawables(&mut self) {
+        if let Some(drawables) = &mut self.drawables
+            && drawables.shown
+        {
+            drawables.shown = false;
+            drawables.layer.setHidden(true);
+        }
+    }
+    /// Drop the drawable layer and its pool (at rest, showing a tile).
+    pub fn release_drawables(&mut self) {
+        if let Some(drawables) = self.drawables.take() {
+            transaction(|| drawables.layer.removeFromSuperlayer());
+            crate::present_log::log(|| "drawables-drop".into());
+        }
+    }
+    /// Show `caret` over the frames, or none; in the caller's transaction
+    /// (the frame's, so the editor's caret and this one never both show,
+    /// nor neither), or one of its own.
+    /// The loops' layers (loops.rs) as the next frame has them, in its
+    /// transaction: a layer and the frame's content move together. The whole
+    /// state: set again before it applies, the later one stands.
+    pub(crate) fn set_loops(&mut self, alive: Vec<u64>, shown: Vec<LoopShown>) {
+        self.loops_due = Some((alive, shown));
+    }
+    /// A loop's layer as it stands: its place from the host's top left, and
+    /// with `on_screen`, where Core Animation shows it now.
+    pub(crate) fn loop_state(&self, key: u64, on_screen: bool) -> Option<LoopState> {
+        let (_, layer, _) = self.loops.iter().find(|(at, ..)| *at == key)?;
+        let flipped = self.host.isGeometryFlipped() || self.host.contentsAreFlipped();
+        let height = self.host.bounds().size.height;
+        let place = |frame: objc2_core_foundation::CGRect| {
+            let y = if flipped {
+                frame.origin.y
+            } else {
+                height - frame.origin.y - frame.size.height
+            };
+            (frame.origin.x, y)
+        };
+        // SAFETY: CALayer's method, returning a CALayer on the main thread: a
+        // copy, or nil before the layer's first commit.
+        let shown: Option<Retained<CALayer>> = on_screen
+            .then(|| unsafe { msg_send![&**layer, presentationLayer] })
+            .flatten();
+        Some(LoopState {
+            at: place(layer.frame()),
+            hidden: layer.isHidden(),
+            opacity: layer.opacity(),
+            on_screen: shown.map(|layer| place(layer.frame())),
+        })
+    }
+    /// Whether what `set_loops` left waits for its frame.
+    pub(crate) fn loops_queued(&self) -> bool {
+        self.loops_due.is_some()
+    }
+    /// Hides every loop's layer now, and drops what was waiting to place one.
+    pub(crate) fn hide_loops(&mut self) {
+        self.loops_due = None;
+        if self.loops.is_empty() {
+            return;
+        }
+        transaction(|| {
+            for (_, layer, _) in &self.loops {
+                layer.setHidden(true);
+            }
+        });
+    }
+    /// Whether a layer plays a loop now, or is about to.
+    pub(crate) fn has_loops(&self) -> bool {
+        !self.loops.is_empty() || self.loops_due.is_some()
+    }
+    /// What `set_loops` left for this frame; in the caller's transaction.
+    fn place_loops(&mut self) {
+        let Some((alive, shown)) = self.loops_due.take() else {
+            return;
+        };
+        self.loops.retain(|(key, layer, _)| {
+            let keep = alive.contains(key);
+            if !keep {
+                layer.removeFromSuperlayer();
+            }
+            keep
+        });
+        let host = &self.host;
+        for loop_ in &shown {
+            let at = self.loops.iter().position(|(key, ..)| *key == loop_.key);
+            let at = at.unwrap_or_else(|| {
+                let layer = CALayer::new();
+                fill(&layer, host, false);
+                layer.setAutoresizingMask(CAAutoresizingMask::empty());
+                // Over the frames, under the caret.
+                layer.setZPosition(0.5);
+                host.addSublayer(&layer);
+                self.loops.push((loop_.key, layer, 0));
+                self.loops.len() - 1
+            });
+            let (_, layer, sheet) = &mut self.loops[at];
+            let (x, y, width, height) = loop_.rect;
+            let y = if host.isGeometryFlipped() || host.contentsAreFlipped() {
+                y
+            } else {
+                host.bounds().size.height - y - height
+            };
+            let frame = objc2_core_foundation::CGRect::new(
+                objc2_core_foundation::CGPoint::new(x, y),
+                CGSize::new(width, height),
+            );
+            // (Asked each frame: a place it already has commits nothing.)
+            if layer.frame() != frame {
+                layer.setFrame(frame);
+            }
+            if layer.opacity() != loop_.opacity {
+                layer.setOpacity(loop_.opacity);
+            }
+            if layer.isHidden() != loop_.hidden {
+                layer.setHidden(loop_.hidden);
+            }
+            // A new place changes no frame of the loop.
+            let id = loop_.surface.id();
+            if *sheet == id {
+                continue;
+            }
+            *sheet = id;
+            let surface = &*loop_.surface as *const IOSurfaceRef as *const AnyObject;
+            // SAFETY: `surface` points to the sheet's live IOSurface, an
+            // object (bridged to `IOSurface`) and a layer's valid contents,
+            // which the layer retains.
+            unsafe { layer.setContents(Some(&*surface)) };
+            if let Some(animation) = loop_animation(loop_) {
+                let key = objc2_foundation::NSString::from_str("loop");
+                // SAFETY: CALayer's method; it copies the animation.
+                let _: () =
+                    unsafe { msg_send![&**layer, addAnimation: &*animation, forKey: &*key] };
+            }
+        }
+    }
+    /// `set_loops`' changes, where no tile showed to carry them.
+    pub(crate) fn flush_loops(&mut self) {
+        if self.loops_due.is_some() {
+            CATransaction::begin();
+            CATransaction::setDisableActions(true);
+            self.place_loops();
+            CATransaction::commit();
+        }
+    }
+    pub fn set_caret(&mut self, caret: Option<Caret>) {
+        if self.caret.as_ref().map(|(_, shown)| *shown) == Some(caret)
+            || (self.caret.is_none() && caret.is_none())
+        {
+            return;
+        }
+        transaction(|| {
+            let host = &self.host;
+            let (layer, shown) = self.caret.get_or_insert_with(|| {
+                let layer = CALayer::new();
+                fill(&layer, host, true);
+                // Its own box, not the host's.
+                layer.setAutoresizingMask(CAAutoresizingMask::empty());
+                layer.setHidden(true);
+                // Above the frames, whichever layer shows them.
+                layer.setZPosition(1.);
+                host.addSublayer(&layer);
+                (layer, None)
+            });
+            let Some(caret) = caret else {
+                layer.setHidden(true);
+                *shown = None;
+                return;
+            };
+            let (x, y, width, height) = caret.rect;
+            // A host whose geometry is not flipped counts from the bottom.
+            let y = if host.isGeometryFlipped() || host.contentsAreFlipped() {
+                y
+            } else {
+                host.bounds().size.height - y - height
+            };
+            let frame = objc2_core_foundation::CGRect::new(
+                objc2_core_foundation::CGPoint::new(x, y),
+                objc2_core_foundation::CGSize::new(width, height),
+            );
+            if layer.frame() != frame {
+                layer.setFrame(frame);
+            }
+            crate::present_log::log(|| format!("caret frame {frame:?}"));
+            if shown.is_none_or(|was| was.color != caret.color) {
+                let [r, g, b, a] = caret.color;
+                let color = objc2_core_graphics::CGColor::new_srgb(r, g, b, a);
+                layer.setBackgroundColor(Some(&color));
+            }
+            // A blink's phase, by its opacity (window 28, 2026-10-27: two such
+            // changes a second cost the window server what GPUI's blinking
+            // frames do, and a Core Animation blink a quarter point more).
+            let opacity = if caret.shown { 1. } else { 0. };
+            if layer.opacity() != opacity {
+                layer.setOpacity(opacity);
+            }
+            layer.setHidden(false);
+            *shown = Some(caret);
+        });
     }
     /// Shows `buffer`'s tile on the plain layer, made (its contents set) the
     /// first time the surface shows; in the caller's transaction.
     fn show_tile(&mut self, buffer: &Buffer) {
+        self.place_loops();
         // The plain layer exactly the host's box too: autoresizing rounds it
         // as it does a tile (a host that starts empty and grows to 1168.5 by
         // 400.25 points leaves it 1169 by 401), and every tile would show
@@ -750,6 +1741,10 @@ impl Layer {
             }
         }
         hide_tiles(&self.plain, Some(tile));
+        self.hide_drawables();
+        if let Some(probe) = &self.probe {
+            probe.present();
+        }
     }
     /// Drops the tiles of surfaces other than `surfaces` (the renderer's, as
     /// it keeps fewer or makes new ones): a tile holds its surface.
@@ -887,6 +1882,15 @@ impl Drop for Layer {
                 video.layer.removeFromSuperlayer();
             }
             self.plain.removeFromSuperlayer();
+            if let Some(drawables) = &self.drawables {
+                drawables.layer.removeFromSuperlayer();
+            }
+            if let Some(probe) = &self.probe {
+                probe.layer.removeFromSuperlayer();
+            }
+            for plane in &self.planes {
+                plane.layer.removeFromSuperlayer();
+            }
         });
     }
 }

@@ -170,10 +170,43 @@ pub struct FontFeatures {
 }
 
 impl FontFeatures {
+    /// zgx: the tag that asks for hyphenation: words may break at their
+    /// hyphenation points, a hyphen drawn where they do (CSS's `hyphens:
+    /// auto`), from `FontSystem::set_hyphenator`'s. No font can have it:
+    /// OpenType's registered tags are lowercase letters and digits, its
+    /// vendors' private ones uppercase letters, neither with an underscore.
+    pub const HYPHENS: FeatureTag = FeatureTag::new(b"_hyp");
+
+    /// zgx: the language a line's Han characters are in, by its own kana
+    /// (1, Japanese) or hangul (2, Korean), or by an app's language (3,
+    /// `FontSystem::set_language`): `ShapeLine::build` sets it on
+    /// such a line's copy of its attributes, so its Han characters take that
+    /// language's fallback fonts and the run cache keeps its runs apart. A
+    /// text's own language (HTML's `lang`) sets it on its attributes, which
+    /// the line's kana then leave as they are: 1 or 2 for Japanese or
+    /// Korean, 4 simplified Chinese, 5 traditional (Taiwan's), 6 Hong
+    /// Kong's, 3 another language (the app's fonts, no hint). No font can
+    /// have it, as `HYPHENS`.
+    pub const HAN: FeatureTag = FeatureTag::new(b"_han");
+
     pub const fn new() -> Self {
         Self {
             features: Vec::new(),
         }
+    }
+
+    /// zgx: the language these say their Han characters are in (`HAN`): 0
+    /// none, 1 Japanese, 2 Korean, 3 the app's, 4 to 6 simplified,
+    /// traditional and Hong Kong Chinese.
+    pub fn han(&self) -> u32 {
+        (self.features.iter())
+            .find(|feature| feature.tag == Self::HAN)
+            .map_or(0, |feature| feature.value)
+    }
+
+    /// zgx: whether these ask for hyphenation (`HYPHENS`).
+    pub fn hyphens(&self) -> bool {
+        (self.features.iter()).any(|feature| feature.tag == Self::HYPHENS && feature.value != 0)
     }
 
     pub fn set(&mut self, tag: FeatureTag, value: u32) -> &mut Self {
@@ -193,16 +226,43 @@ impl FontFeatures {
 }
 
 /// A wrapper for letter spacing to get around that f32 doesn't implement Eq and Hash
+///
+/// zgx: or a grid of cells (`LetterSpacing::grid`, `Attrs::cell_grid`), kept in
+/// `padding_opt` as a NaN's payload, which no padding is: an attribute no
+/// bigger for it, and read only where a run has padding.
 #[derive(Clone, Copy, Debug)]
 pub struct LetterSpacing(pub f32);
 
+/// zgx: a grid's bits, a positive quiet NaN whose payload is the cell in EM,
+/// `GRID_SCALE` to one.
+const GRID: u32 = 0x7fc0_0000;
+const GRID_UNITS: u32 = 0x003f_ffff;
+const GRID_SCALE: f32 = (1 << 20) as f32;
+
+impl LetterSpacing {
+    /// zgx: a grid of cells `cell` EM wide (up to 4 EM; none at zero or below):
+    /// each cluster takes its characters' cells (`shape::snap_to_cells`).
+    pub fn grid(cell: f32) -> Option<Self> {
+        let units = (cell * GRID_SCALE).round();
+        if units.is_nan() || units < 1.0 {
+            return None;
+        }
+        Some(Self(f32::from_bits(GRID | units.min(GRID_UNITS as f32) as u32)))
+    }
+
+    /// zgx: the grid's cell in EM, if it is one.
+    pub fn cell(self) -> Option<f32> {
+        let bits = self.0.to_bits();
+        (bits & !GRID_UNITS == GRID && bits & GRID_UNITS != 0)
+            .then(|| (bits & GRID_UNITS) as f32 / GRID_SCALE)
+    }
+
+}
+
 impl PartialEq for LetterSpacing {
     fn eq(&self, other: &Self) -> bool {
-        if self.0.is_nan() {
-            other.0.is_nan()
-        } else {
-            self.0 == other.0
-        }
+        // zgx: a NaN (a grid) by its bits, so grids of other cells differ.
+        self.0 == other.0 || (self.0.is_nan() && self.0.to_bits() == other.0.to_bits())
     }
 }
 
@@ -213,7 +273,12 @@ impl Hash for LetterSpacing {
         const CANONICAL_NAN_BITS: u32 = 0x7fc0_0000;
 
         let bits = if self.0.is_nan() {
-            CANONICAL_NAN_BITS
+            // zgx: a grid's payload is its cell.
+            if self.cell().is_some() {
+                self.0.to_bits()
+            } else {
+                CANONICAL_NAN_BITS
+            }
         } else {
             // Add +0.0 to canonicalize -0.0 to +0.0
             (self.0 + 0.0).to_bits()
@@ -401,6 +466,16 @@ impl<'a> Attrs<'a> {
     /// zgx: set the span's inline padding (in EM)
     pub const fn padding(mut self, padding: f32) -> Self {
         self.padding_opt = Some(LetterSpacing(padding));
+        self
+    }
+
+    /// zgx: set a grid of cells this wide (in EM, a terminal's) each cluster
+    /// takes its characters' cells on, its glyphs centred in them, whichever
+    /// font draws it; kept in `padding_opt` (`LetterSpacing::grid`, a NaN no
+    /// padding is), so text without padding (most) reads nothing more for it,
+    /// and no padding with it.
+    pub fn cell_grid(mut self, cell: f32) -> Self {
+        self.padding_opt = LetterSpacing::grid(cell);
         self
     }
 

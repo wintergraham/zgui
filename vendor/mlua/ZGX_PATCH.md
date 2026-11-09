@@ -55,8 +55,14 @@ about a third was mlua's handling of values rather than zgx's work:
    `self` here; the call and the formatting code around the check cost each
    call ~29 instructions (research B9). No check changed.
 
+4. **`StackValue::atom`** (`src/table.rs`): a borrowed string's atom
+   (`lua_tostringatom`), what the VM's `useratom` callback gave it, asked
+   once per string and kept in it. A key looked up by its address cost
+   what the heap's layout made its hash probe cost: the atom costs the
+   same whatever the layout.
+
 zgx-script uses both in `node.rs`: `fill_from` walks a node's properties
-with `for_each_borrowed` (a key's identity finds its property; a colour
+with `for_each_borrowed` (a key's atom names its property; a colour
 written out is parsed where it lies; a child node is read without a
 reference), and every node is made with `create_userdata_relaxed`.
 
@@ -96,12 +102,49 @@ comparison of its own, `mount_bench` ran 0.35% more instructions.
 Checked: `the_interrupt_is_set_by_the_memory_alarm` (zgx-script), and the
 memory-limit tests listed above, in debug and release builds.
 
-## Luau held to 740 (zgx-mlua 0.12.3)
+## Luau 744's bytecode loads (zgx-mlua 0.12.5)
 
 mlua-sys 0.13.0 builds Luau from `luau0-src` 0.22, and 0.22.1 (Luau 744,
-2026-10-24) fails mlua 0.12.2's setup as a Lua state is made: "Error
-configuring Luau: attempt to load a text chunk (mode is 'b')". zgx's
-lockfile held 0.22.0, so only an app resolving afresh met it, and every
-Luau app panicked at start. The `luau` feature now depends on
-`luau0-src = "=0.22.0"` (unused as code: it holds the one 0.22 version a
-build may have). Drop it once mlua works with Luau 744.
+2026-10-24, since yanked) failed mlua 0.12.2's setup as a Lua state was
+made: "Error configuring Luau: attempt to load a text chunk (mode is 'b')"
+(#633). Luau 744's compiler writes bytecode version 13, and mlua-sys's
+`luaL_isbytecode` takes versions up to 11 for bytecode: mlua compiles a
+chunk, then loads it as binary, and mlua-sys read it as text. zgx-mlua
+0.12.3 held `luau0-src` at 0.22.0 (Luau 740).
+
+zgx-mlua checks for bytecode itself (`luau::is_bytecode`, by the versions
+Luau 0.22 loads, 14 at most): `Chunk::detect_mode` asks it, and chunks
+load through `luau::luaL_loadbufferenv`, mlua-sys's loader copied line for
+line but for that check (`RawLua::load_chunk_inner` calls it): a load does
+the work it did, and Luau 744's bytecode loads as bytecode. `luau0-src` is
+any 0.22 again. Drop this once mlua-sys knows version 13 (`LBC_VERSION_MAX`
+in its `src/luau/compat.rs`).
+
+The library's own tests run (`cargo test --features luau --lib`) with
+`static_assertions` as a dev-dependency, which the published package
+leaves out.
+
+## Luau's pages, apart from the program's heap (zgx-mlua 0.12.6)
+
+Luau asks the allocator for 16 KB pages of small objects and frees a page
+only when its last object goes, so a heap that was once large leaves pages
+free between the ones still in use. In a general allocator these free pages
+stay in memory: mimalloc holds them in 512 KB runs it returns only whole.
+`src/memory.rs` keeps blocks of exactly that size in a pool of mapped 2 MB
+chunks instead, and `release_free_pages` hands each free slot back to the OS
+(macOS: `MADV_FREE_REUSABLE`, which `footprint` stops counting; Linux:
+`MADV_DONTNEED`). zgx-script calls it as a host goes idle.
+
+The pool is off until `pool_pages(true)`, which applies to VMs made after it:
+a VM stays with what it started on. zgx turns it on with its `mimalloc`
+feature. The system allocators give free pages back by themselves
+(`malloc_zone_pressure_relief`, `malloc_trim`).
+
+## A table read from the stack as itself (zgx-mlua 0.12.7)
+
+`Table`'s `FromLua::from_stack` (`src/conversion.rs`) references a table on
+the stack (a function's result) as itself, reading its type once. The
+default went through `try_stack_value`, which read the type again
+(`Option<Table>` had already read it) and made a `Value` to unwrap. A code
+editor's highlighter returns its spans this way for each line (zgx #1276).
+Anything but a table converts as before, its error the same.

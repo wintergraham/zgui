@@ -6,6 +6,11 @@ into site/windows/, in Windows' own metrics.
 
     python3 scripts/build_site.py docs/results/suite-macos-<date>-<commit>
     python3 scripts/build_site.py --platform windows docs/results/suite-windows-<date>-<commit>
+    python3 scripts/build_site.py <suite> --gate docs/results/gate-<from>-<to>/gate.json --previous <last suite>
+
+`--gate` with `--previous` adds a release-over-release section: the CI
+gate's exact instruction counts per scene for two releases, and zgx's
+change per cell since the last published run, GPUI Fast's beside it.
 
 Only an accepted suite run of one clean commit is published, every scene of
 it accepted. Every median and range shown is recomputed from the scenes'
@@ -20,7 +25,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = 'https://github.com/zeronsh/zgx'
-NAMES = {'zgx': 'zgx', 'zgx-luau': 'zgx (Luau)', 'gpui-fast': 'GPUI Fast', 'mygo': 'MyGo', 'rune': 'Rune'}
+# zgx's variants (named zgx-*) are never counted among the rivals.
+NAMES = {'zgx': 'zgx', 'zgx-luau': 'zgx (Luau)', 'zgx-d3d11': 'zgx (Direct3D 11)',
+         'zgx-d3d11-threaded': 'zgx (Direct3D 11, driver threads on)', 'gpui-fast': 'GPUI Fast', 'mygo': 'MyGo',
+         'rune': 'Rune'}
 ORDER = ['heavy', 'lab', 'animate', 'vlist']
 SCENES = {
     'heavy': ('Heavy dashboard', 'A 1280×800 dashboard: 6 tiles, 30 cards of 26 sparkline bars, a status table '
@@ -73,8 +81,8 @@ WINDOWS_METRICS = {
     'cpu': ('CPU', 'million cycles a second, the app\'s process', 1, 1, 'mcycles_per_second', 'all'),
     'cycles': ('CPU cycles per frame', 'million cycles of the app\'s process per update (the animation: per frame drawn)',
                2, 1, 'mcycles_per_frame', 'active'),
-    'server': ('DWM CPU', '% of one core: the system compositor (Desktop Window Manager), while the app runs', 1, 1,
-               'dwm_cpu_percent', 'all'),
+    'server': ('DWM CPU', 'million cycles a second of the system compositor (Desktop Window Manager), while the app runs',
+               1, 1, 'dwm_mcycles_per_second', 'all'),
     'gpu_time': ('App GPU time', 'ms a second on the GPU\'s 3D engines, the app\'s own', 2, 1, 'gpu_ms_per_second', 'active'),
     'dwm_gpu': ('DWM GPU time', 'ms a second on the GPU\'s 3D engines, the compositor\'s, while the app runs', 2, 1,
                 'dwm_gpu_ms_per_second', 'active'),
@@ -84,7 +92,7 @@ WINDOWS_METRICS = {
     'memory': ('Memory', 'MB, private bytes (committed memory)', 0, 1e-6, 'mean_private_bytes', 'all'),
 }
 WINDOWS_TRIAL_KEYS = ['mcycles_per_second', 'cpu_percent_one_core', 'mcycles_per_frame', 'gpu_ms_per_second', 'dwm_cpu_percent',
-                      'dwm_gpu_ms_per_second', 'mean_private_bytes', 'mean_working_set_bytes']
+                      'dwm_mcycles_per_second', 'dwm_gpu_ms_per_second', 'mean_private_bytes', 'mean_working_set_bytes']
 PLATFORM = 'macos'
 PLATFORM_NAMES = {'macos': 'macOS', 'windows': 'Windows'}
 # Windows: whether the board's power is published (--board-power).
@@ -119,6 +127,8 @@ def load(directory):
         return load_windows(directory, audit, summary, trials, paced, extended, desktop_rows)
     # The whole GPU's power with no app running: each repeat's desktop baseline.
     desktop_gpu = statistics.median(float(t['gpu_system_watts']) for t in trials if t['framework'] == 'desktop')
+    desktop_server = {t['repeat']: float(t['windowserver_cpu_percent']) for t in desktop_rows}
+    assert all(t['repeat'] in desktop_server for t in trials if t['mode'] == 'idle'), f'{directory}: an idle round without its desktop'
     cells = []
     for framework in frameworks:
         for mode in modes:
@@ -135,6 +145,17 @@ def load(directory):
                     cell[key] = spread(values)
             # What the app adds to the GPU's power, in mW.
             cell['gpu_power_mw'] = spread([(float(t['gpu_system_watts']) - desktop_gpu) * 1000 for t in rows])
+            # Active cells too once a run has six rounds, each with its desktop.
+            if audit['scene'] != 'field' and (mode == 'idle' or protocol['repeats'] >= 6):
+                # Idle WindowServer less its own round's desktop alone (the
+                # field shows its carets' whole cost, as measured): the
+                # window server reads one of a few levels launch to launch,
+                # for every app and the desktop alike (M1 Max, 2026-10-28:
+                # no launch of 32 over its round's desktop by 0.2 points).
+                # A cell's extra trial (its spread) has no round, so no desktop.
+                cell['windowserver_over_desktop'] = spread(
+                    [float(t['windowserver_cpu_percent']) - desktop_server[t['repeat']]
+                     for t in rows if t['repeat'] in desktop_server])
             if mode != 'idle':
                 captures = [p for p in paced if (p['framework'], p['mode']) == (framework, mode)]
                 assert len(captures) == protocol['pacing_repeats'], (directory, framework, mode)
@@ -156,8 +177,14 @@ def load(directory):
             cells.append(cell)
     # WindowServer with no app running, each repeat's desktop baseline.
     desktop = [float(t['windowserver_cpu_percent']) for t in trials if t['framework'] == 'desktop']
+    over = [c['windowserver_over_desktop']['median'] for c in cells
+            if c['mode'] == 'idle' and 'windowserver_over_desktop' in c]
     return {
         'desktop_server': statistics.median(desktop), 'desktop_gpu_mw': desktop_gpu * 1000,
+        # Idle WindowServer is noise while no app's median over its round's
+        # desktop exceeds what the desktop alone spreads over the rounds.
+        **({'idle_server': {'desktop': spread(desktop),
+                            'noise': all(abs(o) <= max(desktop) - min(desktop) for o in over)}} if over else {}),
         'scene': audit['scene'], 'run': directory.relative_to(ROOT).as_posix(), 'commit': audit['commit'],
         'started_utc': audit['started_utc'], 'frameworks': frameworks, 'modes': modes, 'cells': cells,
         'trials': audit['trials'], 'pacing_trials': audit['pacing_trials'], 'protocol': protocol,
@@ -206,7 +233,7 @@ def load_windows(directory, audit, summary, trials, paced, extended, desktop_row
                 for f in frameworks}
     return {
         'graphics_modules': graphics,
-        'desktop_server': median('dwm_cpu_percent'), 'desktop_dwm_gpu': median('dwm_gpu_ms_per_second'),
+        'desktop_server': median('dwm_mcycles_per_second'), 'desktop_dwm_gpu': median('dwm_gpu_ms_per_second'),
         'desktop_board_w': desktop_board,
         'scene': audit['scene'], 'run': directory.relative_to(ROOT).as_posix(), 'commit': audit['commit'],
         'started_utc': audit['started_utc'], 'frameworks': frameworks, 'modes': modes, 'cells': cells,
@@ -223,6 +250,14 @@ def cell(scene, framework, mode):
 
 def value(scene, framework, mode, key, field='median'):
     return cell(scene, framework, mode)[key][field]
+
+
+def server(scene, framework, mode):
+    """WindowServer CPU for a cell: less its rounds' desktop alone where the
+    run has one per trial (six rounds, `windowserver_over_desktop`), else as
+    read."""
+    c = cell(scene, framework, mode)
+    return (c.get('windowserver_over_desktop') or c['windowserver_cpu_percent'])['median']
 
 
 def fmt(v, digits):
@@ -249,12 +284,38 @@ def headline(by):
            for key in (cpu, gpu)}
     tests = len(active)
     long_zgx = max(value(s, 'zgx', m, 'long_interval_fraction') for s, m in active)
+    # A test zgx does not lead where its runs overlap the lowest rival's:
+    # within noise, said as such (animate's GPU power at 0.1.7: zgx 115-123
+    # mW, MyGo 111-142), not counted as a loss or a win.
+    close = []
+    for s, m in active:
+        for key, name, unit, digits in ((cpu, 'CPU', '%' if PLATFORM != 'windows' else ' M cycles/s', 2),
+                                        (gpu, gpu_name, ' mW' if PLATFORM != 'windows' else ' ms/s', 0)):
+            ours = cell(s, 'zgx', m)[key]
+            best = min((r for r in rivals if r in s['frameworks']), key=lambda r: value(s, r, m, key))
+            theirs = cell(s, best, m)[key]
+            if ours['median'] >= theirs['median'] and ours['min'] <= theirs['max']:
+                close.append(f"{SCENES[s['scene']][0].lower()}'s {name} is within noise of {NAMES[best]}'s "
+                             f"(zgx {fmt(ours['min'], digits)}–{fmt(ours['max'], digits)}{unit}, {NAMES[best]} "
+                             f"{fmt(theirs['min'], digits)}–{fmt(theirs['max'], digits)}{unit})")
     if led[cpu] == tests and led[gpu] == tests:
         verdict = f'In every test, zgx uses less CPU and less {gpu_name} than {named}'
+    elif led[cpu] + led[gpu] + len(close) == 2 * tests:
+        verdict = f'In every test, zgx uses less CPU and less {gpu_name} than {named}, except that ' + '; '.join(close)
     else:
         verdict = (f'zgx uses the least CPU in {led[cpu]} of {tests} tests and the least {gpu_name} '
                    f'in {led[gpu]}, against {named}')
     verdict += ', and none of its frames run long.' if long_zgx == 0 else '.'
+    if PLATFORM == 'macos':
+        # Where the window server spends more on zgx's window than on the
+        # lowest rival's: said beside the verdict, not left to its chart.
+        over = [server(s, 'zgx', m) - min(server(s, r, m) for r in rivals if r in s['frameworks'])
+                for s, m in active]
+        # Under 0.05 points rounds to level on the chart.
+        over = [o for o in over if o >= 0.05]
+        if over:
+            verdict += (f' WindowServer spends up to {fmt(max(over), 1)} points of a core more on its window '
+                        f"than on the lowest rival's, in {len(over)} of {tests} tests.")
     heavy = by['heavy']
     against = lambda key, mode: ', '.join(
         f'{percent_less(value(heavy, "zgx", mode, key), value(heavy, r, mode, key))} than {NAMES[r]}' for r in rivals)
@@ -283,6 +344,14 @@ def metrics():
     return METRICS
 
 
+def idle_server_label(scene):
+    """The idle row of WindowServer's chart: over the desktop alone, and whether that is noise."""
+    idle = scene['idle_server']
+    return (f"{MODES['idle']}, less the desktop"
+            + (f": within noise (no app above the desktop alone's own spread, "
+               f"{fmt(idle['desktop']['min'], 2)}–{fmt(idle['desktop']['max'], 2)})" if idle['noise'] else ''))
+
+
 def chart(scene, metric):
     title, unit, digits, scale, key, applies = metrics()[metric]
     if metric == 'server':
@@ -294,9 +363,14 @@ def chart(scene, metric):
     if metric == 'board':
         unit += f' ({fmt(scene["desktop_board_w"], 1)} W)'
     modes = [m for m in scene['modes'] if applies == 'all' or m != 'idle']
-    rows = [(m, f, c[key]) for m in modes for f in scene['frameworks']
-            for c in [cell(scene, f, m)] if key in c]
-    top = max(s['median'] * scale for _, _, s in rows) or 1
+    # WindowServer: what each app adds over its round's desktop alone, where
+    # the run has it (idle; active cells too with six rounds).
+    over = metric == 'server'
+    source = lambda m: ('windowserver_over_desktop'
+                        if over and 'windowserver_over_desktop' in cell(scene, scene['frameworks'][0], m) else key)
+    rows = [(m, f, c[source(m)]) for m in modes for f in scene['frameworks']
+            for c in [cell(scene, f, m)] if source(m) in c]
+    top = max(max(s['median'], 0) * scale for _, _, s in rows) or 1
     out = [f'<figure class="chart"><table><caption><span class="title">{title}</span> '
            f'<span class="unit">{unit}</span> <span class="better">lower is better</span></caption>',
            '<colgroup><col class="c-mode"><col class="c-fw"><col></colgroup>'
@@ -307,10 +381,12 @@ def chart(scene, metric):
         out.append('<tbody>')
         for i, (framework, s) in enumerate(group):
             median, low, high = (s[k] * scale for k in ('median', 'min', 'max'))
-            width = 100 * median / top
+            width = 100 * max(median, 0) / top
             # Idle CPU is a fraction of a percent: two places show it.
             places = 2 if (metric, mode) == ('cpu', 'idle') else digits
-            head = f'<th scope="rowgroup" rowspan="{len(group)}" class="mode">{MODES[mode]}</th>' if i == 0 else ''
+            label = (idle_server_label(scene) if over and mode == 'idle' and 'idle_server' in scene
+                     else f"{MODES[mode]}, less the desktop" if source(mode) != key else MODES[mode])
+            head = f'<th scope="rowgroup" rowspan="{len(group)}" class="mode">{label}</th>' if i == 0 else ''
             low, high = fmt(low, places), fmt(high, places)
             spread_text = '' if low == high else f' <span class="range">({low}–{high})</span>'
             out.append(f'<tr class="fw-{framework}">{head}<th scope="row">{NAMES[framework]}</th>'
@@ -433,6 +509,8 @@ def startup_section(startup, e):
             'the probe starts the app (the lab scene, idle, in the suite&#8217;s font), waits for its window, then reads the top of '
             'its content as the window drew it until the first text has drawn, and reads the process&#8217;s CPU time and cycles '
             'at that moment. zgx shows its window with its first frame; MyGo and Rune show theirs before they draw. '
+            'Launches are warm: each finds the caches the launches before it wrote (zgx&#8217;s system-font cache among them), '
+            'as an app&#8217;s second launch onward does; a first launch&#8217;s one-time cache misses are not measured. '
             f'Measured after the suite, on the same PC, at <code>{e(startup["commit"][:7])}</code>.</p>'
             f'<div class="charts">{"".join(charts)}</div></section>'
         )
@@ -442,11 +520,139 @@ def startup_section(startup, e):
         'the probe starts the app, waits for its window, then captures the top of its content until the first text has drawn, '
         'and reads the process&#8217;s CPU time and instructions retired at that moment. '
         'Both apps build the same menu bar at launch (Services, Hide, Quit, and the Window menu), so they start the same work. '
+        'Launches are warm: each finds the caches the launches before it wrote (zgx&#8217;s system-font cache among them), '
+        'as an app&#8217;s second launch onward does; a first launch&#8217;s one-time cache misses are not measured. '
         f'Measured separately from the suite, on the same Mac, at <code>{e(startup["commit"][:7])}</code>.</p>'
         f'<div class="charts">{"".join(charts)}</div></section>'
     )
 
-def page(by, verdict, cards, micro=None, startup=None):
+# Release-over-release: the metrics compared between two suite runs.
+RELEASE_METRICS = [('cpu', 'CPU'), ('gpu', 'GPU power'), ('memory', 'Memory'), ('server', 'WindowServer CPU')]
+
+
+def release_changes(previous, by):
+    """Per scene, mode and framework present in both runs, each metric's
+    median change between the runs, as a fraction."""
+    out = []
+    for n in ORDER:
+        old, new = previous[n], by[n]
+        for mode in new['modes']:
+            for fw in new['frameworks']:
+                try:
+                    a, b = cell(old, fw, mode), cell(new, fw, mode)
+                except (KeyError, StopIteration):
+                    continue
+                change = {}
+                for metric, _ in RELEASE_METRICS:
+                    key, applies = metrics()[metric][4], metrics()[metric][5]
+                    # GPU power idle is the desktop's to the milliwatt: no ratio.
+                    if applies == 'active' and mode == 'idle':
+                        continue
+                    if key in a and key in b and a[key]['median']:
+                        scale = metrics()[metric][3]
+                        change[metric] = {'from': a[key]['median'] * scale, 'to': b[key]['median'] * scale,
+                                          'change': b[key]['median'] / a[key]['median'] - 1}
+                out.append({'scene': n, 'mode': mode, 'framework': fw, 'change': change})
+    return out
+
+
+def release_section(release, e):
+    """What changed since the last release: the instruction gate's exact
+    counts, then this run against the last published one, for zgx, with
+    GPUI Fast beside it as the measure of what the session itself moved."""
+    gate = release['gate']
+    rows = sorted(gate['scenes'].items(), key=lambda kv: kv[1][2])
+    lower = sum(v[2] < 0 for v in gate['scenes'].values())
+    signed = lambda f: ('&#177;0.0%' if round(f * 100, 1) == 0 else f'{f * 100:+.1f}%'.replace('-', '&#8722;'))
+    out = [f'<section id="release" aria-labelledby="release-h"><h2 id="release-h">{e(gate["from"]["version"])} &#8594; '
+           f'{e(gate["to"]["version"])}</h2>',
+           f'<p class="scene-note">Instructions each scene of the CI gate runs ({e(gate["how"])}), '
+           f'{e(gate["from"]["version"])} (<code>{e(gate["from"]["commit"][:8])}</code>) against '
+           f'{e(gate["to"]["version"])} (<code>{e(gate["to"]["commit"][:8])}</code>): exact counts, not samples. '
+           f'{lower} of {len(rows)} scenes run fewer.</p>',
+           '<figure class="chart"><table><caption><span class="title">Instructions per scene</span> '
+           f'<span class="unit">{e(gate["unit"])}</span> <span class="better">lower is better</span></caption>'
+           '<thead><tr><th scope="col">Scene</th><th scope="col">' + e(gate['from']['version']) + '</th><th scope="col">'
+           + e(gate['to']['version']) + '</th><th scope="col">Change</th></tr></thead><tbody>']
+    for name, (a, b, change) in rows:
+        out.append(f'<tr><th scope="row">{e(name)}</th><td>{fmt(a, 1)}</td><td>{fmt(b, 1)}</td>'
+                   f'<td>{f"{change * 100:+.2f}%".replace("-", "&#8722;")}</td></tr>')
+    out.append('</tbody></table></figure>')
+    # A cell measured differently from the gate's earlier releases: both
+    # columns are counted the new way, and the page says what changed.
+    for name, why in gate.get('redefined', {}).items():
+        out.append(f'<p class="scene-note"><strong>{e(name)} changed:</strong> {e(why)}</p>')
+    if 'previous_commit' not in release:
+        out.append(f'<p class="scene-note">The suite on this page is {e(gate["from"]["version"])}&#8217;s '
+                   f'(<code>{e(release["suite_commit"][:7])}</code>), not run again for {e(gate["to"]["version"])}: '
+                   'only the instruction counts above are new.</p></section>')
+        return '\n'.join(out)
+    previous = release['previous_commit']
+    out.append(f'<p class="scene-note">The suite, this run against the last one published (<code>{e(previous[:7])}</code>, '
+               f'{e(release["previous_date"])}), each cell&#8217;s median. The runs are in different sessions, and a session '
+               'moves a whole run (see the caveats), so GPUI Fast is shown beside zgx'
+               + (f' ({e(release["rebuilt"])})' if release.get('rebuilt') else '') +
+               ': the part of a change it shares is the session&#8217;s. Idle shows its values, which are near nothing.</p>')
+    changes = {(c['scene'], c['mode'], c['framework']): c['change'] for c in release['changes']}
+    out.append('<figure class="chart"><table><caption><span class="title">Change since the last run</span> '
+               '<span class="unit">zgx, and GPUI Fast in brackets</span> <span class="better">lower is better</span></caption>'
+               '<thead><tr><th scope="col">Scene</th>' + ''.join(f'<th scope="col">{e(t)}</th>' for _, t in RELEASE_METRICS)
+               + '</tr></thead><tbody>')
+    for n in ORDER:
+        for mode in release['modes'][n]:
+            for fw in ('zgx', 'zgx-luau'):
+                ours = changes.get((n, mode, fw))
+                if ours is None:
+                    continue
+                theirs = changes.get((n, mode, 'gpui-fast'), {})
+                label = f'{SCENES[n][0]}, {MODES[mode].lower()}' + (' (Luau)' if fw == 'zgx-luau' else '')
+                cells = []
+                for metric, _ in RELEASE_METRICS:
+                    if metric not in ours:
+                        cells.append('<td>&#8211;</td>')
+                        continue
+                    # Idle is near nothing: its values, not a ratio of them.
+                    digits = 2 if metrics()[metric][2] else 0
+                    show = ((lambda c: f"{fmt(c['from'], digits)} &#8594; {fmt(c['to'], digits)}") if mode == 'idle'
+                            else (lambda c: signed(c['change'])))
+                    ref = f' <span class="range">({show(theirs[metric])})</span>' if metric in theirs else ''
+                    cells.append(f'<td>{show(ours[metric])}{ref}</td>')
+                out.append(f'<tr><th scope="row">{e(label)}</th>{"".join(cells)}</tr>')
+    out.append('</tbody></table></figure></section>')
+    return '\n'.join(out)
+
+
+# The field scene: each framework's own text field, focused, left alone;
+# how its caret draws, which is what decides its memory.
+FIELD_CARETS = {
+    'zgx': 'zgx&#8217;s text input: its caret blinks as the system&#8217;s, a Core Animation layer shown and hidden each phase, so the window draws no frame while it blinks',
+    'gpui-fast': 'GPUI has no text field of its own: a 2 &#215; 20 point bar shown and hidden every 530 ms in a still window, as a caret blinks',
+    'mygo': 'MyGo&#8217;s <code>TextInput</code>: its caret blinks every 530 ms, a frame each time',
+    'rune': 'Rune&#8217;s <code>text_input</code>: its caret does not blink, so the window draws no frame while it is left alone',
+}
+
+
+def field_section(field, e):
+    """A focused field left alone: memory first, then CPU and WindowServer."""
+    charts = ''.join(chart(field, metric) for metric in ('memory', 'cpu', 'server'))
+    carets = ''.join(f'<li><strong>{e(NAMES[f])}:</strong> {FIELD_CARETS[f]}.</li>' for f in field['frameworks'] if f in FIELD_CARETS)
+    return (
+        '<section id="field" aria-labelledby="field-h"><h2 id="field-h">A focused field, left alone</h2>'
+        '<p class="scene-note">The window most apps show most of the time: a text field with the focus, its user reading. '
+        f'Each framework&#8217;s own field in a 960 &#215; 720 window, sampled {field["protocol"]["idle_window_seconds"][0]}&#8211;'
+        f'{field["protocol"]["idle_window_seconds"][1]} s after launch, {field["protocol"]["idle_repeats"]} launches each. '
+        'A window that draws a frame every few seconds keeps the Metal driver&#8217;s memory for its command queue, about 176 MB, '
+        'for as long as it does. A window that changes only its layers (a caret Core Animation draws) settles at one of two '
+        'levels, launch to launch, about 25 MB apart: after any Metal work, macOS keeps part of that memory in about half the '
+        'launches while a process keeps changing its layers (reproduced in a plain Swift app: two Metal frames, then a layer '
+        'flipped twice a second). Read zgx&#8217;s memory with its range. '
+        f'Measured separately from the suite, at <code>{e(field["commit"][:7])}</code>.</p>'
+        f'<ul class="facts">{carets}</ul>'
+        f'<div class="charts">{charts}</div></section>'
+    )
+
+
+def page(by, verdict, cards, micro=None, startup=None, release=None, field=None):
     heavy = by['heavy']
     env, protocol, commit = heavy['environment'], heavy['protocol'], heavy['commit']
     # Since 2026-10-26 (#637), samples start from the window's readiness,
@@ -509,7 +715,9 @@ def page(by, verdict, cards, micro=None, startup=None):
                           + '</li>')
         else:
             crash_note = '<li>No app exited abnormally during the run.</li>'
-    nav = ' '.join(f'<a href="#{n}">{SCENES[n][0]}</a>' for n in ORDER) + (' <a href="#micro">Microbenchmarks</a>' if micro else '')
+    nav = ' '.join(f'<a href="#{n}">{SCENES[n][0]}</a>' for n in ORDER) + (' <a href="#micro">Microbenchmarks</a>' if micro else '') + (
+        f' <a href="#release">Since {e(release["gate"]["from"]["version"])}</a>' if release else '') + (
+        ' <a href="#field">A focused field</a>' if field else '')
     mygo_build = (f"MyGo {e(mygo.get('mygo_version', '?'))} (<code>{e(mygo.get('mygo_commit', '?')[:7])}</code>, "
                   f"{e(mygo.get('mygo_license', '?'))}) built with {e(mygo.get('go', tools.get('go', 'Go')))}, "
                   f"<code>go build {e(mygo.get('flags', ''))}</code>, cgo {'on' if mygo.get('cgo') else 'off'}") + rune_build
@@ -540,6 +748,8 @@ def page(by, verdict, cards, micro=None, startup=None):
 </header>
 <main>
 {''.join(sections)}
+{field_section(field, e) if field else ''}
+{release_section(release, e) if release else ''}
 {startup_section(startup, e) if startup else ''}
 {micro_section(micro, e) if micro else ''}
 <section id="method" aria-labelledby="method-h">
@@ -586,8 +796,7 @@ def macos_facts(by, e, env, display, tools, mygo_build, commit, protocol, anchor
     active = [(s, m) for s in by.values() for m in s['modes'] if m != 'idle']
     rivals = [f for f in heavy['frameworks'] if not f.startswith('zgx')]
     # How far above the cheapest rival's window zgx's costs WindowServer, per test.
-    server_gaps = [value(s, 'zgx', m, 'windowserver_cpu_percent')
-                   - min(value(s, r, m, 'windowserver_cpu_percent') for r in rivals if r in s['frameworks'])
+    server_gaps = [server(s, 'zgx', m) - min(server(s, r, m) for r in rivals if r in s['frameworks'])
                    for s, m in active]
     server_more = sum(gap > 0 for gap in server_gaps)
     server_gap = max(server_gaps)
@@ -599,11 +808,12 @@ def macos_facts(by, e, env, display, tools, mygo_build, commit, protocol, anchor
 <li><strong>WindowServer CPU:</strong> the CPU of macOS's compositor, which puts every app's frames on screen, over the same sample: what showing the app costs the system beside the app's own CPU. It includes what WindowServer does anyway (the desktop alone, measured each repeat, is beside each chart's title).</li>
 <li><strong>GPU power:</strong> the whole GPU's energy over the sample, from the system's energy model (IOReport), in milliwatts, less the desktop alone (measured each repeat; beside each chart's title). It counts everything the GPU does for the app, the window server's compositing of its window included, so a framework is charged for how it presents its frames as well as for drawing them.</li>
 <li><strong>App GPU time</strong> (secondary): the GPU time macOS accounts to the app's process, as cycles at the GPU's mean clock. It includes the time from each submission to the GPU starting it, about half a millisecond after the GPU idles, so an app that draws small frames often reads high: measured with Metal System Trace, zgx's animation frames execute in 46 µs against GPUI Fast's 318 µs, yet this counter charges zgx more. It also moves with whatever else keeps the GPU awake. Kept for comparison with earlier runs.</li>
-<li><strong>Frame time:</strong> the 99th percentile of the intervals between frames shown on screen; at 60 updates a second, 16.7 ms is on time (8.3 ms for the animation, drawn at 120 Hz). <strong>Long frames</strong> are intervals over 25 ms.</li>
+<li><strong>Frame time:</strong> the 99th percentile of the intervals between frames shown on screen, read through ScreenCaptureKit; at 60 updates a second, 16.7 ms is on time (8.3 ms for the animation, drawn at 120 Hz). <strong>Long frames</strong> are intervals over 25 ms.</li>
 <li><strong>Unfilled rows</strong> (the list): the window captured 10 times a second for {by['vlist']['protocol'].get('blank_seconds', 8)} s in {' and '.join(MODES[m].lower() for m in by['vlist']['protocol'].get('blank_modes', by['vlist']['modes']))}; a capture counts when a stretch of the rows' padding over 24 points shows the window's background, where no row was drawn.</li>
 <li><strong>Memory:</strong> the process's physical footprint (what Activity Monitor shows: resident memory plus GPU memory it owns), averaged over the sample.</li>
 <li><strong>The list widgets:</strong> zgx's measured virtual list{', the same list from a Luau script (<code>ui.list { measured = true }</code>),' if luau else ''} and GPUI Fast's <code>list</code> measure each row as they lay it out; MyGo's <code>ui.List</code> keeps its place by an anchor row and estimates unmeasured rows at the average height{"; Rune's virtual rows estimate unmeasured rows (28 pt fixed, a three-line row variable) and measure as they mount" if has_rune else ''}.</li>'''
     caveats = f'''{anchor_note}
+<li>Frame time and frames shown are measured while the window is captured, and capturing a window changes its pacing: macOS skips frames it would otherwise show, more for some ways of presenting than others (zgx at 120 Hz, by the system&#8217;s own count: 0.2% skipped uncaptured on M1 Max and M5, 12.2% and 3.7% captured). They show pacing under a capture (screen sharing, recording), compared under the same capture; CPU, GPU power, memory and WindowServer CPU come from trials with nothing attached. See <a href="{REPO}/blob/main/docs/benchmarking.md#frame-pacing-a-capture-changes-it">the benchmarking notes</a>.</li>
 <li>Compare within this run only: the same binaries measured hours apart read differently (the machine's state changes), so a cell is not comparable across runs, while the frameworks in one run share its session.</li>
 <li>Idle memory is two-level: an idle window settles at one of two levels about 25 MB apart, launch to launch, as the Metal driver returns its startup memory. Which level a launch lands on is the driver's timing, not the app's, so read idle memory with its range.</li>
 <li>MyGo is immediate mode: each frame it draws builds and draws its whole window, which is how MyGo apps work.</li>
@@ -623,8 +833,8 @@ def windows_facts(by, e, env, display, tools, mygo_build, commit, protocol, anch
     active = [(s, m) for s in by.values() for m in s['modes'] if m != 'idle']
     rivals = [f for f in heavy['frameworks'] if not f.startswith('zgx')]
     # How far above the cheapest rival's window zgx's costs DWM, per test.
-    server_gaps = [value(s, 'zgx', m, 'dwm_cpu_percent')
-                   - min(value(s, r, m, 'dwm_cpu_percent') for r in rivals if r in s['frameworks'])
+    server_gaps = [value(s, 'zgx', m, 'dwm_mcycles_per_second')
+                   - min(value(s, r, m, 'dwm_mcycles_per_second') for r in rivals if r in s['frameworks'])
                    for s, m in active]
     server_more = sum(gap > 0 for gap in server_gaps)
     hz = sorted({d['resolution'].rsplit('@ ', 1)[-1] for d in env['displays'] if d['main']})
@@ -632,7 +842,7 @@ def windows_facts(by, e, env, display, tools, mygo_build, commit, protocol, anch
              'counter, read at the sample&#8217;s two ends), in watts, less the desktop alone (beside each chart&#8217;s title). '
              'It is the whole board, compositing included, as macOS&#8217;s GPU power is the whole GPU&#8217;s.</li>' if BOARD_POWER else '')
     ratios = worst_ratios(by)
-    short = {'cpu': ' M cycles/s', 'cycles': ' M cycles', 'server': '%', 'gpu_time': ' ms/s', 'dwm_gpu': ' ms/s',
+    short = {'cpu': ' M cycles/s', 'cycles': ' M cycles', 'server': ' M cycles/s', 'gpu_time': ' ms/s', 'dwm_gpu': ' ms/s',
              'board': ' W', 'p99': ' ms', 'long': '%', 'memory': ' MB'}
 
     def shown(metric, scene, framework, mode):
@@ -658,7 +868,7 @@ def windows_facts(by, e, env, display, tools, mygo_build, commit, protocol, anch
 <li><strong>Trials:</strong> each a fresh launch, the first {protocol['warmup_seconds']} s {anchor} discarded and the next {protocol['sampled_seconds']} s sampled; {protocol['repeats']} trials of each mode, in alternating order, and {protocol['extra_trials']} more of any whose CPU cycles or app GPU time spread past {protocol['spread_for_extra_trials'] * 100:.0f}% of its median; idle {protocol['idle_repeats']} times in the dashboard, {protocol['idle_window_seconds'][0]}–{protocol['idle_window_seconds'][1]} s {anchor_short}. Every trial had to run as long as asked, at 60 updates a second, its window uncovered as its sample began and ended. Medians are shown, the trials' range beside them. Frame timing is {protocol['pacing_repeats']} separate {protocol['pacing_seconds']} s captures of each mode.</li>
 <li><strong>CPU:</strong> the app process&#8217;s CPU cycles over the sample (<code>QueryProcessCycleTime</code>), in millions a second. Windows counts CPU time in scheduler ticks of 15.6 ms, too coarse for these loads (one app&#8217;s same animation read 0.9% and 0.3% of a core in two trials of equal cycles), so cycles are the figure; CPU time stays in the raw data.</li>
 <li><strong>CPU cycles per frame:</strong> the same cycles per update, or in the animation per frame drawn: what each frame costs, whatever the frame rate.</li>
-<li><strong>DWM CPU:</strong> the CPU of the Desktop Window Manager, Windows&#8217; compositor, over the same sample: what showing the app costs the system beside the app&#8217;s own CPU. It includes what DWM does anyway (the desktop alone, measured each repeat, is beside each chart&#8217;s title).</li>
+<li><strong>DWM CPU:</strong> the CPU cycles of the Desktop Window Manager (<code>dwm.exe</code>), Windows&#8217; compositor, over the same sample, in millions a second: what showing the app costs the system beside the app&#8217;s own CPU. Read from the system&#8217;s process list (<code>SystemProcessInformation</code>&#8217;s cycle time), which needs no administrator rights where <code>QueryProcessCycleTime</code> needs a handle DWM gives no other user. It includes what DWM does anyway (the desktop alone, measured each repeat, is beside each chart&#8217;s title).</li>
 <li><strong>App GPU time:</strong> the time the GPU&#8217;s 3D engines ran the app&#8217;s work, from Windows&#8217; GPU engine counters, in milliseconds a second. Windows reads no system GPU power, so this is the GPU figure here: how long the GPU was held, not what it spent.</li>
 <li><strong>DWM GPU time:</strong> the compositor&#8217;s time on the GPU&#8217;s 3D engines over the same sample: the GPU cost of putting the app&#8217;s frames on screen, plus what DWM does anyway (the desktop alone is beside each chart&#8217;s title).</li>
 {board}<li><strong>Frame time:</strong> the 99th percentile of the intervals between frames shown on screen, read through Desktop Duplication (each frame the compositor put on screen in which the window&#8217;s pixels changed); at 60 updates a second, 16.7 ms is on time. <strong>Long frames</strong> are intervals over 25 ms.</li>
@@ -670,9 +880,9 @@ def windows_facts(by, e, env, display, tools, mygo_build, commit, protocol, anch
 <li>Where zgx is furthest behind the best rival in each metric (zgx&#8217;s median over the lowest rival&#8217;s, in its worst test; under 1 is less than every rival there):<ul>{ratio_items}</ul></li>
 <li>MyGo is immediate mode: each frame it draws builds and draws its whole window, which is how MyGo apps work.</li>
 {'' if luau else '<li>zgx through Luau is not in the list scene.</li>'}
-{f'<li>DWM spends more CPU on zgx&#8217;s window than on the cheapest rival&#8217;s in {server_more} of {len(active)} tests, by at most {fmt(max(server_gaps), 1)} points of a core (its chart follows CPU in each scene).</li>' if server_more else ''}
+{f'<li>DWM spends more CPU on zgx&#8217;s window than on the cheapest rival&#8217;s in {server_more} of {len(active)} tests, by at most {fmt(max(server_gaps), 1)} M cycles a second (its chart follows CPU in each scene).</li>' if server_more else ''}
 <li>Memory includes the graphics driver&#8217;s own floor, which differs by API. The processes had these loaded: {e(graphics_note)}.</li>
-<li>DWM&#8217;s CPU is read through performance counters in scheduler ticks (its cycles need administrator rights), so its trials spread widely: read it with its range.</li>
+<li>Until 2026-10-27 this page&#8217;s DWM CPU was DWM&#8217;s CPU time from performance counters, in % of a core. Windows counts that time in 15.6 ms scheduler ticks, so its trials spread widely and its ratios moved with the rivals&#8217; noise. It is now DWM&#8217;s CPU cycles, in millions a second (see How this was measured); the tick-counted figure stays in the raw data.</li>
 {f'<li>A remote display host ({e(", ".join(hosts))}) streamed the desktop throughout, capturing and encoding the screen: work beside every framework&#8217;s, in the desktop baseline too, which is why the run accepted up to {e(fmt(heavy["preflight"]["threshold_percent"], 0))}% of a core of other use.</li>' if hosts and heavy.get('preflight') else ''}
 <li>The list&#8217;s fling ends slowly, under a pixel a refresh for its last ticks (160 px a tick decaying to 0.6). zgx scrolls in whole device pixels, as Chrome and Windows&#8217; own lists do, to keep text crisp, so in that tail some refreshes move nothing on screen and the capture counts them as long frames: zgx presented on every refresh, its GPU work done within 0.2 ms of each present. Scrolled at a steady 12 or 3 px a tick it shows none; at 0.6 px a tick, 36 frames a second of whole-pixel steps. Rune draws at fractional positions, which change its pixels on every tick.</li>
 <li>The list scene&#8217;s unfilled-row captures are macOS&#8217;s only.</li>
@@ -710,6 +920,10 @@ def main():
     parser.add_argument('--output', type=Path, help='default site/ (macOS), site/windows/ (Windows)')
     parser.add_argument('--micro', type=Path, help='the microbenchmarks\' run (micro.jsonl), shown in its own section')
     parser.add_argument('--startup', type=Path, help='a startup run (docs/results/startup-macos-*/startup.json), shown in its own section')
+    parser.add_argument('--gate', type=Path, help='the instruction gate\'s counts for two releases (from, to, scenes: name → [from, to]), shown with --previous')
+    parser.add_argument('--previous', type=Path, help='the last published suite run, compared with this one per cell, for zgx')
+    parser.add_argument('--field', type=Path, help='a run of the field scene (a focused field left alone), shown in its own section')
+    parser.add_argument('--rebuilt', help='which rival builds differ between the two runs (said beside the comparison)')
     parser.add_argument('--board-power', action='store_true',
                         help='Windows: publish the NVIDIA board\'s power (only where it held still across repeats)')
     args = parser.parse_args()
@@ -729,8 +943,9 @@ def main():
         'sampling_anchor': by['heavy']['protocol'].get('sampling_anchor', 'launch'),
         'frameworks': NAMES,
         'metrics': {m: {'title': t, 'unit': u, 'source': k} for m, (t, u, _, _, k, _) in metrics().items()},
-        'scenes': [{k: by[n][k] for k in ('scene', 'run', 'started_utc', 'frameworks', 'modes', 'trials',
-                                          'pacing_trials', 'protocol', 'environment', 'toolchains', 'cells')}
+        'scenes': [{**{k: by[n][k] for k in ('scene', 'run', 'started_utc', 'frameworks', 'modes', 'trials',
+                                             'pacing_trials', 'protocol', 'environment', 'toolchains', 'cells')},
+                    **({'idle_server': by[n]['idle_server']} if 'idle_server' in by[n] else {})}
                    for n in ORDER],
         # Per metric, zgx's median over the lowest rival's in its worst test.
         **({'worst_ratios': worst_ratios(by)} if PLATFORM == 'windows' else {}),
@@ -739,6 +954,22 @@ def main():
     if startup:
         # Medians and ranges only; every launch stays in the run's file.
         data['startup'] = {k: startup[k] for k in ('commit', 'machine', 'probe', 'apps', 'protocol', 'medians')}
+    release = None
+    if args.gate and not args.previous:
+        # A release whose suite was not run again (a fix release): its gate
+        # counts alone, and the page says whose suite it shows.
+        release = {'gate': json.loads(args.gate.read_text()), 'suite_commit': by['heavy']['commit']}
+        data['release'] = release
+    elif args.gate and args.previous:
+        previous = {name: load(args.previous.resolve() / name) for name in ORDER}
+        release = {'gate': json.loads(args.gate.read_text()), 'previous_commit': previous['heavy']['commit'],
+                   'previous_date': previous['heavy']['started_utc'][:10], 'rebuilt': args.rebuilt,
+                   'modes': {n: by[n]['modes'] for n in ORDER}, 'changes': release_changes(previous, by)}
+        data['release'] = {k: release[k] for k in ('gate', 'previous_commit', 'previous_date', 'rebuilt', 'changes')}
+    field = load(args.field.resolve()) if args.field else None
+    if field:
+        data['field'] = {k: field[k] for k in ('scene', 'run', 'commit', 'started_utc', 'frameworks', 'modes', 'trials',
+                                               'protocol', 'environment', 'toolchains', 'cells')}
     keys = (WINDOWS_TRIAL_KEYS + (['gpu_board_power_w'] if BOARD_POWER else []) if PLATFORM == 'windows'
             else TRIAL_KEYS) + PACING_KEYS + BLANK_KEYS
     args.output.mkdir(parents=True, exist_ok=True)
@@ -756,7 +987,7 @@ def main():
     micro = load_micro(args.micro) if args.micro else None
     if micro:
         shutil.copy(args.micro, args.output / 'micro.jsonl')
-    (args.output / 'index.html').write_text(page(by, verdict, cards, micro, startup), encoding='utf-8', newline='\n')
+    (args.output / 'index.html').write_text(page(by, verdict, cards, micro, startup, release, field), encoding='utf-8', newline='\n')
     counts = ', '.join(f"{n} ({by[n]['trials']} trials)" for n in ORDER)
     print(f"Published {counts} at {by['heavy']['commit'][:7]} to {args.output}")
 

@@ -38,9 +38,11 @@ a whole capture, near the window server's latch in some and not others, so
 one capture's 99th-percentile interval swings by 5 ms or more between
 captures, for every framework.
 
-`--powermetrics` also records package and GPU power with `sudo powermetrics`
-(run `sudo -v` first in the same terminal; without cached credentials the
-columns stay empty).
+`--powermetrics` also records package, CPU and GPU power with `sudo
+powermetrics`, over the same seconds as the other meters. It needs sudo to run
+`/usr/bin/powermetrics` without asking (a sudoers rule, or `sudo -v` first in
+the same terminal); without it the columns stay empty. The suite turns it on
+whenever that holds.
 
 `--quick` is for iterating, not publishing: zgx and GPUI Fast only, two
 repeats, and pacing captured during the sampling trials instead
@@ -92,9 +94,20 @@ PACING_SECONDS, PACING_REPEATS = 8, 8
 # shaping, caches, memory still growing) read 5-10% more CPU for every
 # framework (2026-10-25).
 # Three pacing captures a cell: of two, one bad capture moved a median
-# (lab scroll, 2026-10-25: 30.0 and 17.8 ms; ten more read 18.0). Idle twice:
-# it reads hundredths of a percent, its range shown.
-SUITE = {'REQUESTED': 15, 'WARMUP': 5, 'SAMPLED': 10, 'IDLE_REPEATS': 2, 'PACING_REPEATS': 3}
+# (lab scroll, 2026-10-25: 30.0 and 17.8 ms; ten more read 18.0). Idle six
+# times, each round with its desktop alone: idle CPU reads hundredths of a
+# percent, and WindowServer one of a few levels launch to launch for every
+# app and the desktop alike (0.2 to 1.1% on an M5 Max), so two launches
+# could not rank it. On an M1 Max, 8 rounds, no launch read 0.2 points over
+# its round's desktop (2026-10-28); the site shows idle less the desktop.
+# Six of every active cell too, each round with its desktop alone: WindowServer
+# falls into per-launch levels while animating as well (about 17 or 20% for
+# several frameworks, 2026-10-30), so three launches could not rank it either;
+# six against their rounds' desktops read 0.1.5 and 0.1.6 within 0.06 pt of
+# each other (window 40). The site shows WindowServer less the desktop.
+SUITE = {'REQUESTED': 15, 'WARMUP': 5, 'SAMPLED': 10, 'REPEATS': 6, 'IDLE_REPEATS': 6, 'PACING_REPEATS': 3}
+# Trials of each active cell outside the suite.
+REPEATS = 3
 # A cell whose CPU or GPU power spreads more than this share of its median
 # over its trials gets EXTRA more (the suite).
 SPREAD, EXTRA = 0.10, 1
@@ -149,10 +162,43 @@ SCENES = {
             'rune': RUNE / 'vlist',
         },
     },
+    # A field of lit cubes drawn with wgpu (crates/zgx-desktop/examples/
+    # support/cubes.rs): in a GPU view filling a zgx window, against the same
+    # painter drawing straight into a window's surface with winit and wgpu
+    # alone. What showing it in zgx costs over a minimal wgpu app; idle, the
+    # view's first frame and nothing after.
+    'viewport': {
+        'modes': ['animate', 'idle'],
+        'binaries': {
+            'zgx': ROOT / 'target/dist/examples/viewport_workload',
+            'wgpu': ROOT / 'target/dist/examples/wgpu_viewport',
+            # The same app, its view composited into the window's frame (a
+            # view not opaque or not shown whole), for the plane's gain.
+            'zgx-composite': ROOT / 'target/dist/examples/viewport_composite',
+        },
+    },
+    # A focused text field left alone, idle (zgx_workload::blink): each
+    # framework's own field, its caret as it draws it (MyGo's blinks every
+    # 530 ms, Rune's does not blink, zgx's blinks as the system's); GPUI has
+    # no field, so its caret is a bar blinking as one would.
+    'field': {
+        'modes': ['idle'],
+        'binaries': {
+            'zgx': ROOT / 'target/dist/examples/field_workload',
+            'gpui-fast': ROOT / 'comparisons/gpui-fast/target/dist/blink',
+            'mygo': MYGO / 'field',
+            'rune': RUNE / 'field',
+        },
+    },
 }
 # The suite's frameworks: zgx (in Rust, and in Luau where a scene has it),
 # the stronger GPUI, MyGo and Rune.
-SUITE_FRAMEWORKS = ['zgx', 'zgx-luau', 'gpui-fast', 'mygo', 'rune']
+SUITE_FRAMEWORKS = ['zgx', 'zgx-luau', 'gpui-fast', 'mygo', 'rune', 'wgpu', 'zgx-composite']
+# Scenes whose active trials report the frames they drew (`animation_frames=`,
+# `fps=`) rather than 60 updates a second.
+FRAMES = {'animate', 'viewport'}
+# Frameworks built as zgx-desktop examples beside zgx's (no checkout of their own).
+EXAMPLES = {'wgpu', 'zgx-composite'}
 SAMPLER, PACER, BLANK = Path('/tmp/zgx-macsample'), Path('/tmp/zgx-framepace'), Path('/tmp/zgx-blankprobe')
 READY = Path('/tmp/zgx-window-ready')
 # The one font file every adapter loads (comparisons/fonts), and how each
@@ -198,7 +244,10 @@ def build(scene, frameworks):
     if 'zgx-luau' in frameworks:
         luau = SCENES[scene]['binaries']['zgx-luau'].name
         run(['cargo', 'build', '--profile', 'dist', '--locked', '-p', 'zgx-script', '--example', luau], cwd=ROOT)
-    for name in [f for f in frameworks if f not in ('zgx', 'zgx-luau', 'mygo', 'rune')]:
+    for name in [f for f in frameworks if f in EXAMPLES]:
+        run(['cargo', 'build', '--profile', 'dist', '--locked', '-p', 'zgx-desktop', '--example',
+             SCENES[scene]['binaries'][name].name], cwd=ROOT)
+    for name in [f for f in frameworks if f not in ('zgx', 'zgx-luau', 'mygo', 'rune', *EXAMPLES)]:
         run(['cargo', 'build', '--profile', 'dist', '--locked'], cwd=ROOT / 'comparisons' / name)
     if 'rune' in frameworks:
         # Rune at its pinned rev with the wheel patch (comparisons/rune/build.sh).
@@ -315,15 +364,24 @@ def finish(process, seconds):
         return process.wait(timeout=10), True
 
 
-def powermetrics():
-    """Package, CPU and GPU power over the sampled window, if sudo allows."""
-    command = f'sleep {WARMUP}; exec sudo -n /usr/bin/powermetrics --samplers cpu_power,gpu_power -f plist -i 1000 -n {SAMPLED}'
+def powermetrics(start):
+    """Package, CPU and GPU power over the sampled window, if sudo allows:
+    from `start` seconds after the window is ready, as the sampler's."""
+    command = f'sleep {start}; exec sudo -n /usr/bin/powermetrics --samplers cpu_power,gpu_power -f plist -i 1000 -n {SAMPLED}'
     return subprocess.Popen(['/bin/sh', '-c', command], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+
+def powermetrics_allowed():
+    """Whether `sudo powermetrics` runs without asking (a sudoers rule for
+    /usr/bin/powermetrics, or cached credentials)."""
+    return subprocess.run(['sudo', '-n', '/usr/bin/powermetrics', '--samplers', 'cpu_power', '-i', '100', '-n', '1'],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
 
 def power_of(process):
     output, _ = process.communicate()
-    samples = [plistlib.loads(doc.strip() + b'</plist>') for doc in output.split(b'</plist>') if doc.strip()]
+    # One plist a sample, each ended by a NUL.
+    samples = [plistlib.loads(doc) for doc in output.split(b'\0') if doc.strip()]
     processor = [s.get('processor', {}) for s in samples]
     mean = lambda key: statistics.mean(p[key] for p in processor) if processor and all(key in p for p in processor) else ''
     return {'package_mw': mean('combined_power'), 'cpu_mw': mean('cpu_power'), 'gpu_mw': mean('gpu_power')}
@@ -394,14 +452,14 @@ def one_trial(scene, framework, mode, repeat, out, power, paced=None):
     # Idle: the 5-20 s window too, alongside the settled one, for the record.
     early = subprocess.Popen([str(SAMPLER), str(process.pid), str(WARMUP), str(SAMPLED), str(INTERVAL)],
                              stdout=subprocess.PIPE, text=True) if idle else None
-    meter = powermetrics() if power else None
+    start = IDLE_SETTLE if idle else WARMUP
+    meter = powermetrics(start) if power else None
     pacer = None
     if paced is not None and framework != 'desktop' and mode != 'idle':
         # As long as a pacing trial's capture: one running to the app's own
         # end loses its stream as the window closes.
         pacer = subprocess.Popen([str(PACER), str(process.pid), str(WARMUP), str(PACING_SECONDS)],
                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-    start = IDLE_SETTLE if idle else WARMUP
     sample = json.loads(run([str(SAMPLER), str(process.pid), str(start), str(SAMPLED), str(INTERVAL)]))
     if early is not None:
         sample.update({f'early_{key}': value for key, value in json.loads(early.communicate()[0]).items()})
@@ -450,7 +508,7 @@ def valid(row, scene):
     if FONT_FNV64 and 'font_fnv64' in row and row['font_fnv64'] != FONT_FNV64:
         return False
     ticks, seconds = row['workload_ticks'], row['requested_seconds']
-    if scene == 'animate':
+    if scene in FRAMES and row['mode'] != 'idle':
         return ticks > 0 and row['reported_fps'] not in ('', None) and abs(ticks / seconds - row['reported_fps']) <= 0.15 * row['reported_fps']
     if row['mode'] == 'idle':
         return ticks == 0
@@ -624,9 +682,14 @@ def main():
     frameworks, modes = list(SCENES[args.scene]['binaries']), SCENES[args.scene]['modes']
     if args.suite:
         use_suite()
+        # The field is nothing but idle, whose memory is two-level launch to
+        # launch (the driver returns its pool or keeps part of it): five.
+        if args.scene == 'field':
+            globals()['IDLE_REPEATS'] = 5
         frameworks = [f for f in SUITE_FRAMEWORKS if f in SCENES[args.scene]['binaries']]
-        # Idle once, in heavy: it is the verdict's idle CPU.
-        if args.scene != 'heavy':
+        # Idle once, in heavy: it is the verdict's idle CPU (and in the
+        # field, which is nothing else).
+        if args.scene not in ('heavy', 'field', 'viewport'):
             modes = [m for m in modes if m != 'idle']
     if not args.quickgui:
         frameworks = [f for f in frameworks if f != 'quickgui']
@@ -640,7 +703,7 @@ def main():
     if args.modes:
         modes = [m for m in modes if m in args.modes.split(',')]
     assert not args.into or args.modes, '--into replaces the cells of --modes'
-    repeats = args.repeats or (2 if args.quick else 3)
+    repeats = args.repeats or (2 if args.quick else REPEATS)
     if args.pgo:
         # The supplement: each framework's apps built with a profile of their own runs.
         for framework, path in SCENES[args.scene]['binaries'].items():
@@ -658,6 +721,8 @@ def main():
         log=lambda line: print(line, flush=True), threshold=args.preflight_threshold)
     hidden = hide(args.hide) if args.hide else False
     try:
+        if not args.no_preflight:
+            preflight.desktop_still()
         measure(args, frameworks, modes, repeats, commit, found)
     finally:
         if hidden:
@@ -785,9 +850,10 @@ def measure(args, frameworks, modes, repeats, commit, found):
     (out / 'summary.json').write_text(json.dumps({'groups': groups, 'pacing': pacing_groups,
                                                   **({'blank': blank_groups} if blanks else {})}, indent=1) + '\n')
     apps = [r for r in rows if r['framework'] != 'desktop']
-    if args.scene == 'animate':
-        active = [r['reported_fps'] for r in apps if r['reported_fps'] != '']
-        gated = all(r['workload_ticks'] > 0 for r in apps)
+    if args.scene in FRAMES:
+        active = [r['reported_fps'] for r in apps if r['reported_fps'] != '' and r['mode'] != 'idle']
+        gated = (all(r['workload_ticks'] > 0 for r in apps if r['mode'] != 'idle')
+                 and all(r['workload_ticks'] == 0 for r in apps if r['mode'] == 'idle'))
     else:
         active = [r['workload_ticks'] / float(r.get('requested_seconds') or REQUESTED) for r in apps if r['mode'] != 'idle']
         gated = (all(58 <= t <= 61 for t in active)
@@ -800,7 +866,7 @@ def measure(args, frameworks, modes, repeats, commit, found):
                 for name, path in SCENES[args.scene]['binaries'].items() if name in frameworks}
     audit = {'accepted': accepted, 'trials': len(rows), 'samples': sum(r['samples'] for r in rows),
              'pacing_trials': len(paced),
-             ('reported_fps' if args.scene == 'animate' else 'active_ticks_per_requested_second'):
+             ('reported_fps' if args.scene in FRAMES else 'active_ticks_per_requested_second'):
                  {'min': min(active), 'max': max(active)} if active else None,
              'powermetrics': any(r.get('package_mw') not in ('', None) for r in rows),
              'scene': args.scene, 'commit': commit,

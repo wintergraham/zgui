@@ -566,9 +566,30 @@ impl Ui {
             }
         }
     }
+    /// Scroll the scroll views around `node` (innermost first) so it shows,
+    /// with a little room, laid out where it then is: what a screen reader
+    /// moving to it asks (`AXScrollToVisible`).
+    pub fn scroll_into_view(&mut self, node: NodeId) {
+        let rect = {
+            let scene = self.scene.borrow();
+            if !scene.contains(node) {
+                return;
+            }
+            scene.transformed_bounds(node)
+        };
+        self.scroll_rect_into_view(node, rect);
+    }
     /// Scroll the scroll views around `node` (innermost first) so `rect`
     /// (window points) shows, with a little room.
     fn scroll_rect_into_view(&mut self, node: NodeId, rect: Rect) {
+        self.scroll_rect_into_view_with(node, rect, true);
+    }
+    /// `scroll_rect_into_view` from within a frame's layout (an
+    /// `after_layout` step): the frame lays out what it scrolled.
+    pub(crate) fn scroll_rect_into_view_in_layout(&mut self, node: NodeId, rect: Rect) {
+        self.scroll_rect_into_view_with(node, rect, false);
+    }
+    fn scroll_rect_into_view_with(&mut self, node: NodeId, rect: Rect, settle: bool) {
         const ROOM: f32 = 24.;
         let viewports: Vec<NodeId> = {
             let scene = self.scene.borrow();
@@ -607,7 +628,9 @@ impl Ui {
                     delta_y: dy,
                 },
             );
-            self.prepare_frame();
+            if settle {
+                self.prepare_frame();
+            }
             rect = Rect::new(rect.x - dx, rect.y - dy, rect.width, rect.height);
         }
     }
@@ -677,6 +700,7 @@ impl Ui {
             theme.color_untracked(tok::FIND_MATCH),
             theme.color_untracked(tok::FIND_CURRENT),
         );
+        let radius = theme.number_untracked(tok::MARK_RADIUS);
         let Some((folded, current, marked, editors_marked, bar)) =
             self.storage.find.borrow().as_ref().map(|s| {
                 (
@@ -761,23 +785,28 @@ impl Ui {
                     };
                     let bounds = scene.layout_bounds(node);
                     let frame = Rect::new(0., 0., bounds.width, bounds.height);
-                    ranges
-                        .into_iter()
-                        .flat_map(|range| {
-                            let color = if current_text.as_ref() == Some(&(node, range.clone())) {
-                                current_color
-                            } else {
-                                matched
-                            };
-                            layout
-                                .selection(range)
-                                .into_iter()
-                                .filter_map(move |r| r.intersection(frame))
-                                .map(move |rect| TextMark { rect, color })
-                        })
-                        .collect::<Vec<_>>()
+                    // Each match one shape, over the lines it runs on.
+                    let mut marks = Vec::new();
+                    let mut ends = Vec::new();
+                    for range in ranges {
+                        let color = if current_text.as_ref() == Some(&(node, range.clone())) {
+                            current_color
+                        } else {
+                            matched
+                        };
+                        marks.extend(
+                            (layout.selection(range).into_iter())
+                                .filter_map(|r| r.intersection(frame))
+                                .map(|rect| TextMark { rect, color }),
+                        );
+                        ends.push(marks.len());
+                    }
+                    (marks, ends)
                 };
-                self.scene.borrow_mut().set_text_marks(node, marks);
+                let (marks, ends) = marks;
+                self.scene
+                    .borrow_mut()
+                    .set_text_mark_shapes(node, marks, ends, radius);
                 now_marked.push(node);
             }
             for node in &now_editors {

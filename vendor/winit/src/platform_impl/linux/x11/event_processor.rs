@@ -364,6 +364,15 @@ impl EventProcessor {
         }
     }
 
+    /// zgx patch: whether `window` is one of ours that is hidden
+    /// (`set_visible(false)`, as a window closing is), or gone.
+    fn hidden(&self, window: xproto::Window) -> bool {
+        self.with_window(window, |w| {
+            w.shared_state_lock().visibility == super::window::Visibility::No
+        })
+        .unwrap_or(true)
+    }
+
     pub fn with_window<F, Ret>(&self, window_id: xproto::Window, callback: F) -> Option<Ret>
     where
         F: Fn(&Arc<UnownedWindow>) -> Ret,
@@ -562,6 +571,28 @@ impl EventProcessor {
             }
 
             self.dnd.source_window = Some(source_window);
+            // zgx patch: the files are where the drag is (ZGX_PATCH 12), as
+            // the window hears no motion while the source holds the pointer.
+            let packed = xev.data.get_long(2);
+            let (x, y) = ((packed >> 16) as i16, (packed & 0xffff) as i16);
+            let point = wt
+                .xconn
+                .xcb_connection()
+                .translate_coordinates(wt.root, window, x, y)
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+                .map(|reply| (reply.dst_x as f64, reply.dst_y as f64));
+            if let Some(point) = point.filter(|point| self.dnd.file_point != Some(*point)) {
+                self.dnd.file_point = Some(point);
+                let event = Event::WindowEvent {
+                    window_id,
+                    event: WindowEvent::CursorMoved {
+                        device_id: mkdid(util::VIRTUAL_CORE_POINTER),
+                        position: (point.0, point.1).into(),
+                    },
+                };
+                callback(&self.target, event);
+            }
             if self.dnd.result.is_none() {
                 let time = if version >= 1 {
                     xev.data.get_long(3) as xproto::Timestamp
@@ -635,9 +666,18 @@ impl EventProcessor {
                 }
                 return;
             }
+            let pointed = self.dnd.file_point.is_some();
             self.dnd.reset();
             let event = Event::WindowEvent { window_id, event: WindowEvent::HoveredFileCancelled };
             callback(&self.target, event);
+            // zgx patch: the drag, and the pointer with it, left.
+            if pointed {
+                let event = Event::WindowEvent {
+                    window_id,
+                    event: WindowEvent::CursorLeft { device_id: mkdid(util::VIRTUAL_CORE_POINTER) },
+                };
+                callback(&self.target, event);
+            }
         }
     }
 
@@ -1187,6 +1227,13 @@ impl EventProcessor {
             return;
         }
 
+        // zgx patch: a wheel button is a notch when pressed; its release is
+        // not another (a pointer without scroll valuators, XTEST's or a
+        // remote desktop's, scrolled two lines a notch).
+        if (4..=7).contains(&event.detail) && state == ElementState::Released {
+            return;
+        }
+
         let event = match event.detail as u32 {
             xlib::Button1 => {
                 WindowEvent::MouseInput { device_id, state, button: MouseButton::Left }
@@ -1380,8 +1427,13 @@ impl EventProcessor {
         // Set the timestamp.
         wt.xconn.set_timestamp(xev.time as xproto::Timestamp);
 
+        // zgx patch: a hidden window (one closing) takes no input context
+        // focus: libX11 makes it a round trip to the input method
+        // (XGetICValues), which a closing window must not wait on (zgx#564).
         if let Some(ime) = wt.ime.as_ref() {
-            ime.borrow_mut().focus(xev.event).expect("Failed to focus input context");
+            if !self.hidden(window) {
+                ime.borrow_mut().focus(xev.event).expect("Failed to focus input context");
+            }
         }
 
         if self.active_window == Some(window) {
@@ -1443,8 +1495,11 @@ impl EventProcessor {
             return;
         }
 
+        // zgx patch: nor does a hidden one give it up (as above).
         if let Some(ime) = wt.ime.as_ref() {
-            ime.borrow_mut().unfocus(xev.event).expect("Failed to unfocus input context");
+            if !self.hidden(window) {
+                ime.borrow_mut().unfocus(xev.event).expect("Failed to unfocus input context");
+            }
         }
 
         if self.active_window.take() == Some(window) {

@@ -7,7 +7,9 @@ Builds the zoom_probe example and runs it with --drive: it sends its own key
 window ⌘=, ⌘=, ⌘- and ⌘0, printing its zoom, its viewport in points and a
 text's size as they change. Checks that the keys step through Chrome's
 levels (110%, 125%, 110%, 100%), that the viewport follows the zoom, and
-that text keeps its size in points.
+that text keeps its size in points. Then again with --inset (an inset title
+bar): the traffic lights stay centred in the zoomed 40-point strip, their
+centre 20 × the zoom points below the window's top at every step.
 
 The keys go to the app's own key window (`-[NSApplication sendEvent:]`), not
 the system. It is launched as a direct child, from /tmp, with a clean
@@ -42,9 +44,13 @@ def main():
         shutil.copy2(pathlib.Path(args.target_dir) / 'debug/examples/zoom_probe', binary)
         clean = {key: os.environ[key] for key in ('HOME', 'TMPDIR') if key in os.environ}
         clean['PATH'] = '/usr/bin:/bin'
-        out = subprocess.run([str(binary), '--drive'], cwd='/tmp', env=clean, capture_output=True,
-                             text=True, timeout=60).stdout
-    lines = [dict(re.findall(r'(\w+)=(\S+)', line)) for line in re.findall(r'^ZOOM (.*)$', out, re.M)]
+        run = lambda *flags: subprocess.run([str(binary), '--drive', *flags], cwd='/tmp', env=clean,
+                                            capture_output=True, text=True, timeout=60).stdout
+        out = run()
+        inset = run('--inset')
+    parse = lambda text: [dict(re.findall(r'(\w+)=(\S+)', line)) for line in re.findall(r'^ZOOM (.*)$', text, re.M)]
+    lines = parse(out)
+    placed = parse(inset)
     zooms = [line['zoom'] for line in lines]
     sizes = {line['zoom']: tuple(map(float, line['viewport'].split('x'))) for line in lines}
     base = sizes.get('1.00', (0., 0.))
@@ -55,8 +61,12 @@ def main():
             for z in ('1.10', '1.25') if z in sizes),
         'text keeps its points': len({line['text_points'] for line in lines}) == 1,
         'done': 'ZOOM_DONE' in out,
+        'inset: the traffic lights stay in the zoomed strip': len(placed) >= 3 and all(
+            'buttons' in line and abs(float(line['buttons']) - 20 * float(line['zoom'])) <= 0.5
+            for line in placed),
     }
     print(out.strip())
+    print(inset.strip())
     for name, ok in checks.items():
         print(('ok  ' if ok else 'FAIL') + ' ' + name)
     return 0 if all(checks.values()) else 1

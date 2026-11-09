@@ -25,7 +25,11 @@ fn control(value: View, x: f32) -> View {
         .child(label(value, 12.0, 6.0, 38.0, 20.0))
 }
 
-fn app(stream: zgx::reactive::Signal<String>, offset: zgx::reactive::Signal<f32>) -> View {
+/// The lab's view (render_parity draws it too).
+pub(crate) fn app(
+    stream: zgx::reactive::Signal<String>,
+    offset: zgx::reactive::Signal<f32>,
+) -> View {
     let rows = virtual_list(
         offset,
         ROW_HEIGHT,
@@ -176,7 +180,7 @@ fn main() {
             damaged += stats.damaged_pixels;
         }
     }
-    let measured = (ticks - 60).max(1) as f64;
+    let measured = ticks.saturating_sub(60).max(1) as f64;
     let Some(gpu) = gpu else {
         println!(
             "{mode:?} without rendering: layout {:.3} ms per tick",

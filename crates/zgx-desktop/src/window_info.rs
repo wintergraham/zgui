@@ -100,7 +100,9 @@ pub struct DisplayInfo {
     pub primary: bool,
 }
 /// What this platform lets a window do, so an app can offer only what works.
+/// Apps read it; only zgx builds one, so it can gain fields.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct WindowCapabilities {
     /// The window's position on the desktop can be read (not on Wayland).
     pub global_position: bool,
@@ -110,6 +112,77 @@ pub struct WindowCapabilities {
     pub interactive_drag: bool,
     /// The window can enter native fullscreen.
     pub native_fullscreen: bool,
+    /// The system blurs what is behind a window with `glass`. False on Linux
+    /// where the compositor has no protocol for it (GNOME, sway, Weston, and
+    /// X11, where zgx asks for none): glass there shows what is behind it
+    /// sharp, so an app may draw solid. A Wayland session's is read once.
+    pub blur_behind: bool,
+    /// The system blurs what is behind a popup's translucent panel (a menu,
+    /// a popover, a tooltip), in a window of its own: AppKit's material on
+    /// macOS, the acrylic accent on Windows 11 (`popup_window/win32.rs`).
+    /// False on Windows 10, whose blur is square past a rounded panel's
+    /// corners, and on Linux, whose popup windows have none: there a popup's
+    /// `backdrop_blur` blurs only its window's pixels, and what is past them
+    /// shows through its fill sharp, so an app may draw its popups solid.
+    /// True where popups stay inside their window (`ZGX_POPUP_WINDOWS=0`),
+    /// whose pixels they blur. As `blur_behind`, it says nothing of
+    /// Transparency effects or Reduce transparency
+    /// (`ui.prefers.reduced_transparency`).
+    pub popup_blur_behind: bool,
+    /// How much of what is behind the window its system blur lets through,
+    /// in thousandths, and what it adds (0–255, an sRGB channel's), where
+    /// `blur_behind`: what shows under a clear pixel of `glass` is about
+    /// `pass / 1000 · behind + lift`, channel by channel. A pure blur (macOS's
+    /// material, a Linux compositor's) is 1000 and 0. Windows' acrylic accent
+    /// is 831 and 8, measured over flat black, grey and white on Windows 11,
+    /// whatever its state (blur-behind or acrylic) or tint: its luminosity
+    /// pass darkens what it blurs, which no accent undoes. So an app whose
+    /// glass lays a scrim over the blur, as macOS's would read, can solve a
+    /// thinner one that comes out the same over anything.
+    pub blur_pass: u16,
+    /// See [`WindowCapabilities::blur_pass`].
+    pub blur_lift: u8,
+}
+/// A window going into or out of full screen, as AppKit animates it
+/// (macOS): `WindowContext::full_screen_transition`, `ui.window.full_screen_transition`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FullScreenTransition {
+    /// Going into full screen, over about this long (AppKit doesn't say:
+    /// as long as the last one this way took).
+    Entering(std::time::Duration),
+    /// Coming out of it, over about this long.
+    Leaving(std::time::Duration),
+}
+/// What AppKit says of a window's full screen (its `NSWindowWill…` and
+/// `NSWindowDid…FullScreen` notifications), or that a transition begun
+/// has had time to end (`Settled`: one that failed tells only winit's
+/// delegate).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) enum FullScreenPhase {
+    WillEnter,
+    DidEnter,
+    WillExit,
+    DidExit,
+    Settled,
+}
+impl FullScreenPhase {
+    /// The transition `self` leaves: a will begins one lasting `duration`;
+    /// a did, or `Settled`, ends it.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn transition(self, duration: std::time::Duration) -> Option<FullScreenTransition> {
+        match self {
+            Self::WillEnter => Some(FullScreenTransition::Entering(duration)),
+            Self::WillExit => Some(FullScreenTransition::Leaving(duration)),
+            Self::DidEnter | Self::DidExit | Self::Settled => None,
+        }
+    }
+    /// Whether the window's state is settled after `self` (its full screen
+    /// and its title bar's buttons read again).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn settles(self) -> bool {
+        !matches!(self, Self::WillEnter | Self::WillExit)
+    }
 }
 /// A window's geometry and state, kept current as signals: reading one in
 /// a view updates it when the window moves, resizes or changes display.
@@ -163,6 +236,18 @@ impl WindowInfo {
         }
     }
     pub(crate) fn refresh(&self, window: &Window, titlebar: crate::Titlebar) {
+        self.refresh_holding(window, titlebar, None);
+    }
+    /// `refresh`, but with the title bar's area and buttons `hold` where it
+    /// is given rather than read from the window: through a full-screen
+    /// transition, where they end up (none going in; where they were
+    /// before going out), not where AppKit has them partway.
+    pub(crate) fn refresh_holding(
+        &self,
+        window: &Window,
+        titlebar: crate::Titlebar,
+        hold: Option<Chrome>,
+    ) {
         let wayland = window
             .display_handle()
             .is_ok_and(|h| matches!(h.as_raw(), RawDisplayHandle::Wayland(_)));
@@ -197,7 +282,7 @@ impl WindowInfo {
         self.fullscreen.set(window.fullscreen().is_some());
         let (area, controls) = crate::window_chrome::titlebar_area(window, titlebar);
         // In the content's points, its zoom's (a custom title bar's content
-        // zooms; the platform's own buttons do not).
+        // zooms; the buttons' own places, which `titlebar_area` gives, do not).
         let zoom = crate::popup_window::zoom_of(window.id()) as f32;
         let unzoom = |r: zgx::scene::Rect| {
             zgx::scene::Rect::new(r.x / zoom, r.y / zoom, r.width / zoom, r.height / zoom)
@@ -207,21 +292,78 @@ impl WindowInfo {
         } else {
             (area.map(unzoom), controls.map(unzoom))
         };
+        self.set_chrome(hold.unwrap_or((area, controls)));
+        self.capabilities.set(WindowCapabilities {
+            global_position: !wayland,
+            placement: !wayland,
+            interactive_drag: true,
+            native_fullscreen: true,
+            blur_behind: blur_behind(wayland),
+            popup_blur_behind: popup_blur_behind(),
+            blur_pass: BLUR_TRANSFER.0,
+            blur_lift: BLUR_TRANSFER.1,
+        });
+        self.ready.set(true);
+    }
+}
+/// `WindowCapabilities::blur_behind`.
+#[cfg(target_os = "linux")]
+fn blur_behind(wayland: bool) -> bool {
+    wayland && crate::wayland_blur::offered()
+}
+#[cfg(not(target_os = "linux"))]
+fn blur_behind(_: bool) -> bool {
+    true
+}
+/// `WindowCapabilities::blur_pass` and `blur_lift`: the acrylic accent's on
+/// Windows (`window_chrome::blur_behind`), a pure blur's elsewhere.
+const BLUR_TRANSFER: (u16, u8) = if cfg!(windows) { (831, 8) } else { (1000, 0) };
+/// `WindowCapabilities::popup_blur_behind`.
+fn popup_blur_behind() -> bool {
+    #[cfg(windows)]
+    let system = crate::window_chrome::popup_blur_behind();
+    #[cfg(not(windows))]
+    let system = cfg!(target_os = "macos");
+    system || !crate::popup_window::enabled()
+}
+/// A title bar's free area and its window's buttons, in points
+/// (`WindowInfo::titlebar_area`, `controls`).
+pub(crate) type Chrome = (Option<zgx::scene::Rect>, Option<zgx::scene::Rect>);
+/// The title bar's area and buttons to show through `transition`, if not as
+/// AppKit has them partway: where they end up, so a slide timed to it reads
+/// its target as it begins. None going in; going out, `out`, where they were
+/// before going in, if that is known.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn held_chrome(
+    transition: Option<FullScreenTransition>,
+    out: Option<Chrome>,
+) -> Option<Chrome> {
+    match transition {
+        Some(FullScreenTransition::Entering(_)) => Some((None, None)),
+        Some(FullScreenTransition::Leaving(_)) => out,
+        None => None,
+    }
+}
+impl WindowInfo {
+    /// The title bar's area and buttons as they are now.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn chrome(&self) -> Chrome {
+        (
+            self.titlebar_area.with_untracked(|area| *area),
+            self.controls.with_untracked(|controls| *controls),
+        )
+    }
+    /// Set the title bar's area and buttons, each only if it changed.
+    pub(crate) fn set_chrome(&self, (area, controls): Chrome) {
         if self.titlebar_area.with_untracked(|old| *old != area) {
             self.titlebar_area.set(area);
         }
         if self.controls.with_untracked(|old| *old != controls) {
             self.controls.set(controls);
         }
-        self.capabilities.set(WindowCapabilities {
-            global_position: !wayland,
-            placement: !wayland,
-            interactive_drag: true,
-            native_fullscreen: true,
-        });
-        self.ready.set(true);
     }
 }
+
 pub(crate) fn refresh_rate_hz(monitor: &MonitorHandle) -> Option<f64> {
     monitor
         .refresh_rate_millihertz()
@@ -256,6 +398,13 @@ pub(crate) fn attributes(
         .with_decorations(options.decorations)
         .with_window_level(options.level.winit())
         .with_visible(false);
+    // Linux: the glass is the compositor's blur behind the window, asked
+    // for (`ext-background-effect-v1`, or KWin's protocol); the window is
+    // transparent, so the compositor shows it through what zgx paints.
+    #[cfg(target_os = "linux")]
+    {
+        attrs = attrs.with_blur(options.glass.is_some());
+    }
     #[cfg(target_os = "macos")]
     if !options.shadow {
         use winit::platform::macos::WindowAttributesExtMacOS;
@@ -314,6 +463,12 @@ pub(crate) fn attributes(
         }
         attrs = attrs.with_min_inner_size(winit::dpi::LogicalSize::new(w, h));
     }
+    if let Some((w, h)) = options.max_size {
+        if !w.is_finite() || !h.is_finite() || w <= 0. || h <= 0. {
+            return Err("maximum window dimensions must be finite and positive".into());
+        }
+        attrs = attrs.with_max_inner_size(winit::dpi::LogicalSize::new(w, h));
+    }
     if let Some(selector) = &options.display {
         let monitor = select_monitor(event_loop, selector)
             .ok_or_else(|| "requested display is unavailable".to_owned())?;
@@ -342,4 +497,60 @@ pub(crate) fn attributes(
             .with_position(monitor.position());
     }
     Ok(attrs)
+}
+
+#[cfg(test)]
+mod full_screen_tests {
+    use super::{FullScreenPhase, FullScreenTransition};
+    use std::time::Duration;
+
+    /// Through a transition the title bar's rects say where they end up.
+    #[test]
+    fn a_transition_holds_the_title_bar_where_it_ends_up() {
+        use super::{Chrome, held_chrome};
+        let half = Duration::from_millis(500);
+        let rect = zgx::scene::Rect::new(12., 13., 52., 16.);
+        let out: Chrome = (None, Some(rect));
+        assert_eq!(
+            held_chrome(Some(FullScreenTransition::Entering(half)), Some(out)),
+            Some((None, None))
+        );
+        assert_eq!(
+            held_chrome(Some(FullScreenTransition::Leaving(half)), Some(out)),
+            Some(out)
+        );
+        // Out with nowhere known to go back to (it opened in full screen),
+        // and with no transition: as the window has them.
+        assert_eq!(
+            held_chrome(Some(FullScreenTransition::Leaving(half)), None),
+            None
+        );
+        assert_eq!(held_chrome(None, Some(out)), None);
+    }
+
+    /// AppKit's will begins a transition as long as its animation; its did
+    /// ends it, and the window is read again; a transition that failed
+    /// (no did) ends once it has had time to (`Settled`).
+    #[test]
+    fn a_full_screen_transition_runs_from_its_will_to_its_did() {
+        let half = Duration::from_millis(500);
+        assert_eq!(
+            FullScreenPhase::WillEnter.transition(half),
+            Some(FullScreenTransition::Entering(half))
+        );
+        assert_eq!(
+            FullScreenPhase::WillExit.transition(half),
+            Some(FullScreenTransition::Leaving(half))
+        );
+        for phase in [
+            FullScreenPhase::DidEnter,
+            FullScreenPhase::DidExit,
+            FullScreenPhase::Settled,
+        ] {
+            assert_eq!(phase.transition(half), None);
+            assert!(phase.settles());
+        }
+        assert!(!FullScreenPhase::WillEnter.settles());
+        assert!(!FullScreenPhase::WillExit.settles());
+    }
 }

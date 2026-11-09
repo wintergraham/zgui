@@ -298,6 +298,13 @@ pub struct Semantics {
     /// The text node showing a field's text (`set_text_node`), whose lines
     /// assistive technology is given the geometry of: few nodes have one.
     text_nodes: HashMap<NodeId, NodeId>,
+    /// A field's text shown a line at a time (`set_text_lines`): where each
+    /// shown line starts in it, and the node showing it.
+    text_lines: HashMap<NodeId, Vec<(usize, NodeId)>>,
+    /// What names a node with no name of its own (`set_labelled_by`): an
+    /// unnamed popover's or menu's trigger. Few nodes have one, and their
+    /// portal clears it as it goes (`unlabel_within`).
+    labelled_by: HashMap<NodeId, NodeId>,
 }
 impl Default for Semantics {
     fn default() -> Self {
@@ -316,6 +323,8 @@ impl Default for Semantics {
             long: HashMap::new(),
             errors: HashMap::new(),
             text_nodes: HashMap::new(),
+            text_lines: HashMap::new(),
+            labelled_by: HashMap::new(),
         }
     }
 }
@@ -382,8 +391,18 @@ impl Semantics {
         }
         if !self.text_nodes.is_empty() {
             self.text_nodes.remove(&id);
+            if !self.text_lines.is_empty() {
+                self.text_lines.remove(&id);
+            }
         }
         crate::shrink_sparse(&mut self.nodes);
+    }
+    /// A window at rest: the room its tables took for what has gone.
+    pub fn rest(&mut self) {
+        self.nodes.shrink_to_fit();
+        self.text_nodes.shrink_to_fit();
+        self.text_lines.shrink_to_fit();
+        self.labelled_by.shrink_to_fit();
     }
     /// Set `id`'s information; equal information changes nothing.
     pub fn set(&mut self, id: NodeId, node: SemanticNode) {
@@ -418,6 +437,19 @@ impl Semantics {
             instance: self.instance,
             revision: entry.revision,
         })
+    }
+    /// Count `id`'s information as changed though none of it did: what a
+    /// host adds to the node for assistive technology changed (a page's
+    /// own tree, another process's, embedded under it), so it is projected
+    /// again. Nothing for a node with no information.
+    pub fn touch(&mut self, id: NodeId) {
+        if self.buried(id) {
+            return;
+        }
+        if let Some(entry) = self.nodes.get_mut(&id) {
+            self.revision = self.revision.wrapping_add(1);
+            entry.revision = self.revision;
+        }
     }
     /// Change `id`'s information in place, if it has any. It counts as
     /// changed only if `f` changed it.
@@ -619,10 +651,68 @@ impl Semantics {
     pub fn set_text_node(&mut self, id: NodeId, text: NodeId) {
         self.text_nodes.insert(id, text);
     }
+    /// `id`'s text shows a line at a time (a text area's), `lines` of it in
+    /// view: where each starts in its text, and the node showing it, top to
+    /// bottom. Assistive technology is given their geometry, as a text
+    /// node's (`set_text_node`). None, when it shows in its text node.
+    pub fn set_text_lines(&mut self, id: NodeId, lines: Vec<(usize, NodeId)>) {
+        let held = self.text_lines.get(&id).map_or(&[][..], Vec::as_slice);
+        if held == lines.as_slice() || self.buried(id) {
+            return;
+        }
+        let Some(entry) = self.nodes.get_mut(&id) else {
+            return;
+        };
+        if lines.is_empty() {
+            if !self.text_lines.is_empty() {
+                self.text_lines.remove(&id);
+            }
+        } else {
+            self.text_lines.insert(id, lines);
+        }
+        self.revision = self.revision.wrapping_add(1);
+        entry.revision = self.revision;
+    }
+    /// The lines `id`'s text shows on apart (`set_text_lines`), if it does.
+    pub fn text_lines(&self, id: NodeId) -> Option<&[(usize, NodeId)]> {
+        if self.text_lines.is_empty() {
+            return None;
+        }
+        self.text_lines.get(&id).map(Vec::as_slice)
+    }
     /// The text node showing `id`'s text (`set_text_node`): itself for a
     /// text node, none for a node whose text is not shown in one.
     pub fn text_node(&self, id: NodeId) -> Option<NodeId> {
         self.text_nodes.get(&id).copied()
+    }
+    /// `id`, which has no name of its own, is named by `by` (ARIA's
+    /// `aria-labelledby`): an unnamed popover by its trigger, read as the
+    /// trigger is named whenever assistive technology reads it.
+    pub fn set_labelled_by(&mut self, id: NodeId, by: NodeId) {
+        if self.buried(id) || self.labelled_by.get(&id) == Some(&by) {
+            return;
+        }
+        let Some(entry) = self.nodes.get_mut(&id) else {
+            return;
+        };
+        self.labelled_by.insert(id, by);
+        self.revision = self.revision.wrapping_add(1);
+        entry.revision = self.revision;
+    }
+    /// Forget what names the nodes within `root` (a portal's overlay, as it
+    /// goes): the portal clears its own, so no node's removal looks.
+    pub(crate) fn unlabel_within(&mut self, scene: &Scene, root: NodeId) {
+        if !self.labelled_by.is_empty() {
+            self.labelled_by.retain(|id, _| !scene.is_within(*id, root));
+        }
+    }
+    /// What names `id` (`set_labelled_by`), if anything.
+    #[inline]
+    pub fn labelled_by(&self, id: NodeId) -> Option<NodeId> {
+        if self.labelled_by.is_empty() || self.buried(id) {
+            return None;
+        }
+        self.labelled_by.get(&id).copied()
     }
     /// Remove `id`'s information.
     pub fn remove(&mut self, id: NodeId) {
@@ -636,6 +726,9 @@ impl Semantics {
             }
             if !self.text_nodes.is_empty() {
                 self.text_nodes.remove(&id);
+                if !self.text_lines.is_empty() {
+                    self.text_lines.remove(&id);
+                }
             }
             self.revision = self.revision.wrapping_add(1);
             crate::shrink_sparse(&mut self.nodes);
@@ -648,6 +741,12 @@ impl Semantics {
         self.long.retain(|id, _| scene.contains(*id));
         if !self.errors.is_empty() {
             self.errors.retain(|id, _| scene.contains(*id));
+        }
+        if !self.labelled_by.is_empty() {
+            self.labelled_by.retain(|id, _| scene.contains(*id));
+        }
+        if !self.text_lines.is_empty() {
+            self.text_lines.retain(|id, _| scene.contains(*id));
         }
         if self.nodes.len() != count {
             self.revision = self.revision.wrapping_add(1);
@@ -669,6 +768,30 @@ impl Semantics {
 mod tests {
     use super::*;
     use crate::scene::{Color, NodeKind, Style};
+    /// What names a node is kept beside it, setting it again changes
+    /// nothing, and its portal clears it.
+    #[test]
+    fn labelled_by_is_kept_beside_the_node_and_its_portal_clears_it() {
+        let mut scene = Scene::new(100., 100.);
+        let root = scene.root();
+        let panel = scene.append(root, NodeKind::Rect(Color(0, 0, 0, 0)), Style::default());
+        let trigger = scene.append(root, NodeKind::Rect(Color(0, 0, 0, 0)), Style::default());
+        let mut semantics = Semantics::new();
+        // A node with no information has nothing to name.
+        semantics.set_labelled_by(panel, trigger);
+        assert_eq!(semantics.labelled_by(panel), None);
+        semantics.set(panel, SemanticNode::new(Role::Dialog, ""));
+        let before = semantics.node_revision(panel);
+        semantics.set_labelled_by(panel, trigger);
+        assert_eq!(semantics.labelled_by(panel), Some(trigger));
+        let named = semantics.node_revision(panel);
+        assert_ne!(named, before);
+        semantics.set_labelled_by(panel, trigger);
+        assert_eq!(semantics.node_revision(panel), named);
+        semantics.unlabel_within(&scene, root);
+        assert_eq!(semantics.labelled_by(panel), None);
+        assert!(semantics.labelled_by.is_empty());
+    }
     #[test]
     fn node_tokens_isolate_mutations_and_survive_retention() {
         let mut scene = Scene::new(100., 100.);
@@ -826,5 +949,32 @@ mod tests {
         s.remove(n);
         a.retain_mounted(&s);
         assert!(a.get(n).is_none());
+    }
+    /// A node touched (what a host adds to it changed) is projected again:
+    /// its token and the store's revision move, its information doesn't;
+    /// a node with none is left alone.
+    #[test]
+    fn a_touched_node_reads_as_changed() {
+        let mut s = Scene::new(100., 100.);
+        let n = s.append(
+            s.root(),
+            NodeKind::Rect(Color(0, 0, 0, 255)),
+            Style::default(),
+        );
+        let bare = s.append(
+            s.root(),
+            NodeKind::Rect(Color(0, 0, 0, 255)),
+            Style::default(),
+        );
+        let mut a = Semantics::new();
+        a.set(n, SemanticNode::new(Role::Group, "Web page"));
+        let (rev, token) = (a.revision(), a.node_revision(n));
+        a.touch(n);
+        assert_eq!(a.revision(), rev + 1);
+        assert_ne!(a.node_revision(n), token);
+        assert_eq!(a.get(n).unwrap().label, "Web page");
+        a.touch(bare);
+        assert_eq!(a.revision(), rev + 1);
+        assert!(a.get(bare).is_none());
     }
 }

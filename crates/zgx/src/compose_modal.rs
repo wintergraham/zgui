@@ -25,6 +25,11 @@ impl Drop for Owner {
             return;
         };
         unwind(&ui, self.overlay);
+        // What named its panel (`set_labelled_by`) goes with it.
+        ui.semantics
+            .borrow_mut()
+            .unlabel_within(&ui.scene.borrow(), self.overlay);
+        ui.remove_portal(self.overlay);
         ui.remove(self.overlay);
     }
 }
@@ -37,6 +42,7 @@ pub(crate) fn create(ui: &mut Ui, owner: NodeId, parent: NodeId) -> Portal {
             ..Default::default()
         },
     );
+    ui.add_portal(owner, overlay);
     ui.retain(
         owner,
         Owner {
@@ -64,6 +70,9 @@ pub(crate) fn activate(
     role: Role,
     logical_parent: Option<NodeId>,
     return_focus: Option<NodeId>,
+    // What opened it (its trigger), where focus returns as it closes if
+    // what had focus before is gone and it opened from the keyboard.
+    trigger: Option<NodeId>,
     focusable: bool,
     // A submenu: its menu stays live under it.
     porous: bool,
@@ -220,11 +229,9 @@ pub(crate) fn activate(
                 if let Some(trigger) = return_focus {
                     ui.input.focus(&ui.scene, Some(trigger));
                 }
-                let pushed = if porous {
-                    ui.input.push_porous_focus_scope(&ui.scene, overlay)
-                } else {
-                    ui.input.push_focus_scope(&ui.scene, overlay)
-                };
+                let pushed = ui
+                    .input
+                    .push_focus_scope_from(&ui.scene, overlay, porous, trigger);
                 if !pushed {
                     open.set(false);
                     visible.set(false);
@@ -322,6 +329,106 @@ impl ModalPlacement {
 }
 pub(crate) fn center(ui: &mut Ui, owner: NodeId, position: NodeId) {
     place(ui, owner, position, ModalPlacement::centered());
+}
+/// What `compose::hoist` holds a top layer's panel to.
+pub(crate) struct Hoist {
+    /// Across and down: whether the panel takes its holder's size, the holder
+    /// otherwise taking the panel's.
+    pub fills: (bool, bool),
+    /// The panel's size, for its holder.
+    pub natural: crate::reactive::Signal<(f32, f32)>,
+    /// Whether at least half of the holder shows.
+    pub shown: Option<crate::reactive::Signal<bool>>,
+}
+/// A top layer's panel over its holder, the parent of `owner`: `position` is
+/// the part of the holder that shows, clipping, and the panel lies in it
+/// where the holder is. It follows what moves or cuts the holder: the holder
+/// and each box above it.
+pub(crate) fn hoist(ui: &mut Ui, owner: NodeId, portal: &Portal, panel: NodeId, at: Hoist) {
+    let Some(holder) = ui.scene.borrow().parent(owner) else {
+        return;
+    };
+    let above: Vec<NodeId> = ui.scene.borrow().ancestors(holder).collect();
+    let above: Vec<_> = above.into_iter().map(|id| ui.observe_bounds(id)).collect();
+    let held = ui.observe_bounds(holder);
+    let size = ui.observe_bounds(panel);
+    let position = portal.position;
+    let weak = ui.downgrade();
+    ui.bind(owner, move || {
+        for bounds in &above {
+            bounds.get();
+        }
+        let held = held.get();
+        let size = size.get();
+        let natural = (size.width, size.height);
+        if at.natural.with_untracked(|was| *was != natural) {
+            at.natural.set(natural);
+        }
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
+        let mut scene = ui.scene.borrow_mut();
+        let visible = scene.visible_bounds(holder);
+        let shows = visible.unwrap_or(crate::scene::Rect::new(held.x, held.y, 0., 0.));
+        scene.set_style(
+            position,
+            Style {
+                absolute: true,
+                clip: true,
+                width: Some(shows.width),
+                height: Some(shows.height),
+                ..Default::default()
+            },
+        );
+        let (prior, from) = (scene.transform(position), scene.world_bounds(position));
+        let moved = Transform {
+            x: prior.x + shows.x - from.x,
+            y: prior.y + shows.y - from.y,
+        };
+        if moved != prior {
+            scene.set_transform(position, moved);
+        }
+        let inside = Transform {
+            x: held.x - shows.x,
+            y: held.y - shows.y,
+        };
+        if inside != scene.transform(panel) {
+            scene.set_transform(panel, inside);
+        }
+        if let Some(shown) = &at.shown {
+            let half = held.width * held.height / 2.;
+            let now = shows.width * shows.height >= half && shows.width * shows.height > 0.;
+            if shown.with_untracked(|was| *was != now) {
+                shown.set(now);
+            }
+        }
+    });
+}
+/// A top layer's panel, the whole of the window from its corner: blank, it
+/// is no hit boundary, as a dialog's panel is.
+pub(crate) fn fill(ui: &mut Ui, owner: NodeId, portal: &Portal, panel: NodeId) {
+    use crate::compose_popover::Edge;
+    ui.scene.borrow_mut().set_style(
+        portal.position,
+        Style {
+            width_percent: Some(1.),
+            height_percent: Some(1.),
+            ..Default::default()
+        },
+    );
+    let mut options = ui.input.options(panel).unwrap_or_default();
+    options.pass_through = true;
+    ui.input.set_options(panel, options);
+    place(
+        ui,
+        owner,
+        portal.position,
+        ModalPlacement {
+            x: Edge::Start,
+            y: Edge::Start,
+            insets: [0.; 4],
+        },
+    );
 }
 pub(crate) fn place(ui: &mut Ui, owner: NodeId, position: NodeId, at: ModalPlacement) {
     use crate::compose_popover::Edge;

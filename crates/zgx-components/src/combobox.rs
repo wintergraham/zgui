@@ -82,6 +82,9 @@ pub fn combobox(
 ) -> View {
     let label = label.into();
     component(move |cx| {
+        // A label that changes (a translation, a state), where the caller
+        // gave one (`FollowedLabel::around`).
+        let followed = zgx::compose::FollowedLabel::take(cx);
         let runtime = cx.runtime();
         let open = runtime.signal(false);
         let highlight = runtime.signal(None::<usize>);
@@ -203,6 +206,7 @@ pub fn combobox(
             );
             let expanded = open.clone();
             text_input(label.clone(), text_value.clone())
+                .accessible_label_or(label.clone(), followed.as_ref())
                 .role(Role::ComboBox)
                 .expanded_when(move || expanded.get())
                 .w_full()
@@ -369,17 +373,26 @@ pub fn combobox(
                 })
             },
         );
-        popover(format!("{label} suggestions"), open.clone(), field)
-            .layer()
-            .lazy()
-            .autofocus(false)
-            .placement(Placement {
-                side: PlacementSide::Bottom,
-                align: PlacementEdge::Start,
-                offset: 4.,
-            })
-            .match_anchor_width()
-            .p(4.)
-            .child(column().child(content).child(div()))
+        let suggestions = match followed.clone() {
+            Some(followed) => popover(format!("{label} suggestions"), open.clone(), field)
+                .accessible_label_when(move || format!("{} suggestions", followed.get())),
+            None => popover(format!("{label} suggestions"), open.clone(), field),
+        };
+        // What the combobox is given (its `id`, its size) lands on this box,
+        // which the field fills: on the popover it would reach the panel.
+        column().child(
+            suggestions
+                .layer()
+                .lazy()
+                .autofocus(false)
+                .placement(Placement {
+                    side: PlacementSide::Bottom,
+                    align: PlacementEdge::Start,
+                    offset: 4.,
+                })
+                .match_anchor_width()
+                .p(4.)
+                .child(column().child(content).child(div())),
+        )
     })
 }

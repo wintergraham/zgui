@@ -1,6 +1,25 @@
 //! Reusable shaped text geometry for editor hit testing, carets and bidi selections.
 pub use cosmic_text::Affinity;
 use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping};
+
+/// `key`'s glyph image: swash's, or for a face whose shapes swash can't
+/// draw (macOS 26's PingFang, `hvgl` only) Core Text's. Asked only where
+/// swash gave none: a glyph cache miss with nothing to show.
+pub(crate) fn glyph_image(
+    swash: &mut cosmic_text::SwashCache,
+    fonts: &mut FontSystem,
+    key: cosmic_text::CacheKey,
+) -> Option<cosmic_text::SwashImage> {
+    let image = swash.get_image_uncached(fonts, key);
+    #[cfg(target_os = "macos")]
+    if image
+        .as_ref()
+        .is_none_or(|image| image.placement.width == 0 || image.placement.height == 0)
+    {
+        return crate::core_text_glyphs::glyph_image(fonts, key).or(image);
+    }
+    image
+}
 use std::{ops::Range, sync::Arc};
 use unicode_segmentation::UnicodeSegmentation;
 use zgx::scene::Rect;
@@ -51,6 +70,27 @@ impl FontData {
     pub fn byte_len(&self) -> usize {
         self.bytes.len()
     }
+    /// Put it in `fonts` in place of the faces of every family it holds:
+    /// text in those families shapes with it from now on. The shaped runs
+    /// `fonts` keeps go too; callers must also drop retained text shapes and
+    /// layout caches (`GpuContext::replace_font` does).
+    pub fn replace_in(&self, fonts: &mut FontSystem) {
+        let db = fonts.db_mut();
+        let old: Vec<_> = db
+            .faces()
+            .filter(|face| {
+                face.families
+                    .iter()
+                    .any(|(name, _)| self.families.binary_search(name).is_ok())
+            })
+            .map(|face| face.id)
+            .collect();
+        for id in old {
+            db.remove_face(id);
+        }
+        self.install(fonts);
+        fonts.shape_run_cache.clear();
+    }
     /// Install before shaping text; callers replacing a live database must also
     /// invalidate retained text shapes and their layout caches.
     pub fn install(&self, fonts: &mut FontSystem) {
@@ -61,6 +101,23 @@ impl FontData {
             )));
     }
 }
+/// A text's OpenType features (`FontStyle::features`), apart from `attrs`'
+/// path for the most text, which sets none.
+#[inline(never)]
+fn font_features(settings: &[([u8; 4], u32)]) -> cosmic_text::FontFeatures {
+    let mut features = cosmic_text::FontFeatures::new();
+    for (tag, value) in settings {
+        // zgx's hyphenation tag, which no font has: the shaper reads it.
+        if *tag == zgx::text_layout::FontFeatures::HYPHENS && *value != 0 {
+            cosmic_text::note_hyphens();
+        }
+        features.set(cosmic_text::FeatureTag::new(tag), *value);
+    }
+    features
+}
+// Inlined where it is called, as it was before `spaced` took the rare part
+// out of it (LTO had stopped inlining it into the text cache).
+#[inline(always)]
 pub(crate) fn attrs(font: &zgx::text_layout::FontStyle, size: f32) -> Attrs<'_> {
     use zgx::text_layout::FontFamily;
     let family = match &font.family {
@@ -69,10 +126,10 @@ pub(crate) fn attrs(font: &zgx::text_layout::FontStyle, size: f32) -> Attrs<'_> 
         FontFamily::Monospace => Family::Monospace,
         FontFamily::Named(name) => Family::Name(name),
     };
-    let mut features = cosmic_text::FontFeatures::new();
-    for (tag, value) in font.features.settings() {
-        features.set(cosmic_text::FeatureTag::new(tag), *value);
-    }
+    let features = match font.features.settings() {
+        [] => cosmic_text::FontFeatures::new(),
+        settings => font_features(settings),
+    };
     let attrs = Attrs::new()
         .font_features(features)
         .family(family)
@@ -87,13 +144,25 @@ pub(crate) fn attrs(font: &zgx::text_layout::FontStyle, size: f32) -> Attrs<'_> 
         } else {
             cosmic_text::Style::Normal
         });
-    let spacing = font.letter_spacing.pixels();
-    if spacing == 0. {
+    if font.letter_spacing == zgx::text_layout::LetterSpacing::ZERO {
         attrs
     } else {
-        // cosmic-text 0.14 accepts tracking in EM, while our public styles use
-        // logical pixels. Use the same effective size as Buffer's metrics.
-        attrs.letter_spacing(spacing / size.max(1.))
+        spaced(attrs, font.letter_spacing, size)
+    }
+}
+/// `attrs` with `spacing`, tracking or a grid of cells (a terminal's), both
+/// in EM: out of line, so text without spacing (most) pays nothing for it.
+#[inline(never)]
+fn spaced(
+    attrs: cosmic_text::Attrs<'_>,
+    spacing: zgx::text_layout::LetterSpacing,
+    size: f32,
+) -> cosmic_text::Attrs<'_> {
+    match spacing.cell() {
+        Some(cell) => attrs.cell_grid(cell / size.max(1.)),
+        // cosmic-text 0.14 accepts tracking in EM, while our public styles
+        // use logical pixels. Use the same effective size as Buffer's metrics.
+        None => attrs.letter_spacing(spacing.pixels() / size.max(1.)),
     }
 }
 pub(crate) fn alignment(font: &zgx::text_layout::FontStyle) -> Option<cosmic_text::Align> {
@@ -134,16 +203,15 @@ fn fallback_spans<'a>(
     let faces: Vec<_> = families
         .iter()
         .map(|f| {
-            let id = fonts.db().query(&cosmic_text::fontdb::Query {
-                families: &[family(f)],
-                weight: cosmic_text::Weight(font.weight),
-                style: if font.italic {
+            let id = fonts.query_face(
+                family(f),
+                cosmic_text::Weight(font.weight),
+                if font.italic {
                     cosmic_text::Style::Italic
                 } else {
                     cosmic_text::Style::Normal
                 },
-                ..Default::default()
-            });
+            );
             id.and_then(|id| fonts.get_font(id, cosmic_text::Weight(font.weight)))
         })
         .collect();
@@ -395,6 +463,17 @@ impl ShapedText {
         let mut rectangles: Vec<Rect> = Vec::new();
         for run in self.buffer.layout_runs() {
             let offset = self.line_offsets[run.line_i];
+            // An empty line in the selection: its line break, a little wide.
+            if run.glyphs.is_empty() && offset >= start && offset < end {
+                let width = zgx::text_layout::empty_line_width(run.line_height);
+                let cursor = TextCursor {
+                    byte_index: offset,
+                    affinity: Affinity::After,
+                };
+                let x = ShapedText::caret(self, cursor).map_or(0., |caret| caret.x);
+                rectangles.push(Rect::new(x, run.line_top, width, run.line_height));
+                continue;
+            }
             let mut spans = Vec::new();
             for glyph in run.glyphs {
                 if glyph.metadata == usize::MAX {
@@ -548,16 +627,15 @@ impl zgx::text_layout::TextLayout for ShapedText {
             };
             let end = clusters.iter().map(|c| c.1).max().unwrap_or(start);
             let mut carets = Vec::new();
-            for (i, _) in self.text[start..end].grapheme_indices(true) {
-                let at = start + i;
+            for grapheme in zgx::text_layout::grapheme_ranges(&self.text[start..end]) {
+                let at = start + grapheme.start;
                 let k = clusters.partition_point(|c| c.0 <= at);
                 let x = match k.checked_sub(1).map(|k| clusters[k]) {
                     Some((s, e, x, w, rtl)) if at < e => {
                         let cluster = &self.text[s..e];
-                        let count = cluster.graphemes(true).count().max(1);
-                        let before = cluster
-                            .grapheme_indices(true)
-                            .filter(|(i, _)| s + i < at)
+                        let count = zgx::text_layout::grapheme_ranges(cluster).count().max(1);
+                        let before = zgx::text_layout::grapheme_ranges(cluster)
+                            .filter(|range| s + range.start < at)
                             .count();
                         let fraction = before as f32 / count as f32;
                         if rtl {
@@ -762,7 +840,7 @@ impl CpuTextRaster {
         for run in buffer.layout_runs() {
             for glyph in run.glyphs {
                 let p = glyph.physical((0., 0.), 1.);
-                if let Some(image) = self.swash.get_image_uncached(&mut self.fonts, p.cache_key) {
+                if let Some(image) = glyph_image(&mut self.swash, &mut self.fonts, p.cache_key) {
                     images.push((
                         p.x,
                         p.y + run.line_y as i32,
@@ -793,9 +871,8 @@ impl CpuTextRaster {
         for run in buffer.layout_runs() {
             for glyph in run.glyphs {
                 let physical = glyph.physical((0., 0.), 1.);
-                if let Some(image) = self
-                    .swash
-                    .get_image_uncached(&mut self.fonts, physical.cache_key)
+                if let Some(image) =
+                    glyph_image(&mut self.swash, &mut self.fonts, physical.cache_key)
                 {
                     images.push((physical.x, physical.y + run.line_y as i32, image));
                 }
@@ -809,6 +886,74 @@ impl CpuTextRaster {
 mod visual_line_tests {
     use super::*;
     use zgx::text_layout::{TextAffinity, TextLayout, TextPosition};
+
+    /// With hyphenation, words break inside at their points, a hyphen
+    /// (holding no text) ending the line; without, at their ends.
+    #[cfg(feature = "hyphens")]
+    #[test]
+    fn hyphenated_words_break_inside_with_a_hyphen() {
+        use zgx::text_layout::{FontFeatures, FontStyle};
+        let mut fonts = crate::font_cache::system_fonts();
+        let text = "Characteristically incomprehensible internationalization";
+        let plain = FontStyle::default();
+        let hyphenated = FontStyle {
+            features: FontFeatures::default().with_hyphens(true),
+            ..FontStyle::default()
+        };
+        let lines = |font: &FontStyle, fonts: &mut FontSystem| {
+            let shaped = ShapedText::with_font(fonts, text, 18., Some(140.), font);
+            let mut rows = Vec::new();
+            for run in shaped.buffer.layout_runs() {
+                let glyphs: Vec<_> = run.glyphs.iter().map(|g| (g.start, g.end)).collect();
+                rows.push(glyphs);
+            }
+            (rows, shaped)
+        };
+        let (plain_rows, _) = lines(&plain, &mut fonts);
+        let (rows, shaped) = lines(&hyphenated, &mut fonts);
+        let hyphen = |rows: &[Vec<(usize, usize)>]| {
+            (rows.iter()).any(|row| row.iter().any(|(start, end)| start == end))
+        };
+        assert!(!hyphen(&plain_rows), "no hyphens without: {plain_rows:?}");
+        // Some line ends with the hyphen: a glyph at the break, holding no
+        // text, inside a word.
+        let ends: Vec<usize> = rows
+            .iter()
+            .filter_map(|row| row.last().filter(|(start, end)| start == end).map(|g| g.0))
+            .collect();
+        assert!(!ends.is_empty(), "{rows:?}");
+        for at in ends {
+            let (before, after) = (text[..at].chars().last(), text[at..].chars().next());
+            assert!(before.is_some_and(char::is_alphabetic), "{at}");
+            assert!(after.is_some_and(char::is_alphabetic), "{at}");
+        }
+        // All the text is still there, and selects.
+        let selected: f32 = shaped
+            .selection(0..text.len())
+            .iter()
+            .map(|r| r.width)
+            .sum();
+        assert!(selected > 0.);
+        assert!(shaped.hit_test(0., 0.).is_some());
+    }
+
+    #[test]
+    fn a_selection_shows_an_empty_line_as_a_sliver() {
+        let mut fonts = FontSystem::new();
+        let layout = ShapedText::new(&mut fonts, "ab\n\ncd", 18., None);
+        let rows = layout.selection(0..6);
+        assert_eq!(rows.len(), 3);
+        let sliver = rows[1];
+        assert_eq!(
+            sliver.width,
+            zgx::text_layout::empty_line_width(sliver.height)
+        );
+        assert_eq!(sliver.y, rows[0].y + rows[0].height);
+        assert_eq!(layout.selection(0..2).len(), 1, "no line break selected");
+        assert_eq!(layout.selection(3..4), [sliver], "its break alone");
+        let last = ShapedText::new(&mut fonts, "ab\n", 18., None);
+        assert_eq!(last.selection(0..3).len(), 1, "the last line has no break");
+    }
 
     #[test]
     fn logical_visual_row_range_includes_mixed_bidi_clusters_beyond_physical_edges() {
@@ -1250,6 +1395,16 @@ mod letter_spacing_tests {
                 );
             }
             assert!(attrs(&font(0.), size).letter_spacing_opt.is_none());
+            // A grid goes to cosmic-text as one, in EM, with no tracking.
+            let grid = FontStyle {
+                letter_spacing: LetterSpacing::cells(7.),
+                ..Default::default()
+            };
+            let on_grid = attrs(&grid, size);
+            // In the padding, a NaN no padding is; no tracking with it.
+            let cell = on_grid.padding_opt.and_then(|spacing| spacing.cell());
+            assert!((cell.unwrap() - 7. / size).abs() < 1e-5);
+            assert!(on_grid.letter_spacing_opt.is_none());
             assert_eq!(
                 attrs(&font(3.), size).letter_spacing_opt.unwrap().0,
                 3. / size
@@ -1766,6 +1921,58 @@ mod rich_tests {
         }
         FontSystem::new_with_locale_and_db("en-US".into(), db)
     }
+    /// A family without the weight asked for draws in its own nearest
+    /// face, as CSS's font matching does: Medium text in a family with
+    /// Regular alone stays in that family rather than taking another's
+    /// Medium (a custom interface font in an app whose labels are Medium).
+    #[test]
+    fn a_family_without_the_weight_asked_for_draws_in_its_nearest() {
+        // DejaVu Sans's Book alone, under a name no fallback list holds,
+        // and a Medium under the name this platform's fallback list puts
+        // first (where a run without its family's weight went).
+        let first_fallback = if cfg!(target_os = "macos") {
+            ".SF NS"
+        } else if cfg!(windows) {
+            "Segoe UI"
+        } else {
+            "Noto Sans"
+        };
+        let mut db = cosmic_text::fontdb::Database::new();
+        let mut renamed = |bytes: &[u8], family: &str| {
+            let mut one = cosmic_text::fontdb::Database::new();
+            one.load_font_data(bytes.to_vec());
+            let mut face = one.faces().next().expect("bundled font").clone();
+            face.families = vec![(family.into(), face.families[0].1)];
+            db.push_face_info(face);
+        };
+        renamed(
+            include_bytes!("../../zgx-desktop/assets/DejaVuSans.ttf"),
+            "zgx test regular",
+        );
+        renamed(
+            include_bytes!("../tests/fonts/Geist-500-subset.ttf"),
+            first_fallback,
+        );
+        let mut fonts = FontSystem::new_with_locale_and_db("en-US".into(), db);
+        let width = |fonts: &mut FontSystem, family: &str, weight: u16| {
+            let font = FontStyle {
+                family: zgx::text_layout::FontFamily::Named(family.into()),
+                weight,
+                ..Default::default()
+            };
+            ShapedText::with_font(fonts, "The quick brown fox", 20., None, &font)
+                .size()
+                .0
+        };
+        let regular = width(&mut fonts, "zgx test regular", 400);
+        let medium = width(&mut fonts, "zgx test regular", 500);
+        let geist = width(&mut fonts, first_fallback, 500);
+        assert!(
+            (regular - geist).abs() > 1.,
+            "the two families differ: {regular} {geist}"
+        );
+        assert_eq!(medium, regular, "its own Book, not Geist's Medium");
+    }
     #[test]
     fn display_line_clamp_shapes_ellipsis_and_excludes_hidden_link_geometry() {
         use zgx::text_layout::{TextOptions, TextOverflow};
@@ -2216,6 +2423,16 @@ pub struct RichDecoration {
     pub strike: bool,
 }
 impl RichDecoration {
+    /// How this line is drawn under `rich`; solid for a background.
+    pub fn line_style(&self, rich: &zgx::rich_text::RichText) -> zgx::rich_text::LineStyle {
+        let run = rich.runs().get(self.run);
+        let line = if self.strike {
+            run.and_then(|run| run.strikethrough)
+        } else {
+            run.and_then(|run| run.underline)
+        };
+        line.map(|line| line.line_style()).unwrap_or_default()
+    }
     /// This decoration's colour under `rich`, which has the same shape.
     pub fn color_in(&self, rich: &zgx::rich_text::RichText) -> zgx::scene::Color {
         let run = &rich.runs()[self.run];
@@ -2276,6 +2493,40 @@ pub fn plain_underlines<'a>(
     })
     .collect()
 }
+/// The background `output` has for the run before `index` that a wash of
+/// `run`'s (`bounds`, `color`, `radius`) joins: on its line, touching it,
+/// the same, and one of the two only word joiners (room kept in the line).
+fn joined_wash<'o>(
+    output: &'o mut [RichDecoration],
+    rich: &zgx::rich_text::RichText,
+    index: usize,
+    bounds: Rect,
+    color: zgx::scene::Color,
+    radius: f32,
+) -> Option<&'o mut Rect> {
+    let runs = rich.runs();
+    let spacer = |run: &zgx::rich_text::TextRun| {
+        let text = &rich.text()[run.range.clone()];
+        !text.is_empty() && text.chars().all(|c| c == '\u{2060}')
+    };
+    let before = output.iter_mut().rev().find(|d| d.background)?;
+    let joins = index > 0
+        && before.run + 1 == index
+        && (spacer(&runs[index]) || spacer(&runs[index - 1]))
+        && before.color == color
+        && before.radius == radius
+        && (before.bounds.y - bounds.y).abs() < 0.01
+        && (before.bounds.height - bounds.height).abs() < 0.01
+        && ((bounds.x - (before.bounds.x + before.bounds.width)).abs() < 0.5
+            || (before.bounds.x - (bounds.x + bounds.width)).abs() < 0.5);
+    if joins {
+        // The next run joins it as the run it now ends with.
+        before.run = index;
+        Some(&mut before.bounds)
+    } else {
+        None
+    }
+}
 /// Derive decoration geometry from shaped visual fragments, including bidi and wrapping.
 pub fn rich_decorations(buffer: &Buffer, rich: &zgx::rich_text::RichText) -> Vec<RichDecoration> {
     rich_decorations_in(buffer.layout_runs(), &line_starts(buffer), rich)
@@ -2331,6 +2582,16 @@ pub fn rich_decorations_in<'a>(
                     } else {
                         Rect::new(left, line.line_top, right - left, line.line_height)
                     };
+                    // A run of word joiners alone keeps room in its line
+                    // (an icon's, a span's padding beside it): its
+                    // background and its neighbour's, the same and touching
+                    // on its line, are one wash (a chip's), not three.
+                    if let Some(joined) =
+                        joined_wash(&mut output, rich, index, bounds, color, run.radius)
+                    {
+                        *joined = joined.union(bounds);
+                        continue;
+                    }
                     output.push(RichDecoration {
                         bounds,
                         color,
@@ -2367,4 +2628,123 @@ pub fn rich_decorations_in<'a>(
         }
     }
     output
+}
+
+#[cfg(test)]
+mod monospace_fallback_tests {
+    use super::*;
+
+    #[test]
+    fn cjk_in_monospaced_text_takes_finite_room() {
+        // macOS's monospaced fallback for CJK found GB18030Bitmap, a font
+        // without units per em, and laid it out infinitely wide.
+        let mut fonts = FontSystem::new();
+        let font = zgx::text_layout::FontStyle {
+            family: zgx::text_layout::FontFamily::Monospace,
+            ..Default::default()
+        };
+        for text in ["中文", "a中b", "表示 ok"] {
+            let (width, height) = ShapedText::with_font(&mut fonts, text, 13., None, &font).size();
+            assert!(width.is_finite() && width > 0., "{text:?}: {width}");
+            assert!(height.is_finite() && height > 0., "{text:?}: {height}");
+        }
+    }
+
+    /// Monospaced text is upright wherever the system has an upright
+    /// monospaced face (on Linux it took DejaVu Sans Mono Oblique).
+    #[test]
+    fn monospaced_text_takes_an_upright_face() {
+        let mut fonts = crate::font_cache::system_fonts();
+        if !fonts
+            .db()
+            .faces()
+            .any(|face| face.monospaced && face.style == cosmic_text::fontdb::Style::Normal)
+        {
+            return;
+        }
+        let font = zgx::text_layout::FontStyle {
+            family: zgx::text_layout::FontFamily::Monospace,
+            ..Default::default()
+        };
+        let shaped = ShapedText::with_font(&mut fonts, "abc", 13., None, &font);
+        let glyph = shaped
+            .buffer
+            .layout_runs()
+            .next()
+            .and_then(|run| run.glyphs.first().cloned())
+            .expect("a glyph");
+        let face = fonts.db().face(glyph.font_id).expect("its face");
+        assert_eq!(
+            face.style,
+            cosmic_text::fontdb::Style::Normal,
+            "{:?}",
+            face.post_script_name
+        );
+    }
+}
+
+#[cfg(test)]
+mod wash_tests {
+    use super::*;
+    use zgx::{
+        rich_text::{RichText, TextRun},
+        scene::Color,
+    };
+
+    fn run(range: std::ops::Range<usize>, wash: Option<(Color, [f32; 2])>) -> TextRun {
+        TextRun {
+            range,
+            background: wash.map(|(color, _)| color),
+            padding: wash.map_or([0.; 2], |(_, padding)| padding),
+            radius: if wash.is_some() { 5. } else { 0. },
+            font_size: 18.,
+            ..Default::default()
+        }
+    }
+    fn washes(rich: &RichText) -> Vec<Rect> {
+        let mut fonts = FontSystem::new();
+        let buffer = rich_buffer(&mut fonts, rich, Some(600.), None);
+        rich_decorations(&buffer, rich)
+            .into_iter()
+            .filter(|d| d.background)
+            .map(|d| d.bounds)
+            .collect()
+    }
+
+    /// A chip with an icon is runs of its own (the icon's room, its text,
+    /// the padding after it): they wash as one, not three. Spans side by
+    /// side, the same colour, each keep theirs.
+    #[test]
+    fn a_chips_icon_text_and_padding_wash_as_one() {
+        let red = Color(255, 0, 0, 255);
+        let text = "Look at \u{2060}chat.rs\u{2060} please";
+        let (icon, name) = (8..11, 11..18);
+        let rich = RichText::new(
+            text,
+            vec![
+                run(0..8, None),
+                run(icon, Some((red, [11., 2.]))),
+                run(name.clone(), Some((red, [0., 2.]))),
+                run(18..21, Some((red, [2., 2.]))),
+                run(21..text.len(), None),
+            ],
+        )
+        .unwrap();
+        let found = washes(&rich);
+        assert_eq!(found.len(), 1, "one wash: {found:?}");
+        let alone = RichText::new("chat.rs", vec![run(0..7, Some((red, [0., 2.])))]).unwrap();
+        assert!(
+            found[0].width > washes(&alone)[0].width + 20.,
+            "it holds the icon and padding"
+        );
+        let apart = RichText::new(
+            "ab",
+            vec![
+                run(0..1, Some((red, [0., 2.]))),
+                run(1..2, Some((red, [0., 2.]))),
+            ],
+        )
+        .unwrap();
+        assert_eq!(washes(&apart).len(), 2, "two spans side by side: two");
+    }
 }

@@ -10,10 +10,24 @@ mod composition_line_height;
 mod composition_percent;
 #[path = "../composition_wrap.rs"]
 mod composition_wrap;
+#[path = "../container_queries.rs"]
+mod container_queries;
 #[path = "../contents_layout.rs"]
 mod contents_layout;
+#[path = "../display_contents.rs"]
+mod display_contents;
+#[path = "../element_zoom.rs"]
+mod element_zoom;
+#[path = "../grid_areas.rs"]
+mod grid_areas;
+#[path = "../grid_tracks.rs"]
+mod grid_tracks;
 #[path = "../incremental_layout_equivalence.rs"]
 mod incremental_layout_equivalence;
+#[path = "../intrinsic_sizes.rs"]
+mod intrinsic_sizes;
+#[path = "../layout_alone.rs"]
+mod layout_alone;
 #[path = "../layout_automatic_minimum.rs"]
 mod layout_automatic_minimum;
 #[path = "../layout_box_model.rs"]
@@ -24,13 +38,33 @@ mod layout_feedback;
 mod layout_fit_content;
 #[path = "../layout_growing_boxes.rs"]
 mod layout_growing_boxes;
+#[path = "../layout_history.rs"]
+mod layout_history;
+#[path = "../layout_width_changes.rs"]
+mod layout_width_changes;
 #[path = "../panel_layout.rs"]
 mod panel_layout;
+#[path = "../percent_fields.rs"]
+mod percent_fields;
 #[path = "../resize_regions.rs"]
 mod resize_regions;
 #[path = "../rtl_layout.rs"]
 mod rtl_layout;
 #[path = "../rtl_scroll.rs"]
 mod rtl_scroll;
+#[path = "../size_calc.rs"]
+mod size_calc;
+#[path = "../sticky.rs"]
+mod sticky;
+#[path = "../text_reach.rs"]
+mod text_reach;
+#[path = "../text_same_size.rs"]
+mod text_same_size;
+#[path = "../viewports_within.rs"]
+mod viewports_within;
 #[path = "../wrapped_text_in_capped_box.rs"]
 mod wrapped_text_in_capped_box;
+#[path = "../z_order.rs"]
+mod z_order;
+#[path = "../zoom_relayout.rs"]
+mod zoom_relayout;

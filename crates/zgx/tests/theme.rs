@@ -111,10 +111,16 @@ fn themes_extend_and_fall_back_to_their_type() {
     themes.register(Theme::new("test-base", ThemeKind::Dark).with(tok::RADIUS_MD, 3.));
     assert_eq!(themes.number(tok::RADIUS_MD), 3.);
     assert!(themes.set("no-such-theme").is_err());
-    // Every built-in theme defines every standard token.
+    // Every built-in theme defines every standard token but those unset
+    // unless a theme sets them.
     for name in [DARK, LIGHT] {
         themes.set(name).unwrap();
         for (id, token, _) in zgx::theme::standard() {
+            if zgx::theme::standard_unset(id) {
+                assert!(!themes.root().is_defined(id), "{name} sets {token}");
+                assert_eq!(themes.root().get_untracked(id), TokenValue::Unset);
+                continue;
+            }
             assert!(themes.root().is_defined(id), "{name} lacks {token}");
             assert_ne!(
                 themes.root().get_untracked(id),
@@ -462,6 +468,17 @@ fn vscode_themes_import_onto_tokens() {
     assert_eq!(hex(tok::SURFACE_BASE), "#181818", "sideBar.background");
     assert_eq!(hex(tok::INPUT_BG), "#313131", "input.background");
     assert_eq!(hex(tok::DANGER), "#f85149", "errorForeground");
+    // Its terminal colours, where it names them; the rest stay unset (the
+    // terminal's own).
+    assert_eq!(
+        hex(tok::TERMINAL_FOREGROUND),
+        "#cccccc",
+        "terminal.foreground"
+    );
+    assert_eq!(
+        themes.root().get_untracked(tok::TERMINAL_ANSI_1),
+        TokenValue::Unset
+    );
     // A colour it clears (`button.secondaryBackground: #00000000`) leaves
     // the button to the next candidate: the raised surface.
     assert_eq!(
@@ -480,6 +497,11 @@ fn vscode_themes_import_onto_tokens() {
         hex(tok::SELECTION_ITEM),
         "#e8e8e8",
         "list.activeSelectionBackground"
+    );
+    assert_eq!(
+        hex(tok::TERMINAL_CURSOR),
+        "#005fb8",
+        "terminalCursor.foreground"
     );
     // What VS Code has no colour for comes from zgx's theme of its type.
     assert_eq!(themes.number(tok::RADIUS_MD), 6.);
@@ -592,11 +614,18 @@ fn the_system_text_size_scales_font_tokens_whichever_theme_sets_them() {
     ui.theme().set_system_text_scale(1.5);
     assert_eq!(size(&ui), base * 1.5);
     assert_eq!(line(&ui), base_line * 1.5);
+    // A control grows to hold a body line and its padding, never shrinks.
+    let control = |ui: &Ui| ui.theme().root().number_untracked(tok::CONTROL_HEIGHT);
+    assert_eq!(control(&ui), (base * 1.5 * 1.4).ceil() + 12.);
     // Spacing is not text.
     let space = ui.theme().root().number_untracked(tok::SPACE_3);
     ui.theme().set_system_text_scale(1.);
     assert_eq!(ui.theme().root().number_untracked(tok::SPACE_3), space);
     assert_eq!(size(&ui), base);
+    assert_eq!(control(&ui), 36., "the theme's");
+    ui.theme().set_system_text_scale(0.8);
+    assert_eq!(control(&ui), 36., "never below the theme's");
+    ui.theme().set_system_text_scale(1.);
     // An app theme's own sizes scale too.
     ui.theme().register(
         Theme::new("test-large", ThemeKind::Dark)
@@ -623,4 +652,86 @@ fn a_scope_with_fixed_text_sizes_keeps_them_under_the_system_text_size() {
     // A terminal's grid: its own sizes, and its children's.
     assert_eq!(fixed.number_untracked(tok::FONT_SIZE_MD), base);
     assert_eq!(nested.number_untracked(tok::FONT_SIZE_MD), base);
+}
+
+#[test]
+fn a_scopes_font_family_restyles_the_text_in_it() {
+    use zgx::text_layout::FontFamily;
+    let mut ui = Ui::new(400., 400.);
+    let sans = ui.signal(None::<&'static str>);
+    let mono = ui.signal(None::<&'static str>);
+    let (read_sans, read_mono) = (sans.clone(), mono.clone());
+    let handle = ui.mount(theme_scope_with(
+        move || {
+            let mut over = ThemeOverride::new();
+            if let Some(name) = read_sans.get() {
+                over = over.with(tok::FONT_SANS, FontFamily::from(name));
+            }
+            if let Some(name) = read_mono.get() {
+                over = over.with(tok::FONT_MONO, FontFamily::from(name));
+            }
+            over
+        },
+        column()
+            .child(text("Body").id("body"))
+            .child(text("Code").id("code").font_family(tok::FONT_MONO)),
+    ));
+    ui.scene.borrow_mut().flush();
+    let family = |ui: &Ui, id: &str| {
+        ui.scene
+            .borrow()
+            .font(handle.find(id).unwrap())
+            .family
+            .clone()
+    };
+    let (body, code) = (family(&ui, "body"), family(&ui, "code"));
+    sans.set(Some("Chosen Sans"));
+    ui.prepare_frame();
+    assert_eq!(
+        family(&ui, "body"),
+        FontFamily::from("Chosen Sans"),
+        "inherited text"
+    );
+    assert_eq!(family(&ui, "code"), code);
+    mono.set(Some("Chosen Mono"));
+    ui.prepare_frame();
+    assert_eq!(
+        family(&ui, "code"),
+        FontFamily::from("Chosen Mono"),
+        "text in a font token"
+    );
+    sans.set(None);
+    mono.set(None);
+    ui.prepare_frame();
+    assert_eq!(family(&ui, "body"), body);
+    assert_eq!(family(&ui, "code"), code);
+}
+
+#[test]
+fn a_font_token_given_a_name_where_its_kind_isnt_known_is_that_family() {
+    use zgx::{text_layout::FontFamily, theme::TokenInput};
+    let mut ui = Ui::new(400., 400.);
+    // As a script's `theme = { ["font.mono"] = … }` parses it: text, which
+    // a font token takes as a CSS family list.
+    let handle = ui.mount(theme_scope(
+        ThemeOverride::new()
+            .with(tok::FONT_SANS, TokenInput::parse("Chosen Sans").unwrap())
+            .with(
+                tok::FONT_MONO,
+                TokenInput::parse("\"3270 Mono\", monospace").unwrap(),
+            ),
+        column()
+            .child(text("Body").id("body"))
+            .child(text("Code").id("code").font_family(tok::FONT_MONO)),
+    ));
+    ui.scene.borrow_mut().flush();
+    let family = |id: &str| {
+        ui.scene
+            .borrow()
+            .font(handle.find(id).unwrap())
+            .family
+            .clone()
+    };
+    assert_eq!(family("body"), FontFamily::from("Chosen Sans"));
+    assert_eq!(family("code"), FontFamily::from("3270 Mono"));
 }

@@ -55,6 +55,42 @@ pub(crate) struct Animated {
 /// A node's literal translation and local transform.
 pub(crate) type BaseTransform = (Option<(f32, f32)>, Option<LocalTransform>);
 
+/// `hit = "target"`'s goals for an element (`Element::sync_hit`).
+#[derive(Clone, Default)]
+pub(crate) struct HitGoals {
+    /// Where its style is taking it.
+    style: zgx::scene::HitTarget,
+    /// Where `anime` animations are taking properties, each the last value
+    /// of the track that holds it.
+    anime: Vec<(crate::anime::Key, f32)>,
+}
+thread_local! {
+    /// `hit = "target"`'s goals, by element, for the few that ask
+    /// (`Element::mark_hit`): kept apart, so that no element grows or drops
+    /// anything more for them.
+    static HIT_GOALS: RefCell<Vec<(std::rc::Weak<Element>, HitGoals)>> =
+        const { RefCell::new(Vec::new()) };
+}
+/// Whether any element ever asked: what an animation reads first, all an
+/// app with none pays.
+static ANY_HIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Whether any element ever asked to hit at its target: what animations
+/// read before looking (`ANY_HIT`).
+#[inline(always)]
+pub(crate) fn any_hit() -> bool {
+    ANY_HIT.load(std::sync::atomic::Ordering::Relaxed)
+}
+/// `f` on `element`'s goals, if it asked; those of elements gone go.
+fn with_goals<R>(element: &Element, f: impl FnOnce(&mut HitGoals) -> R) -> Option<R> {
+    HIT_GOALS.with(|goals| {
+        let mut goals = goals.borrow_mut();
+        goals.retain(|(held, _)| held.strong_count() > 0);
+        goals
+            .iter_mut()
+            .find(|(held, _)| std::ptr::eq(held.as_ptr(), element))
+            .map(|(_, goals)| f(goals))
+    })
+}
 pub(crate) struct Element {
     handle: OnceCell<NodeHandle>,
     pub id: Option<Rc<str>>,
@@ -67,6 +103,9 @@ pub(crate) struct Element {
     pub revision: Signal<u64>,
     styles_changed: Cell<bool>,
     compositor_changed: Cell<bool>,
+    /// A baked loop to hand the scene at the next flush (`Some(None)` ends it).
+    #[cfg(target_os = "macos")]
+    bake: RefCell<Option<Option<Rc<zgx::scene::BakedLoop>>>>,
     /// Queued for this frame's flush.
     queued: Cell<bool>,
     /// Its node went: its selector entries are stale (`Registered`).
@@ -79,6 +118,10 @@ pub(crate) struct Element {
     scene: OnceCell<std::rc::Weak<RefCell<Scene>>>,
     /// Pointer and key listeners added after mount (`createDraggable`).
     pub listeners: RefCell<Vec<Listener>>,
+    /// Whether the node has the listener that runs `listeners`: from the
+    /// first, for a node takes the pointer once it listens, and `id` or
+    /// `on_mount` alone should not make it (`pointer_events = "none"`).
+    forwards: Cell<bool>,
     /// A scroll view's offset (points), for scroll observers.
     pub scroll: OnceCell<(Signal<f32>, bool)>,
     /// What the node's literals set: where an animation starts from before
@@ -113,11 +156,14 @@ impl Element {
             revision: runtime.signal(0),
             styles_changed: Cell::new(false),
             compositor_changed: Cell::new(false),
+            #[cfg(target_os = "macos")]
+            bake: RefCell::new(None),
             queued: Cell::new(false),
             unregistered: Cell::new(false),
             owners: RefCell::default(),
             scene: OnceCell::new(),
             listeners: RefCell::default(),
+            forwards: Cell::new(false),
             scroll: OnceCell::new(),
             base: Cell::new((None, None)),
             base_effects: Cell::new((1., 0.)),
@@ -355,6 +401,12 @@ impl Element {
         drop(animated);
         self.compositor_changed.set(true);
     }
+    /// Hands the scene `bake` (see `Scene::set_baked_loop`) at the next flush.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn set_bake(&self, bake: Option<Rc<zgx::scene::BakedLoop>>) {
+        *self.bake.borrow_mut() = Some(bake);
+        self.compositor_changed.set(true);
+    }
     pub fn set_base_clip(&self, clip: Option<[f32; 4]>) {
         self.base_clip.set(clip);
     }
@@ -381,6 +433,137 @@ impl Element {
             let _ = self.scene.set(Rc::downgrade(&scene));
         }
         let _ = self.handle.set(handle);
+    }
+    /// Adds a pointer and key listener to the mounted node.
+    pub fn listen(self: &Rc<Self>, listener: Listener) {
+        self.listeners.borrow_mut().push(listener);
+        let Some(handle) = self.handle.get() else {
+            return;
+        };
+        if self.forwards.replace(true) {
+            return;
+        }
+        let element = self.clone();
+        handle.on_event(move |event| {
+            let listeners = element.listeners.borrow().clone();
+            for listener in listeners {
+                listener(event);
+            }
+        });
+    }
+    /// It's leaving, gone from the data it showed: while its exit plays it
+    /// takes no input (`NodeHandle::leave`), so a second click or a key acts
+    /// on what is still there.
+    pub(crate) fn leave(&self) {
+        if let Some(handle) = self.handle.get() {
+            handle.leave();
+        }
+    }
+    /// Whether its node takes hits where it's going (`hit = "target"`).
+    /// One load an app with none pays (`ANY_HIT`); the look-up apart.
+    #[inline(always)]
+    pub(crate) fn hits_at_target(&self) -> bool {
+        ANY_HIT.load(std::sync::atomic::Ordering::Relaxed) && self.asked_hit()
+    }
+    #[cold]
+    #[inline(never)]
+    fn asked_hit(&self) -> bool {
+        with_goals(self, |_| ()).is_some()
+    }
+    /// Its node takes hits where it's going (`hit = "target"`): from now,
+    /// before it mounts and an animation in `on_mount` starts.
+    pub(crate) fn mark_hit(self: &Rc<Self>) {
+        ANY_HIT.store(true, std::sync::atomic::Ordering::Relaxed);
+        if with_goals(self, |_| ()).is_none() {
+            HIT_GOALS.with(|goals| {
+                goals
+                    .borrow_mut()
+                    .push((Rc::downgrade(self), HitGoals::default()))
+            });
+        }
+    }
+    /// Where its style is taking it (`hit = "target"`): with `anime`'s goals
+    /// over it, where it takes hits.
+    pub(crate) fn set_style_hit(&self, style: zgx::scene::HitTarget) {
+        if with_goals(self, |goals| goals.style = style).is_some() {
+            self.sync_hit();
+        }
+    }
+    /// Where an `anime` animation of `key` is taking it, or `None` once it
+    /// lets the property go. Nothing unless its node hits at its target.
+    pub(crate) fn anime_goal(&self, key: &crate::anime::Key, goal: Option<f32>) {
+        let held = with_goals(self, |goals| {
+            goals.anime.retain(|(k, _)| k != key);
+            if let Some(goal) = goal {
+                goals.anime.push((key.clone(), goal));
+            }
+        });
+        if held.is_some() {
+            self.sync_hit();
+        }
+    }
+    /// Its hit target: its style's goals, then `anime`'s over them.
+    fn sync_hit(&self) {
+        use crate::anime::Key;
+        let Some(target) = with_goals(self, |hit| hit.clone()).map(|hit| {
+            let mut target = hit.style;
+            // What `anime` wrote is shown over the style (`shown`): an
+            // animation let go of mid-way left it there.
+            let animated = self.animated.borrow();
+            if let Some((x, y)) = animated.translate {
+                target.translation = zgx::scene::Transform { x, y };
+            }
+            if animated.local.is_some() {
+                target.local = animated.local;
+            }
+            if let Some(opacity) = animated.opacity {
+                target.gone = opacity <= 0.;
+            }
+            drop(animated);
+            let mut local = target.local.unwrap_or_else(|| self.local());
+            let mut turned = false;
+            for (key, v) in &hit.anime {
+                turned |= matches!(
+                    key,
+                    Key::Scale
+                        | Key::ScaleX
+                        | Key::ScaleY
+                        | Key::Rotate
+                        | Key::RotateX
+                        | Key::RotateY
+                        | Key::Perspective
+                        | Key::Skew
+                        | Key::SkewX
+                        | Key::SkewY
+                );
+                match key {
+                    Key::X => target.translation.x = *v,
+                    Key::Y => target.translation.y = *v,
+                    Key::Opacity => target.gone = *v <= 0.,
+                    Key::Scale => local.scale = (*v, *v),
+                    Key::ScaleX => local.scale.0 = *v,
+                    Key::ScaleY => local.scale.1 = *v,
+                    Key::Rotate => local.rotate = *v,
+                    Key::RotateX => local.rotate_x = *v,
+                    Key::RotateY => local.rotate_y = *v,
+                    Key::Perspective => local.perspective = v.max(0.),
+                    Key::Skew => local.skew = (*v, *v),
+                    Key::SkewX => local.skew.0 = *v,
+                    Key::SkewY => local.skew.1 = *v,
+                    // A layout animation's offset: its target is layout's place.
+                    _ => {}
+                }
+            }
+            if turned {
+                target.local = Some(local);
+            }
+            target
+        }) else {
+            return;
+        };
+        if let (Some(scene), Some(node)) = (self.scene(), self.node()) {
+            scene.borrow_mut().set_hit_target(node, Some(target));
+        }
     }
     pub fn read<R>(&self, f: impl FnOnce(&Scene, NodeId) -> R) -> Option<R> {
         let scene = self.scene()?;
@@ -584,6 +767,10 @@ impl Element {
             && let Some(id) = self.node()
             && scene.contains(id)
         {
+            #[cfg(target_os = "macos")]
+            if let Some(bake) = self.bake.borrow_mut().take() {
+                scene.set_baked_loop(id, bake);
+            }
             let animated = self.animated.borrow();
             let translate = self.shown(&animated, None).map(|(x, y)| Transform { x, y });
             let effects =
@@ -656,6 +843,30 @@ impl Element {
     }
 }
 
+/// The hosts' elements on a runtime (an app's windows each have one), by
+/// which targets (`driver::find`) read the classes of a node mounted.
+#[derive(Default)]
+pub(crate) struct Classes(RefCell<Vec<Weak<Elements>>>);
+impl Classes {
+    pub fn register(runtime: &zgx::reactive::Runtime, elements: &Rc<Elements>) {
+        let classes = runtime.extension(|_| Classes::default());
+        let mut all = classes.0.borrow_mut();
+        all.retain(|e| e.strong_count() > 0);
+        all.push(Rc::downgrade(elements));
+    }
+    /// Whether the element mounted at `node` has every one of `classes`.
+    pub fn has(runtime: &zgx::reactive::Runtime, node: NodeId, classes: &[String]) -> bool {
+        let all = runtime.extension(|_| Classes::default());
+        let all = all.0.borrow();
+        all.iter().filter_map(Weak::upgrade).any(|elements| {
+            elements.at(node).is_some_and(|element| {
+                classes
+                    .iter()
+                    .all(|class| element.classes.iter().any(|own| **own == **class))
+            })
+        })
+    }
+}
 /// Every targetable element, by id and class.
 #[derive(Default)]
 pub(crate) struct Elements {
@@ -844,9 +1055,10 @@ pub(crate) fn sort_by_document_order(elements: &mut [Rc<Element>]) {
     };
     let scene = scene.borrow();
     // Each node's place among its siblings, a parent's children indexed
-    // once: a thousand rows of one list are not each searched for.
-    let mut places: HashMap<NodeId, usize> = HashMap::new();
-    let mut indexed = std::collections::HashSet::new();
+    // once: a thousand rows of one list are not each searched for. Node ids
+    // hash by a multiply (Fx), not SipHash: these lookups are all it does.
+    let mut places: rustc_hash::FxHashMap<NodeId, usize> = Default::default();
+    let mut indexed: rustc_hash::FxHashSet<NodeId> = Default::default();
     let mut path = |element: &Rc<Element>| {
         let mut path = Vec::new();
         let mut node = element.node();
@@ -1077,6 +1289,10 @@ fn select_and_keep(lua: &mlua::Lua, editor: zgx::widgets::EditorHandle, anchor: 
     });
 }
 fn settle(lua: &mlua::Lua) {
+    // Most find nothing due: no clocks read for it, each a system call.
+    if crate::node::env(lua).is_ok_and(|env| env.runtime.nothing_due()) {
+        return;
+    }
     off_clock(lua, |runtime| runtime.settle());
 }
 /// `work` with the runtime, off the calling script's clock: what an input's
@@ -1092,6 +1308,98 @@ fn off_clock<R>(lua: &mlua::Lua, work: impl FnOnce(&zgx::reactive::Runtime) -> R
         None => work(&runtime),
     })
 }
+/// `ui.editor`: a field's undo and the byte under a point, for an app's own
+/// undo stack across panes and drops where the pointer is. On `ui`, made
+/// when first read, so an element's metatable stays as small as it was.
+pub(crate) fn install_editor(lua: &mlua::Lua, ui: &mlua::Table) -> mlua::Result<()> {
+    type El<'a> = mlua::UserDataRef<ElementUd>;
+    let editor_of = |e: &El| e.0.handle.get().and_then(NodeHandle::editor);
+    let table = lua.create_table()?;
+    table.set(
+        "undo",
+        lua.create_function(move |lua, e: El| {
+            settle(lua);
+            let Some(editor) = editor_of(&e) else {
+                return Ok(false);
+            };
+            let mut done = false;
+            off_clock(lua, |_| done = editor.undo());
+            settle(lua);
+            Ok(done)
+        })?,
+    )?;
+    table.set(
+        "redo",
+        lua.create_function(move |lua, e: El| {
+            settle(lua);
+            let Some(editor) = editor_of(&e) else {
+                return Ok(false);
+            };
+            let mut done = false;
+            off_clock(lua, |_| done = editor.redo());
+            settle(lua);
+            Ok(done)
+        })?,
+    )?;
+    table.set(
+        "can_undo",
+        lua.create_function(move |lua, e: El| {
+            settle(lua);
+            Ok(editor_of(&e).is_some_and(|editor| editor.editor.borrow().can_undo()))
+        })?,
+    )?;
+    table.set(
+        "can_redo",
+        lua.create_function(move |lua, e: El| {
+            settle(lua);
+            Ok(editor_of(&e).is_some_and(|editor| editor.editor.borrow().can_redo()))
+        })?,
+    )?;
+    table.set(
+        "offset_at",
+        lua.create_function(move |lua, (e, x, y): (El, f32, f32)| {
+            settle(lua);
+            Ok(editor_of(&e).and_then(|editor| editor.offset_at(x, y)))
+        })?,
+    )?;
+    // `ui.editor.scroll_to_line(el, n, { align })`: line `n` from 1 at that
+    // place in the view, its caret left where it is.
+    table.set(
+        "scroll_to_line",
+        lua.create_function(
+            move |lua, (e, line, options): (El, f64, Option<mlua::Table>)| {
+                use zgx::compose::RowAlign;
+                let align = match options {
+                    Some(options) => options.get::<Option<String>>("align")?,
+                    None => None,
+                };
+                let align = match align.as_deref() {
+                    None | Some("nearest") => RowAlign::Nearest,
+                    Some("start") => RowAlign::Start,
+                    Some("center") => RowAlign::Center,
+                    Some("end") => RowAlign::End,
+                    Some(other) => {
+                        return Err(mlua::Error::runtime(format!(
+                            "scroll_to_line's align is \"start\", \"center\", \"end\" or \"nearest\", not `{other}`"
+                        )));
+                    }
+                };
+                settle(lua);
+                let Some(editor) = editor_of(&e) else {
+                    return Ok(false);
+                };
+                if !(line.is_finite() && line >= 1.) {
+                    return Ok(false);
+                }
+                off_clock(lua, |_| editor.scroll_to_line(line as usize - 1, align));
+                Ok(true)
+            },
+        )?,
+    )?;
+    table.set_readonly(true);
+    ui.set("editor", table)
+}
+
 impl UserData for ElementUd {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         fields.add_field_method_get("id", |_, e| Ok(e.0.id.as_deref().map(str::to_owned)));
@@ -1112,18 +1420,23 @@ impl UserData for ElementUd {
             Ok(other.borrow::<ElementUd>().is_ok_and(|o| Rc::ptr_eq(&e.0, &o.0)))
         });
         // Keyboard focus to the node or its first focusable descendant, once
-        // the handler's writes have settled: an input the same handler
-        // reveals can take it.
-        methods.add_method("focus", |lua, e, ()| {
+        // the handler's writes have settled (an input the same handler
+        // reveals can take it), scrolled into view; `{ scroll = false }`
+        // leaves it where it is.
+        methods.add_method("focus", |lua, e, options: Option<mlua::Table>| {
+            let scroll = match options {
+                Some(options) => options.get::<Option<bool>>("scroll")?.unwrap_or(true),
+                None => true,
+            };
             settle(lua);
             let Some(handle) = e.0.handle.get().cloned() else {
                 return Ok(false);
             };
             let asked = bump(&FOCUS_ASKED);
-            let took = handle.focus();
+            let took = handle.focus_with(scroll);
             again(lua, move || {
                 if FOCUS_ASKED.with(|n| n.get()) == asked && !handle.has_focus_within() {
-                    handle.focus();
+                    handle.focus_with(scroll);
                 }
             });
             Ok(took)
@@ -1297,6 +1610,18 @@ impl UserData for ElementUd {
             FOCUS_ASKED.with(|n| n.set(n.get() + 1));
             if let Some(handle) = e.0.handle.get() {
                 handle.blur();
+            }
+            Ok(())
+        });
+        // The pointer locked to the element (the DOM's
+        // `requestPointerLock`): only in a press's, a release's or a key's
+        // handler (or just after); whether it holds it.
+        methods.add_method("lock_pointer", |_, e, ()| {
+            Ok(e.0.handle.get().is_some_and(|h| h.lock_pointer()))
+        });
+        methods.add_method("unlock_pointer", |_, e, ()| {
+            if let Some(handle) = e.0.handle.get() {
+                handle.unlock_pointer();
             }
             Ok(())
         });

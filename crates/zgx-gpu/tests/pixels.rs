@@ -530,7 +530,7 @@ fn scene_installs_native_text_geometry() {
 }
 
 #[test]
-fn image_cache_reclaims_removed_nodes_and_rejects_oversized_allocations() {
+fn image_cache_reclaims_removed_nodes_and_leaves_out_oversized_allocations() {
     let _gpu_fixture = gpu_fixture();
     let mut gpu = GpuRenderer::new(8, 8).unwrap();
     let mut scene = Scene::new(8., 8.);
@@ -543,6 +543,9 @@ fn image_cache_reclaims_removed_nodes_and_rejects_oversized_allocations() {
     scene.remove(node);
     let d = scene.flush().damage;
     gpu.render(&scene, &d).unwrap();
+    // Kept to come back to (a list's row), until the window goes idle.
+    assert_eq!(gpu.debug_cache_stats().image_textures, 1);
+    gpu.trim();
     assert_eq!(gpu.debug_cache_stats().image_textures, 0);
     let huge = std::sync::Arc::new(
         zgx::image::ImageData::new(4096, 4097, vec![0; 4096 * 4097 * 4]).unwrap(),
@@ -560,9 +563,11 @@ fn image_cache_reclaims_removed_nodes_and_rejects_oversized_allocations() {
     assert_eq!(gpu.debug_cache_stats().image_bytes, 0);
     scene.set_effects(hidden, Effects::default());
     let d = scene.flush().damage;
-    let error = gpu.render(&scene, &d).unwrap_err();
-    assert!(error.0.contains("64 MiB"));
-    assert_eq!(gpu.debug_cache_stats().image_bytes, 0);
+    gpu.render(&scene, &d).unwrap();
+    // Shown in 8 by 8: held at 8 by 9 (its halving at least that), not
+    // 4096 by 4097.
+    assert!(gpu.take_issues().is_empty());
+    assert_eq!(gpu.debug_cache_stats().image_bytes, 8 * 9 * 4);
 }
 
 #[test]
@@ -730,7 +735,7 @@ fn isolated_overflow_and_fractional_translation_reuse_content() {
 }
 
 #[test]
-fn layer_texture_budget_fails_before_allocation_and_recovers_after_removal() {
+fn layer_texture_budget_rasterizes_coarser_and_recovers_after_removal() {
     let _gpu_fixture = gpu_fixture();
     let mut gpu = GpuRenderer::new(8, 8).unwrap();
     let mut scene = Scene::new(8., 8.);
@@ -744,8 +749,11 @@ fn layer_texture_budget_fails_before_allocation_and_recovers_after_removal() {
     );
     scene.set_isolated(huge, true);
     let d = scene.flush().damage;
-    assert!(gpu.render(&scene, &d).unwrap_err().0.contains("64 MiB"));
-    assert_eq!(gpu.debug_cache_stats().layer_bytes, 0);
+    gpu.render(&scene, &d).unwrap();
+    assert_eq!(gpu.take_issues(), Vec::<String>::new());
+    assert_eq!(gpu.debug_cache_stats().layers_coarser, 1);
+    let bytes = gpu.debug_cache_stats().layer_bytes;
+    assert!(bytes > 0 && bytes <= 64 * 1024 * 1024, "{bytes}");
     scene.remove(huge);
     let d = scene.flush().damage;
     gpu.render(&scene, &d).unwrap();
@@ -753,7 +761,7 @@ fn layer_texture_budget_fails_before_allocation_and_recovers_after_removal() {
 }
 
 #[test]
-fn image_count_budget_fails_the_frame_and_recovers_after_removal() {
+fn image_count_budget_leaves_images_out_and_recovers_after_removal() {
     let _gpu_fixture = gpu_fixture();
     let mut gpu = GpuRenderer::new(8, 8).unwrap();
     let mut scene = Scene::new(8., 8.);
@@ -773,15 +781,18 @@ fn image_count_budget_fails_the_frame_and_recovers_after_removal() {
         })
         .collect();
     let d = scene.flush().damage;
-    assert!(gpu.render(&scene, &d).unwrap_err().0.contains("16384"));
+    gpu.render(&scene, &d).unwrap();
+    assert!(gpu.take_issues()[0].contains("16,384"));
     scene.remove(images[0]);
     let d = scene.flush().damage;
     gpu.render(&scene, &d).unwrap();
     assert_eq!(gpu.readback().unwrap()[..4], [255, 0, 0, 255]);
 }
 
+/// At the count of images a window may hold, those not drawn this frame give
+/// way: a page of small pictures scrolled through leaves none out.
 #[test]
-fn images_over_the_byte_budget_fail_only_the_frame() {
+fn image_count_budget_lets_images_not_drawn_go_first() {
     let _gpu_fixture = gpu_fixture();
     let mut gpu = GpuRenderer::new(8, 8).unwrap();
     let mut scene = Scene::new(8., 8.);
@@ -790,23 +801,34 @@ fn images_over_the_byte_budget_fail_only_the_frame() {
         NodeKind::Container(Layout::Overlay),
         fixed(8., 8.),
     );
-    let large = || {
-        let pixels = [255, 0, 0, 255].repeat(4096 * 2100);
-        NodeKind::Image(std::sync::Arc::new(
-            zgx::image::ImageData::new(4096, 2100, pixels).unwrap(),
-        ))
+    let image = || {
+        let image = zgx::image::ImageData::new(1, 1, vec![255, 0, 0, 255]).unwrap();
+        NodeKind::Image(std::sync::Arc::new(image))
     };
-    let (_first, second) = (
-        scene.append(stack, large(), fixed(8., 8.)),
-        scene.append(stack, large(), fixed(8., 8.)),
-    );
+    let first: Vec<_> = (0..16_384)
+        .map(|_| scene.append(stack, image(), fixed(1., 1.)))
+        .collect();
     let d = scene.flush().damage;
-    assert!(gpu.render(&scene, &d).unwrap_err().is_over_texture_budget());
-    scene.remove(second);
-    scene.flush();
-    // As the app does after a failed frame: the whole window, not just what changed.
-    gpu.render(&scene, &[scene.bounds(scene.root())]).unwrap();
+    gpu.render(&scene, &d).unwrap();
+    assert_eq!(gpu.debug_cache_stats().image_textures, 16_384);
+    // Still in the scene, far out of view, and a new one comes.
+    scene.set_style(
+        stack,
+        Style {
+            margin: Insets {
+                top: -100_000.,
+                ..Default::default()
+            },
+            ..fixed(8., 8.)
+        },
+    );
+    scene.set_kind(scene.root(), NodeKind::Container(Layout::Overlay));
+    let later = scene.append(scene.root(), image(), fixed(8., 8.));
+    let d = scene.flush().damage;
+    gpu.render(&scene, &d).unwrap();
+    assert_eq!(gpu.take_issues(), Vec::<String>::new());
     assert_eq!(gpu.readback().unwrap()[..4], [255, 0, 0, 255]);
+    drop((first, later));
 }
 
 #[test]
@@ -2928,6 +2950,8 @@ fn object_fit_pixels_crop_center_and_reuse_uploaded_image_across_transitions() {
     gpu.render(&ui.scene.borrow(), &[Rect::new(0., 0., 112., 104.)])
         .unwrap();
     assert_eq!(partial, gpu.readback().unwrap());
+    // (Those no node shows are kept until the window goes idle.)
+    gpu.trim();
     assert_eq!(gpu.debug_cache_stats().image_textures, 1);
 }
 
@@ -3302,6 +3326,119 @@ fn assert_blur_matches_fresh(
         partial == fresh.readback().unwrap(),
         "bounded blur reconstruction differs from a fresh full frame"
     );
+}
+
+/// A blurred frame walks only where its damage reaches through the filters
+/// (`Scene::backdrop_filters`), not the window: what it draws must still be
+/// what the whole frame draws, even where the damage reaches a filter only
+/// through another (a change under one filter whose output meets a second,
+/// the second's backdrop reaching past both), with boxes under a moved
+/// ancestor and far from every filter changing too.
+#[test]
+fn a_blurred_frame_walked_within_its_reach_is_the_frame_drawn_afresh() {
+    let _fixture = gpu_fixture();
+    let mut gpu = GpuRenderer::new(320, 200).unwrap();
+    let mut scene = Scene::new(320., 200.);
+    scene.set_kind(scene.root(), NodeKind::Container(Layout::Overlay));
+    scene.append(
+        scene.root(),
+        NodeKind::Rect(Color(20, 30, 50, 255)),
+        fixed(320., 200.),
+    );
+    let rect = |scene: &mut Scene, parent, color, w, h, x, y| {
+        let node = scene.append(parent, NodeKind::Rect(color), fixed(w, h));
+        scene.set_transform(node, Transform { x, y });
+        node
+    };
+    let root = scene.root();
+    // Under the first filter alone, and under the second alone, past the
+    // first's output and the damage.
+    let under_first = rect(
+        &mut scene,
+        root,
+        Color(240, 200, 60, 255),
+        10.,
+        10.,
+        30.,
+        40.,
+    );
+    let under_second = rect(
+        &mut scene,
+        root,
+        Color(60, 220, 120, 255),
+        10.,
+        10.,
+        150.,
+        40.,
+    );
+    // A group of boxes moved as one, far from both filters.
+    let group = scene.append(root, NodeKind::Container(Layout::Overlay), fixed(60., 60.));
+    scene.set_transform(group, Transform { x: 240., y: 120. });
+    let mut far = Vec::new();
+    for i in 0..12 {
+        let box_ = rect(
+            &mut scene,
+            group,
+            Color(30 + i * 15, 90, 200 - i * 10, 255),
+            8.,
+            8.,
+            (i % 4) as f32 * 14.,
+            (i / 4) as f32 * 14.,
+        );
+        far.push(box_);
+    }
+    // The first filter's output meets the second's: damage under the
+    // first re-blurs the second too, so its backdrop is drawn again.
+    for (x, w) in [(24., 90.), (100., 80.)] {
+        let blur = rect(&mut scene, root, Color(230, 40, 70, 40), w, 60., x, 24.);
+        scene.set_effects(
+            blur,
+            Effects {
+                blur_radius: 5.,
+                ..Effects::default()
+            },
+        );
+    }
+    let damage = scene.flush().damage;
+    gpu.render(&scene, &damage).unwrap();
+    assert_blur_matches_fresh(&gpu, &scene, 320, 200, 1.);
+    // Under the first filter alone: the second's backdrop (`under_second`)
+    // is drawn again within its blur, though nothing near it changed. The
+    // renderer is given the box alone (the scene's flush grows its damage
+    // through the filters too, but the renderer reconstructs blur from what
+    // it's given), so the reach it walks must be its own.
+    scene.set_kind(under_first, NodeKind::Rect(Color(20, 160, 240, 255)));
+    scene.flush();
+    gpu.render(&scene, &[Rect::new(30., 40., 10., 10.)])
+        .unwrap();
+    assert_blur_matches_fresh(&gpu, &scene, 320, 200, 1.);
+    // Under the second alone.
+    scene.set_kind(under_second, NodeKind::Rect(Color(220, 60, 200, 255)));
+    let damage = scene.flush().damage;
+    gpu.render(&scene, &damage).unwrap();
+    assert_blur_matches_fresh(&gpu, &scene, 320, 200, 1.);
+    // Far from both: the group slides a step at a time, as rows do, and
+    // one of its boxes changes on the way.
+    for step in 1..=6 {
+        scene.set_transform(
+            group,
+            Transform {
+                x: 240. - step as f32 * 3.5,
+                y: 120. + step as f32 * 1.5,
+            },
+        );
+        if step == 3 {
+            scene.set_kind(far[5], NodeKind::Rect(Color(250, 250, 250, 255)));
+        }
+        let damage = scene.flush().damage;
+        gpu.render(&scene, &damage).unwrap();
+        assert_blur_matches_fresh(&gpu, &scene, 320, 200, 1.);
+    }
+    // And slid under the second filter: it is backdrop now.
+    scene.set_transform(group, Transform { x: 120., y: 30. });
+    let damage = scene.flush().damage;
+    gpu.render(&scene, &damage).unwrap();
+    assert_blur_matches_fresh(&gpu, &scene, 320, 200, 1.);
 }
 
 #[test]
@@ -4214,13 +4351,11 @@ fn clean_blur_streaming_uses_one_pass_including_isolated_layer_accounting() {
             let damage = scene.flush().damage;
             let stats = gpu.render(&scene, &damage).unwrap();
             if isolated {
-                // Repainted isolated layers currently redraw their whole target.
-                assert_eq!(stats.layer_repaints, 1);
-                assert_eq!(
-                    stats.blur_passes, 3,
-                    "nested passes reach caller statistics"
-                );
-                assert!(stats.render_passes > stats.blur_passes + 1);
+                // The layer repaints where the text changed alone: the blur,
+                // away from it, draws nothing again (`layer_partial_repaints`).
+                assert_eq!((stats.layer_repaints, stats.layer_partial_repaints), (1, 1));
+                assert_eq!(stats.blur_passes, 0);
+                assert_eq!(stats.render_passes, 2, "the layer's and the window's");
             } else {
                 assert_eq!(stats.blur_passes, 0);
                 assert_eq!(stats.render_passes, 1);
@@ -4783,7 +4918,7 @@ fn colour_only_rich_text_changes_recolour_without_reshaping() {
     assert_eq!(gpu.render(&scene, &damage).unwrap().shaped_nodes, 1);
 }
 #[test]
-fn fade_edges_mask_descendants_with_a_quadratic_ramp() {
+fn fade_edges_mask_descendants_with_an_eased_ramp() {
     let _gpu_fixture = gpu_fixture();
     let mut scene = Scene::new(100., 100.);
     scene.set_kind(scene.root(), NodeKind::Container(Layout::Overlay));
@@ -4811,13 +4946,18 @@ fn fade_edges_mask_descendants_with_a_quadratic_ramp() {
     gpu.render(&scene, &damage).unwrap();
     let pixels = gpu.readback().unwrap();
     let at = |y: usize| pixels[(y * 100 + 50) * 4];
-    // Edges nearly vanish, the ramp is quadratic, the middle is untouched.
+    // Edges nearly vanish, the ramp eases (smoothstep: at y 10, its centre
+    // 10.5 px in, 0.54), the middle is untouched.
     assert!(at(0) < 5, "top edge {}", at(0));
     assert!(at(99) < 5, "bottom edge {}", at(99));
     let half = at(10) as f32 / 255.;
-    assert!((half - 0.27).abs() < 0.08, "halfway {half}");
+    assert!((half - 0.54).abs() < 0.03, "halfway {half}");
     assert_eq!(at(50), 255);
     assert_eq!(at(30), 255);
+    // Level where the band meets the content: no step there to show as a
+    // line (t², still rising at slope 2, left 242 then 255).
+    assert!(at(19) >= 252, "the band's inner end {}", at(19));
+    assert!(at(20) - at(19) <= 2, "{} then {}", at(19), at(20));
 }
 
 #[test]
@@ -4855,15 +4995,16 @@ fn fade_insets_end_the_bands_inside_the_clip() {
     assert_eq!(at(10), 255);
     assert_eq!(at(49), 255);
     let half = at(60) as f32 / 255.;
-    assert!((half - 0.27).abs() < 0.08, "halfway {half}");
+    assert!((half - 0.46).abs() < 0.04, "halfway {half}");
     assert!(at(69) < 5, "band's end {}", at(69));
     assert_eq!(at(85), 0);
 }
 
 /// Whole-pixel scrolls shift the retained pixels and draw only the exposed
-/// strip; the result matches a fresh renderer exactly. Content that fades at
-/// the edges, a sibling painting over the list, or a fractional shift make a
-/// copy inexact, so those repaint instead.
+/// strip; the result matches a fresh renderer exactly. A list fading at its
+/// edges copies its interior and repaints its bands. A sibling painting over
+/// the list, or a fractional shift, make a copy inexact, so those repaint
+/// instead.
 #[test]
 fn scroll_copies_match_a_fresh_render_and_decline_when_inexact() {
     let _gpu_fixture = gpu_fixture();
@@ -4873,8 +5014,11 @@ fn scroll_copies_match_a_fresh_render_and_decline_when_inexact() {
         Plain,
         Faded,
         Covered,
+        // The list clips at rounded corners: its corners' edge and what lies
+        // outside them must not move with the rows.
+        Rounded,
     }
-    for case in [Case::Plain, Case::Faded, Case::Covered] {
+    for case in [Case::Plain, Case::Faded, Case::Covered, Case::Rounded] {
         let mut gpu = GpuRenderer::new(160, 120).unwrap();
         let mut ui = Ui::new(160., 120.);
         let offset = ui.signal(0_f32);
@@ -4903,10 +5047,10 @@ fn scroll_copies_match_a_fresh_render_and_decline_when_inexact() {
         .h(100.)
         .p(8.)
         .bg(rgb(0x101820));
-        let rows = if case == Case::Faded {
-            rows.fade_edges(12., 12.)
-        } else {
-            rows
+        let rows = match case {
+            Case::Faded => rows.fade_edges(12., 12.),
+            Case::Rounded => rows.rounded(14.),
+            _ => rows,
         };
         let mut root = overlay().w(160.).h(120.).bg(rgb(0x000000)).child(rows);
         if case == Case::Covered {
@@ -4921,7 +5065,8 @@ fn scroll_copies_match_a_fresh_render_and_decline_when_inexact() {
         }
         ui.mount(root);
         let mut copies = 0;
-        for scroll in [0., 14., 28., 100., 101.5, 150., 40.] {
+        // Down, then back up: what a move left behind shows on the way back.
+        for scroll in [0., 14., 28., 100., 101.5, 150., 40., 26., 12., 0.] {
             offset.set(scroll);
             ui.prepare_frame();
             let damage = ui.scene.borrow_mut().flush().damage;
@@ -4947,12 +5092,66 @@ fn scroll_copies_match_a_fresh_render_and_decline_when_inexact() {
         match case {
             // 0→14, 14→28 and 28→100 copy. 100→101.5 and 101.5→150 shift by
             // fractions of a pixel; 150→40 jumps past the viewport.
-            Case::Plain => assert_eq!(copies, 3),
-            Case::Faded => assert_eq!(copies, 0),
+            Case::Plain => assert!(copies >= 3, "{copies}"),
+            // Its interior copies, its bands repaint (bands.rs).
+            Case::Faded => assert!(copies >= 3, "{copies}"),
+            Case::Rounded => assert!(copies >= 3, "{copies}"),
             // Only 28→100 copies: its 72 px exposed strip repaints the whole
             // overlay, which the smaller moves would have shifted.
             Case::Covered => assert_eq!(copies, 1),
         }
+    }
+}
+
+/// A sticky header holds still over rows a copy moves: what the copy took
+/// of it repaints, and each frame matches a fresh renderer.
+#[test]
+fn scroll_copies_under_a_sticky_header_match_a_fresh_render() {
+    let _gpu_fixture = gpu_fixture();
+    use zgx::{compose::prelude::*, widgets::Ui};
+    let mut gpu = GpuRenderer::new(160, 120).unwrap();
+    let mut ui = Ui::new(160., 120.);
+    let offset = ui.signal(0_f32);
+    let section = |shade: u32| {
+        column()
+            .w(160.)
+            .h(200.)
+            .bg(rgb(shade))
+            .child(div().w(160.).h(20.).bg(rgb(0xff8800)).sticky_top(6.))
+            .child(div().w(100.).h(170.).bg(rgb(0x223344)))
+    };
+    ui.mount(
+        scroll(offset.clone())
+            .w(160.)
+            .h(120.)
+            .bg(rgb(0x000000))
+            .child(section(0x101820))
+            .child(section(0x182010)),
+    );
+    let mut copies = 0;
+    // On through the first header's hold and the hand-over to the second.
+    for at in [
+        0., 3., 6., 14., 28., 100., 160., 174., 188., 200., 214., 180., 90., 0.,
+    ] {
+        offset.set(at);
+        ui.prepare_frame();
+        let damage = ui.scene.borrow_mut().flush().damage;
+        copies += gpu
+            .render(&ui.scene.borrow(), &damage)
+            .unwrap()
+            .scroll_copies;
+        let mut fresh = GpuRenderer::new(160, 120).unwrap();
+        fresh
+            .render(&ui.scene.borrow(), &[Rect::new(0., 0., 160., 120.)])
+            .unwrap();
+        assert_eq!(
+            gpu.readback().unwrap(),
+            fresh.readback().unwrap(),
+            "scroll {at}"
+        );
+    }
+    if !cfg!(target_os = "macos") {
+        assert!(copies >= 3, "{copies}");
     }
 }
 
@@ -5014,6 +5213,147 @@ fn fractional_scrolls_on_the_pixel_grid_copy_and_match_a_fresh_render() {
     // Texture blits cost Apple GPUs graphics memory; macOS repaints.
     let expected = if cfg!(target_os = "macos") { 0 } else { 4 };
     assert_eq!(copies, expected);
+}
+
+/// A clear box over a list (an overlay scrollbar's track away from the
+/// pointer is one) paints nothing: the list's scrolls still copy, and the
+/// frames match a fresh render.
+#[test]
+fn scrolls_under_a_clear_box_copy_and_match_a_fresh_render() {
+    let _gpu_fixture = gpu_fixture();
+    use zgx::{compose::prelude::*, widgets::Ui};
+    let mut gpu = GpuRenderer::new(160, 120).unwrap();
+    let mut ui = Ui::new(160., 120.);
+    ui.scene.borrow_mut().set_pixel_scale(1.);
+    let offset = ui.signal(0_f32);
+    ui.mount(
+        overlay()
+            .w(160.)
+            .h(120.)
+            .bg(rgb(0x000000))
+            .child(
+                virtual_list(
+                    offset.clone(),
+                    24.,
+                    2,
+                    || 1000,
+                    |i| i,
+                    |_, key, _| {
+                        div()
+                            .size(144., 24.)
+                            .bg(if key % 2 == 0 {
+                                rgb(0x223344)
+                            } else {
+                                rgb(0x334455)
+                            })
+                            .child(div().size(144., 1.).bg(rgb(0xffffff)))
+                    },
+                )
+                .w(160.)
+                .h(100.)
+                .p(8.)
+                .bg(rgb(0x101820)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(140.)
+                    .top(8.)
+                    .size(8., 84.)
+                    .bg(rgba(0xffffff00)),
+            ),
+    );
+    let mut copies = 0;
+    for scroll in [0., 14., 28., 31., 60.] {
+        offset.set(scroll);
+        ui.prepare_frame();
+        let damage = ui.scene.borrow_mut().flush().damage;
+        copies += gpu
+            .render(&ui.scene.borrow(), &damage)
+            .unwrap()
+            .scroll_copies;
+        let mut fresh = GpuRenderer::new(160, 120).unwrap();
+        fresh
+            .render(&ui.scene.borrow(), &[Rect::new(0., 0., 160., 120.)])
+            .unwrap();
+        assert_eq!(
+            gpu.readback().unwrap(),
+            fresh.readback().unwrap(),
+            "scroll {scroll}"
+        );
+    }
+    // Texture blits cost Apple GPUs graphics memory; macOS repaints.
+    let expected = if cfg!(target_os = "macos") { 0 } else { 4 };
+    assert_eq!(copies, expected);
+}
+
+/// A rounded panel, overflow hidden, holding a scroll view beside a divider
+/// (an app's sidebar), scrolled down and back up in a wheel's uneven steps
+/// on a 2x pixel grid: a copy of the view's pixels must not carry the
+/// panel's corners, which stay where they are, down the view.
+#[test]
+fn rounded_panel_scrolled_down_and_up_matches_a_fresh_render() {
+    let _gpu_fixture = gpu_fixture();
+    use zgx::{compose::prelude::*, widgets::Ui};
+    let (w, h) = (160., 120.);
+    let renderer = || {
+        let mut gpu = GpuRenderer::new(320, 240).unwrap();
+        gpu.set_scale_factor(2.);
+        gpu
+    };
+    let mut gpu = renderer();
+    let mut ui = Ui::new(w, h);
+    ui.scene.borrow_mut().set_pixel_scale(2.);
+    let offset = ui.signal(0_f32);
+    let mut cards = column().gap(6.).p(6.);
+    for i in 0..30 {
+        cards = cards.child(div().w(96.).h(28.).bg(if i % 2 == 0 {
+            rgb(0x223344)
+        } else {
+            rgb(0x2a3a4a)
+        }));
+    }
+    ui.mount(
+        overlay().w(w).h(h).bg(rgb(0x2f6b3a)).child(
+            row()
+                .w(150.)
+                .h(110.)
+                .left(5.)
+                .top(5.)
+                .rounded(14.)
+                .bg(rgb(0x111111))
+                .overflow_hidden()
+                // Filled opaque and square: its moves copy where copying is
+                // allowed, and the panel's corners round it.
+                .child(
+                    scroll(offset.clone())
+                        .w(110.)
+                        .h(110.)
+                        .bg(rgb(0x111111))
+                        .child(cards),
+                )
+                .child(div().w(1.).h(110.).bg(rgb(0x333333)))
+                .child(div().w(38.).h(110.).bg(rgb(0x161616))),
+        ),
+    );
+    let steps = [
+        0., 3.5, 9.25, 17.0, 30.5, 48.0, 71.75, 90.0, 120.5, 150.0, 120.0, 95.5, 61.25, 40.0, 22.5,
+        8.75, 2.0, 0.,
+    ];
+    for scroll_to in steps {
+        offset.set(scroll_to);
+        ui.prepare_frame();
+        let damage = ui.scene.borrow_mut().flush().damage;
+        gpu.render(&ui.scene.borrow(), &damage).unwrap();
+        let mut fresh = renderer();
+        fresh
+            .render(&ui.scene.borrow(), &[Rect::new(0., 0., w, h)])
+            .unwrap();
+        assert!(
+            gpu.readback().unwrap() == fresh.readback().unwrap(),
+            "scroll {scroll_to}: differs from a fresh render"
+        );
+    }
 }
 
 /// A chat transcript: a measured, end-anchored virtual list of wrapped text
@@ -5470,6 +5810,50 @@ fn small_quads_of_different_shading_share_a_draw() {
     assert_eq!(large, 3);
 }
 
+/// In a clipping box, what lies wholly inside it and what its edge cuts
+/// share draws: scissored to the window or to the box, the inside ones
+/// lose no pixel either way. Every pixel is as the box cut it.
+#[test]
+fn what_a_clip_cuts_and_what_lies_inside_it_share_a_draw() {
+    let _gpu_fixture = gpu_fixture();
+    use zgx::{compose::prelude::*, widgets::Ui};
+    let render = |wide: f32, clip: bool| {
+        let mut gpu = GpuRenderer::new(600, 400).unwrap();
+        gpu.set_scale_factor(2.);
+        let mut ui = Ui::new(300., 200.);
+        gpu.install_text(&mut ui.scene.borrow_mut());
+        // Rows of a short bar inside the box and a long one past its edge.
+        let rows = column().size(100., 100.).gap(2.).children((0..10).map(|_| {
+            row()
+                .gap(2.)
+                .child(div().size(10., 6.).shrink_0().bg(rgb(0x3366aa)))
+                .child(div().size(wide, 6.).shrink_0().bg(rgb(0x3366aa)))
+        }));
+        ui.mount(match clip {
+            true => rows.overflow_hidden(),
+            false => rows,
+        });
+        ui.prepare_frame();
+        let damage = ui.scene.borrow_mut().flush().damage;
+        let draws = gpu.render(&ui.scene.borrow(), &damage).unwrap().draw_calls;
+        (draws, gpu.readback().unwrap())
+    };
+    let (draws, cut) = render(150., true);
+    // Twenty alternating clips, a draw each before.
+    assert!(draws <= 3, "{draws} draw calls");
+    // The long bars cut at the box's edge, as bars ending there draw.
+    let (_, ending) = render(88., false);
+    let differing = cut
+        .chunks(4)
+        .zip(ending.chunks(4))
+        .filter(|(a, b)| a != b)
+        .count();
+    assert_eq!(
+        differing, 0,
+        "{differing} pixels differ from bars ending at the edge"
+    );
+}
+
 /// Opaque rounded and bordered panels draw a flat interior with the basic
 /// shader and only their edge bands with the full one: the same bytes as one
 /// quad, at fractional positions and sizes, per-corner radii and any scale.
@@ -5771,4 +6155,930 @@ fn find_marks_are_rounded_whichever_shader_draws_the_text() {
         .filter(|(a, b)| a != b)
         .count();
     assert_eq!(changed, 0, "find marks differ from the full shader's");
+}
+
+/// Five lines of large text, fourteen letters a line, none twice (a letter
+/// repeated on whole pixels is one image, below 2x): enough to grow the
+/// glyph atlas past its first size.
+fn large_letters(scene: &mut Scene) -> Vec<NodeId> {
+    (0..5)
+        .map(|line| {
+            let text: String = (0..14)
+                .map(|i| (b'A' + (line * 5 + i) % 26) as char)
+                .collect();
+            scene.append(
+                scene.root(),
+                NodeKind::Text {
+                    text: text.as_str().into(),
+                    font_size: 120. + f32::from(line) * 7.,
+                    color: Color(255, 255, 255, 255),
+                },
+                fixed(1200., 170.),
+            )
+        })
+        .collect()
+}
+
+/// A screen of large text fills a grown atlas. A long idle keeps it (none
+/// of it could go without being rasterized again as the user comes back),
+/// and the next frame draws the same picture from it, uploading nothing.
+#[test]
+fn a_grown_atlas_its_screen_fills_stays_at_idle() {
+    let _gpu = gpu_fixture();
+    let mut scene = Scene::new(1200., 900.);
+    large_letters(&mut scene);
+    let mut gpu = GpuRenderer::new(1200, 900).unwrap();
+    let damage = scene.flush().damage;
+    gpu.render(&scene, &damage).unwrap();
+    let first_size = 512 * 512 * 4;
+    let grown = gpu.debug_cache_stats().atlas_bytes;
+    assert!(grown > first_size);
+    let before = gpu.readback().unwrap();
+    gpu.trim();
+    gpu.trim_atlas();
+    assert_eq!(gpu.debug_cache_stats().atlas_bytes, grown);
+    let whole = [Rect::new(0., 0., 1200., 900.)];
+    let stats = gpu.render(&scene, &whole).unwrap();
+    assert_eq!(stats.glyph_uploads, 0);
+    assert!(gpu.readback().unwrap() == before, "the same picture");
+}
+
+/// Large text grows the atlas, then gives way to a line of small text. A
+/// pause keeps the grown atlas; a long idle shrinks it to what the screen
+/// draws, its glyphs copied across: the next frame draws the same picture
+/// without rasterizing any of them again.
+#[test]
+fn a_grown_atlas_shrinks_at_idle_to_what_its_screen_draws() {
+    let _gpu = gpu_fixture();
+    let mut scene = Scene::new(1200., 900.);
+    let large = large_letters(&mut scene);
+    let mut gpu = GpuRenderer::new(1200, 900).unwrap();
+    let damage = scene.flush().damage;
+    gpu.render(&scene, &damage).unwrap();
+    let first_size = 512 * 512 * 4;
+    let grown = gpu.debug_cache_stats().atlas_bytes;
+    assert!(grown > first_size);
+    for id in large {
+        scene.remove(id);
+    }
+    scene.append(
+        scene.root(),
+        NodeKind::Text {
+            text: "The quick brown fox jumps over the lazy dog".into(),
+            font_size: 16.,
+            color: Color(255, 255, 255, 255),
+        },
+        fixed(1200., 40.),
+    );
+    let damage = scene.flush().damage;
+    gpu.render(&scene, &damage).unwrap();
+    let before = gpu.readback().unwrap();
+    gpu.trim();
+    assert_eq!(gpu.debug_cache_stats().atlas_bytes, grown);
+    gpu.trim_atlas();
+    assert_eq!(gpu.debug_cache_stats().atlas_bytes, first_size);
+    let whole = [Rect::new(0., 0., 1200., 900.)];
+    let stats = gpu.render(&scene, &whole).unwrap();
+    assert_eq!(stats.glyph_uploads, 0, "drawn from the glyphs copied");
+    assert!(gpu.readback().unwrap() == before, "the same picture");
+}
+
+/// A rounded, bordered image keeps its corners and its frame however it is
+/// fitted, on both of the renderer's ways of drawing an image: a portrait
+/// picture cropped top and bottom by `cover` too.
+#[test]
+fn a_rounded_image_keeps_its_corners_and_frame_however_it_fits() {
+    let _gpu_fixture = gpu_fixture();
+    use std::sync::Arc;
+    use zgx::{compose::prelude::*, image::ImageData, widgets::Ui};
+    let pixels: Vec<u8> = [230u8, 40, 40, 255].repeat(60 * 200);
+    let source = Arc::new(ImageData::new(60, 200, pixels).unwrap());
+    let background = [16, 32, 48, 255];
+    for (fit, layered, name) in [
+        (ObjectFit::Cover, false, "cover"),
+        (ObjectFit::Cover, true, "cover, in a layer"),
+        (ObjectFit::Fill, false, "fill"),
+        (ObjectFit::Fill, true, "fill, in a layer"),
+        (ObjectFit::None, false, "none"),
+    ] {
+        let mut gpu = GpuRenderer::new(120, 120).unwrap();
+        let mut ui = Ui::new(120., 120.);
+        let bitmap = source.clone();
+        ui.mount(div().size(120., 120.).bg(rgb(0x102030)).child({
+            let view = image_signal("Portrait", move || bitmap.clone())
+                .size(100., 100.)
+                .m(10.)
+                .rounded(24.)
+                .border(2.)
+                .border_color(rgb(0xffffff))
+                .object_fit(fit);
+            // Drawn into a layer of its own, then composited.
+            if layered { view.opacity(0.999) } else { view }
+        }));
+        ui.prepare_frame();
+        let damage = ui.scene.borrow_mut().flush().damage;
+        gpu.render(&ui.scene.borrow(), &damage).unwrap();
+        let pixels = gpu.readback().unwrap();
+        let at = |x: usize, y: usize| {
+            let i = (y * 120 + x) * 4;
+            [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+        };
+        // Outside the rounded corners: what is behind, at each corner.
+        for (x, y) in [(12, 12), (107, 12), (12, 107), (107, 107)] {
+            let near = at(x, y)
+                .iter()
+                .zip(background)
+                .all(|(a, b)| a.abs_diff(b) <= 1);
+            assert!(near, "{name}: corner at {x},{y}: {:?}", at(x, y));
+        }
+        // The frame, on every side, over the picture.
+        for (x, y) in [(60, 11), (60, 108), (11, 60), (108, 60)] {
+            assert!(
+                at(x, y)[1] > 200,
+                "{name}: frame at {x},{y}: {:?}",
+                at(x, y)
+            );
+        }
+        // And the picture within it.
+        assert!(
+            at(60, 60)[0] > 180 && at(60, 60)[1] < 110,
+            "{name}: {:?}",
+            at(60, 60)
+        );
+    }
+}
+
+/// An underline in each style, on a run of spaces so only the line shows: a
+/// double has two rows, dots and dashes have gaps along it (dashes longer),
+/// and a wave moves up and down, in the colour asked for, at both scales.
+#[test]
+fn underlines_draw_in_each_line_style() {
+    use std::sync::Arc;
+    use zgx::rich_text::{Decoration, LineStyle, RichText, TextRun};
+    let _gpu_fixture = gpu_fixture();
+    let red = Color(240, 20, 30, 255);
+    for scale in [1u32, 2] {
+        // The line's pixels in each column, top to bottom.
+        let columns = |style: LineStyle| {
+            let mut scene = Scene::new(200., 40.);
+            let text = " ".repeat(40);
+            let run = TextRun {
+                range: 0..text.len(),
+                underline: Some(Decoration::new(2.).color(red).line(style)),
+                ..Default::default()
+            };
+            scene.append(
+                scene.root(),
+                NodeKind::RichText {
+                    text: Arc::new(RichText::new(text, vec![run]).unwrap()),
+                },
+                fixed(200., 40.),
+            );
+            let mut gpu = GpuRenderer::new(200 * scale, 40 * scale).unwrap();
+            gpu.set_scale_factor(scale as f32);
+            let damage = scene.flush().damage;
+            gpu.render(&scene, &damage).unwrap();
+            let pixels = gpu.readback().unwrap();
+            let (width, height) = (200 * scale as usize, 40 * scale as usize);
+            (0..width)
+                .map(|x| {
+                    (0..height)
+                        .filter(|y| {
+                            let p = &pixels[(y * width + x) * 4..][..4];
+                            p[0] > 120 && p[1] < 110 && p[2] < 110
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let drawn = |columns: &[Vec<usize>]| columns.iter().filter(|c| !c.is_empty()).count();
+        // Runs of columns with ink.
+        let pieces = |columns: &[Vec<usize>]| {
+            columns
+                .windows(2)
+                .filter(|w| w[0].is_empty() && !w[1].is_empty())
+                .count()
+                + usize::from(!columns[0].is_empty())
+        };
+        let solid = columns(LineStyle::Solid);
+        assert!(
+            drawn(&solid) > 50,
+            "scale {scale}: no line: {}",
+            drawn(&solid)
+        );
+        assert_eq!(pieces(&solid), 1, "scale {scale}");
+        let thick = solid.iter().map(Vec::len).max().unwrap();
+        let double = columns(LineStyle::Double);
+        assert_eq!(pieces(&double), 1, "scale {scale}");
+        assert!(double.iter().map(Vec::len).max().unwrap() >= 2 * thick);
+        let (dotted, dashed) = (columns(LineStyle::Dotted), columns(LineStyle::Dashed));
+        assert!(
+            pieces(&dotted) > 6,
+            "scale {scale}: {} dots",
+            pieces(&dotted)
+        );
+        assert!(
+            pieces(&dashed) > 3,
+            "scale {scale}: {} dashes",
+            pieces(&dashed)
+        );
+        assert!(pieces(&dashed) < pieces(&dotted));
+        assert!(
+            drawn(&dashed) * 100 > drawn(&dotted) * 110,
+            "dashes cover more"
+        );
+        let wavy = columns(LineStyle::Wavy);
+        assert_eq!(pieces(&wavy), 1, "scale {scale}: a wave doesn't break");
+        let tops: Vec<usize> = wavy.iter().filter_map(|c| c.first().copied()).collect();
+        let (low, high) = (tops.iter().min().unwrap(), tops.iter().max().unwrap());
+        assert!(high - low >= 2, "scale {scale}: it moves: {low} to {high}");
+    }
+}
+
+/// `object_position` places what `cover` crops: a portrait's top, its middle
+/// (the default) or its bottom shows, and a `none` picture its corner.
+#[test]
+fn object_position_says_what_a_crop_keeps() {
+    use std::sync::Arc;
+    use zgx::{compose::prelude::*, image::ImageData, widgets::Ui};
+    let _gpu_fixture = gpu_fixture();
+    // A portrait in thirds: red, green, blue, top to bottom.
+    let (red, green, blue) = ([230, 30, 40, 255], [30, 210, 60, 255], [30, 70, 220, 255]);
+    let pixels: Vec<u8> = (0..60)
+        .flat_map(|y| {
+            let band = [red, green, blue][y / 20];
+            (0..20).flat_map(move |_| band)
+        })
+        .collect();
+    let source = Arc::new(ImageData::new(20, 60, pixels).unwrap());
+    let shown = |view: fn(View) -> View| {
+        let (mut gpu, mut ui) = (GpuRenderer::new(100, 100).unwrap(), Ui::new(100., 100.));
+        let bitmap = source.clone();
+        ui.mount(view(
+            image_signal("Portrait", move || bitmap.clone()).size(60., 60.),
+        ));
+        ui.prepare_frame();
+        let damage = ui.scene.borrow_mut().flush().damage;
+        gpu.render(&ui.scene.borrow(), &damage).unwrap();
+        let pixels = gpu.readback().unwrap();
+        move |x: usize, y: usize| -> [u8; 4] {
+            pixels[(y * 100 + x) * 4..][..4].try_into().unwrap()
+        }
+    };
+    let near = |a: [u8; 4], b: [u8; 4]| a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 12);
+    // Centred, as ever: the middle band fills the middle of the box.
+    let middle = shown(|v| v.object_fit(ObjectFit::Cover));
+    assert!(near(middle(30, 30), green), "{:?}", middle(30, 30));
+    let top = shown(|v| v.object_fit(ObjectFit::Cover).object_position(0.5, 0.));
+    assert!(near(top(30, 10), red), "{:?}", top(30, 10));
+    let bottom = shown(|v| v.object_fit(ObjectFit::Cover).object_position(0.5, 1.));
+    assert!(near(bottom(30, 50), blue), "{:?}", bottom(30, 50));
+    // Uncropped: a picture smaller than its box, at its end.
+    let end = shown(|v| v.object_fit(ObjectFit::None).object_position(1., 0.));
+    assert!(near(end(50, 5), red), "{:?}", end(50, 5));
+    assert!(!near(end(5, 5), red), "nothing at the other side");
+}
+
+/// The report's first frame: a 300 by 420 card in a zoomed box, its tilt 26.3°
+/// and perspective 53.6, so its edge is 93 points toward an eye 53.6 away.
+/// Its parent's layer holds what can show, and the frame draws.
+#[test]
+fn a_tilt_past_the_eye_inside_a_zoomed_layer_draws() {
+    let _gpu_fixture = gpu_fixture();
+    let (w, h) = (800., 900.);
+    let mut gpu = GpuRenderer::new(w as u32, h as u32).unwrap();
+    let mut scene = Scene::new(w, h);
+    scene.set_kind(scene.root(), NodeKind::Container(Layout::Overlay));
+    let zoomed = scene.append(
+        scene.root(),
+        NodeKind::Container(Layout::Overlay),
+        fixed(w, h),
+    );
+    scene.set_zoom(zoomed, 0.76);
+    scene.set_isolated(zoomed, true);
+    let card = scene.append(
+        zoomed,
+        NodeKind::Rect(Color(200, 40, 40, 255)),
+        fixed(300., 420.),
+    );
+    scene.set_transform(card, Transform { x: 240., y: 240. });
+    scene.set_isolated(card, true);
+    let tilt = |degrees: f32, perspective: f32| LocalTransform {
+        rotate_x: degrees.to_radians(),
+        perspective,
+        ..LocalTransform::IDENTITY
+    };
+    scene.set_local_transform(card, tilt(26.3, 53.6));
+    let bounds = scene.layer_bounds(zoomed);
+    assert!(
+        bounds.width <= w / 0.76 && bounds.height <= h / 0.76,
+        "what can show, not everything: {bounds:?}"
+    );
+    let report = scene.flush();
+    gpu.render(&scene, &report.damage).unwrap();
+    assert_eq!(gpu.take_issues(), Vec::<String>::new());
+    // At its distance, it fits where it always did.
+    scene.set_local_transform(card, tilt(0.5, 900.));
+    let bounds = scene.layer_bounds(zoomed);
+    assert!(bounds.width <= w && bounds.height <= h, "{bounds:?}");
+    let report = scene.flush();
+    gpu.render(&scene, &report.damage).unwrap();
+}
+
+/// Past the budget or the texture size, a layer rasterizes coarser and shows:
+/// no issue, the budget doing its job, and devtools can find it.
+#[test]
+fn a_layer_past_its_budget_draws_coarser_and_raises_no_issue() {
+    let _gpu_fixture = gpu_fixture();
+    for (width, height) in [(12_000., 12_000.), (60_000., 40.)] {
+        let mut gpu = GpuRenderer::new(100, 100).unwrap();
+        let mut scene = Scene::new(100., 100.);
+        scene.set_kind(scene.root(), NodeKind::Container(Layout::Overlay));
+        let layer = scene.append(
+            scene.root(),
+            NodeKind::Rect(Color(220, 30, 30, 255)),
+            fixed(width, height),
+        );
+        scene.set_isolated(layer, true);
+        scene.set_effects(
+            layer,
+            Effects {
+                opacity: 0.999,
+                ..Default::default()
+            },
+        );
+        let report = scene.flush();
+        gpu.render(&scene, &report.damage).unwrap();
+        assert_eq!(gpu.take_issues(), Vec::<String>::new());
+        assert_eq!(gpu.debug_cache_stats().layers_coarser, 1);
+        let pixels = gpu.readback().unwrap();
+        assert!(pixels[(10 * 100 + 10) * 4] > 200, "it shows");
+    }
+}
+
+/// Past 1024 layers, or the budget of them all, frames go on.
+#[test]
+fn layers_past_their_count_and_budget_all_draw() {
+    let _gpu_fixture = gpu_fixture();
+    let mut gpu = GpuRenderer::new(600, 600).unwrap();
+    let mut scene = Scene::new(600., 600.);
+    scene.set_kind(scene.root(), NodeKind::Container(Layout::Overlay));
+    for index in 0..1100 {
+        let side = if index < 8 { 2000. } else { 8. };
+        let layer = scene.append(
+            scene.root(),
+            NodeKind::Rect(Color(30, 200, 60, 255)),
+            fixed(side, side),
+        );
+        scene.set_isolated(layer, true);
+        scene.set_effects(
+            layer,
+            Effects {
+                opacity: 0.999,
+                ..Default::default()
+            },
+        );
+    }
+    let report = scene.flush();
+    gpu.render(&scene, &report.damage).unwrap();
+    assert_eq!(gpu.take_issues(), Vec::<String>::new());
+    assert!(gpu.debug_cache_stats().layers_coarser > 0);
+    assert!(gpu.readback().unwrap()[(300 * 600 + 300) * 4 + 1] > 150);
+}
+
+/// An image past the texture size or the budget at full size is drawn at
+/// the size it shows: nothing is left out, and nothing is said.
+#[test]
+fn images_too_large_for_a_texture_draw_at_the_size_they_show() {
+    use std::sync::Arc;
+    use zgx::image::ImageData;
+    let _gpu_fixture = gpu_fixture();
+    for (width, height) in [(5000, 4000), (40_000, 1)] {
+        let mut gpu = GpuRenderer::new(100, 100).unwrap();
+        let mut scene = Scene::new(100., 100.);
+        scene.set_kind(scene.root(), NodeKind::Container(Layout::Overlay));
+        let pixels = vec![255; width * height * 4];
+        let image = Arc::new(ImageData::new(width as u32, height as u32, pixels).unwrap());
+        scene.append(
+            scene.root(),
+            NodeKind::Rect(Color(30, 60, 220, 255)),
+            fixed(100., 100.),
+        );
+        scene.append(scene.root(), NodeKind::Image(image), fixed(50., 50.));
+        let report = scene.flush();
+        gpu.render(&scene, &report.damage).unwrap();
+        assert!(gpu.take_issues().is_empty());
+        let pixels = gpu.readback().unwrap();
+        assert!(pixels[(25 * 100 + 25) * 4] > 200, "the image shows");
+        assert!(pixels[(75 * 100 + 75) * 4 + 2] > 200);
+    }
+}
+
+/// The 33rd shadow on a panel is left off, once said, and the frame draws.
+#[test]
+fn a_panel_past_32_shadows_draws_the_first_32() {
+    use zgx::{compose::prelude::*, widgets::Ui};
+    let _gpu_fixture = gpu_fixture();
+    let mut gpu = GpuRenderer::new(100, 100).unwrap();
+    let mut ui = Ui::new(100., 100.);
+    let shadow = BoxShadow {
+        color: Color(0, 0, 0, 40),
+        offset: Transform { x: 0., y: 2. },
+        blur_radius: 2.,
+        spread: 0.,
+    };
+    ui.mount(
+        div()
+            .size(40., 40.)
+            .bg(Color(255, 255, 255, 255))
+            .shadows(vec![shadow; 33]),
+    );
+    ui.prepare_frame();
+    let damage = ui.scene.borrow_mut().flush().damage;
+    gpu.render(&ui.scene.borrow(), &damage).unwrap();
+    let issues = gpu.take_issues();
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert!(issues[0].contains("32 shadows"), "{issues:?}");
+}
+
+/// Where a tilted card shows and where it is hit are the same place: every
+/// point of the window, drawn against hit, at zoom 1 and 0.76, a sibling
+/// column beside it, under a scroll or not.
+#[test]
+fn a_tilted_card_is_hit_where_it_shows() {
+    let _gpu_fixture = gpu_fixture();
+    let (w, h) = (800usize, 600usize);
+    let tilt = LocalTransform {
+        rotate_x: 12f32.to_radians(),
+        rotate_y: (-12f32).to_radians(),
+        perspective: 900.,
+        ..LocalTransform::IDENTITY
+    };
+    for (zoom, scrolled) in [(1., 0.), (0.76, 0.), (1., 40.), (0.76, 40.)] {
+        let mut gpu = GpuRenderer::new(w as u32, h as u32).unwrap();
+        let mut scene = Scene::new(w as f32, h as f32);
+        scene.set_kind(scene.root(), NodeKind::Container(Layout::Overlay));
+        let page = scene.append(
+            scene.root(),
+            NodeKind::Container(Layout::Overlay),
+            fixed(w as f32, h as f32),
+        );
+        scene.set_transform(page, Transform { x: 30., y: 20. });
+        scene.set_zoom(page, zoom);
+        if zoom != 1. {
+            scene.set_isolated(page, true);
+        }
+        let list = scene.append(
+            page,
+            NodeKind::Container(Layout::Overlay),
+            fixed(w as f32, h as f32),
+        );
+        scene.set_transform(
+            list,
+            Transform {
+                x: 0.,
+                y: -scrolled,
+            },
+        );
+        let card = scene.append(
+            list,
+            NodeKind::Rect(Color(220, 30, 30, 255)),
+            fixed(200., 240.),
+        );
+        scene.set_transform(card, Transform { x: 80., y: 100. });
+        scene.set_isolated(card, true);
+        scene.set_local_transform(card, tilt);
+        let next = scene.append(
+            list,
+            NodeKind::Rect(Color(30, 30, 220, 255)),
+            fixed(200., 240.),
+        );
+        scene.set_transform(next, Transform { x: 400., y: 100. });
+        let report = scene.flush();
+        gpu.render(&scene, &report.damage).unwrap();
+        let pixels = gpu.readback().unwrap();
+        let mut wrong = Vec::new();
+        for (x, y) in (0..h)
+            .step_by(6)
+            .flat_map(|y| (0..w).step_by(6).map(move |x| (x, y)))
+        {
+            let at = (y * w + x) * 4;
+            let (red, blue) = (pixels[at], pixels[at + 2]);
+            let hit = scene.hit_test_all(x as f32 + 0.5, y as f32 + 0.5);
+            // The edges' antialiasing says nothing.
+            if (40..200).contains(&red.max(blue)) {
+                continue;
+            }
+            if (red > 200) != hit.contains(&card) || (blue > 200) != hit.contains(&next) {
+                wrong.push((x, y, red, blue));
+            }
+        }
+        assert!(
+            wrong.len() <= 8,
+            "zoom {zoom}, scrolled {scrolled}: {} points differ: {:?}",
+            wrong.len(),
+            &wrong[..wrong.len().min(8)]
+        );
+    }
+}
+
+/// A text's shadow paints its glyphs again, moved and in its colour, under
+/// them; without one, nothing does. Moved, it leaves no trail: its old place
+/// is damage.
+#[test]
+fn a_text_shadow_paints_under_its_glyphs_and_moves_without_a_trail() {
+    use zgx::{compose::prelude::*, widgets::Ui};
+    let _gpu_fixture = gpu_fixture();
+    let red = |p: &[u8]| p[0] > 180 && p[1] < 80 && p[2] < 80;
+    let draw = |shadow: bool| {
+        let (mut gpu, mut ui) = (GpuRenderer::new(200, 100).unwrap(), Ui::new(200., 100.));
+        let label = text("HHHH").text_size(40.).text_color(Color(0, 0, 0, 255));
+        let label = match shadow {
+            true => label.text_shadow(0., 30., 0., Color(230, 20, 20, 255)),
+            false => label,
+        };
+        ui.mount(
+            div()
+                .size(200., 100.)
+                .bg(Color(255, 255, 255, 255))
+                .child(label),
+        );
+        ui.prepare_frame();
+        let damage = ui.scene.borrow_mut().flush().damage;
+        gpu.render(&ui.scene.borrow(), &damage).unwrap();
+        let pixels = gpu.readback().unwrap();
+        (pixels.chunks(4).filter(|p| red(p)).count(), ui)
+    };
+    assert_eq!(draw(false).0, 0, "no shadow, no red");
+    let (count, ui) = draw(true);
+    assert!(count > 200, "the shadow shows: {count} red pixels");
+    // Its glyphs reach at most 50 down; its shadow 30 below that.
+    let mut scene = ui.scene.borrow_mut();
+    let node = scene
+        .children(scene.root())
+        .first()
+        .and_then(|div| scene.children(*div).first().copied())
+        .unwrap();
+    scene.set_transform(node, Transform { x: 100., y: 0. });
+    let damage = scene.flush().damage;
+    assert!(
+        damage.iter().any(|d| d.x <= 10. && d.y + d.height >= 75.),
+        "its old shadow is damage: {damage:?}"
+    );
+}
+
+/// A blurred text shadow spreads past its glyphs, lighter, where a sharp
+/// one stops; drawn again it rasterizes nothing (its blurred glyphs and
+/// quads are kept), and a sharp shadow beside it still draws sharp. Both
+/// paint below and beside the text's box (40 points down from a box 48
+/// high), as CSS's do: a text is clipped to its box, its shadows aren't.
+#[test]
+fn a_blurred_text_shadow_spreads_softly_and_is_kept() {
+    use zgx::{compose::prelude::*, widgets::Ui};
+    let _gpu_fixture = gpu_fixture();
+    // Reddened, then fully red.
+    let tinted = |p: &[u8]| i32::from(p[0]) - i32::from(p[1]) > 24;
+    let red = |p: &[u8]| p[0] > 180 && p[1] < 80 && p[2] < 80;
+    let draw = |blur: f32, sharp_too: bool| {
+        let (mut gpu, mut ui) = (GpuRenderer::new(200, 120).unwrap(), Ui::new(200., 120.));
+        let red_shadow = zgx::scene::TextShadow {
+            offset: Transform { x: 0., y: 40. },
+            blur,
+            color: Color(230, 20, 20, 255),
+        };
+        let blue_sharp = zgx::scene::TextShadow {
+            offset: Transform { x: 100., y: 0. },
+            blur: 0.,
+            color: Color(20, 20, 230, 255),
+        };
+        let shadows: Vec<_> = if sharp_too {
+            vec![red_shadow, blue_sharp]
+        } else {
+            vec![red_shadow]
+        };
+        ui.mount(
+            div().size(200., 120.).bg(Color(255, 255, 255, 255)).child(
+                text("HH")
+                    .size(200., 48.)
+                    .text_size(40.)
+                    .text_color(Color(0, 0, 0, 255))
+                    .text_shadows(shadows),
+            ),
+        );
+        ui.prepare_frame();
+        let damage = ui.scene.borrow_mut().flush().damage;
+        gpu.render(&ui.scene.borrow(), &damage).unwrap();
+        let pixels = gpu.readback().unwrap();
+        let counts = (
+            pixels.chunks(4).filter(|p| tinted(p)).count(),
+            pixels.chunks(4).filter(|p| red(p)).count(),
+            pixels.chunks(4).filter(|p| p[2] > 180 && p[0] < 80).count(),
+        );
+        // Again, whole: nothing rasterized, the same pixels.
+        let again = gpu
+            .render(&ui.scene.borrow(), &[Rect::new(0., 0., 200., 120.)])
+            .unwrap();
+        assert_eq!(again.glyph_uploads, 0, "kept");
+        assert_eq!(gpu.readback().unwrap(), pixels, "drawn the same");
+        counts
+    };
+    let (sharp_tint, sharp_red, _) = draw(0., false);
+    let (soft_tint, soft_red, _) = draw(3., false);
+    assert!(sharp_red > 200, "sharp: {sharp_red} red pixels");
+    assert!(
+        soft_tint > sharp_tint + 200,
+        "blurred, it reaches further: {soft_tint} tinted pixels, {sharp_tint} sharp"
+    );
+    assert!(
+        soft_red < sharp_red / 2,
+        "and is lighter: {soft_red} fully red, {sharp_red} sharp"
+    );
+    let (_, _, blue) = draw(3., true);
+    assert!(
+        blue > 200,
+        "a sharp shadow beside it draws: {blue} blue pixels"
+    );
+}
+
+/// A shadow reaches past its text's box; its glyphs don't. Under a parent
+/// that clips, truncated, clamped to a line, or cut at its box's width,
+/// a shadowed text draws its glyphs where it did without one, sharp shadow
+/// or blurred, and its shadow shows below its box (not past a parent's
+/// clip).
+#[test]
+fn a_shadowed_text_keeps_its_glyphs_clipped_where_they_were() {
+    use zgx::{compose::prelude::*, widgets::Ui};
+    let _gpu_fixture = gpu_fixture();
+    let dark = |p: &[u8]| p[0] < 100 && p[1] < 100 && p[2] < 100;
+    let tinted = |p: &[u8]| i32::from(p[0]) - i32::from(p[1]) > 24;
+    let long = "HHHH HHHH HHHH HHHH";
+    // Each case: its text, and whether a parent clips it (and its shadow)
+    // to 50 points high.
+    #[allow(clippy::type_complexity)]
+    let cases: [(&str, fn(View) -> View, bool); 4] = [
+        ("parent clip", |t| t, true),
+        ("truncate", |t| t.truncate(), false),
+        ("lines = 1", |t| t.line_clamp(1), false),
+        ("a word wider than its box", |t| t, false),
+    ];
+    for (case, style, parent_clips) in cases {
+        for blur in [0., 3.] {
+            let draw = |shadow: bool| {
+                let (mut gpu, mut ui) = (GpuRenderer::new(240, 160).unwrap(), Ui::new(240., 160.));
+                let word = case == "a word wider than its box";
+                let mut label = text(if word { "HHHHHHHHHH" } else { long })
+                    .size(if word { 100. } else { 120. }, 48.)
+                    .text_size(30.)
+                    .text_color(Color(0, 0, 0, 255));
+                if shadow {
+                    label = label.text_shadow(0., 60., blur, Color(230, 20, 20, 255));
+                }
+                let label = style(label);
+                let parent = div().size(240., if parent_clips { 50. } else { 160. });
+                let parent = if parent_clips {
+                    parent.overflow_hidden()
+                } else {
+                    parent
+                };
+                ui.mount(
+                    div()
+                        .size(240., 160.)
+                        .bg(Color(255, 255, 255, 255))
+                        .child(parent.child(label)),
+                );
+                ui.prepare_frame();
+                let damage = ui.scene.borrow_mut().flush().damage;
+                gpu.render(&ui.scene.borrow(), &damage).unwrap();
+                gpu.readback().unwrap()
+            };
+            let (plain, shadowed) = (draw(false), draw(true));
+            let glyphs = |pixels: &[u8]| pixels.chunks(4).map(dark).collect::<Vec<_>>();
+            assert_eq!(
+                glyphs(&shadowed),
+                glyphs(&plain),
+                "{case}, blur {blur}: its glyphs as they were"
+            );
+            assert!(glyphs(&plain).iter().any(|&d| d), "{case}: its glyphs show");
+            // Rows below its box (48 points) and below a clipping parent's (50).
+            let below = shadowed
+                .chunks(240 * 4)
+                .skip(52)
+                .flat_map(|row| row.chunks(4));
+            let reddened = below.filter(|p| tinted(p)).count();
+            match parent_clips {
+                true => assert_eq!(reddened, 0, "{case}, blur {blur}: not past its clip"),
+                false => assert!(
+                    reddened > 100,
+                    "{case}, blur {blur}: {reddened} shadow pixels below"
+                ),
+            }
+        }
+    }
+}
+
+/// The user's case: two large photos (4000 by 3000) shown as 300 by 420
+/// cards at 2x. Each texture holds its card's pixels, not its file's (48 MB
+/// each would pass the budget between them), both draw, and a card drawn
+/// larger (zoomed) is uploaded again, sharper; smaller, it keeps its own.
+#[test]
+fn large_photos_in_small_cards_hold_their_cards_pixels() {
+    use std::sync::Arc;
+    use zgx::image::ImageData;
+    let _gpu_fixture = gpu_fixture();
+    let (w, h) = (4000usize, 3000usize);
+    let photo = |shade: u8| {
+        let pixels: Vec<u8> = (0..w * h)
+            .flat_map(|p| {
+                [
+                    shade,
+                    ((p % w) * 255 / w) as u8,
+                    ((p / w) * 255 / h) as u8,
+                    255,
+                ]
+            })
+            .collect();
+        Arc::new(ImageData::new(w as u32, h as u32, pixels).unwrap())
+    };
+    let mut gpu = GpuRenderer::new(1400, 1000).unwrap();
+    gpu.set_scale_factor(2.);
+    let mut scene = Scene::new(700., 500.);
+    scene.set_kind(scene.root(), NodeKind::Container(Layout::Row));
+    let card = |scene: &mut Scene, image| {
+        scene.append(scene.root(), NodeKind::Image(image), fixed(300., 420.))
+    };
+    let first = card(&mut scene, photo(200));
+    card(&mut scene, photo(40));
+    let report = scene.flush();
+    let stats = gpu.render(&scene, &report.damage).unwrap();
+    assert!(gpu.take_issues().is_empty(), "both drawn");
+    assert_eq!(stats.image_uploads, 2);
+    // Stretched into 600 by 840 device pixels: held at 1120 by 840, its
+    // shape kept (3.8 MB each, not 48: two at 48 pass the budget).
+    let held = gpu.debug_cache_stats().image_bytes;
+    assert_eq!(held, 2 * 1120 * 840 * 4, "{held}");
+    // Its card's red, top left: the photo, not a gap.
+    let pixels = gpu.readback().unwrap();
+    assert!(pixels[(20 * 1400 + 20) * 4..][..3].iter().any(|&c| c > 150));
+    // Drawn three times as large: uploaded again, larger (its layer
+    // rasterizes at the nearest √2 step, 2.83).
+    scene.set_local_transform(
+        first,
+        LocalTransform {
+            scale: (3., 3.),
+            ..LocalTransform::IDENTITY
+        },
+    );
+    scene.set_isolated(first, true);
+    let report = scene.flush();
+    let stats = gpu.render(&scene, &report.damage).unwrap();
+    assert_eq!(stats.image_uploads, 1, "the larger one alone");
+    let zoomed = gpu.debug_cache_stats().image_bytes - 1120 * 840 * 4;
+    assert!(
+        zoomed > 3 * 1120 * 840 * 4 && zoomed < 4000 * 3000 * 4,
+        "{zoomed}"
+    );
+    // Back down: kept as it is (no churn).
+    scene.set_local_transform(first, LocalTransform::IDENTITY);
+    let report = scene.flush();
+    assert_eq!(gpu.render(&scene, &report.damage).unwrap().image_uploads, 0);
+}
+
+/// One layer as large as a 2x window (2880 by 1800, 20.7 MB) is drawn at
+/// its scale, not coarser: a layer has no room of its own past what the
+/// budget leaves (it had 16 MiB, and warned of the 64 MiB budget alone).
+#[test]
+fn a_window_sized_layer_draws_at_its_scale() {
+    let _gpu_fixture = gpu_fixture();
+    let mut gpu = GpuRenderer::new(2880, 1800).unwrap();
+    gpu.set_scale_factor(2.);
+    let mut scene = Scene::new(1440., 900.);
+    scene.set_kind(scene.root(), NodeKind::Container(Layout::Overlay));
+    let layer = scene.append(
+        scene.root(),
+        NodeKind::Rect(Color(200, 30, 30, 255)),
+        fixed(1440., 900.),
+    );
+    scene.set_isolated(layer, true);
+    scene.set_effects(
+        layer,
+        Effects {
+            opacity: 0.999,
+            ..Default::default()
+        },
+    );
+    let report = scene.flush();
+    gpu.render(&scene, &report.damage).unwrap();
+    assert_eq!(gpu.take_issues(), Vec::<String>::new());
+    // Its texture: 2882 by 1802 with its border, rounded up to 64s.
+    assert_eq!(gpu.debug_cache_stats().layer_bytes, 2944 * 1856 * 4);
+    // Each layer is listed: its node, its pixels, its scale.
+    let mut report = zgx::memory::Report::default();
+    gpu.memory(&mut report);
+    let line = report
+        .lines
+        .iter()
+        .find(|line| line.area == "gpu layer")
+        .expect("listed");
+    assert!(
+        line.name
+            .starts_with(&format!("@{} 2882x1802 px at 2.00x", layer.number())),
+        "{}",
+        line.name
+    );
+    assert_eq!(line.bytes, Some(2944 * 1856 * 4));
+}
+
+#[test]
+fn reading_into_a_kept_buffer_reads_what_a_fresh_read_does() {
+    let _gpu = gpu_fixture();
+    let mut scene = Scene::new(64., 48.);
+    let root = scene.root();
+    scene.set_kind(root, NodeKind::Container(Layout::Overlay));
+    // Red, green and blue a third each, and a translucent band over them:
+    // channels out of order, or alpha lost, would show.
+    for (i, fill) in [
+        Color(255, 0, 0, 255),
+        Color(0, 255, 0, 255),
+        Color(0, 0, 255, 255),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = scene.append(
+            root,
+            NodeKind::Panel {
+                layout: Layout::Overlay,
+                quad: QuadStyle {
+                    fill,
+                    ..Default::default()
+                },
+            },
+            fixed(21., 48.),
+        );
+        scene.set_transform(
+            id,
+            Transform {
+                x: i as f32 * 21.,
+                y: 0.,
+            },
+        );
+    }
+    let band = scene.append(
+        root,
+        NodeKind::Panel {
+            layout: Layout::Overlay,
+            quad: QuadStyle {
+                fill: Color(255, 255, 255, 128),
+                ..Default::default()
+            },
+        },
+        fixed(64., 8.),
+    );
+    scene.set_transform(band, Transform { x: 0., y: 20. });
+    scene.flush();
+    let mut gpu = GpuRenderer::new(64, 48).unwrap();
+    gpu.render(&scene, &[Rect::new(0., 0., 64., 48.)]).unwrap();
+    let fresh = gpu.readback().unwrap();
+    assert_eq!(&fresh[..4], &[255, 0, 0, 255], "RGBA, red first");
+    let green = (5 * 64 + 30) * 4;
+    assert_eq!(&fresh[green..green + 4], &[0, 255, 0, 255]);
+
+    // A kept read swaps red and blue on the GPU (a pass into an RGBA
+    // texture), a fresh one on the CPU: the same bytes either way.
+    let mut staging = zgx_gpu::Readback::default();
+    // Stale bytes of the right length, then of the wrong one: each read
+    // replaces them whole.
+    let mut kept = vec![0xAB; fresh.len()];
+    for _ in 0..2 {
+        gpu.readback_into(&mut kept, &mut staging).unwrap();
+        assert_eq!(kept, fresh);
+    }
+    let mut short = vec![7; 10];
+    gpu.readback_into(&mut short, &mut staging).unwrap();
+    assert_eq!(short, fresh);
+
+    // Another size: the kept pass and texture are made again for the new
+    // target, and read what a fresh read does.
+    gpu.resize(32, 24);
+    let mut small = Scene::new(32., 24.);
+    let small_root = small.root();
+    small.set_kind(small_root, NodeKind::Container(Layout::Overlay));
+    let dot = small.append(
+        small_root,
+        NodeKind::Panel {
+            layout: Layout::Overlay,
+            quad: QuadStyle {
+                fill: Color(10, 200, 90, 255),
+                ..Default::default()
+            },
+        },
+        fixed(8., 8.),
+    );
+    small.set_transform(dot, Transform { x: 4., y: 4. });
+    small.flush();
+    gpu.render(&small, &[Rect::new(0., 0., 32., 24.)]).unwrap();
+    let fresh = gpu.readback().unwrap();
+    assert_eq!(fresh.len(), 32 * 24 * 4);
+    gpu.readback_into(&mut kept, &mut staging).unwrap();
+    assert_eq!(kept, fresh);
 }

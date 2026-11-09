@@ -19,10 +19,14 @@ use std::{
     collections::HashMap,
     ops::Range,
     rc::Rc,
+    sync::Arc,
 };
 
 /// Shapes one line, wrapped at a width if given (`Scene::line_shaper`).
 pub(crate) type LineShaper = Rc<dyn Fn(&str, Option<f32>) -> Box<dyn TextLayout>>;
+/// Shapes a styled line (`Scene::rich_line_shaper`).
+pub(crate) type RichLineShaper =
+    Rc<dyn Fn(&crate::rich_text::RichText, Option<f32>) -> Box<dyn TextLayout>>;
 
 /// A line's colours: byte ranges of the line, each with the colour its
 /// text shows in (the rest, the editor's).
@@ -36,13 +40,240 @@ pub type LineColors = Vec<(Range<usize>, crate::scene::Color)>;
 /// must depend on nothing but its arguments.
 pub type Highlighter = Rc<dyn Fn(&str, u32) -> (LineColors, u32)>;
 
+/// How a range of a line shows (`SpanHighlighter`). Where spans overlap,
+/// each of colour, weight and background is the first's (by start) that
+/// sets it, and the flags are any's: a code span inside bold text keeps the
+/// bold weight and shows its own colour.
+///
+/// Built from its default (or a colour) with its methods, so styles added
+/// later leave the code that builds these as it is:
+/// `SpanStyle::default().weight(600).italic()`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct SpanStyle {
+    /// Its text's colour (none: the editor's).
+    pub color: Option<crate::scene::Color>,
+    /// Its font weight (`600`): shaped so, so carets and hits follow it.
+    pub weight: Option<u16>,
+    /// Italic: shaped so.
+    pub italic: bool,
+    /// A line through it.
+    pub strike: bool,
+    /// A wash behind it (inline code).
+    pub background: Option<crate::scene::Color>,
+}
+impl From<crate::scene::Color> for SpanStyle {
+    fn from(color: crate::scene::Color) -> Self {
+        Self {
+            color: Some(color),
+            ..Self::default()
+        }
+    }
+}
+impl SpanStyle {
+    /// Its text in `color`.
+    pub const fn color(mut self, color: crate::scene::Color) -> Self {
+        self.color = Some(color);
+        self
+    }
+    /// Its text in font weight `weight` (`600`).
+    pub const fn weight(mut self, weight: u16) -> Self {
+        self.weight = Some(weight);
+        self
+    }
+    /// Its text italic.
+    pub const fn italic(mut self) -> Self {
+        self.italic = true;
+        self
+    }
+    /// A line through its text.
+    pub const fn strike(mut self) -> Self {
+        self.strike = true;
+        self
+    }
+    /// A wash of `color` behind its text (inline code).
+    pub const fn background(mut self, color: crate::scene::Color) -> Self {
+        self.background = Some(color);
+        self
+    }
+    fn merge(&mut self, style: &SpanStyle) {
+        self.color = self.color.or(style.color);
+        self.weight = self.weight.or(style.weight);
+        self.italic |= style.italic;
+        self.strike |= style.strike;
+        self.background = self.background.or(style.background);
+    }
+    /// Whether it only colours its text.
+    fn colors_only(&self) -> bool {
+        self.weight.is_none() && !self.italic && !self.strike && self.background.is_none()
+    }
+    /// Whether it changes how its text is shaped (and so its width).
+    fn shapes(&self) -> bool {
+        self.weight.is_some() || self.italic
+    }
+}
+/// A line's styled ranges: byte ranges of the line, each with how it shows.
+pub type LineSpans = Vec<(Range<usize>, SpanStyle)>;
+/// A `Highlighter` that styles its ranges (`SpanStyle`) beyond colouring
+/// them: weight and italics (which its lines are shaped with, so carets,
+/// hits and wrapping follow them), strikes and washes behind the text.
+pub type SpanHighlighter = Rc<dyn Fn(&str, u32) -> (LineSpans, u32)>;
+/// A colouring highlighter as one of spans.
+pub(crate) fn span_highlighter(highlighter: Highlighter) -> SpanHighlighter {
+    Rc::new(move |line, before| {
+        let (colors, leaves) = highlighter(line, before);
+        let spans = colors
+            .into_iter()
+            .map(|(range, color)| (range, SpanStyle::from(color)))
+            .collect();
+        (spans, leaves)
+    })
+}
+
+/// `line`'s runs as `spans` (in order by start, on its character
+/// boundaries) style them, overlapping spans merged: each run's range, and
+/// its style (`None` for the editor's own).
+fn runs(line: &str, spans: &LineSpans) -> Vec<(Range<usize>, Option<SpanStyle>)> {
+    // Apart (a code highlighter's tokens): each span a run, as they are.
+    if spans.windows(2).all(|w| w[0].0.end <= w[1].0.start) {
+        let mut runs = Vec::with_capacity(spans.len() * 2 + 1);
+        let mut at = 0;
+        for (range, style) in spans {
+            if range.start > at {
+                runs.push((at..range.start, None));
+            }
+            runs.push((range.clone(), Some(*style)));
+            at = range.end;
+        }
+        if at < line.len() {
+            runs.push((at..line.len(), None));
+        }
+        return runs;
+    }
+    // Where a run may change: each span's ends, and the line's.
+    let mut cuts: Vec<usize> = Vec::with_capacity(spans.len() * 2 + 2);
+    cuts.push(0);
+    cuts.push(line.len());
+    for (range, _) in spans {
+        cuts.push(range.start);
+        cuts.push(range.end);
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut runs: Vec<(Range<usize>, Option<SpanStyle>)> = Vec::with_capacity(cuts.len());
+    for pair in cuts.windows(2) {
+        let (start, end) = (pair[0], pair[1]);
+        let mut style: Option<SpanStyle> = None;
+        for (range, span) in spans {
+            if range.start > start {
+                break;
+            }
+            if range.end >= end {
+                style.get_or_insert_default().merge(span);
+            }
+        }
+        match runs.last_mut() {
+            Some((last, last_style)) if *last_style == style => last.end = end,
+            _ => runs.push((start..end, style)),
+        }
+    }
+    runs
+}
+/// `line` as `spans` style it, in `font` at `size`, coloured `color` where
+/// no span colours it (`None` if it is empty or has no spans).
+pub(crate) fn styled_line(
+    line: &str,
+    spans: &LineSpans,
+    color: crate::scene::Color,
+    size: f32,
+    font: &crate::text_layout::FontStyle,
+) -> Option<crate::rich_text::RichText> {
+    if line.is_empty() || spans.is_empty() {
+        return None;
+    }
+    // Spans that only colour (a code highlighter's): runs straight from
+    // them, as before styles, an earlier span keeping what it overlaps.
+    if spans.iter().all(|(_, style)| style.colors_only()) {
+        let run = |range: Range<usize>, color| crate::rich_text::TextRun {
+            range,
+            font: font.clone(),
+            font_size: size,
+            color,
+            ..Default::default()
+        };
+        let mut runs = Vec::with_capacity(spans.len() * 2 + 1);
+        let mut at = 0;
+        for (range, style) in spans {
+            let start = range.start.max(at);
+            if start >= range.end {
+                continue;
+            }
+            if start > at {
+                runs.push(run(at..start, color));
+            }
+            runs.push(run(start..range.end, style.color.unwrap_or(color)));
+            at = range.end;
+        }
+        if at < line.len() {
+            runs.push(run(at..line.len(), color));
+        }
+        return crate::rich_text::RichText::new(line, runs).ok();
+    }
+    let runs: Vec<_> = runs(line, spans)
+        .into_iter()
+        .map(|(range, style)| {
+            let style = style.unwrap_or_default();
+            let mut font = font.clone();
+            if let Some(weight) = style.weight {
+                font.weight = weight.clamp(1, 1000);
+            }
+            font.italic |= style.italic;
+            crate::rich_text::TextRun {
+                range,
+                font,
+                font_size: size,
+                color: style.color.unwrap_or(color),
+                background: style.background,
+                strikethrough: style.strike.then(|| crate::rich_text::Decoration::new(1.)),
+                ..Default::default()
+            }
+        })
+        .collect();
+    crate::rich_text::RichText::new(line, runs).ok()
+}
+/// What shapes a styled line beyond its text: its runs' weights and
+/// slants (`None`: it shapes as its plain text does).
+fn shape_key(spans: &LineSpans) -> Option<ShapeKey> {
+    if !spans.iter().any(|(_, s)| s.shapes()) {
+        return None;
+    }
+    Some(
+        spans
+            .iter()
+            .filter(|(_, s)| s.shapes())
+            .map(|(r, s)| {
+                (
+                    r.start as u32,
+                    r.end as u32,
+                    s.weight.unwrap_or(0),
+                    s.italic,
+                )
+            })
+            .collect(),
+    )
+}
+
 /// A text this long (in bytes, or lines) is laid out by its lines; a
 /// shorter one whole, as before.
 pub(crate) const LONG_TEXT_BYTES: usize = 64 * 1024;
 pub(crate) const LONG_TEXT_LINES: usize = 2_000;
 /// Whether `text` is long enough to lay out by its lines.
 pub(crate) fn is_long(text: &str) -> bool {
-    text.len() > LONG_TEXT_BYTES || text.match_indices('\n').nth(LONG_TEXT_LINES).is_some()
+    // Its line breaks counted only where there could be enough, a word of
+    // bytes at a time (an iterator of matches costs a call each).
+    text.len() > LONG_TEXT_BYTES
+        || (text.len() > LONG_TEXT_LINES
+            && text.bytes().filter(|byte| *byte == b'\n').count() > LONG_TEXT_LINES)
 }
 
 /// Lines kept shaped: about a few screens' worth.
@@ -63,6 +294,9 @@ struct Shaping {
 pub(crate) struct LineCache {
     shaping: RefCell<Option<Shaping>>,
     shaped: RefCell<HashMap<Box<str>, Shaped>>,
+    /// Lines whose spans shape them (weights, italics), by their text and
+    /// those spans' shaping (`shape_key`).
+    styled: RefCell<HashMap<StyledKey, Shaped>>,
     /// A wrapped line's height once shaped, by its text: kept when its
     /// layout is evicted, so the lines above what shows keep their places.
     heights: RefCell<HashMap<Box<str>, f32>>,
@@ -70,7 +304,13 @@ pub(crate) struct LineCache {
     last: RefCell<Option<Rc<LinesLayout>>>,
     /// The editor's text revision `last` is of, if it is its committed text.
     last_revision: Cell<Option<u64>>,
-    highlighter: RefCell<Option<Highlighter>>,
+    highlighter: RefCell<Option<SpanHighlighter>>,
+    /// The highlighter has given a span that shapes its line (a weight,
+    /// italics): only then is a line asked for its spans as it is shaped,
+    /// so one that only colours costs what it did. `restyled`: it just
+    /// became so (`take_restyled`).
+    shapes: Cell<bool>,
+    restyled: Cell<bool>,
     /// What each line leaves the next, from the first; as far as known.
     states: RefCell<Vec<u32>>,
     /// What the lines below the last edit left before it: once the lines
@@ -90,13 +330,36 @@ struct Tail {
 }
 /// A shaped line, and when it was last used.
 type Shaped = (Rc<dyn TextLayout>, u64);
+/// What shapes a styled line's runs: each one's range, weight and slant.
+type ShapeKey = Box<[(u32, u32, u16, bool)]>;
+/// A styled line's text and what shapes its runs (`shape_key`).
+type StyledKey = (Box<str>, ShapeKey);
 /// A highlighted line: its colours, what it leaves the next, when used.
 struct Colored {
-    colors: Rc<LineColors>,
+    colors: Rc<LineSpans>,
     leaves: u32,
     used: u64,
 }
 impl LineCache {
+    /// The last layout made: the text it shows, by its lines.
+    pub(crate) fn last_layout(&self) -> Option<Rc<LinesLayout>> {
+        self.last.borrow().clone()
+    }
+    /// `text` as a `Text`: the last layout's, edited to it (`Text::edited_to`),
+    /// so a short text's keystroke copies a chunk of it, not all of it.
+    pub(crate) fn text_of(&self, text: &str) -> Text {
+        match self.last.borrow().as_ref() {
+            Some(last) => last.text.edited_to(text),
+            None => Text::new(text),
+        }
+    }
+    /// Let go of the last layout, which holds this cache in turn: called as
+    /// its editor goes (`widgets`), or the two would keep each other, their
+    /// lines and the shaper alive.
+    pub(crate) fn forget_last(&self) {
+        self.last.borrow_mut().take();
+        self.last_revision.set(None);
+    }
     /// The layout of the text `text` makes, its last one if the text and
     /// shaping are the same: known by the text's `revision`
     /// (`TextEditor::revision`) if it is an editor's committed text, before
@@ -111,7 +374,7 @@ impl LineCache {
         wrap: Option<f32>,
         font: &crate::text_layout::FontStyle,
         revision: u64,
-        shape: impl FnOnce() -> LineShaper,
+        shape: impl FnOnce() -> (LineShaper, RichLineShaper),
     ) -> Rc<LinesLayout> {
         let shaping = Shaping {
             size: size.to_bits(),
@@ -121,6 +384,7 @@ impl LineCache {
         };
         if self.shaping.borrow().as_ref() != Some(&shaping) {
             self.shaped.borrow_mut().clear();
+            self.styled.borrow_mut().clear();
             self.heights.borrow_mut().clear();
             *self.last.borrow_mut() = None;
             self.last_revision.set(None);
@@ -213,9 +477,10 @@ impl LineCache {
             *tail = None;
         }
     }
-    /// Colour lines with `highlighter` (none: the editor's colour).
-    pub(crate) fn set_highlighter(&self, highlighter: Option<Highlighter>) {
+    /// Style lines with `highlighter` (none: the editor's style).
+    pub(crate) fn set_highlighter(&self, highlighter: Option<SpanHighlighter>) {
         *self.highlighter.borrow_mut() = highlighter;
+        self.shapes.set(false);
         self.states.borrow_mut().clear();
         *self.tail.borrow_mut() = None;
         self.colored.borrow_mut().clear();
@@ -228,9 +493,14 @@ impl LineCache {
     pub(crate) fn highlighted(&self) -> bool {
         self.highlighter.borrow().is_some()
     }
-    /// Line `i`'s colours, if it has a highlighter: what the lines above
+    /// Whether a line's spans shape it now that did not before: what was
+    /// laid out without them is laid out again.
+    pub(crate) fn take_restyled(&self) -> bool {
+        self.restyled.replace(false)
+    }
+    /// Line `i`'s spans, if it has a highlighter: what the lines above
     /// it leave found first (each once, until one changes).
-    pub(crate) fn colors(&self, layout: &LinesLayout, i: usize) -> Option<Rc<LineColors>> {
+    pub(crate) fn spans(&self, layout: &LinesLayout, i: usize) -> Option<Rc<LineSpans>> {
         let highlight = self.highlighter.borrow().clone()?;
         loop {
             let known = self.states.borrow().len();
@@ -259,7 +529,12 @@ impl LineCache {
     }
     /// `text` highlighted after a line that left `before` (from the cache
     /// if it is there; no borrow is held while the highlighter runs).
-    fn highlight(&self, highlight: &Highlighter, text: &str, before: u32) -> (Rc<LineColors>, u32) {
+    fn highlight(
+        &self,
+        highlight: &SpanHighlighter,
+        text: &str,
+        before: u32,
+    ) -> (Rc<LineSpans>, u32) {
         let tick = self.clock.get() + 1;
         self.clock.set(tick);
         let key = (Box::<str>::from(text), before);
@@ -276,6 +551,10 @@ impl LineCache {
                 && text.is_char_boundary(range.end)
         });
         colors.sort_by_key(|(range, _)| range.start);
+        if !self.shapes.get() && colors.iter().any(|(_, style)| style.shapes()) {
+            self.shapes.set(true);
+            self.restyled.set(true);
+        }
         let colors = Rc::new(colors);
         let mut colored = self.colored.borrow_mut();
         if colored.len() >= SHAPED_LINES * 4 {
@@ -295,6 +574,32 @@ impl LineCache {
         );
         (colors, leaves)
     }
+    /// Line `i` shaped with the runs its spans give it, if they shape it
+    /// (a weight, italics): `None` for a line shaped as its plain text.
+    fn styled(&self, layout: &LinesLayout, i: usize, text: &str) -> Option<Rc<dyn TextLayout>> {
+        if !self.shapes.get() {
+            return None;
+        }
+        let spans = self.spans(layout, i)?;
+        let key = (Box::<str>::from(text), shape_key(&spans)?);
+        let tick = self.clock.get() + 1;
+        self.clock.set(tick);
+        if let Some((layout, used)) = self.styled.borrow_mut().get_mut(&key) {
+            *used = tick;
+            return Some(layout.clone());
+        }
+        let (size, font) = {
+            let shaping = self.shaping.borrow();
+            let shaping = shaping.as_ref()?;
+            (f32::from_bits(shaping.size), shaping.font.clone())
+        };
+        let rich = styled_line(text, &spans, crate::scene::Color(0, 0, 0, 255), size, &font)?;
+        let shaped: Rc<dyn TextLayout> = (layout.rich)(&rich, layout.wrap).into();
+        let mut styled = self.styled.borrow_mut();
+        evict(&mut styled);
+        styled.insert(key, (shaped.clone(), tick));
+        Some(shaped)
+    }
     /// Line `text`, shaped (from the cache if it is there).
     fn line(&self, text: &str, shape: &LineShaper, wrap: Option<f32>) -> Rc<dyn TextLayout> {
         let tick = self.clock.get() + 1;
@@ -305,15 +610,19 @@ impl LineCache {
         }
         let layout: Rc<dyn TextLayout> = shape(text, wrap).into();
         let mut shaped = self.shaped.borrow_mut();
-        if shaped.len() >= SHAPED_LINES {
-            // The least recently used half goes: amortized, a line a shape.
-            let mut uses: Vec<u64> = shaped.values().map(|(_, used)| *used).collect();
-            let (_, median, _) = uses.select_nth_unstable(SHAPED_LINES / 2);
-            let median = *median;
-            shaped.retain(|_, (_, used)| *used > median);
-        }
+        evict(&mut shaped);
         shaped.insert(text.into(), (layout.clone(), tick));
         layout
+    }
+}
+/// Shaped lines past the most kept: the least recently used half goes
+/// (amortized, a line a shape).
+fn evict<K: Eq + std::hash::Hash>(shaped: &mut HashMap<K, Shaped>) {
+    if shaped.len() >= SHAPED_LINES {
+        let mut uses: Vec<u64> = shaped.values().map(|(_, used)| *used).collect();
+        let (_, median, _) = uses.select_nth_unstable(SHAPED_LINES / 2);
+        let median = *median;
+        shaped.retain(|_, (_, used)| *used > median);
     }
 }
 
@@ -387,23 +696,61 @@ pub(crate) struct LinesLayout {
     widest: Cell<f32>,
     heights: Option<RefCell<Heights>>,
     shape: LineShaper,
+    rich: RichLineShaper,
     cache: Rc<LineCache>,
+    /// Lines across chunks, joined once (a long line's every draw would
+    /// copy it): a few, by number.
+    joined: RefCell<HashMap<usize, Arc<str>>>,
 }
+/// A line's text: in its chunk, or joined across chunks and kept.
+pub(crate) enum LineText<'a> {
+    In(&'a str),
+    Joined(Arc<str>),
+}
+impl std::ops::Deref for LineText<'_> {
+    type Target = str;
+    fn deref(&self) -> &str {
+        match self {
+            LineText::In(text) => text,
+            LineText::Joined(text) => text,
+        }
+    }
+}
+impl LineText<'_> {
+    /// As a node's text: the joined line shared, not copied.
+    pub(crate) fn to_arc(&self) -> Arc<str> {
+        match self {
+            LineText::In(text) => Arc::from(*text),
+            LineText::Joined(text) => text.clone(),
+        }
+    }
+}
+/// Joined lines a layout keeps, at most.
+const JOINED_LINES: usize = 64;
 impl LinesLayout {
-    fn new(text: Text, wrap: Option<f32>, shape: LineShaper, cache: Rc<LineCache>) -> Self {
+    fn new(
+        text: Text,
+        wrap: Option<f32>,
+        (shape, rich): (LineShaper, RichLineShaper),
+        cache: Rc<LineCache>,
+    ) -> Self {
         let longest = text.longest_line();
         let sample = shape("0", None);
         let (advance, row) = sample.size();
         let mut layout = Self {
             text,
             wrap,
-            row: row.max(1.),
+            // Any height a line can have (a fraction of a point too), but
+            // none: a line is found by dividing by it.
+            row: if row > 0. { row } else { 1. },
             advance: advance.max(0.),
             longest,
             widest: Cell::new(0.),
             heights: None,
             shape,
+            rich,
             cache,
+            joined: RefCell::default(),
         };
         if let Some(width) = wrap {
             let known = layout.cache.heights.borrow();
@@ -439,7 +786,9 @@ impl LinesLayout {
             widest: Cell::new(old.widest.get()),
             heights: None,
             shape: old.shape.clone(),
+            rich: old.rich.clone(),
             cache: old.cache.clone(),
+            joined: RefCell::default(),
         };
         // The edited lines' lengths count for the longest.
         for i in kept - 1..first_moved.min(layout.line_count()) {
@@ -481,8 +830,22 @@ impl LinesLayout {
     pub(crate) fn line_range(&self, i: usize) -> Range<usize> {
         self.text.line_range(i)
     }
-    pub(crate) fn line_text(&self, i: usize) -> std::borrow::Cow<'_, str> {
-        self.text.line(i)
+    pub(crate) fn line_text(&self, i: usize) -> LineText<'_> {
+        if let Some(text) = self.joined.borrow().get(&i) {
+            return LineText::Joined(text.clone());
+        }
+        match self.text.line(i) {
+            std::borrow::Cow::Borrowed(text) => LineText::In(text),
+            std::borrow::Cow::Owned(text) => {
+                let text: Arc<str> = text.into();
+                let mut joined = self.joined.borrow_mut();
+                if joined.len() >= JOINED_LINES {
+                    joined.clear();
+                }
+                joined.insert(i, text.clone());
+                LineText::Joined(text)
+            }
+        }
     }
     /// The line holding byte `offset` (a line's end, before its break, is
     /// its own; the offset after the break, the next line's).
@@ -527,7 +890,10 @@ impl LinesLayout {
     /// Line `i`, shaped.
     pub(crate) fn line(&self, i: usize) -> Rc<dyn TextLayout> {
         let text = self.line_text(i);
-        let layout = self.cache.line(&text, &self.shape, self.wrap);
+        let layout = match self.cache.styled(self, i, &text) {
+            Some(layout) => layout,
+            None => self.cache.line(&text, &self.shape, self.wrap),
+        };
         let (width, height) = layout.size();
         if width > self.widest.get() {
             self.widest.set(width);
@@ -579,6 +945,13 @@ impl LinesLayout {
             let line = self.line_range(i);
             let (a, b) = (start.max(line.start), end.min(line.end));
             if a >= b {
+                // An empty line in the selection: its line break, a little wide.
+                if line.is_empty() && start <= line.start && end > line.end {
+                    let row = self.line(i).caret_position(Default::default());
+                    let width = crate::text_layout::empty_line_width(row.height);
+                    let sliver = Rect::new(row.x, row.y, width, row.height);
+                    rects.push(self.shift(i, sliver));
+                }
                 continue;
             }
             let layout = self.line(i);
@@ -650,10 +1023,38 @@ impl TextLayout for LinesLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Spans that only colour give their runs as before styles: in order,
+    /// an earlier span keeping what a later one overlaps, the rest the
+    /// editor's colour.
+    #[test]
+    fn colour_spans_give_runs_as_before_styles() {
+        use crate::scene::Color;
+        let (red, blue, ink) = (
+            Color(255, 0, 0, 255),
+            Color(0, 0, 255, 255),
+            Color(0, 0, 0, 255),
+        );
+        let spans: LineSpans = vec![(1..4, red.into()), (2..6, blue.into())];
+        let font = crate::text_layout::FontStyle::default();
+        let rich = styled_line("abcdefgh", &spans, ink, 14., &font).unwrap();
+        let runs: Vec<_> = rich
+            .runs()
+            .iter()
+            .map(|r| (r.range.clone(), r.color))
+            .collect();
+        assert_eq!(runs, [(0..1, ink), (1..4, red), (4..6, blue), (6..8, ink)]);
+    }
     use crate::text_layout::{FallbackTextLayout, FontStyle};
 
-    fn shaper() -> LineShaper {
-        Rc::new(|text, width| Box::new(FallbackTextLayout::new(text, 14., width)))
+    fn rich() -> RichLineShaper {
+        Rc::new(|rich, width| Box::new(FallbackTextLayout::with_rich(rich, width)))
+    }
+    fn shaper() -> (LineShaper, RichLineShaper) {
+        (
+            Rc::new(|text, width| Box::new(FallbackTextLayout::new(text, 14., width))),
+            rich(),
+        )
     }
     fn lines(text: &str, wrap: Option<f32>) -> Rc<LinesLayout> {
         Rc::new(LineCache::default()).layout(
@@ -792,7 +1193,7 @@ mod tests {
             None,
             &FontStyle::default(),
             0,
-            || shape,
+            || (shape, rich()),
         );
         let shown = layout.lines_between(50_000. * layout.row, 50_000. * layout.row + 600.);
         assert_eq!(shown.start, 50_000);

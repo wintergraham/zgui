@@ -19,6 +19,7 @@ ui.component<P>(build: (props: P) -> Node) -> (props: P) -> Node
 ui.on_mount(f: () -> ...unknown) -> ()
 ui.slot(name: string, props: Props?) -> Node
 ui.contribute(name: string, node: Node) -> ()
+ui.contribute({ target: string, before: Node?, after: Node?, replace: Node? }) -> ()
 ui.set<T>(state: State<T>, value: T) -> Action
 ui.toggle(state: State<boolean>) -> Action
 ui.add(state: State<number>, by: number?) -> Action
@@ -26,7 +27,9 @@ ui.action(name: string, arg: unknown?) -> Action
 ui.invoke(name: string, arg: unknown?) -> ()
 ui.call(name: string, arg: unknown?) -> Promise
 ui.task<A...>(f: (A...) -> (), A...) -> Task
-ui.try<T, A...>(f: (A...) -> ...T, A...) -> (T?, string?)
+ui.async<A...>(f: (A...) -> ()) -> (A...) -> ()
+ui.optimistic<T>(state: State<T>, next: T, save: () -> ...any) -> UiError?
+ui.try<T, A...>(f: (A...) -> ...T, A...) -> (T?, UiError?)
 ui.resource<T>(load: () -> T, opts: { initial: T }?) -> Resource<T>
 ui.fetch(url: string, opts: FetchOptions?) -> Promise<Response>
 ui.clipboard.read() -> string?
@@ -37,6 +40,8 @@ ui.open_files(opts: FilePickerOptions?) -> Promise<{ File }>
 ui.save_file(opts: FilePickerOptions?) -> Promise<File?>
 ui.read_file(file: File | string) -> Promise<string>
 ui.write_file(file: File | string, text: string) -> Promise<nil>
+ui.open_folder(opts: FolderPickerOptions?) -> Promise<Folder?>
+ui.remembered_folder(key: string) -> Promise<Folder?>
 ui.args: { string }
 ui.on_open(handler: (e: { files: { File }, urls: { string } }) -> ())
 ```
@@ -74,7 +79,7 @@ local tabs = ui.state("tabs", {} :: { Tab })
 | `set(value: T)` | replaces the value | |
 | `update(f: (value: T) -> ...T)` | `f` gets a mutable copy: change it and return nothing, or return the new value | copies the whole value into Luau and back |
 | `set_key(path, value)` | one key (`"title"`), a list index from 1 (`3`), or a path (`{ "tabs", 3, "title" }`), where a table step picks a list's first item with those fields (`{ "c1", { id = "m5" }, "text" }`); `nil` removes a key | makes missing tables along the path; an index may be one past the end (appends); a list cannot get a hole (`nil` removes only its last item); the value is not type checked |
-| `append(path, text)` | adds `text` to the string at `path` (or puts it there) | concatenated in Rust: a token streaming into a reply, without the text so far copied into the script and back |
+| `append(text)`, `append(path, text)` | adds `text` to the state's string, or to the one at `path` (or puts it there) | in Rust: a token streaming into a reply, without the text so far copied into the script and back. A long string (past 64 KiB, held in chunks) takes it where it ends, and an editor bound to the state (`ui.textarea { value = reply }`) applies the token alone, never comparing the document; a string growing past that size becomes one. `zgx lint` flags `reply:set(reply:get() .. token)` (`append-concat`) |
 | `patch(fields: { ... })` | a shallow merge of string keys | each field as `set_key(name, value)` |
 | `toggle()` | `not value` | |
 | `add(by: number?)` | adds `by` (1) to a number; anything else counts as 0 (a boolean as 0 or 1) | |
@@ -106,7 +111,9 @@ Handlers take a function or an action Rust runs without calling the script:
 | --- | --- |
 | `p:after(on_value, on_error)` | calls one of them once it settles (at once if it has), on the script's budget |
 | `p.done`, `p.value`, `p.error` | tracked fields: an interface reading them shows loading, the result and errors as they come, with no handler |
-| `p:await()` | inside `ui.task(function() ... end)` only: waits for it, returns its value or raises its error (the host's message as it wrote it, so `pcall` catches it) |
+| `p:await()` | inside `ui.task(function() ... end)` only: waits for it, returns its value or raises its error (so `pcall` catches it) |
+
+What a promise rejects with (its `error`, `on_error`'s argument, what `:await()` raises) is a `UiError`, the same as `ui.try` gives (below): its `message` is the host's as it wrote it, `kind` is `"action"`, `"network"`, `"cancelled"`, `"http"` or `"io"`.
 
 ```luau
 local user = ui.call("load_user", id) -- the interface follows it
@@ -127,9 +134,41 @@ ui.task(function() -- steps in order
 end)
 ```
 
-`ui.task` returns its handle: `task:cancel()` stops it at the await it is at, never to go on (`task.cancelled` says so). A fetch it awaited (and nothing else hears) stops: the host's transport sees its `Body` close and its future is dropped. An action it awaited goes on, its answer unheard. Cancel what a closed view started, as React's effects abort a fetch in their cleanup: `ui.on_cleanup(function() task:cancel() end)`. A resource cancels a load it begins again, and its owner going cancels its load; a form cancels its submit with `form.cancel()` and as it goes.
+`ui.task` returns its handle: `task:cancel()` stops it at the await it is at, never to go on (`task.cancelled` says so). A fetch it awaited (and nothing else hears) stops: the host's transport sees its `Body` close and its future is dropped. Other host work it awaited is dropped too, and a promise's own `p:cancel()` drops it the same way: a file dialog's request (Linux's portal closes its picker; a macOS sheet and a Windows dialog stay up until answered, their answer unheard) and `ui.sleep` end, and a file read is no longer waited on (its thread finishes on its own). An action it awaited goes on, its answer unheard. Cancel what a closed view started, as React's effects abort a fetch in their cleanup: `ui.on_cleanup(function() task:cancel() end)`. A resource cancels a load it begins again, and its owner going cancels its load; a form cancels its submit with `form.cancel()` and as it goes.
 
-`ui.try(f, ...)` is `pcall` with its error typed: `f(...)`'s value and nil, or nil and what it raised as text a person reads (an error object's message, without its traceback), where Luau types `pcall`'s error as `f`'s result. Awaits inside `f` work in a task as through `pcall`:
+`ui.async(f)` is a handler that awaits, as React's async handlers do: each call runs `f` as a task with the call's arguments (`on_click = ui.async(save)`, a toast's `action.run`). Its tasks are cancelled as what made the handler goes (a component unmounting, a reload), and what one raises and doesn't catch is reported once as the script's error.
+
+`ui.optimistic(state, next, save)`, inside a task (a `ui.async` handler), writes `next` to `state` now and runs `save`, which may await. If `save` succeeds the write stays and it returns nil; if it raises, the state goes back to what this write replaced and the error comes back (a `UiError`, as `ui.try` gives), as React's `useOptimistic` does. Calls on one state may overlap: the newest write shows, a failure puts back only what its own write replaced (never over a newer write still out or kept), and a write kept settles the older ones still out.
+
+```lua
+local liked = ui.state("liked", false)
+local like = ui.async(function(on: boolean)
+	local err = ui.optimistic(liked, on, function()
+		return ui.call("like", on):await()
+	end)
+	if err then
+		ui.toast { title = "Couldn't save that", body = err, kind = "error" }
+	end
+end)
+return ui.checkbox {
+	label = "Like",
+	value = function()
+		return liked:get()
+	end,
+	on_change = like,
+}
+```
+
+`ui.try(f, ...)` is `pcall` with its error typed: `f(...)`'s value and nil, or nil and a `UiError` for what it raised, where Luau types `pcall`'s error as `f`'s result. Awaits inside `f` work in a task as through `pcall`. A `UiError` is one shape from every source, to branch on:
+
+| field | |
+| --- | --- |
+| `message` | what a person reads: the text raised (an error object's, without its traceback; a raised table's `message` field), or the host's |
+| `kind` | `"raised"` (`error(...)` in the script), `"action"` (a host action rejected), `"network"` (no answer came), `"cancelled"`, `"http"` (a fetch with `raise = true` answered outside 2xx), `"io"` (a file, the clipboard) |
+| `status`, `body` | `"http"`: the response's status, and its body (the JSON decoded, else the text) |
+| `value` | `"raised"`: what was raised, as it was (`error({ code = 409 })` gives that table back) |
+
+It is still text where text was expected: `tostring(err)`, `"Couldn't load: " .. err`, `` `{err}` `` and string methods (`err:find("404")`) read its message, a state set to it holds its message, and a toast's `title` or `body`, a prop or a text given it show it. Comparing it with `==` to a string, or `type(err) == "string"`, no longer holds: compare `err.message` or `err.kind`. Making one costs nothing until something fails.
 
 ```lua
 local status = ui.state("status", "")
@@ -189,11 +228,33 @@ return ui.switch(person.status, {
 
 [The team example](../../crates/zgx-script/examples/team) loads a list this way, and saves and removes people with `ui.task`s that write its `data`.
 
+### Pages and debouncing
+
+`ui.paged(load)` loads a list a page at a time (an inbox, a feed, search results): `load(cursor)` returns `{ items, next }` (in a task, so it may await), `cursor` nil for the first page and the last page's `next` after it. It returns `items` (the items of every page so far, a list state its rows show), `loading`, `status` (`"loading"` until the first page answers, then `"ready"` or `"failed"`), `done` (the last page had no `next`), `error` (the last load's `UiError`, tracked, or nil), `more()` and `reload()`. `more()` loads the next page, and does nothing while one loads or once `done`; give it to a list's `on_end` and the list asks as its end comes in reach, filling a short view by itself. As `ui.resource`, it is keyed by what its first page reads: a state it read changing (a search's query), or `reload()`, loads again from the start, a load still out cancelled and an answer to one superseded dropped; a later page's reads key nothing.
+
+`ui.debounced(state, ms)` is a read-only state following `state` once it has stayed unchanged for `ms` (as `ui.computed`'s, a write is an error): a search box's query, so a load keyed by it waits for the typing to stop. Each change begins one timer again (no frames meanwhile), and it is gone with its owner.
+
+```luau
+type Message = { subject: string }
+local query = ui.state("query", "")
+local settled = ui.debounced(query, 250)
+local mail = ui.paged(function(cursor)
+	local page = ui.fetch(`https://api.test/mail?q={settled:get()}&after={cursor or ""}`, { raise = true }):await()
+	return { items = page.json.items :: { Message }, next = page.json.next :: string? }
+end)
+return ui.column {
+	ui.input { value = query, placeholder = "Search" },
+	ui.list { data = mail.items, height = 48, on_end = mail.more,
+		row = function(message: Message) return ui.text { message.subject } end },
+	ui.text { function() local err = mail.error; return if err then `Couldn't load: {err}` else "" end },
+}
+```
+
 ### The network
 
-`ui.fetch(url, { method, headers, body })` makes an HTTP request through the host's transport, `ScriptHost::fetcher(|request| async { … })`: the app owns the HTTP stack, redirects, headers and credentials (a token minted per request), and zgx adds no HTTP dependency. The promise settles with `{ status, ok, headers, body, json }`: `ok` for a 2xx status, header names in lower case, `json` the decoded body when the response says it is JSON; a transport error rejects it. A table `body` is sent as JSON with its content type. Without a fetcher, `ui.fetch` is an error.
+`ui.fetch(url, { method, headers, body })` makes an HTTP request through the host's transport, `ScriptHost::fetcher(|request| async { … })`: the app owns the HTTP stack, redirects, headers and credentials (a token minted per request), and zgx and zgx-script add no HTTP dependency. An app `zgx-run` runs has its fetcher, over HTTP and HTTPS ([Running a script](../scripting.md)). The promise settles with `{ status, ok, headers, body, json }`: `ok` for a 2xx status, header names in lower case, `json` the decoded body when the response says it is JSON (typed `any`, as JSON is to JavaScript: cast it to the shape the server sends); a transport error rejects it (a `"network"` error). With `raise = true`, a status outside 2xx rejects too, as an `"http"` error carrying the `status` and `body` (`if err.status == 404 then …`), for a load that should fail on one. A table `body` is sent as JSON with its content type. Without a fetcher, `ui.fetch` is an error.
 
-A response can be read as it arrives (a model's reply, a log): `on_chunk = function(text)` gets the body's text piece by piece, in whole characters, and `on_event = function(e)` each server-sent event (`text/event-stream`) as it ends, `e.event` (`"message"` unless named), `e.data` (its `data:` lines joined by line breaks) and `e.id`. The promise settles once the body has ended, with the status and headers, and with an empty `body` unless the request failed (then the body's start, an error's JSON). `p:cancel()` stops a fetch at once (the promise rejects with `"cancelled"`, reported nowhere), as does cancelling the task that awaits it; a reload stops the rest of a stream. The host streams with `ScriptHost::streaming_fetcher(|request, body| async { … })`, writing each piece to `body` as it comes and answering with the status once it ends; a plain `fetcher`'s body arrives as one piece.
+A response can be read as it arrives (a model's reply, a log): `on_chunk = function(text)` gets the body's text piece by piece, in whole characters, and `on_event = function(e)` each server-sent event (`text/event-stream`) as it ends, `e.event` (`"message"` unless named), `e.data` (its `data:` lines joined by line breaks) and `e.id`. The promise settles once the body has ended, with the status and headers, and with an empty `body` unless the request failed (then the body's start, an error's JSON). `p:cancel()` stops a fetch at once (the promise rejects with a `"cancelled"` error, reported nowhere), as does cancelling the task that awaits it; a reload stops the rest of a stream. The host streams with `ScriptHost::streaming_fetcher(|request, body| async { … })`, writing each piece to `body` as it comes and answering with the status once it ends; a plain `fetcher`'s body arrives as one piece.
 
 ```lua
 local reply = ui.state("reply", "")
@@ -236,19 +297,153 @@ return ui.column {
 
 `ui.image { src = "https://…" }` and `ui.svg { src = "https://…" }` load through the same fetcher: one request per URL however many nodes show it, decoded off the main thread, cached for the host's life; a node shows nothing until its source arrives, and only the nodes showing it redraw.
 
+### Live connections
+
+`ui.socket(url, opts)` keeps a connection open (a WebSocket: a chat's, a feed's) through the host's connector, as React's `useWebSocket`. Its `status` is a state, `"connecting"`, `"open"`, `"reconnecting"` or `"closed"`, for a banner; each message goes to `on_message(message, binary)`, text as a string (decoded first with `json = true`) or a binary message's bytes as a string. A decoded message is the script's own: a plain table, made for it alone, that it may change and keep (add a field, put it in state), where tables read from state are read-only. `send(v)` sends a string as text and any other value as JSON, and `send_bytes(s)` a binary message; sent while the connection is not open, they wait and go in order once it is. `buffered` is a state of the bytes sent and not yet taken by the connection, and past `max_buffered` (16 MB) `send` refuses, returning false, as it does once the socket is closed for good. A connection that ends or fails opens again after a wait: `reconnect = { min = 500, max = 30000, factor = 2, jitter = 0.2, attempts = math.huge }` is the default (true), `false` none. Meanwhile `attempt` counts and `retry_in` is the wait in ms; out of attempts it is `"closed"`, and `error` (a `UiError`, tracked) says why it last ended. `on_open` and `on_close(err)` hear each connection begin and end. `close()` closes it until `reconnect()`, which also cuts a wait short. `url` may be a function: a state it reads changing (a room, a token) opens it again at once. It closes with its owner (a component, or the script on reload).
+
+The host connects with `ScriptHost::socket_connector(|request, socket| async { … })`: it opens `request.url`, calls `socket.opened()`, hands each message that arrives to `socket.receive`, and sends what `socket.next().await` gives, as fast as the connection takes it, until that answers `None` (the script closed it); its future answers `Ok(())` when the connection ends and `Err(message)` when it fails. A plugin needs the host's `Capability::Fetch`, and the app's `fetch_policy` is asked of its URL and addresses (see Plugins in `docs/scripting.md`). `ui.sleep(ms)` is a promise settled after `ms`, to await in a task.
+
+```lua
+type Message = { from: string, text: string }
+local messages = ui.state("messages", {} :: { Message })
+local socket = ui.socket("wss://chat.example/room/1", {
+	json = true,
+	on_message = function(message: Message)
+		messages:push(message)
+	end,
+})
+return ui.column {
+	ui.show(function()
+		return socket.status:get() ~= "open"
+	end, ui.text {
+		function()
+			local wait = socket.retry_in:get()
+			return if wait > 0 then `Reconnecting in {math.ceil(wait / 1000)} s…` else "Connecting…"
+		end,
+	}),
+	ui.each(messages, function(m: Message)
+		return ui.text { `{m.from}: {m.text}` }
+	end),
+	ui.button {
+		"Wave",
+		on_click = function()
+			socket.send({ text = "👋" })
+		end,
+	},
+}
+```
+
+### Folders
+
+`ui.open_folder()` shows the system's folder dialog and settles with a `Folder`, or nil if the person cancels. Only that dialog makes one, as a browser's `showDirectoryPicker` does: a script can't build a handle from a path or a table, and a handle can be kept in state.
+
+```lua
+local folder = ui.state("folder", nil :: Folder?)
+local function open()
+	ui.task(function()
+		local picked = ui.open_folder({ title = "Open a vault" }):await()
+		if not picked then
+			return
+		end
+		folder:set(picked)
+		for _, entry in picked:list("", { recursive = true }):await() do
+			if entry.kind == "file" and string.find(entry.name, "%.md$") then
+				print(entry.path, entry.size, picked:read(entry.path):await())
+			end
+		end
+		picked:write("notes/new.md", "# New"):await()
+	end)
+end
+return ui.button { "Open a vault", on_click = open }
+```
+
+| Member | |
+| --- | --- |
+| `name` | the folder's own name |
+| `list(path?, { recursive?, limit? })` | a promise of `{ name, path, kind, size, modified }`: `path` from the root, `kind` `"file"` or `"folder"`, `modified` in milliseconds since 1970, by name, depth first. `limit` stops it (100,000 by default) |
+| `read(path)` | a promise of a text file's contents |
+| `file(path)` | a promise of a file inside it as a `File`, its `path` absolute, which `ui.image`, `ui.read_file` and `drag_export`'s `files` take as they do a dialog's (a thumbnail, a drag out to Finder). `list(path, { files = true })` gives each file entry its `file` the same way |
+| `write(path, text)` | a promise settled once the file is replaced whole: its folders made, a temporary file beside it renamed over it, its permissions kept. A failure leaves the old file as it was |
+| `forget()` | the host keeps it no more: a later launch's `ui.remembered_folder` is nil. This run's handle still reaches it |
+
+Everything runs off the main thread, and a failure is a `UiError`: `kind` `"denied"` for a path the handle refuses, `"io"` for what the system says.
+
+**What a handle can't reach:** paths are relative with `/` between their parts, so `..`, `.`, an absolute path, a drive and a backslash are refused. A symbolic link counts as where it leads: a link leading out of the folder is refused, left out of `list`, and not written through, and a link inside it is read but not entered by `recursive` (links can loop). It holds no delete or rename. A hard link can't be told from a file, so one made outside the app does reach out, and a link swapped by another process between the check and the open is out of its hands: the guarantee is against scripts, which can make neither.
+
+**Who gets one:** a plugin only with the `folders` grant (`zgx.json`, or `ScriptHost::grant(plugin, Capability::Folders)`). A Rust host can refuse it to every script, the app's own too, with `ScriptHost::refuse_folders()`, and a platform without a folder dialog settles with an error.
+
+**A handle lasts the run, unless the host keeps it.** `ui.persist` doesn't save one. `ui.open_folder({ remember = "library" })` asks the host to keep the grant under that key, and on a later launch `ui.remembered_folder("library")` settles with the handle if the folder still resolves, or nil (gone, refused, or never kept). The handle keeps every rule above, and `folder:forget()` drops the grant.
+
+```lua
+local library = ui.state("library", nil :: Folder?)
+ui.task(function()
+	library:set(ui.remembered_folder("library"):await())
+end)
+local function choose()
+	ui.task(function()
+		library:set(ui.open_folder({ title = "Choose a library", remember = "library" }):await())
+	end)
+end
+return ui.button { "Choose a library", on_click = choose }
+```
+
+What the host keeps, and where: on macOS a bookmark, which follows the folder moved or renamed. In the sandbox it's security-scoped, the scope entered while the handle lasts. Outside it's plain, because a security-scoped bookmark resolves only under the code-signing identifier that made it, and an unbundled app's (zgx-run's) changes with each version, which would forget every folder at an upgrade. Elsewhere it's the folder's path. It goes in the host's storage (`ScriptHost::storage`, or the app's data directory under `app_id`, in `.folders`, a file per key), where no script reads, since scripts read only what was picked. A host without storage keeps it in memory, for the run. A sandboxed macOS app needs the `com.apple.security.files.user-selected.read-write` entitlement for the dialog's folder to be readable at all, and `com.apple.security.files.bookmarks.app-scope` to make bookmarks. Plugins keep no folders. A Rust host can refuse to keep any with `ScriptHost::refuse_remembered_folders()`: `remember` then picks as without it, and `ui.remembered_folder` settles with nil. `ui.remembered_folder` is a promise rather than a value because a script's first load runs before its window exists, and resolving a grant takes the window's platform (on macOS, resolving the bookmark and entering its scope). It settles once the window is there, so it works at a script's top level, inside `ui.task`.
+
+In a test, `app:pick_folder(name)` answers the next dialog with a folder of the test's own files ([testing](../scripting.md#testing-an-app)).
+
 ### The clipboard and files
 
-A desktop window gives scripts its clipboard and file dialogs (`zgx::platform`). `ui.clipboard.read()` returns its text, `ui.clipboard.write(text)` replaces it. `ui.clipboard.read_image()` settles with its image as a full-colour `Bitmap` (`w`, `h`; a screenshot, an image editor's copy, a browser's Copy Image), or nil, and `ui.clipboard.write_image(bitmap)` puts one there (a `ui.bitmap`, or one read before) for other apps to paste, settling with whether it took it: promises, as a large image is decoded and encoded off the main thread (a 4K one took 15 to 70 ms to read and 130 ms to write). State can keep a `Bitmap`, its pixels counted against a plugin's memory limit, and `ui.image { src = state }` shows the one it holds (a pasted picture: `ui.clipboard.read_image():after(function(b) if b then pasted:set(b) end end)`). `ui.open_files({ title, directory, filters = { { "Images", { "png" } } }, multiple })` settles with the files the user picks (an empty list if they cancel) and `ui.save_file({ name })` with where they choose to save (or nil), each a `{ path, name }`. A script reads and writes only files the user picked in this host's dialogs, as a web page does: `ui.read_file(file)` settles with its text and `ui.write_file(file, text)` writes beside it and renames over it (never half a file), both off the main thread. Headless, without a window, they are errors.
+A desktop window gives scripts its clipboard and file dialogs (`zgx::platform`). `ui.clipboard.read()` returns its text, `ui.clipboard.write(text)` replaces it. `ui.clipboard.read_image()` settles with its image as a full-colour `Bitmap` (`w`, `h`; a screenshot, an image editor's copy, a browser's Copy Image), or nil, and `ui.clipboard.write_image(bitmap)` puts one there (a `ui.bitmap`, or one read before) for other apps to paste, settling with whether it took it: promises, as a large image is decoded and encoded off the main thread (a 4K one took 15 to 70 ms to read and 130 ms to write). State can keep a `Bitmap`, its pixels counted against a plugin's memory limit, and `ui.image { src = state }` shows the one it holds (a pasted picture: `ui.clipboard.read_image():after(function(b) if b then pasted:set(b) end end)`). `ui.open_files({ title, directory, filters = { { "Images", { "png" } } }, multiple })` settles with the files the user picks (an empty list if they cancel) and `ui.save_file({ name })` with where they choose to save (or nil), each a `{ path, name }`. A script reads and writes only files the user picked in this host's dialogs, as a web page does: `ui.read_file(file)` settles with its text and `ui.write_file(file, text)` writes beside it and renames over it (never half a file), both off the main thread. A dialog asked for as a script loads (a task at its top level, before its view mounts in a window) opens once the window is there. Headless, without a window, they are errors, shown as any script error is.
+
+A file, from `ui.open_files`, a drop (`on_file_drop`, [events](events.md)) or `ui.on_open`, is `{ path, name, size, type }` as the web's `File` is: `size` in bytes and `type` its media type by its extension (`"image/png"`, `""` when unknown). `ui.fetch(url, { file = f })` sends it as the request's body with its type (a POST unless `method` says otherwise), and `multipart = { caption = "Hi", attachment = f }` sends a form's fields, text or files, as `multipart/form-data` (the web's `FormData`). The files are read on a thread of their own, so a large one never holds up the window. `on_progress = function(sent, total)` hears the body go out: the transport tells it as it writes (zgx-run's does; a host's streaming fetcher calls `Body::sent`), and one that does not say reports it all at the answer. Cancelling the task or the promise stops the upload, as it stops any fetch. A plugin needs `Capability::Files` as well as `Fetch` to send files.
+
+```lua
+local progress = ui.state("progress", 0)
+local function upload(file: File)
+	ui.task(function()
+		local response = ui.fetch("https://files.example/upload", {
+			multipart = { attachment = file, room = "general" },
+			on_progress = function(sent: number, total: number)
+				progress:set(if total > 0 then sent / total else 1)
+			end,
+		}):await()
+		if not response.ok then
+			ui.toast { title = "Upload failed", body = `HTTP {response.status}`, kind = "error" }
+		end
+	end)
+end
+return ui.column {
+	h = 200,
+	on_file_drop = function(files: { File })
+		for _, file in files do
+			upload(file)
+		end
+	end,
+	ui.text { "Drop a file here" },
+	ui.progress { value = progress },
+}
+```
 
 `ui.args` is what the app was launched with after its script (`zgx-run app/ notes.txt` gives `{ "notes.txt" }`), and `ui.on_open(handler)` is handed the files and URLs the system asks it to open: those among its launch's arguments, and with an `application_id` (reverse-DNS, in `zgx.json` or `Application::application_id`) a file opened with the app, a link to it, or a second launch's on Windows. Its files are the user's choice, as a dialog's are, so `ui.read_file` takes them; what arrives before the script registers its handler waits for it. It is the app's: a plugin's `ui.on_open` is an error.
 
-Plugins reach the network, the clipboard and files only if the host grants each: `ScriptHost::grant("plugin.luau", Capability::Fetch)` (or `Clipboard`, `Files`; `Plugin::grants` for the plugins an app sets), and the app's actions and shared state only where it exposes them (see Plugins in `docs/scripting.md`). A plugin that fails to load is left out and its error reported; the app and the other plugins load.
+Plugins reach the network, the clipboard and files only if the host grants each: `ScriptHost::grant("plugin.luau", Capability::Fetch)` (or `Clipboard`, `Files`; `Plugin::grants` for the plugins an app sets), where it may reach is the app's `ScriptHost::fetch_policy(impl FetchPolicy)`, and the app's actions and shared state only where it exposes them (see Plugins in `docs/scripting.md`). A plugin that fails to load is left out and its error reported; the app and the other plugins load.
 
 ## Computeds, effects, batches
 
 `ui.computed(f)` and `ui.effect(f)` run `f` at once and again whenever a state it read with `get` (or a tracked field: `web.title`, `term.pwd`, a ref) changes; reads with `peek` do not count. `ui.batch(f)` runs `f` and updates what its writes affect once, after it; it returns what `f` returns. Every handler already runs in a batch.
 
-`ui.on_cleanup(f)` runs `f` when what is being built goes away: a component unmounting, an effect running again, the script reloading (stop a subscription, a timer of the host's). `ui.now()` is milliseconds since the epoch, to the microsecond; it is not tracked (`os.time` counts whole seconds). `print` writes a line to the app's stderr.
+`ui.on_cleanup(f)` runs `f` when what made it goes: a component unmounting, an effect running again, the script reloading (stop a subscription, a timer of the host's).
+
+### What owns what
+
+A cleanup, a timer (`ui.after`, `ui.every`) and an effect or computed belong to the innermost of what was running as they were made:
+
+- **A build** (a component, an `each` row, `presence` or `switch` content) owns what it makes until that part goes. Content a `presence` swaps out takes its effects, and what they made, with it.
+- **An effect's run** owns what it makes until the effect runs again, and until the effect goes: its cleanups run before each new run, as a React effect's do.
+- **A computed's run** owns what it makes until its next run. A computed is a derivation, as React's `useMemo` is: start timers in an effect or a handler, not in a computed.
+- **The script** owns what its top level makes, until it reloads.
+
+`ui.now()` is milliseconds since the epoch, to the microsecond; it is not tracked (`os.time` counts whole seconds). `print` writes a line to the app's stderr.
 
 ## Large data
 
@@ -289,6 +484,7 @@ return ui.list {
 
 - `ui.sorted(list, spec)` is a list state's items in order, kept in order as the list changes: an item a write leaves alone is the same value, so a write re-places the items it wrote (`by` and `filter` called for those alone), in one pass over the order. `spec` is `{ by, descending, filter }`: `by` a field's name (read in Rust, no script call per item) or a function of an item, `filter` a function keeping the items it is true for, or a table of fields' tests, read in Rust as `by` is (no script call an item): `{ sector = "Tech" }` keeps the items whose `sector` is `"Tech"`, `{ symbol = { contains = "AB" } }` those whose `symbol` holds `"AB"` (`case = false` folds ASCII letters' case, as `state:find`'s), every test passing. A spec giving the same tests again keeps the order it has; a new function always sorts again. Give a function returning the spec when the order follows state (a sort header, a search): it runs when what it reads changes, and a new spec sorts the whole list again. Ties keep the list's order and nil keys go last, as `ui.sort`'s. `state:at(i)` reads one item without making the list a table, `state:len()` its length and `state:index_of(field, value)` where one is: a list shows its rows in view that way, and an action finds a row's place (a mailbox's next message, the one after the archived). A filter that is equality alone (`{ mailbox = "Inbox" }`) is all Rust, and a write judges the item it wrote: archiving a message in a view of 4000 re-places one. The lint (`computed-sort`) points at a `ui.computed` that re-sorts a whole list.
 - `ui.sort(list, by, descending?)` sorts `list` in place, stably, by a field of each item (`"price"`) or a function of it, called once an item; it returns `list`, and puts nil keys last. `table.sort` with a comparator calls Luau some 1.7 million times for 100,000 rows (about 95 ms, over a call's 50 ms budget); `ui.sort` reads each key once and sorts in Rust (4 to 8 ms). A state's value is read-only: sort `table.clone(value)`.
+- A new order (a sort header clicked, a filter's spec changed) sorts the whole list: 100,000 rows in about 4 ms (the dashboard's sort, 45.9 M instructions), by an 11-bit radix sort on keys read in Rust. About 30% of that is making the sorted view's list of 100,000 values and dropping the last one. A lazy view (the order as indices into the list, an item made a value only when a row reads it) would save most of that, but every reader of a list state would have to take it; it is the remaining lever, left until a sort's 4 ms matters.
 - A computed returning row tables it builds converts every row each time it runs; `ui.sorted` hands on the rows the list holds.
 - Large payloads that don't drive updates don't belong in state: a row's chart history, a file's bytes, a decoded image. Everything in state is converted between Luau and Rust and kept on both sides, so 100,000 rows with 16 points of history each cost several times what their prices do. Keep such data in a plain table keyed by the row's id, and let state hold what changes and what reading it should follow: the row a feed writes is what redraws its sparkline, which then reads the history from the table.
 - Totals over every row (a sum, a count by group) cost a loop over all of them each time they run: keep them as the rows change (the feed adds what it changed) rather than summing in a chart's `draw` each tick.
@@ -317,6 +513,8 @@ A ref has no element methods of its own: `r:get():focus()`, not `r:focus()`. [Ev
 type CardProps = { title: string, [number]: Child, children: { Child }? }
 local Card = ui.component(function(props: CardProps) … end)
 ```
+
+An `id` (and a `class`) given to a component names its root: `Card { id = "summary" }` is `#summary` to `ui.contribute` and to tests. One set on the root inside goes unseen, so a component holding a record takes it under another name (`Panel { issue = 5 }`, not `id`); `zgx lint`'s `component-id` and a warning as it mounts say when this happens.
 
 What `each` rows, `presence` content and `list` rows build owns what it makes in the same way, as long as that part is mounted. Made at the top level, computeds and effects live as long as the script.
 
@@ -406,14 +604,60 @@ A module's `ui.state` and `ui.persist` keys are its own: `ui.state("open", false
 
 A text template's `{name}` (in `ui.text`, a child string, a span) looks for the state with the key `name` where the template is written: the module's own `ui.state` or `ui.persist` of that key first, then the script's, its persisted state, and shared state. It is an error when there is none. Templates find keyed state only: a computed, a `use_state` or a local's name is not a key; show those with a function (`function() return tostring(n:get()) end`). `{{` and `}}` are literal braces; anything else in braces that is not a name is literal text.
 
+## Routing
+
+`ui.router { routes, initial?, scheme? }` keeps where an app is, as React Router does: named routes with `:params`, the history behind and ahead, the platform's back and forward input, and deep links.
+
+```lua
+local router = ui.router {
+	routes = { list = "/", thread = "/thread/:id", settings = "/settings" },
+	scheme = "mail", -- mail://thread/42 opens that thread
+}
+return ui.column {
+	ui.button { "Back", disabled = function() return not router.can_back:get() end, on_click = router.back },
+	router.view({
+		list = ui.text { "All mail" },
+		thread = function(params)
+			return ui.text { `Thread {params.id}` }
+		end,
+	}),
+	ui.modal {
+		open = function() return router.is("settings") end,
+		on_close = router.back,
+		ui.text { "Settings" },
+	},
+}
+```
+
+| | |
+| --- | --- |
+| `route` | a state: `{ name, path, params }`, params as text |
+| `navigate(name, params?)` | to a route by its name and params (`navigate("thread", { id = 7 })`): an app's route names and params are typed, so a misspelling is a type error; a name with no such route, or a missing param, is an error as it runs |
+| `replace(name, params?)` | the same, in place of the route now |
+| `open(path, { replace? }?)` | to the route a path matches (`open("/thread/7")`), as a deep link goes; a path no route matches is an error |
+| `back()`, `forward()`, `can_back`, `can_forward` | the history, and whether there is any behind or ahead |
+| `is(name)` | whether the route is `name` now, tracked |
+| `view(cases, props?)` | what each route shows: a node, or a function of its params made again as they change. It takes the mouse's back and forward buttons and a trackpad's swipe between pages (`grow = 1` unless sized) |
+
+Back and forward come from the platform's own input as well: the mouse's back and forward buttons over the view, a trackpad's swipe between pages over it (macOS, [`on_navigate`](events.md)), and the commands `router.back` and `router.forward`, which the desktop host binds to Alt+← and Alt+→ (⌘[ and ⌘] on macOS). With a `scheme`, a link the system opens the app with (`mail://thread/42`) navigates to the route its path matches; a link that matches none is reported once. A route-driven modal reads the route in a controlled `open` and goes back in `on_close` ([overlays](overlays.md)).
+
+`zgx types` (and `zgx check`) types an app's literal routes ([scripting](../scripting.md)). `navigate` and `replace` take one overload per route, its params named by its path's `:params`, so `navigate("thraed")` and `navigate("thread", { idd = 7 })` are type errors. `is` takes the route names, and each `view` case's function gets its route's params. Up to 100 routes are typed with their params, and up to 1,000 by name alone. Past that, or for routes built at run time, they stay strings, and the `unknown-route` lint checks literal names.
+
 ## Plugins and slots
 
-A host's plugins (`ScriptHost::plugins(dir)`) are scripts in their own sandboxed VMs. A plugin returns nothing; it adds nodes to the application's slots with `ui.contribute(name, node)`. `ui.slot(name, props)` is a column holding every contribution to `name`, in plugin order; `props` style it. Plugins see `ui.shared` state, never the application's `ui.state`.
+A host's plugins (`ScriptHost::plugins(dir)`) are scripts in their own sandboxed VMs. A plugin returns nothing; it adds nodes to the application's slots with `ui.contribute(name, node)`. `ui.slot(name, props)` is a column holding every contribution to `name`, in plugin order; `props` style it. Plugins see the `ui.shared` state the host exposes (`expose_shared`, or `expose_shared_read` to read and follow only: a plugin's write is an error), never the application's `ui.state`.
 
 ```lua
 -- file: app.luau
 local user = ui.shared("user", "")
-return ui.column { p = 16, gap = 8, ui.text { "Hello, {user}" }, ui.slot("sidebar", { gap = 6 }) }
+return ui.column {
+	p = 16,
+	gap = 8,
+	ui.text { "Hello, {user}" },
+	ui.slot("sidebar", { gap = 6 }),
+	ui.button { id = "save", label = "Save" },
+	ui.input { private = true, value = ui.state("password", "") },
+}
 ```
 
 ```lua
@@ -429,6 +673,77 @@ ui.contribute(
 )
 ```
 
+### Hooks
+
+`ui.contribute { target, before | after | replace = node }` adds at an element of the app's without a slot. `target` takes the inspector's and `zgx test`'s selectors, matched against what the app's source writes as the interface is built:
+
+- `#id`; `hook:name` (an element declaring `hook = "name"`); `.class`, every element with that class (`class = "session-row"`), and `.a.b`, both; `role:button "Save"` or a name (its `role` or its kind's, its `label` or literal text). Parts in one element narrow it: `#save .primary`.
+- `a >> b`: `b` anywhere inside `a`, as `#sidebar >> .session-row`. A chain is checked as each element mounts, so it holds inside list rows and components built later; where it doesn't, nothing is added.
+- A target matching several elements contributes at each. `@n`, `row` and `[n]` are refused: they are known only once the interface shows.
+
+Under strict types a `target` is one of the app's ids, declared hooks or classes (`HookTarget`, which `zgx types` writes from its source, for an editor to offer), a chain (`HookChain`, any text: its parts combine freely, and `zgx lint` warns of each `#id`, `hook:` or `.class` in it that the app doesn't declare), or `ui.selector('role:button "Save"')` for a role or a name, which marks it as the app's internals.
+
+- `before` and `after` add beside the element, in plugin order, wherever it is built; the host can make a target ask a capability with `expose_hook(target, Some(capability))`.
+- At the root of a `ui.show`'s or `ui.switch`'s branch, a component or a `ui.presence`'s content, they are siblings in the parent's flow that come and go with it (a presence's leave when its exit ends) and read what the root provides; at the app's root or a window's root, which can't have siblings, they are an error (`contributions()`).
+- At the root of a `ui.each` or `ui.list` row they apply a row each: what is added lays out as the list's own items, moves with its row as the list reorders, goes with it when it is removed, and reads what the row's root provides (`ui.use_context`), live. What a plugin adds reads what the app provides above where it lands, nearest first: a value converted into the plugin's script, a state as the same state, read only.
+- `replace` takes the element's place (an element in a container's children, or the root of a `ui.presence`'s content at any depth, each entry replaced as it enters and leaving with it: not the app's root, nor a split's panes) and needs `Capability::Override(target)` or `Capability::Override("*")`; the last plugin's wins.
+- `private = true` (or `hook = false`) on an element puts it and everything in it out of reach.
+- What a plugin adds has the accessible description "From the plugin `<name>`".
+- `host.contributions()` (`zgx inspect contributions`, MCP `zgx_contributions`) says what each does now: its target, place, how many elements it applies at (0: its target matches nothing showing) and its latest error, then each plugin command's shortcut dropped because the app (or an earlier plugin) holds it (place `shortcut`; typed: `host.dropped_shortcuts()`). `host.elements(&ui, &handle)` (`zgx inspect elements`, MCP `zgx_elements`) lists the app's ids, classes and hooks grouped by the elements that provide context, with a selector that reaches each group and the names it provides and inherits: where a plugin can put something, and what it can read there.
+
+With the app above, a plugin adds a button before its Save; nothing reaches the password field:
+
+```lua
+-- file: plugins/preview.luau
+ui.contribute { target = "#save", before = ui.button { label = "Preview" } }
+```
+
+`ui.filter { target, text | label | hidden | disabled | tooltip | items | order = fn }` passes an element's prop through a function of the plugin's, which takes the value as it is and returns it changed. It runs in the plugin's script, again whenever what it reads changes (the app's state the value follows, the plugin's own), never per frame. It needs `Capability::Override`, as replacing does.
+
+- `text` is the element's text, or a button's or item's (its first child's); `label` its accessible name.
+- `hidden` and `disabled` take and return a boolean.
+- `tooltip` is a written tooltip's text, passed through as the element is built.
+- `items` is what a `ui.each` or a `ui.list` with `data` shows: a list in, a list out.
+- `order` is the element's children's order: it gets their ids (a position from 1 for one without) and returns those it puts first; the rest follow as they were. A changed order rebuilds the element's children; an unchanged one keeps them.
+- Nothing else is filtered: its handlers, styles and state stay the app's. A filter that fails is reported as the plugin's error, and the value shows as it was.
+
+```luau
+-- file: plugins/shout.luau (granted Capability::OverrideElement("#title"))
+ui.filter { target = "#title", text = function(text) return string.upper(text) end }
+ui.filter {
+	target = "#tasks",
+	items = function(items)
+		local open = {}
+		for _, task in items do
+			if not task.done then table.insert(open, task) end
+		end
+		return open
+	end,
+}
+```
+
+A plugin targeting an `id` that is not a declared `hook` reaches the app's internals: the app's next version may move or drop it ([design](../design/plugin-hooks.md)).
+
+
+### Module overrides
+
+`ui.override { module = "@app/<path>", with = "<plugin path>" }`, from a plugin, replaces one of the app's modules: wherever the app requires `@app/<path>`, it gets the plugin's module instead.
+
+- `module` is one of the app's `@app/…` modules (`@app` is the app's directory; a relative require is never replaced). `with` is one of the plugin's own files, a directory as its `init.luau`.
+- It needs `Capability::OverrideModule(module)` or `Capability::OverrideModule("*")`, **a trust grant**: the replacement runs in the app's VM as the app's own code, with all its access. Of several plugins, the last one's wins.
+- The replacement may `require("@app-original/<path>")` for the module it replaces (to wrap it); nothing else may. Its own relative requires reach its plugin's directory.
+- A plugin requires none of the app's modules; a `.luaurc` defining an `app` or `app-original` alias is an error.
+
+```lua
+-- file: plugins/badges/init.luau (granted Capability::OverrideModule("@app/components/card"))
+ui.override { module = "@app/components/card", with = "./card" }
+
+-- file: plugins/badges/card.luau
+local card = require("@app-original/components/card")
+return function(props)
+    return ui.row { card(props), ui.text { "New" } }
+end
+```
 ## Gotchas
 
 - State values are read-only snapshots: `tasks:get()[1].done = true` fails with "attempt to modify a readonly table" and a hint naming `set_key`, `patch`, `update`, `insert` and `set`.

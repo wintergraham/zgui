@@ -144,6 +144,33 @@ impl App {
 }
 
 #[test]
+fn the_sidebar_toggle_sits_a_gap_past_the_window_buttons_at_any_zoom() {
+    let mut app = App::new();
+    let toggle = |app: &mut App| {
+        app.h.ui.prepare_frame();
+        let node = app.h.find("sidebar_toggle").expect("the toggle");
+        app.h.ui.scene.borrow().bounds(node).x
+    };
+    // Not reported (a standard title bar, fullscreen): where they end at 100%.
+    assert_eq!(toggle(&mut app), 83.);
+    let area = app.h.ui.signal(None);
+    let controls = app.h.ui.signal(Some(Rect::new(12., 13., 60., 14.)));
+    app.h.host.window_chrome(area, controls.clone());
+    app.settle();
+    // AppKit's traffic lights at 100% (12 in, 23 apart, 14 wide) end at 72: the same 83.
+    assert_eq!(toggle(&mut app), 83.);
+    // Zoomed to 125% they keep their size, so in the zoom's points they end
+    // nearer: the gap stays 11 points past them, not 83 from the edge.
+    controls.set(Some(Rect::new(12., 16., 48., 11.2)));
+    app.settle();
+    assert!(
+        (toggle(&mut app) - 71.).abs() < 0.01,
+        "{}",
+        toggle(&mut app)
+    );
+}
+
+#[test]
 fn panes_split_beside_and_below_and_close_back_to_one() {
     let mut app = App::new();
     let one = app.panes();

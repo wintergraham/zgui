@@ -3,6 +3,18 @@ struct Vertex { @location(0) rect:vec4<f32>, @location(1) uv:vec4<f32>, @locatio
 // Flat, they cost nothing per pixel (a software rasterizer interpolates every
 // smooth varying for every pixel it shades).
 struct Out { @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32>, @location(1) @interpolate(flat) color:vec4<f32>, @location(2) point:vec2<f32>, @location(3) @interpolate(flat) fade:vec4<f32>, @location(4) @interpolate(flat) options:vec4<f32>, @location(5) @interpolate(flat) shape:vec4<f32>, @location(6) @interpolate(flat) border:vec4<f32>, @location(7) @interpolate(flat) mask:vec4<f32> }
+// How much a glyph mask's coverage firms below 2x (`FIRM_GLYPH`), as
+// DirectWrite's enhanced contrast has it, by how light the text is: a one-pixel
+// edge blends to a faint grey on a dark ground, thin beside the system's text,
+// where near-black text on white reads as it is. Worked out once a quad.
+fn firmness(options_y:f32, text:vec3<f32>)->f32 {
+ if options_y<1.1||options_y>1.5 {return 0.;}
+ return clamp(dot(text,vec3(.2126,.7152,.0722))*2.,0.,1.);
+}
+// Its curve: `a*(k+1)/(a*k+1)` to within 0.03 of coverage, the same on average,
+// with no division: a software rasterizer runs this for every glyph's every
+// pixel.
+fn firm(a:f32, k:f32)->f32 {return a+k*.67*a*(1.-a);}
 // Group 1: one immutable buffer per viewport size, so layers never rewrite it.
 @group(1) @binding(0) var<uniform> viewport:vec4<f32>;
 @group(0) @binding(1) var atlas:texture_2d<f32>;
@@ -17,6 +29,8 @@ struct Out { @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32>, @
 // of straight RGB (brightness, contrast, saturate), applied as the colour
 // is written. `tint.y`, `tint.z`: the rounded boxes' feathers, how far
 // inside their edges their content fades out from (0: cut at the edge).
+// `tint.w`: a second fade's region (index plus one; 0 for none), the next
+// fading ancestor's out, multiplied in (nested fades apply the nearest two).
 struct Region { round0:vec4<f32>, radii0:vec4<f32>, round1:vec4<f32>, radii1:vec4<f32>, fade_box:vec4<f32>, fade:vec4<f32>, color0:vec4<f32>, color1:vec4<f32>, color2:vec4<f32>, tint:vec4<f32> }
 @group(1) @binding(1) var<storage, read> regions:array<Region>;
 fn rounded(b:vec4<f32>, r:vec4<f32>, feather:f32, p:vec2<f32>)->f32 {
@@ -39,10 +53,20 @@ fn tinted(index:f32, premultiplied:vec4<f32>)->vec4<f32> {
 fn region(index:f32, position:vec2<f32>)->f32 {
  let g=regions[u32(index)-1u]; let p=position/viewport.z;
  var k=rounded(g.round0,g.radii0,g.tint.y,p)*rounded(g.round1,g.radii1,g.tint.z,p);
- if g.fade.x>0. {let t=clamp((p.y-g.fade_box.y)/g.fade.x,0.,1.); k*=t*t;}
- if g.fade.y>0. {let t=clamp((g.fade_box.z-p.x)/g.fade.y,0.,1.); k*=t*t;}
- if g.fade.z>0. {let t=clamp((g.fade_box.w-p.y)/g.fade.z,0.,1.); k*=t*t;}
- if g.fade.w>0. {let t=clamp((p.x-g.fade_box.x)/g.fade.w,0.,1.); k*=t*t;}
+ k*=faded(g.fade_box,g.fade,p);
+ // Under a second fade (`tint.w`: its record's index plus one), its too.
+ if g.tint.w>.5 {let o=regions[u32(g.tint.w)-1u]; k*=faded(o.fade_box,o.fade,p);}
+ return k;
+}
+// Each edge's band eases in (smoothstep): level at both ends, so its inner
+// end meets the content without a line (t², still rising there at slope 2,
+// showed one).
+fn faded(b:vec4<f32>, f:vec4<f32>, p:vec2<f32>)->f32 {
+ var k=1.;
+ if f.x>0. {let t=clamp((p.y-b.y)/f.x,0.,1.); k*=t*t*(3.-2.*t);}
+ if f.y>0. {let t=clamp((b.z-p.x)/f.y,0.,1.); k*=t*t*(3.-2.*t);}
+ if f.z>0. {let t=clamp((b.w-p.y)/f.z,0.,1.); k*=t*t*(3.-2.*t);}
+ if f.w>0. {let t=clamp((p.x-b.x)/f.w,0.,1.); k*=t*t*(3.-2.*t);}
  return k;
 }
 @group(0) @binding(2) var tex_sampler:sampler;
@@ -87,6 +111,13 @@ fn zgx_box_shadow(lower:vec2<f32>,upper:vec2<f32>,point:vec2<f32>,sigma:f32,corn
  return clamp(value,0.,1.);
 }
 fn shade(input:Out)->vec4<f32> { return shade_texel(input,vec4(0.),false); }
+// How far `at` (a pixel's centre, device pixels) lies from the middle of
+// `box` (logical), each way, in logical units: the box's middle on a 64th
+// of a device pixel, so a box moved by whole pixels gives what it gave.
+fn centred(at:vec2<f32>, box:vec4<f32>)->vec2<f32> {
+ let middle=round((box.xy+box.zw*0.5)*viewport.z*64.)/64.;
+ return abs(at-middle)/viewport.z;
+}
 // `shade` with the texel `given` when `has_texel` (image_effects.wgsl's,
 // which works it out), rather than sampled at `uv`.
 fn shade_texel(input:Out, given:vec4<f32>, has_texel:bool)->vec4<f32> {
@@ -103,8 +134,19 @@ fn shade_texel(input:Out, given:vec4<f32>, has_texel:bool)->vec4<f32> {
      corner=select(select(v.border.x,v.border.y,right),select(v.border.w,v.border.z,right),bottom);
    }
    let radius=clamp(corner,0.,min(v.fade.z,v.fade.w)*0.5);
-   let q=abs(v.point-v.fade.xy-v.fade.zw*0.5)-(v.fade.zw*0.5-vec2(radius));
+   // From the pixel's own centre in device pixels (exact) to the box's,
+   // on a 64th of a pixel: moved by whole pixels, the same numbers.
+   let q=centred(v.position.xy,v.fade)-(v.fade.zw*0.5-vec2(radius));
    let distance=length(max(q,vec2(0.)))+min(max(q.x,q.y),0.)-radius;
+   // Its slopes a device pixel across and down, from its gradient: what
+   // fine derivatives estimate, the same at every pixel (they difference
+   // with the neighbour in the pixel's 2×2 block, so a corner moved by an
+   // odd number of pixels shaded otherwise, and a scroll's copy of it
+   // differed from it drawn where it went).
+   let outside=max(q,vec2(0.));
+   let reach=length(outside);
+   let gradient=select(select(vec2(0.,1.),vec2(1.,0.),q.x>q.y),outside/max(reach,1e-20),reach>0.);
+   let slope=gradient/viewport.z;
    if v.shape.y<0. {
      // A ring (a border alone, `ring_quad`): side widths (top, right,
      // bottom, left) packed two to a lane in 16ths of a pixel; inside, the
@@ -115,12 +157,12 @@ fn shade_texel(input:Out, given:vec4<f32>, has_texel:bool)->vec4<f32> {
      let across=select(sides.w,sides.y,right); let down=select(sides.x,sides.z,bottom);
      let box=vec4(v.fade.xy+sides.wx,max(v.fade.zw-sides.wx-sides.yz,vec2(0.)));
      let inner_radius=clamp(radius-(across+down)*0.5,0.,min(box.z,box.w)*0.5);
-     let iq=abs(v.point-box.xy-box.zw*0.5)-(box.zw*0.5-vec2(inner_radius));
+     let iq=centred(v.position.xy,box)-(box.zw*0.5-vec2(inner_radius));
      let inside=length(max(iq,vec2(0.)))+min(max(iq.x,iq.y),0.)-inner_radius;
-     // Fine derivatives (each pixel's own): Direct3D's `fwidth` is coarse,
-     // one per 2×2 block, and softened rounded rings (a pixel 1.4 px inside
-     // a 4 px border came out 94% covered). Metal's and Vulkan's were fine.
-     let aa=max(fwidthFine(distance),0.5);
+     // Its slopes (above), each pixel's own: Direct3D's `fwidth` is
+     // coarse, one per 2×2 block, and softened rounded rings (a pixel 1.4 px
+     // inside a 4 px border came out 94% covered).
+     let aa=max(slope.x+slope.y,0.5);
      let hollow=select(0.,clamp(0.5-inside/aa,0.,1.),box.z>0.&&box.w>0.);
      color.a*=max(clamp(0.5-distance/aa,0.,1.)-hollow,0.);
    } else if v.shape.z>0. {
@@ -140,7 +182,7 @@ fn shade_texel(input:Out, given:vec4<f32>, has_texel:bool)->vec4<f32> {
    // `fwidth` (the slopes' sum) adds both axes' there when the pixel's 2×2
    // block reaches outside (a corner at an odd pixel), and shaded 3/4 what
    // the basic shader draws whole, so a box's pixels hung on its batch.
-   else {let dx=abs(dpdxFine(distance));let dy=abs(dpdyFine(distance));let aa=max(select(dx+dy,max(dx,dy),radius<=0.),0.5);let outer=clamp(0.5-distance/aa,0.,1.);let inner=clamp(0.5-(distance+v.shape.y)/aa,0.,1.);let alpha=color.a*inner+v.border.a*(outer-inner);let rgb=select(vec3(0.),(color.rgb*color.a*inner+v.border.rgb*v.border.a*(outer-inner))/max(alpha,0.00001),alpha>0.);color=vec4(rgb,alpha);}
+   else {let dx=slope.x;let dy=slope.y;let aa=max(select(dx+dy,max(dx,dy),radius<=0.),0.5);let outer=clamp(0.5-distance/aa,0.,1.);let inner=clamp(0.5-(distance+v.shape.y)/aa,0.,1.);let alpha=color.a*inner+v.border.a*(outer-inner);let rgb=select(vec3(0.),(color.rgb*color.a*inner+v.border.rgb*v.border.a*(outer-inner))/max(alpha,0.00001),alpha>0.);color=vec4(rgb,alpha);}
  }
 
  // Premultiplied texels carry their alpha already: the colour stays
@@ -150,7 +192,7 @@ fn shade_texel(input:Out, given:vec4<f32>, has_texel:bool)->vec4<f32> {
  if v.options.y>0.5 {
    var tex=given; if !has_texel {tex=textureSample(atlas,tex_sampler,v.uv);}
    if v.options.y>1.5 {premultiplied=true; rgb=color.rgb*tex.rgb*color.a; color.a=color.a*tex.a;}
-   else {color=vec4(color.rgb*tex.rgb,color.a*tex.a);}
+   else {color=vec4(color.rgb*tex.rgb,color.a*firm(tex.a,firmness(v.options.y,color.rgb)));}
  }
  if v.options.x>0. {let distance=min(v.point-v.fade.xy,v.fade.xy+v.fade.zw-v.point); let f=clamp(min(distance.x,distance.y)/v.options.x,0.,1.); color.a*=f; scale*=f;}
  // Rounded clips and `fade_edges` around it (see `Region`).
@@ -167,16 +209,16 @@ struct Both { @location(0) retained:vec4<f32>, @location(1) drawable:vec4<f32> }
 // this one where drawing is split (see `push_draw`). Same results as `shade`.
 // `texture`: 0 for a flat colour, 1 for straight-alpha samples (glyphs), 2
 // for premultiplied ones (icons, images), as `options.y`.
-struct Basic { @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32>, @location(1) @interpolate(flat) color:vec4<f32>, @location(2) @interpolate(flat) texture:f32 }
+struct Basic { @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32>, @location(1) @interpolate(flat) color:vec4<f32>, @location(2) @interpolate(flat) texture:f32, @location(3) @interpolate(flat) firmness:f32 }
 @vertex fn vs_basic(@location(0) rect:vec4<f32>,@location(1) uv:vec4<f32>,@location(2) color:vec4<f32>,@location(4) options:vec4<f32>,@builtin(vertex_index) i:u32)->Basic {
  let corner=vec2(f32(i&1u),f32(i>>1u));
  let p=rect.xy+corner*rect.zw;
- var o:Basic; o.position=vec4(p.x/viewport.x*2.-1.,1.-p.y/viewport.y*2.,0.,1.);o.uv=uv.xy+corner*uv.zw;o.color=color;o.texture=options.y;return o;
+ var o:Basic; o.position=vec4(p.x/viewport.x*2.-1.,1.-p.y/viewport.y*2.,0.,1.);o.uv=uv.xy+corner*uv.zw;o.color=color;o.texture=options.y;o.firmness=firmness(options.y,color.rgb);return o;
 }
 // Straight samples: colour.rgb * tex.rgb * (colour.a * tex.a). Premultiplied
 // ones already carry tex.a in tex.rgb: colour.rgb * tex.rgb * colour.a.
 fn basic(v:Basic)->vec4<f32> {
- if v.texture>0.5 {let tex=textureSample(atlas,tex_sampler,v.uv); let a=v.color.a*tex.a; return vec4(v.color.rgb*tex.rgb*select(a,v.color.a,v.texture>1.5),a);}
+ if v.texture>0.5 {let tex=textureSample(atlas,tex_sampler,v.uv); let a=v.color.a*firm(tex.a,v.firmness); return vec4(v.color.rgb*tex.rgb*select(a,v.color.a,v.texture>1.5),a);}
  return vec4(v.color.rgb*v.color.a,v.color.a);
 }
 @fragment fn fs_basic(v:Basic)->@location(0) vec4<f32> { return basic(v); }

@@ -7,24 +7,64 @@
 //! removing or renaming a font changes its directory. The font files
 //! themselves (about 370 stats, a fifth of the cache's cost) are checked
 //! after launch, off the main thread: one changed in place drops the cache
-//! for the next launch. Linux, where fontdb takes its directories from
-//! fontconfig, loads as before.
+//! for the next launch. On Linux fontdb takes its directories from
+//! fontconfig's configuration: the cache watches the files it read, and keeps
+//! the generic families its aliases chose.
 use cosmic_text::{
     FontSystem,
     fontdb::{self, Language, Source, Stretch, Style, Weight},
 };
 use std::{
     path::{Path, PathBuf},
-    time::UNIX_EPOCH,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-/// Bump when fontdb or cosmic-text change what they read from a font file.
-const FORMAT: &[u8] = b"zgx system fonts 2\n";
+/// Bump when fontdb or cosmic-text change what they read from a font file,
+/// with `FILE`.
+/// 3: macOS's PingFang, outside the font directories, is loaded too.
+/// 4: the environment fontdb reads and the generic families it chose.
+const FORMAT: &[u8] = b"zgx system fonts 4\n";
+
+/// The cache file's name, one per format: apps built on zgx versions that
+/// read different formats keep a cache each, where with one file each
+/// rewrote what the other wrote and both loaded every font at every launch.
+const FILE: &str = "system-fonts-v4";
+
+/// How long another format's cache file (or one left half-written) stays
+/// unchanged before it is removed. An app on this format keeps its own file
+/// changed (`keep_fresh`); zgx 0.1.7 and earlier wrote `system-fonts` only
+/// when it was stale, so theirs may go while still read, and is written
+/// again at that app's next launch.
+const UNUSED: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 pub(crate) fn system_fonts() -> FontSystem {
     let mut fonts = cached_system_fonts();
     platform_families(&mut fonts);
+    #[cfg(feature = "hyphens")]
+    fonts.set_hyphenator(Some(std::sync::Arc::new(hyphenation_points)));
     fonts
+}
+
+/// Where `word` may break with a hyphen, in `locale`'s language (English
+/// for one hypher has no patterns for): byte offsets inside it.
+#[cfg(feature = "hyphens")]
+fn hyphenation_points(word: &str, locale: &str) -> Vec<usize> {
+    let code = locale.as_bytes();
+    let lang = (code.len() >= 2)
+        .then(|| {
+            hypher::Lang::from_iso([code[0].to_ascii_lowercase(), code[1].to_ascii_lowercase()])
+        })
+        .flatten()
+        .unwrap_or(hypher::Lang::English);
+    let mut at = 0;
+    let mut points = Vec::new();
+    for syllable in hypher::hyphenate(word, lang) {
+        at += syllable.len();
+        if at < word.len() {
+            points.push(at);
+        }
+    }
+    points
 }
 
 /// The system's own faces for the generic families. cosmic-text names
@@ -54,6 +94,61 @@ fn platform_families(fonts: &mut FontSystem) {
         }
         if let Some(serif) = serif {
             db.set_serif_family(serif);
+        }
+    }
+    // Nor does macOS have Noto Sans Mono. With no face of its own,
+    // monospaced text searched every fixed-width face for each word it
+    // shaped anew (a terminal's every line), to settle on Menlo for Latin
+    // text. Menlo, on every Mac, is now the family's face; characters it
+    // lacks fall back to other faces as on Windows and Linux.
+    #[cfg(target_os = "macos")]
+    {
+        let db = fonts.db_mut();
+        if db
+            .faces()
+            .any(|face| face.families.iter().any(|(family, _)| family == "Menlo"))
+        {
+            db.set_monospace_family("Menlo");
+        }
+    }
+    // cosmic-text's monospace is Noto Sans Mono, which few Linux systems
+    // install: monospaced text then took any fixed-width face, and on one
+    // with DejaVu that was DejaVu Sans Mono Oblique, slanting every code
+    // block. A family with an upright face is taken instead, a common one
+    // first.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let db = fonts.db_mut();
+        let upright = |name: &str| {
+            db.faces().any(|face| {
+                face.style == Style::Normal
+                    && face.families.iter().any(|(family, _)| family == name)
+            })
+        };
+        if !upright(db.family_name(&fontdb::Family::Monospace)) {
+            let common = [
+                "DejaVu Sans Mono",
+                "Liberation Mono",
+                "Ubuntu Mono",
+                "Cascadia Mono",
+                "Source Code Pro",
+                "Hack",
+                "Fira Mono",
+                "Noto Mono",
+            ];
+            let mono = common
+                .into_iter()
+                .find(|name| upright(name))
+                .map(str::to_owned)
+                .or_else(|| {
+                    db.faces()
+                        .find(|face| face.monospaced && face.style == Style::Normal)
+                        .and_then(|face| face.families.first())
+                        .map(|(family, _)| family.clone())
+                });
+            if let Some(mono) = mono {
+                db.set_monospace_family(mono);
+            }
         }
     }
     // The desktop's interface face, as GTK and Qt apps take it, where the
@@ -92,12 +187,15 @@ fn cached_system_fonts() -> FontSystem {
     let Some(cache) = cache_file() else {
         return FontSystem::new();
     };
-    if let Some((fonts, files)) = std::fs::read(&cache).ok().and_then(|bytes| decode(&bytes)) {
+    if let Some((fonts, files)) = std::fs::read(&cache)
+        .ok()
+        .and_then(|bytes| decode(&bytes, &environment()))
+    {
         check_later(cache, files);
         return fonts;
     }
     let mut fonts = FontSystem::new();
-    if let Some(bytes) = encode(&mut fonts) {
+    if let Some(bytes) = encode(&mut fonts, &environment()) {
         // Written whole and renamed, so another process never reads half.
         let partial = cache.with_extension(format!("{}.partial", std::process::id()));
         let written = cache
@@ -117,15 +215,83 @@ type Stamps = Vec<(PathBuf, (u64, u64))>;
 
 /// Once the app has started, whether a font file changed in place since the
 /// cache was written: if one did, the next launch loads the fonts again.
+/// Then the cache is marked in use, and other formats' caches long unused
+/// are removed.
 fn check_later(cache: PathBuf, files: Stamps) {
-    let _ = std::thread::Builder::new()
-        .name("zgx font cache check".into())
-        .spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            if stale(&files) {
-                let _ = std::fs::remove_file(cache);
-            }
-        });
+    // No thread of its own: a process that ever had a second thread locks
+    // its allocator on every allocation (glibc), and the check waits for the
+    // app to have started (`check_pending`) instead.
+    if let Ok(mut pending) = PENDING.lock() {
+        *pending = Some((cache, files));
+    }
+}
+
+/// The cache read at launch and its files' stamps, until `check_pending`.
+static PENDING: std::sync::Mutex<Option<(PathBuf, Stamps)>> = std::sync::Mutex::new(None);
+
+/// Checks the cache read at launch, once, as the app has started: on a
+/// renderer's first trim (its host gone idle, no wake of its own) or after
+/// its first frames (`LAUNCH_FRAMES`) for an app that never goes idle.
+pub(crate) fn check_pending() {
+    let Some((cache, files)) = PENDING.lock().ok().and_then(|mut pending| pending.take()) else {
+        return;
+    };
+    check(&cache, &files);
+}
+
+/// Whether a font file changed in place since `cache` was written: if one
+/// did, it goes (the next launch loads the fonts again), else it is marked
+/// in use; then other formats' caches long unused are removed.
+fn check(cache: &Path, files: &[(PathBuf, (u64, u64))]) {
+    if stale(files) {
+        let _ = std::fs::remove_file(cache);
+    } else {
+        keep_fresh(cache, SystemTime::now());
+    }
+    if let Some(dir) = cache.parent() {
+        prune(dir, SystemTime::now());
+    }
+}
+
+/// Marks a cache read as in use, at most once a day: reading it changes
+/// nothing `prune` sees.
+fn keep_fresh(cache: &Path, now: SystemTime) {
+    let Ok(file) = std::fs::File::options().write(true).open(cache) else {
+        return;
+    };
+    let day = Duration::from_secs(24 * 60 * 60);
+    let old = file
+        .metadata()
+        .and_then(|meta| meta.modified())
+        .is_ok_and(|at| now.duration_since(at).is_ok_and(|age| age > day));
+    if old {
+        let _ = file.set_modified(now);
+    }
+}
+
+/// Removes the system font caches in `dir` other than this format's that
+/// have gone unchanged for `UNUSED`: older and newer formats' and files a
+/// write left half-done.
+fn prune(dir: &Path, now: SystemTime) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name == FILE || !name.starts_with("system-fonts") {
+            continue;
+        }
+        let unused = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .is_ok_and(|at| now.duration_since(at).is_ok_and(|age| age > UNUSED));
+        if unused {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// Whether any of `files` is no longer as stamped.
@@ -135,11 +301,26 @@ fn stale(files: &[(PathBuf, (u64, u64))]) -> bool {
 
 fn cache_file() -> Option<PathBuf> {
     if cfg!(target_os = "macos") {
-        Some(PathBuf::from(std::env::var_os("HOME")?).join("Library/Caches/zgx/system-fonts"))
+        Some(
+            PathBuf::from(std::env::var_os("HOME")?)
+                .join("Library/Caches/zgx")
+                .join(FILE),
+        )
     } else if cfg!(windows) {
-        Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("zgx\\system-fonts"))
-    } else {
+        Some(
+            PathBuf::from(std::env::var_os("LOCALAPPDATA")?)
+                .join("zgx")
+                .join(FILE),
+        )
+    } else if cfg!(target_os = "android") {
         None
+    } else {
+        // XDG's cache directory, `~/.cache` by default.
+        let base = match std::env::var_os("XDG_CACHE_HOME").filter(|dir| !dir.is_empty()) {
+            Some(dir) => PathBuf::from(dir),
+            None => PathBuf::from(std::env::var_os("HOME")?).join(".cache"),
+        };
+        Some(base.join("zgx").join(FILE))
     }
 }
 
@@ -177,7 +358,80 @@ fn font_roots() -> (Vec<PathBuf>, Vec<PathBuf>) {
             roots.push(home.join("AppData\\Roaming\\Microsoft\\Windows\\Fonts"));
         }
     }
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
+    {
+        let var = |name| std::env::var(name).ok();
+        fontconfig_roots(
+            var("FONTCONFIG_FILE"),
+            var("XDG_CONFIG_HOME"),
+            var("HOME"),
+            &mut roots,
+            &mut parents,
+        );
+    }
     (roots, parents)
+}
+
+/// fontdb 0.23's `load_fontconfig`, as far as what it reads: the directories
+/// fontconfig's configuration names (or its fallback ones, where it names
+/// none), and as parents every configuration file read, the directories
+/// holding them (a file added to `conf.d`) and the files it would have read
+/// had they existed.
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
+fn fontconfig_roots(
+    fontconfig_file: Option<String>,
+    xdg_config_home: Option<String>,
+    home: Option<String>,
+    roots: &mut Vec<PathBuf>,
+    parents: &mut Vec<PathBuf>,
+) {
+    let mut config = fontconfig_parser::FontConfig::default();
+    if let Some(file) = fontconfig_file {
+        parents.push(PathBuf::from(&file));
+        let _ = config.merge_config(Path::new(&file));
+    } else {
+        let user = match xdg_config_home {
+            Some(dir) => Some(PathBuf::from(dir)),
+            None => home.as_ref().map(|home| Path::new(home).join(".config")),
+        };
+        let read_global = match user {
+            Some(dir) => {
+                let file = dir.join("fontconfig/fonts.conf");
+                parents.push(file.clone());
+                config.merge_config(&file).is_err()
+            }
+            None => true,
+        };
+        if read_global {
+            parents.push("/etc/fonts/local.conf".into());
+            let _ = config.merge_config(Path::new("/etc/fonts/local.conf"));
+        }
+        parents.push("/etc/fonts/fonts.conf".into());
+        let _ = config.merge_config(Path::new("/etc/fonts/fonts.conf"));
+    }
+    for file in &config.config_files {
+        parents.push(file.clone());
+        if let Some(dir) = file.parent() {
+            parents.push(dir.to_owned());
+        }
+    }
+    for dir in &config.dirs {
+        match dir.path.strip_prefix("~") {
+            Ok(rest) => {
+                if let Some(home) = &home {
+                    roots.push(Path::new(home).join(rest));
+                }
+            }
+            Err(_) => roots.push(dir.path.clone()),
+        }
+    }
+    if config.dirs.is_empty() {
+        roots.extend(["/usr/share/fonts/", "/usr/local/share/fonts/"].map(PathBuf::from));
+        if let Some(home) = &home {
+            roots.push(Path::new(home).join(".fonts"));
+            roots.push(Path::new(home).join(".local/share/fonts"));
+        }
+    }
 }
 
 /// Every path whose change could change the loaded faces: the font
@@ -223,9 +477,12 @@ fn stamp(path: &Path) -> (u64, u64) {
     })
 }
 
-fn encode(fonts: &mut FontSystem) -> Option<Vec<u8>> {
+fn encode(fonts: &mut FontSystem, env: &Environment) -> Option<Vec<u8>> {
     let (dirs, files) = watched(fonts)?;
     let mut out = Writer(FORMAT.to_vec());
+    for value in env {
+        out.option_str(value.as_deref());
+    }
     for paths in [&dirs, &files] {
         out.u32(paths.len() as u32);
         for path in paths {
@@ -265,13 +522,39 @@ fn encode(fonts: &mut FontSystem) -> Option<Vec<u8>> {
             None => out.0.push(0),
         }
     }
+    let db = fonts.db();
+    for family in GENERIC {
+        out.str(db.family_name(&family));
+    }
     Some(out.0)
 }
 
+/// What fontdb reads from the environment as it finds the system's fonts
+/// (on Linux, where fontconfig's configuration lives): a cache written
+/// under other values isn't used.
+type Environment = [Option<String>; 3];
+fn environment() -> Environment {
+    ["HOME", "XDG_CONFIG_HOME", "FONTCONFIG_FILE"].map(|name| std::env::var(name).ok())
+}
+
+/// The generic families, in the order the cache keeps their faces' names.
+const GENERIC: [fontdb::Family<'static>; 5] = [
+    fontdb::Family::Serif,
+    fontdb::Family::SansSerif,
+    fontdb::Family::Cursive,
+    fontdb::Family::Fantasy,
+    fontdb::Family::Monospace,
+];
+
 /// The cached fonts, if every font directory is as it was, with the font
 /// files' stamps to check later (`check_later`).
-fn decode(bytes: &[u8]) -> Option<(FontSystem, Stamps)> {
+fn decode(bytes: &[u8], env: &Environment) -> Option<(FontSystem, Stamps)> {
     let mut input = Reader(bytes.strip_prefix(FORMAT)?);
+    for value in env {
+        if input.option_str()? != value.as_deref() {
+            return None;
+        }
+    }
     for _ in 0..input.u32()? {
         let path = input.str()?;
         if stamp(Path::new(path)) != (input.u64()?, input.u64()?) {
@@ -326,9 +609,16 @@ fn decode(bytes: &[u8]) -> Option<(FontSystem, Stamps)> {
         });
         axes.push((id, axis));
     }
+    // As the load that wrote it chose them (on Linux, fontconfig's aliases).
+    let generic: Vec<&str> = GENERIC.iter().map(|_| input.str()).collect::<Option<_>>()?;
     if !input.0.is_empty() {
         return None;
     }
+    db.set_serif_family(generic[0]);
+    db.set_sans_serif_family(generic[1]);
+    db.set_cursive_family(generic[2]);
+    db.set_fantasy_family(generic[3]);
+    db.set_monospace_family(generic[4]);
     let mut fonts = FontSystem::new_with_db(db);
     for (id, axis) in axes {
         fonts.set_weight_axis(id, axis);
@@ -368,6 +658,15 @@ impl Writer {
         self.u32(s.len() as u32);
         self.0.extend_from_slice(s.as_bytes());
     }
+    fn option_str(&mut self, s: Option<&str>) {
+        match s {
+            Some(s) => {
+                self.0.push(1);
+                self.str(s);
+            }
+            None => self.0.push(0),
+        }
+    }
 }
 
 struct Reader<'a>(&'a [u8]);
@@ -392,6 +691,13 @@ impl<'a> Reader<'a> {
     fn str(&mut self) -> Option<&'a str> {
         let len = self.u32()? as usize;
         std::str::from_utf8(self.take(len)?).ok()
+    }
+    fn option_str(&mut self) -> Option<Option<&'a str>> {
+        match self.u8()? {
+            0 => Some(None),
+            1 => Some(Some(self.str()?)),
+            _ => None,
+        }
     }
 }
 
@@ -445,15 +751,182 @@ mod tests {
         );
     }
 
+    /// As fontdb reads fontconfig's configuration: its directories, and as
+    /// parents the files read (an included one too), the directories holding
+    /// them and the file named whether it exists or not; none named, fontdb's.
+    /// (fontconfig-parser expands a `~` itself, from the process's HOME.)
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
+    #[test]
+    fn the_cache_watches_what_fontconfig_read() {
+        let dir = std::env::temp_dir().join(format!("zgx-fontconfig-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("conf.d")).unwrap();
+        let file = dir.join("fonts.conf");
+        std::fs::write(
+            &file,
+            format!(
+                "<?xml version=\"1.0\"?><fontconfig><dir>/opt/fonts</dir>\
+                 <include ignore_missing=\"yes\">{}</include></fontconfig>",
+                dir.join("conf.d").display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("conf.d/10-more.conf"),
+            "<?xml version=\"1.0\"?><fontconfig><dir>/srv/fonts</dir></fontconfig>",
+        )
+        .unwrap();
+        let (mut roots, mut parents) = (Vec::new(), Vec::new());
+        let named = Some(file.to_string_lossy().into_owned());
+        fontconfig_roots(
+            named,
+            None,
+            Some("/home/u".into()),
+            &mut roots,
+            &mut parents,
+        );
+        assert_eq!(roots, ["/opt/fonts", "/srv/fonts"].map(PathBuf::from));
+        let canonical = |p: &Path| std::fs::canonicalize(p).unwrap();
+        for watched in [
+            canonical(&file),
+            canonical(&dir.join("conf.d/10-more.conf")),
+        ] {
+            assert!(parents.contains(&watched), "{watched:?} in {parents:?}");
+            assert!(parents.contains(&watched.parent().unwrap().to_owned()));
+        }
+        // A configuration that names no directory: fontdb's own.
+        let (mut roots, mut parents) = (Vec::new(), Vec::new());
+        let missing = Some(dir.join("absent.conf").to_string_lossy().into_owned());
+        fontconfig_roots(
+            missing,
+            None,
+            Some("/home/u".into()),
+            &mut roots,
+            &mut parents,
+        );
+        assert_eq!(
+            roots,
+            [
+                "/usr/share/fonts/",
+                "/usr/local/share/fonts/",
+                "/home/u/.fonts",
+                "/home/u/.local/share/fonts"
+            ]
+            .map(PathBuf::from)
+        );
+        assert!(
+            parents.contains(&dir.join("absent.conf")),
+            "the file named, though absent"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The file is named for the format it holds.
+    #[test]
+    fn the_cache_file_is_named_for_its_format() {
+        let format = std::str::from_utf8(FORMAT).unwrap();
+        let number = format.trim_end().rsplit(' ').next().unwrap();
+        assert_eq!(FILE, format!("system-fonts-v{number}"));
+    }
+
+    /// Another format's cache, or a half-written one, goes once unchanged a
+    /// month; this format's, a recent one and other files stay.
+    #[test]
+    fn caches_of_other_formats_long_unused_are_removed() {
+        let dir = std::env::temp_dir().join(format!("zgx-font-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let now = SystemTime::now();
+        let long_ago = now - UNUSED - Duration::from_secs(60);
+        let lately = now - UNUSED + Duration::from_secs(60 * 60);
+        let files = [
+            ("system-fonts", long_ago, false),
+            ("system-fonts-v2", long_ago, false),
+            ("system-fonts-v3.123.partial", long_ago, false),
+            (FILE, long_ago, true),
+            ("system-fonts-v9", lately, true),
+            ("bytecode", long_ago, true),
+        ];
+        for (name, at, _) in files {
+            let file = std::fs::File::create(dir.join(name)).unwrap();
+            file.set_modified(at).unwrap();
+        }
+        prune(&dir, now);
+        for (name, _, kept) in files {
+            assert_eq!(dir.join(name).exists(), kept, "{name}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The check the app runs once started: a cache whose font file changed
+    /// in place goes, one whose fonts are as stamped stays; and taking the
+    /// pending check leaves none to run again.
+    #[test]
+    fn a_started_app_checks_its_cache_once() {
+        let dir = std::env::temp_dir().join(format!("zgx-font-check-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let font = dir.join("face.ttf");
+        std::fs::write(&font, b"glyphs").unwrap();
+        let cache = dir.join(FILE);
+        std::fs::write(&cache, b"cache").unwrap();
+        let as_written = vec![(font.clone(), stamp(&font))];
+        check(&cache, &as_written);
+        assert!(cache.exists(), "fonts as stamped keep the cache");
+        std::fs::write(&font, b"other glyphs").unwrap();
+        check(&cache, &as_written);
+        assert!(!cache.exists(), "a font changed in place drops it");
+        let _ = std::fs::remove_dir_all(&dir);
+        // Taken, a pending check runs once.
+        *PENDING.lock().unwrap() = None;
+        check_pending();
+        assert!(PENDING.lock().unwrap().is_none());
+    }
+
+    /// A cache in use is marked so once a day, not at every launch.
+    #[test]
+    fn a_cache_read_is_kept_fresh_daily() {
+        let path = std::env::temp_dir().join(format!("zgx-font-fresh-{}", std::process::id()));
+        let file = std::fs::File::create(&path).unwrap();
+        let now = SystemTime::now();
+        let modified = || std::fs::metadata(&path).unwrap().modified().unwrap();
+        let hour_ago = now - Duration::from_secs(60 * 60);
+        file.set_modified(hour_ago).unwrap();
+        keep_fresh(&path, now);
+        assert_eq!(modified(), hour_ago, "an hour old is fresh");
+        let week_ago = now - Duration::from_secs(7 * 24 * 60 * 60);
+        file.set_modified(week_ago).unwrap();
+        keep_fresh(&path, now);
+        assert!(
+            modified() > week_ago + Duration::from_secs(60),
+            "a week old is marked"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// The cached database is the loaded one: the same faces, in the same
     /// order (matching breaks ties by it), with the same weight axes.
     #[test]
     fn a_decoded_cache_holds_the_loaded_faces() {
         let mut loaded = FontSystem::new();
-        let Some(bytes) = encode(&mut loaded) else {
+        let env = environment();
+        let Some(bytes) = encode(&mut loaded, &env) else {
             return; // No system fonts cache on this platform.
         };
-        let (mut cached, files) = decode(&bytes).expect("an unchanged system decodes");
+        let (mut cached, files) = decode(&bytes, &env).expect("an unchanged system decodes");
+        // Its generic families, as the load chose them (fontconfig's aliases).
+        for family in GENERIC {
+            assert_eq!(
+                loaded.db().family_name(&family),
+                cached.db().family_name(&family)
+            );
+        }
+        // Written under another environment fontdb reads, it isn't used.
+        let elsewhere = [env[0].clone(), Some("/elsewhere".into()), env[2].clone()];
+        assert!(
+            decode(&bytes, &elsewhere).is_none(),
+            "another XDG_CONFIG_HOME reloads"
+        );
         assert!(!stale(&files), "an unchanged font file is not stale");
         if let Some(first) = files.first() {
             let touched = [(first.0.clone(), (first.1.0 ^ 1, first.1.1))];
@@ -487,18 +960,25 @@ mod tests {
             assert_eq!(loaded.weight_axis(a), cached.weight_axis(b));
         }
         assert!(
-            decode(&bytes[..bytes.len() - 1]).is_none(),
+            decode(&bytes[..bytes.len() - 1], &env).is_none(),
             "a truncated cache is not used"
         );
-        // The first font directory's modification time, as if it changed
-        // (Linux watches none: fontconfig has its own cache).
-        let dirs = u32::from_le_bytes(bytes[FORMAT.len()..][..4].try_into().unwrap());
+        // The first watched path's modification time, as if it changed.
+        // Past the environment it was written under.
+        let mut at = FORMAT.len();
+        for value in &env {
+            at += 1 + value.as_ref().map_or(0, |v| 4 + v.len());
+        }
+        let dirs = u32::from_le_bytes(bytes[at..][..4].try_into().unwrap());
         if dirs > 0 {
             let mut changed = bytes.clone();
-            let first = FORMAT.len() + 4;
+            let first = at + 4;
             let len = u32::from_le_bytes(changed[first..first + 4].try_into().unwrap()) as usize;
             changed[first + 4 + len] ^= 1;
-            assert!(decode(&changed).is_none(), "a changed directory reloads");
+            assert!(
+                decode(&changed, &env).is_none(),
+                "a changed directory reloads"
+            );
         }
     }
 }

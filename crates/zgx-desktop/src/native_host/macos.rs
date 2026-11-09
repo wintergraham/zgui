@@ -107,6 +107,104 @@ pub(crate) fn forward_secondary_click(view: &NSView, event: &objc2_app_kit::NSEv
     });
 }
 
+/// Whether `event`, a key `view` (a native view, a terminal) would keep, is
+/// one of the app's shortcuts: a key binding zgx has where focus is, or
+/// above it. A key the app's menus take never gets here (AppKit offers them
+/// first).
+#[cfg(feature = "ghostty")]
+pub(crate) fn app_binds_key(view: &NSView, event: &objc2_app_kit::NSEvent) -> bool {
+    app_key(view, event, |input, scene, key, modifiers| {
+        input.binds_key(scene, key, modifiers)
+    })
+}
+
+/// Whether `event`, a key `view` (a page, a terminal) would get first, is a
+/// shortcut the app keeps whatever has the keyboard
+/// (`KeyBinding::reserved`, `Application::reserved_shortcuts`).
+pub(crate) fn app_reserves_key(view: &NSView, event: &objc2_app_kit::NSEvent) -> bool {
+    app_key(view, event, |input, scene, key, modifiers| {
+        input.reserves_key(scene, key, modifiers)
+    })
+}
+
+/// `ask` of the key `event` is, as zgx names the window's own key presses,
+/// with the input and scene of `view`'s window.
+fn app_key(
+    view: &NSView,
+    event: &objc2_app_kit::NSEvent,
+    ask: impl FnOnce(
+        &zgx::input::InputDispatcher,
+        &Scene,
+        &zgx::input::Key,
+        zgx::input::Modifiers,
+    ) -> bool,
+) -> bool {
+    use objc2_app_kit::NSEventModifierFlags as Flags;
+    let Some(router) = view
+        .window()
+        .and_then(|window| window.contentView())
+        .and_then(|content| router_of(&content))
+    else {
+        return false;
+    };
+    let Some(scene) = router.scene.upgrade() else {
+        return false;
+    };
+    let flags = event.modifierFlags();
+    let modifiers = zgx::input::Modifiers {
+        shift: flags.contains(Flags::Shift),
+        control: flags.contains(Flags::Control),
+        alt: flags.contains(Flags::Option),
+        meta: flags.contains(Flags::Command),
+    };
+    let Some(key) = shortcut_of(event, modifiers) else {
+        return false;
+    };
+    scene
+        .try_borrow()
+        .is_ok_and(|scene| ask(&router.input, &scene, &key, modifiers))
+}
+
+/// The shortcut `event` is, named as zgx names the window's own key presses.
+/// The names are the vendored winit's (`zgx_winit_patched`); crates.io's
+/// names no AppKit event, so with it no key a page or terminal gets is the
+/// app's, as its views never hand one back up anyway.
+#[cfg(not(zgx_winit_patched))]
+fn shortcut_of(_: &objc2_app_kit::NSEvent, _: zgx::input::Modifiers) -> Option<zgx::input::Key> {
+    None
+}
+#[cfg(zgx_winit_patched)]
+fn shortcut_of(
+    event: &objc2_app_kit::NSEvent,
+    modifiers: zgx::input::Modifiers,
+) -> Option<zgx::input::Key> {
+    // SAFETY: AppKit's live key event, on the main thread.
+    let key = unsafe { winit::platform::macos::key_event_of(std::ptr::from_ref(event).cast()) };
+    crate::application::shortcut_of(&key, modifiers)
+}
+
+/// A shortcut the app keeps (`app_reserves_key`), the app's first: its
+/// menus, and failing them zgx's view, up `view`'s responder chain, which
+/// hears it as a shortcut. Whether it was the app's.
+pub(crate) fn take_reserved_key(view: &NSView, event: &objc2_app_kit::NSEvent) -> bool {
+    // AppKit offers key equivalents to every view; only a focused one's
+    // keys are its to give up.
+    if event.r#type() != objc2_app_kit::NSEventType::KeyDown
+        || !has_focus(view)
+        || !app_reserves_key(view, event)
+    {
+        return false;
+    }
+    if !crate::app_menu::offer_key(event) {
+        // SAFETY: AppKit's own responder chain, on the main thread; the
+        // next responder is a live view or the window.
+        if let Some(next) = unsafe { view.nextResponder() } {
+            next.keyDown(event);
+        }
+    }
+    true
+}
+
 /// The router of `content`'s window, if it has native views.
 fn router_of(content: &NSView) -> Option<Rc<Router>> {
     let key = content as *const NSView as usize;
@@ -148,6 +246,81 @@ fn watch_pointer() {
         )
     };
     std::mem::forget(monitor);
+}
+
+thread_local! {
+    /// Whether `watch_modifiers` installed its monitor.
+    static WATCHING_MODIFIERS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether `Ui::modifiers` follows the monitor (`watch_modifiers`), not
+/// winit: once native views are in the process, winit's report can be a
+/// key's that a page passed back, after the change it described.
+pub(crate) fn modifiers_watched() -> bool {
+    WATCHING_MODIFIERS.with(Cell::get)
+}
+
+/// Follow the modifier keys whatever holds the keyboard (once per process,
+/// as native views first show): AppKit sends `flagsChanged:` to the key
+/// window's first responder, so while a page or a terminal has keyboard
+/// focus winit hears no modifier change. And a key a page hands back
+/// (one it didn't take) reaches winit with the modifiers it was pressed
+/// with, which winit reports as a change after the fact: Command left held.
+/// A local monitor sees each `flagsChanged:` before it is sent, whoever it
+/// goes to, and takes nothing from it; from then on it alone writes
+/// `Ui::modifiers`.
+fn watch_modifiers() {
+    if WATCHING_MODIFIERS.replace(true) {
+        return;
+    }
+    let block = block2::RcBlock::new(
+        |event: std::ptr::NonNull<objc2_app_kit::NSEvent>| -> *mut objc2_app_kit::NSEvent {
+            // SAFETY: AppKit passes a valid event for the handler's duration.
+            modifiers_changed(unsafe { event.as_ref() });
+            event.as_ptr()
+        },
+    );
+    // The monitor lives as long as the app.
+    // SAFETY: the handler returns the event it was given (valid, or AppKit
+    // would not have passed it); its only caller, `Surfaces::new`, checked
+    // it runs on the main thread, where AppKit calls the handler.
+    let monitor = unsafe {
+        objc2_app_kit::NSEvent::addLocalMonitorForEventsMatchingMask_handler(
+            objc2_app_kit::NSEventMask::FlagsChanged,
+            &block,
+        )
+    };
+    std::mem::forget(monitor);
+}
+
+/// The modifier keys changed in a window with native views, whatever holds
+/// its keyboard: `Ui::modifiers` follows (`zgx::input::set_held_modifiers`).
+fn modifiers_changed(event: &objc2_app_kit::NSEvent) {
+    use objc2_app_kit::NSEventModifierFlags as Flags;
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(window) = event.window(mtm).filter(|window| window.isKeyWindow()) else {
+        return;
+    };
+    let Some(content) = window.contentView() else {
+        return;
+    };
+    let Some(router) = router_of(&content) else {
+        return;
+    };
+    let flags = event.modifierFlags();
+    let held = zgx::input::Modifiers {
+        shift: flags.contains(Flags::Shift),
+        control: flags.contains(Flags::Control),
+        alt: flags.contains(Flags::Option),
+        meta: flags.contains(Flags::Command),
+    };
+    zgx::native_view::post(move || {
+        if let Some(runtime) = router.runtime.upgrade() {
+            zgx::input::set_held_modifiers(&runtime, held);
+        }
+    });
 }
 
 /// A mouse move in a window with native views that zgx's view will not
@@ -248,7 +421,7 @@ pub(crate) fn zgx_cursor_at(
 }
 
 /// Whether `view` or a view in it has its window's keyboard focus.
-fn has_focus(view: &NSView) -> bool {
+pub(super) fn has_focus(view: &NSView) -> bool {
     view.window()
         .and_then(|window| window.firstResponder())
         .and_then(|responder| responder.downcast::<NSView>().ok())
@@ -283,6 +456,9 @@ pub(crate) struct Router {
     pub unheard: Cell<Option<(f32, f32)>>,
     /// The window's zoom (`Ui::zoom`): AppKit's points are zgx's times it.
     pub zoom: Cell<f32>,
+    /// Where the modifier keys a native view's focus hides from winit go
+    /// (`Ui::modifiers`).
+    pub runtime: zgx::reactive::WeakRuntime,
 }
 impl Router {
     /// The pointer moved to window point `(x, y)`: what zgx hears.
@@ -729,6 +905,18 @@ pub fn disable_cursor_rects(window: &winit::window::Window) {
     }
 }
 
+/// Hides the pointer or shows it again, for a locked pointer (`Host::
+/// sync_pointer_lock`). AppKit counts hides: each hide is matched by one
+/// show. winit's own hiding is an invisible cursor in a cursor rect, which
+/// does nothing with the window's rects off (`disable_cursor_rects`).
+pub fn show_cursor(shown: bool) {
+    if shown {
+        objc2_app_kit::NSCursor::unhide();
+    } else {
+        objc2_app_kit::NSCursor::hide();
+    }
+}
+
 /// Shows `cursor`, if the pointer is over this window (an app sets the cursor
 /// only for its own windows).
 pub fn set_cursor(window: &winit::window::Window, cursor: winit::window::CursorIcon) {
@@ -815,6 +1003,7 @@ impl Surfaces {
             unsafe { Retained::retain(handle.ns_view.as_ptr().cast()) }.ok_or("no content view")?;
         let parent_key = Retained::as_ptr(&parent) as usize;
         watch_pointer();
+        watch_modifiers();
         let overlay_root = CALayer::new();
         no_actions(&overlay_root);
         let overlay_host = CALayer::new();
@@ -950,7 +1139,9 @@ impl Surfaces {
                 .find(|(other, _)| other == node)
                 .unwrap()
                 .1;
-            // Mount what it shows (a page or a terminal is made on first mount).
+            // Mount what it shows (a page or a terminal is made on first mount),
+            // its content at the window's zoom and the zoomed nodes' around it.
+            let zoom = self.zoom * f64::from(split.native_zoom(*node));
             let mut term = None;
             let (view, web): (Option<Retained<NSView>>, Option<zgx::web_view::WebView>) =
                 match content {
@@ -963,18 +1154,19 @@ impl Surfaces {
                                 .as_any()
                                 .downcast_ref::<webkit::MacWebView>()
                                 .map(|page| {
-                                    page.set_window_zoom(self.zoom);
+                                    page.set_window_zoom(zoom);
                                     page.view().retain()
                                 });
                         (page, Some(web.clone()))
                     }
                     NativeContent::Terminal(terminal) => {
                         term = Some(terminal.clone());
-                        (Self::terminal_view(terminal, self.zoom, self.mtm), None)
+                        (Self::terminal_view(terminal, zoom, self.mtm), None)
                     }
                     NativeContent::Platform(view) => {
                         (view.downcast_ref::<Retained<NSView>>().cloned(), None)
                     }
+                    NativeContent::Glass(pane) => (glass_view(pane, self.mtm), None),
                 };
             let inner: Retained<NSView> =
                 Retained::into_super(clip.cuts.last().unwrap().view.clone());
@@ -1461,6 +1653,26 @@ pub struct BackdropReport {
     /// The blur's radius, as its filter holds it.
     pub blur: Option<f64>,
 }
+/// The materials behind the popup windows over `parent`'s window, as
+/// `BackdropReport`s (`NativeDiagnostics::backdrops`).
+fn popup_backdrops(parent: &NSView) -> Vec<BackdropReport> {
+    let Some(window) = parent.window() else {
+        return Vec::new();
+    };
+    crate::popup_window::popup_backdrops(window.windowNumber())
+        .into_iter()
+        .map(|(frame, radius)| BackdropReport {
+            hidden: false,
+            frame,
+            alpha: 1.,
+            corner_radius: radius as f64,
+            masks: Vec::new(),
+            index: usize::MAX,
+            class: "NSVisualEffectView".into(),
+            blur: None,
+        })
+        .collect()
+}
 fn masks_of(cuts: &[Retained<CutView>], zoom: f32) -> Vec<(Rect, f64)> {
     cuts.iter()
         .filter_map(|cut| {
@@ -1516,7 +1728,10 @@ impl NativeDiagnostics {
         })
         .unwrap_or_default()
     }
-    /// Each backdrop blur the window shows.
+    /// Each backdrop blur the window shows, and AppKit's material behind
+    /// each translucent popup it shows in a window of its own (a menu past
+    /// its edge): class `NSVisualEffectView`, above all of the window's
+    /// (`index` `usize::MAX`).
     pub fn backdrops(&self) -> Vec<BackdropReport> {
         self.with(|shared| {
             let parent = shared.parent.as_ref().unwrap();
@@ -1561,6 +1776,7 @@ impl NativeDiagnostics {
                         blur,
                     }
                 })
+                .chain(popup_backdrops(parent))
                 .collect()
         })
         .unwrap_or_default()
@@ -1707,4 +1923,69 @@ impl NativeDiagnostics {
         })
         .unwrap_or_default()
     }
+}
+
+/// Whether this macOS has the system's glass (`NSGlassEffectView`, macOS 26).
+pub(crate) fn glass_available() -> bool {
+    objc2::runtime::AnyClass::get(c"NSGlassEffectView").is_some()
+}
+
+/// A glass pane's `NSGlassEffectView`, made the first time and styled as it
+/// now asks. Hidden from assistive technology: its node is what speaks.
+fn glass_view(
+    pane: &zgx::glass::GlassPane,
+    mtm: objc2::MainThreadMarker,
+) -> Option<Retained<NSView>> {
+    use zgx::glass::{GlassStyle, GlassVariant};
+    let style = pane.style();
+    let view = match pane.view() {
+        Some(view) => view
+            .downcast_ref::<(Retained<NSView>, std::cell::Cell<Option<GlassStyle>>)>()?
+            .0
+            .clone(),
+        None => {
+            let class = objc2::runtime::AnyClass::get(c"NSGlassEffectView")?;
+            let _ = mtm;
+            // SAFETY: `new` on an NSView subclass, on the main thread (`mtm`).
+            let view: Retained<NSView> = unsafe { msg_send![class, new] };
+            objc2_app_kit::NSAccessibility::setAccessibilityElement(&*view, false);
+            pane.set_view(Rc::new((
+                view.clone(),
+                std::cell::Cell::new(None::<GlassStyle>),
+            )));
+            view
+        }
+    };
+    let held = pane.view()?;
+    let (_, shown) =
+        held.downcast_ref::<(Retained<NSView>, std::cell::Cell<Option<GlassStyle>>)>()?;
+    if shown.get() != Some(style) {
+        shown.set(Some(style));
+        let variant: isize = match style.variant {
+            GlassVariant::Regular => 0,
+            GlassVariant::Clear => 1,
+        };
+        // A capsule's radius: half a box as large as any.
+        let radius = if style.radius.is_finite() {
+            f64::from(style.radius)
+        } else {
+            1e4
+        };
+        // SAFETY: NSGlassEffectView's setters, on the main thread; a tint is
+        // a fresh NSColor, kept by the view.
+        unsafe {
+            let _: () = msg_send![&*view, setStyle: variant];
+            let _: () = msg_send![&*view, setCornerRadius: radius];
+            let tint: Option<Retained<objc2_app_kit::NSColor>> = style.tint.map(|tint| {
+                objc2_app_kit::NSColor::colorWithSRGBRed_green_blue_alpha(
+                    f64::from(tint.0) / 255.,
+                    f64::from(tint.1) / 255.,
+                    f64::from(tint.2) / 255.,
+                    f64::from(tint.3) / 255.,
+                )
+            });
+            let _: () = msg_send![&*view, setTintColor: tint.as_deref()];
+        }
+    }
+    Some(view)
 }

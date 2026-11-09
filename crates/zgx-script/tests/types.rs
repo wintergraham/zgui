@@ -532,6 +532,31 @@ fn events_and_node_options_are_typed() {
     }
 }
 
+#[test]
+fn a_custom_sliders_options_are_typed() {
+    // What a plain element reads for `role = "slider"` (`read_range`),
+    // after the options every element takes: typed for the plain
+    // elements, and a slider's `value_text` for it.
+    let from = NODE.find("fn read_range").expect("read_range");
+    let body = &NODE[from..from + NODE[from..].find("\n}\n").expect("its end")];
+    let mut names: Vec<String> = body
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .filter(|name| is_name(name))
+        .map(str::to_owned)
+        .collect();
+    names.dedup();
+    assert!(names.len() >= 7, "{names:?}");
+    let gaps = missing(&names, &table("ContainerProps"));
+    assert!(
+        gaps.is_empty(),
+        "custom slider options not in ContainerProps: {gaps:?}"
+    );
+    let text = ["value_text".to_owned()];
+    assert!(missing(&text, &table("SliderProps")).is_empty());
+}
+
 /// The keys `text` reads from tables: `get("key")`, `get::<T>("key")`,
 /// `raw_get(…)`, and the `handler("key")` and `value("key")` closures.
 fn gets(text: &str) -> Vec<String> {
@@ -619,8 +644,9 @@ fn element_options_are_typed_on_their_constructors() {
                     keys.retain(|k| k != "code");
                 }
                 if name == "svg" {
-                    // Likewise, only an image has a `fallback`.
-                    keys.retain(|k| k != "fallback");
+                    // Likewise, only an image has a `fallback`, and tells
+                    // what became of its picture.
+                    keys.retain(|k| !["fallback", "on_load", "on_error"].contains(&k.as_str()));
                 }
                 if name == "calendar" {
                     // Read with date_picker's: only its button writes a date.
@@ -851,5 +877,24 @@ fn standard_tokens_are_typed() {
             union("TokenName").contains(&format!("\"{name}\"")),
             "the token `{name}` is not in `TokenName`"
         );
+    }
+}
+
+/// What the engine keeps and a script reads (`ui.prefers`, `ui.modifiers`)
+/// is a `ReadOnlyState`, whose `get` a strict script can call: `Readable`'s
+/// `self: never` (any state fits a property) makes `:get()` unreachable.
+#[test]
+fn engine_kept_states_are_read_only_states_a_script_can_call() {
+    for field in [
+        "reduced_motion",
+        "more_contrast",
+        "reduced_transparency",
+        "shift",
+        "control",
+        "alt",
+        "meta",
+    ] {
+        let declared = format!("\t\t{field}: ReadOnlyState<boolean>,");
+        assert!(DEFS.contains(&declared), "{field} is a ReadOnlyState");
     }
 }

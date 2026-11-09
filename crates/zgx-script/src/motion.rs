@@ -376,6 +376,12 @@ pub(crate) fn each(
                                 let origin = scene.layout_bounds(region.node());
                                 (offset(scene, node, origin), scene.layout_bounds(node))
                             });
+                            // Never laid out (made in the mount laying it
+                            // out), so never shown: it just goes.
+                            if placed.is_some_and(|(_, b)| b == Rect::default()) {
+                                st.elements.remove(&row);
+                                continue;
+                            }
                             if let Some(((x, y), b)) = placed {
                                 let px = |v: f32| Lit::Len(Length::Px(v));
                                 for (prop, lit) in [
@@ -435,6 +441,7 @@ pub(crate) fn each(
             shown.set(list);
             if let Some(exit) = &motion.exit {
                 for (row, element) in leaving_out {
+                    element.leave();
                     let then = remove.clone();
                     let done: Rc<dyn Fn()> = {
                         let row = row.clone();

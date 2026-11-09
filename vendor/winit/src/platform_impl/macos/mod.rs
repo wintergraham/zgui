@@ -17,14 +17,16 @@ mod window_delegate;
 
 use std::fmt;
 
-pub(crate) use self::event::{physicalkey_to_scancode, scancode_to_physicalkey, KeyEventExtra};
+pub(crate) use self::event::{
+    create_key_event, physicalkey_to_scancode, scancode_to_physicalkey, KeyEventExtra,
+};
 pub(crate) use self::event_loop::{
     ActiveEventLoop, EventLoop, EventLoopProxy, OwnedDisplayHandle,
     PlatformSpecificEventLoopAttributes,
 };
 pub(crate) use self::monitor::{MonitorHandle, VideoModeHandle};
 pub(crate) use self::window::WindowId;
-pub(crate) use self::view::set_selection_services;
+pub(crate) use self::view::{set_navigation_swipes, set_selection_services};
 pub(crate) use self::window_delegate::PlatformSpecificWindowAttributes;
 use crate::event::DeviceId as RootDeviceId;
 

@@ -10,10 +10,10 @@ Add the crates, from crates.io:
 
 ```toml
 [dependencies]
-zgx = "0.1.3"
-zgx-desktop = "0.1.3"
+zgx = "0.1.10"
+zgx-desktop = "0.1.10"
 # The component library (a data grid, a tree, tabs, toasts…), if you use it.
-zgx-components = "0.1.3"
+zgx-components = "0.1.10"
 ```
 
 Or, for what is not released yet ([the changelog](../CHANGELOG.md) says what), from its repository:
@@ -25,7 +25,7 @@ zgx-desktop = { git = "https://github.com/zeronsh/zgx" }
 zgx-components = { git = "https://github.com/zeronsh/zgx" }
 ```
 
-That builds as it is: zgx's own forks (of cosmic-text, taffy and mlua) come with it as crates of their own. A few more of its dependencies are patched in zgx's repository alone (winit, wgpu-hal, the AccessKit adapters), and an app gets their releases instead, which zgx builds with, short of those fixes: Wayland popups open in their window, text dragged in from other apps drops into fields on Wayland alone, macOS's Services don't act on zgx's text, Metal frames take more command buffers, VoiceOver misses headings and grid rows, a field's error message is said only in its description ([releasing](releasing.md) lists them). To have them too, add the patches your app's build then takes from zgx's repository (a dependency's `[patch]` never reaches an app):
+That builds as it is: zgx's own forks (of cosmic-text, taffy and mlua) come with it as crates of their own. A few more of its dependencies are patched in zgx's repository alone (winit, wgpu-hal, the AccessKit adapters), and an app gets their releases instead, which zgx builds with, short of those fixes: Wayland popups open in their window, glass blurs on KWin alone, a covered Windows window goes on drawing, text dragged in from other apps drops into fields on Wayland alone, macOS's Services don't act on zgx's text, Metal frames take more command buffers, VoiceOver misses headings and grid rows, a field's error message is said only in its description ([releasing](releasing.md) lists them). To have them too, add the patches your app's build then takes from zgx's repository (a dependency's `[patch]` never reaches an app):
 
 ```toml
 [patch.crates-io]
@@ -212,7 +212,7 @@ RUSTFLAGS="-Cprofile-generate=/tmp/pgo" cargo build --profile dist
 RUSTFLAGS="-Cprofile-use=/tmp/app.profdata" cargo build --profile dist
 ```
 
-zgx-desktop's `mimalloc` feature makes mimalloc the program's allocator: 1–10% fewer cycles in zgx's headless scenes (text 7%, layout 6%, animation 9%, the heavy dashboard 2%) for about 2–3 MB more memory. It also smooths the frames after a large removal: a large subtree leaves the scene at once and zgx frees its nodes a millisecond's worth per frame, but the system allocator on macOS can take 6–9 ms over the first chunk it frees (it hands pages back), where with mimalloc it stays within the millisecond. Turn it on with `features = ["mimalloc"]` on the dependency, unless your program declares a `#[global_allocator]` of its own.
+zgx-desktop's `mimalloc` feature makes mimalloc the program's allocator: 1–10% fewer cycles in zgx's headless scenes (text 7%, layout 6%, animation 9%, the heavy dashboard 2%) for about 2–3 MB more memory. It also smooths the frames after a large removal: a large subtree leaves the scene at once and zgx frees its nodes a millisecond's worth per frame, but the system allocator on macOS can take 6–9 ms over the first chunk it frees (it hands pages back), where with mimalloc it stays within the millisecond. Turn it on with `features = ["mimalloc"]` on the dependency, unless your program declares a `#[global_allocator]` of its own. Its memory shows in vmmap, footprint and Activity Monitor as "Memory Tag 240" (the first tag macOS leaves to an application), where mimalloc's own default, tag 100, reads as "IOAccelerator", the program's heap mistaken for GPU memory. `MIMALLOC_OS_TAG` sets another.
 
 Release binaries keep their symbol table, so backtraces and crash reports name functions. Stripping it saves about another 1.4 MB, and is your choice to make: add `strip = "symbols"` to `[profile.dist]` and keep the symbols apart, in a dSYM, to read crash reports with. On macOS that is `split-debuginfo = "packed"` with `debug = "line-tables-only"` in the profile; Cargo writes `<binary>.dSYM` beside the binary. Keep it with each release you ship, so crash reports from it can be symbolicated (`atos`, or Xcode's Organizer).
 
@@ -230,6 +230,17 @@ LUAU_CXXFLAGS=-DNDEBUG cargo install zgx-script --bin zgx
 (For what is not released yet, `--git https://github.com/zeronsh/zgx` before the crate's name installs from the repository.)
 
 (`zgx-run` uses mimalloc as its allocator, for 6–10% less CPU on script, text and layout work at about 2 MB more memory; add `--no-default-features` to keep the system's. `LUAU_CXXFLAGS=-DNDEBUG` builds Luau without its asserts, a fifth faster: the repository's own builds set it in `.cargo/config.toml`, which an install doesn't read. Without it, `zgx-run` says so as it starts.)
+
+The quickest start is an app made for you:
+
+```sh
+zgx new my-app                     # or --template router, list, form or plugins; --i18n for ui.t
+cd my-app
+zgx run .                          # a window, reloading as you save
+zgx test                           # its tests, headless
+```
+
+It writes `app.luau`, a component, a theme of the app's own tokens (`theme.luau`), a test (`tests/app.test.luau`), `zgx.json`, a README, and a GitHub Actions workflow that runs `zgx check`, `zgx lint`, `zgx audit` and `zgx test`. All four are clean from the start. [Start an app](app-templates.md) has what each template shows. The sections below build the same pieces by hand.
 
 ### A window
 
@@ -329,4 +340,6 @@ A shipped app carries its scripts compiled into the binary: a build script bundl
 
 - [Components](composition.md), [styling](styling.md) and [layout](layout.md) in Rust.
 - [Scripting](scripting.md) and the [Luau reference](reference/index.md).
+- [Testing an app](scripting.md#testing-an-app), [routing](reference/state.md#routing) and [data, network and files](reference/state.md#host-calls-with-results).
+- [3D scenes](3d.md) and [localized text](i18n.md) in Rust.
 - [Windows](windows.md) and [Linux](linux.md) notes; [benchmarking](benchmarking.md).

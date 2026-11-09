@@ -19,13 +19,14 @@ use crate::utils::Lazy;
 use windows_sys::Win32::Devices::HumanInterfaceDevice::MOUSE_MOVE_RELATIVE;
 use windows_sys::Win32::Foundation::{
     GetLastError, FALSE, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_FAILED, WAIT_OBJECT_0,
-    WPARAM,
+    WAIT_TIMEOUT, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromRect, MonitorFromWindow, RedrawWindow, ScreenToClient,
     ValidateRect, MONITORINFO, MONITOR_DEFAULTTONULL, RDW_INTERNALPAINT, SC_SCREENSAVE,
 };
 use windows_sys::Win32::System::Ole::RevokeDragDrop;
+use windows_sys::Win32::System::SystemServices::{MK_CONTROL, MK_SHIFT};
 use windows_sys::Win32::System::Threading::{
     CreateEventW, CreateWaitableTimerExW, GetCurrentThreadId, SetEvent, SetWaitableTimer,
     WaitForSingleObject, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, INFINITE, TIMER_ALL_ACCESS,
@@ -59,7 +60,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_MENUCHAR, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCACTIVATE, WM_NCCALCSIZE,
     WM_NCCREATE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_POINTERDOWN, WM_POINTERUP,
     WM_POINTERUPDATE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE,
-    WM_SIZE, WM_SIZING, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TOUCH, WM_WINDOWPOSCHANGED,
+    WM_SIZE, WM_SIZING, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_TOUCH,
+    WM_WINDOWPOSCHANGED,
     WM_WINDOWPOSCHANGING, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_EX_LAYERED,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_OVERLAPPED, WS_POPUP, WS_VISIBLE,
 };
@@ -160,7 +162,7 @@ pub struct EventLoop<T: 'static> {
     // It is a timer used on timed waits.
     // It is created lazily in case if we have `ControlFlow::WaitUntil`.
     // Keep it as a field to avoid recreating it on every `ControlFlow::WaitUntil`.
-    high_resolution_timer: Option<OwnedHandle>,
+    high_resolution_timer: Option<HighResolutionTimer>,
     // zgx patch: how a proxy wakes the loop while it waits (`ProxyWake`).
     proxy_wake: Option<Arc<ProxyWake>>,
 }
@@ -706,6 +708,22 @@ const FIFTY_DAYS: Duration = Duration::from_secs(50_u64 * 24 * 60 * 60);
 /// because they are even less precise (can overshoot by few ms).
 const MIN_WAIT: Duration = Duration::from_nanos(100);
 
+/// The timer of timed waits, and the `ControlFlow::WaitUntil` deadline it is
+/// armed for, if any. zgx patch: a wait for the deadline it is armed for
+/// arms it again for nothing (a kernel call each turn, every turn of a burst
+/// of input under one deadline), so it isn't. Waiting on it consumes its
+/// signal (a synchronization timer), so a wait it ends leaves it unarmed.
+struct HighResolutionTimer {
+    handle: OwnedHandle,
+    armed: Option<Instant>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Times a timer was armed on this thread (`set_high_resolution_timer`).
+    static TIMER_ARMS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 fn create_high_resolution_timer() -> Option<OwnedHandle> {
     unsafe {
         let handle: HANDLE = CreateWaitableTimerExW(
@@ -741,6 +759,8 @@ unsafe fn set_high_resolution_timer(timer: RawHandle, timeout: Duration) -> Resu
     debug_assert!(intervals_to_wait < i64::MAX as u64, "Must be called with smaller duration",);
     // Use negative time to indicate relative time.
     let due_time: i64 = -(intervals_to_wait as i64);
+    #[cfg(test)]
+    TIMER_ARMS.with(|arms| arms.set(arms.get() + 1));
     unsafe {
         let set_result = SetWaitableTimer(timer as HANDLE, &due_time, 0, None, ptr::null(), FALSE);
         if set_result != FALSE {
@@ -757,11 +777,16 @@ unsafe fn set_high_resolution_timer(timer: RawHandle, timeout: Duration) -> Resu
 /// including winits internal notifications about waiting and new messages arrival.
 /// The user events a proxy's event woke the wait for (zgx patch: `ProxyWake`).
 fn wait_for_messages_impl(
-    high_resolution_timer: &mut Option<OwnedHandle>,
+    high_resolution_timer: &mut Option<HighResolutionTimer>,
     proxy_wake: Option<&ProxyWake>,
     control_flow: ControlFlow,
     timeout: Option<Duration>,
 ) -> usize {
+    // The `WaitUntil` deadline, when it is what the wait waits for.
+    let mut deadline = match control_flow {
+        ControlFlow::WaitUntil(deadline) => Some(deadline),
+        _ => None,
+    };
     let timeout = {
         let control_flow_timeout = match control_flow {
             ControlFlow::Wait => None,
@@ -778,39 +803,51 @@ fn wait_for_messages_impl(
         }
         // Now we decided to wait so need to do some clamping
         // to avoid problems with overflow and calling WinAPI with invalid parameters.
-        timeout
+        let clamped = timeout
             .map(|t| t.min(FIFTY_DAYS))
             // If timeout is less than minimally supported by Windows,
             // increase it to that minimum. Who want less than microsecond delays anyway?
-            .map(|t| t.max(MIN_WAIT))
+            .map(|t| t.max(MIN_WAIT));
+        // Another limit, or a clamp, waits for something else.
+        if clamped != control_flow_timeout {
+            deadline = None;
+        }
+        clamped
     };
 
     if timeout.is_some() && high_resolution_timer.is_none() {
-        *high_resolution_timer = create_high_resolution_timer();
+        *high_resolution_timer =
+            create_high_resolution_timer().map(|handle| HighResolutionTimer { handle, armed: None });
     }
 
-    let high_resolution_timer: Option<RawHandle> =
-        high_resolution_timer.as_ref().map(OwnedHandle::as_raw_handle);
-
     let use_timer: bool;
-    if let (Some(handle), Some(timeout)) = (high_resolution_timer, timeout) {
-        let res = unsafe {
-            // Safety: handle can be Some only if we succeeded in creating high resolution
-            // timer. We properly clamped timeout so it can be used as argument
-            // to timer.
-            set_high_resolution_timer(handle, timeout)
-        };
-        if let Err(error_code) = res {
-            // We successfully got timer but failed to set it?
-            // Should be some bug in our code.
-            tracing::trace!("Failed to set high resolution timer: last error {}", error_code);
-            use_timer = false;
-        } else {
+    if let (Some(timer), Some(timeout)) = (high_resolution_timer.as_mut(), timeout) {
+        if deadline.is_some() && timer.armed == deadline {
+            // zgx patch: armed for this deadline already, and not yet fired.
             use_timer = true;
+        } else {
+            let res = unsafe {
+                // Safety: handle can be Some only if we succeeded in creating high resolution
+                // timer. We properly clamped timeout so it can be used as argument
+                // to timer.
+                set_high_resolution_timer(timer.handle.as_raw_handle(), timeout)
+            };
+            if let Err(error_code) = res {
+                // We successfully got timer but failed to set it?
+                // Should be some bug in our code.
+                tracing::trace!("Failed to set high resolution timer: last error {}", error_code);
+                timer.armed = None;
+                use_timer = false;
+            } else {
+                timer.armed = deadline;
+                use_timer = true;
+            }
         }
     } else {
         use_timer = false;
     }
+    let timer_handle: Option<RawHandle> =
+        high_resolution_timer.as_ref().map(|timer| timer.handle.as_raw_handle());
 
     unsafe {
         // Either:
@@ -821,7 +858,7 @@ fn wait_for_messages_impl(
         let mut raw_handles: [RawHandle; 2] = [ptr::null_mut(); 2];
         let mut num_handles = 0;
         if use_timer {
-            raw_handles[num_handles] = high_resolution_timer.unwrap();
+            raw_handles[num_handles] = timer_handle.unwrap();
             num_handles += 1;
         }
         // zgx patch: a proxy's event (`ProxyWake`), after the timer.
@@ -844,6 +881,15 @@ fn wait_for_messages_impl(
             // Well, nothing smart to do in such case.
             // Treat it as spurious wake up.
             tracing::warn!("Failed to MsgWaitForMultipleObjectsEx: error code {}", GetLastError(),);
+        }
+        // The deadline came, whether the timer ended the wait (its signal now
+        // consumed) or the wait's own timeout beat it by a tick, or the wait
+        // failed: armed for nothing now. (A deadline passed is never waited
+        // for again, and arming anew resets a signal left behind.)
+        if use_timer && matches!(result, WAIT_OBJECT_0 | WAIT_TIMEOUT | WAIT_FAILED) {
+            if let Some(timer) = high_resolution_timer.as_mut() {
+                timer.armed = None;
+            }
         }
         match (proxy_wake, wake_index) {
             (Some(wake), Some(index)) => wake.taken(result == WAIT_OBJECT_0 + index as u32),
@@ -1099,12 +1145,98 @@ fn normalize_pointer_pressure(pressure: u32) -> Option<Force> {
 /// Emit a `ModifiersChanged` event whenever modifiers have changed.
 /// Returns the current modifier state
 fn update_modifiers(window: HWND, userdata: &WindowData) {
-    use crate::event::WindowEvent::ModifiersChanged;
+    let modifiers = LAYOUT_CACHE.lock().unwrap().get_agnostic_mods(None);
+    send_modifiers(window, userdata, modifiers);
+}
 
-    let modifiers = {
-        let mut layouts = LAYOUT_CACHE.lock().unwrap();
-        layouts.get_agnostic_mods()
-    };
+/// ZGX PATCH: the same for a mouse message, whose `wParam` says whether Shift
+/// and Control were down when it was made (`MK_SHIFT`, `MK_CONTROL`). That
+/// holds for a window without focus too, where `GetKeyState` doesn't: the
+/// keyboard updates only the focused thread's key state, so Shift with the
+/// wheel over a window behind another read as no Shift.
+fn update_mouse_modifiers(window: HWND, userdata: &WindowData, wparam: WPARAM) {
+    let modifiers = LAYOUT_CACHE.lock().unwrap().get_agnostic_mods(Some(mouse_keys(wparam)));
+    send_modifiers(window, userdata, modifiers);
+}
+
+/// Whether a mouse message's `wParam` has Shift and Control down.
+fn mouse_keys(wparam: WPARAM) -> (bool, bool) {
+    let keys = wparam as u32 & 0xffff;
+    (keys & MK_SHIFT != 0, keys & MK_CONTROL != 0)
+}
+
+#[cfg(test)]
+mod mouse_modifier_tests {
+    use std::time::Duration;
+
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::System::SystemServices::MK_SHIFT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WHEEL_DELTA, WM_MOUSEWHEEL};
+
+    use crate::application::ApplicationHandler;
+    use crate::event::{MouseScrollDelta, WindowEvent};
+    use crate::event_loop::{ActiveEventLoop, EventLoop};
+    use crate::platform::pump_events::EventLoopExtPumpEvents;
+    use crate::platform::windows::EventLoopBuilderExtWindows;
+    use crate::window::{Window, WindowId};
+
+    #[derive(Default)]
+    struct Wheels {
+        window: Option<Window>,
+        shift: bool,
+        seen: Vec<(MouseScrollDelta, bool)>,
+    }
+
+    impl ApplicationHandler for Wheels {
+        fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+            if self.window.is_none() {
+                let attributes = Window::default_attributes().with_visible(false);
+                self.window = Some(event_loop.create_window(attributes).unwrap());
+            }
+        }
+
+        fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+            match event {
+                WindowEvent::ModifiersChanged(modifiers) => {
+                    self.shift = modifiers.state().shift_key()
+                },
+                WindowEvent::MouseWheel { delta, .. } => self.seen.push((delta, self.shift)),
+                _ => {},
+            }
+        }
+    }
+
+    // A hidden window never has focus, so the thread's key state has no
+    // Shift: only the message says it is down, as for a window behind another.
+    #[test]
+    fn a_wheel_with_shift_down_has_shift_without_focus() {
+        let mut event_loop = EventLoop::builder().with_any_thread(true).build().unwrap();
+        let mut app = Wheels::default();
+        for _ in 0..100 {
+            event_loop.pump_app_events(Some(Duration::ZERO), &mut app);
+            if app.window.is_some() {
+                break;
+            }
+        }
+        let window = u64::from(app.window.as_ref().expect("a window").id()) as HWND;
+        let down = ((-(WHEEL_DELTA as i16)) as u16 as usize) << 16;
+        unsafe {
+            PostMessageW(window, WM_MOUSEWHEEL, down | MK_SHIFT as usize, 0);
+            PostMessageW(window, WM_MOUSEWHEEL, down, 0);
+        }
+        for _ in 0..100 {
+            event_loop.pump_app_events(Some(Duration::from_millis(1)), &mut app);
+            if app.seen.len() == 2 {
+                break;
+            }
+        }
+        let line = MouseScrollDelta::LineDelta(0.0, -1.0);
+        assert_eq!(app.seen, [(line, true), (line, false)]);
+    }
+}
+
+fn send_modifiers(window: HWND, userdata: &WindowData, modifiers: ModifiersState) {
+    use crate::event::WindowEvent::ModifiersChanged;
 
     let mut window_state = userdata.window_state.lock().unwrap();
     if window_state.modifiers_state != modifiers {
@@ -1355,9 +1487,28 @@ unsafe fn public_window_callback_inner(
             result = ProcResult::Value(0);
         },
 
+        // zgx patch: `occlusion`'s timer, the one way its verdicts are given.
+        WM_TIMER if wparam == super::occlusion::TIMER => {
+            let hidden = super::occlusion::hidden(window);
+            let change = userdata.window_state_lock().occlusion.settle(hidden);
+            if userdata.window_state_lock().occlusion.occluded() {
+                super::occlusion::watch(window);
+            } else {
+                super::occlusion::unwatch(window);
+            }
+            if let Some(occluded) = change {
+                userdata.send_event(Event::WindowEvent {
+                    window_id: RootWindowId(WindowId(window)),
+                    event: WindowEvent::Occluded(occluded),
+                });
+            }
+            result = ProcResult::Value(0);
+        },
+
         WM_DESTROY => {
             use crate::event::WindowEvent::Destroyed;
             unsafe { RevokeDragDrop(window) };
+            super::occlusion::unwatch(window);
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
                 event: Destroyed,
@@ -1796,7 +1947,7 @@ unsafe fn public_window_callback_inner(
             }
 
             if cursor_moved {
-                update_modifiers(window, userdata);
+                update_mouse_modifiers(window, userdata, wparam);
 
                 userdata.send_event(Event::WindowEvent {
                     window_id: RootWindowId(WindowId(window)),
@@ -1828,7 +1979,7 @@ unsafe fn public_window_callback_inner(
             let value = (wparam >> 16) as i16;
             let value = value as f32 / WHEEL_DELTA as f32;
 
-            update_modifiers(window, userdata);
+            update_mouse_modifiers(window, userdata, wparam);
 
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
@@ -1848,7 +1999,7 @@ unsafe fn public_window_callback_inner(
             let value = (wparam >> 16) as i16;
             let value = -value as f32 / WHEEL_DELTA as f32; // NOTE: inverted! See https://github.com/rust-windowing/winit/pull/2105/
 
-            update_modifiers(window, userdata);
+            update_mouse_modifiers(window, userdata, wparam);
 
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
@@ -1883,7 +2034,7 @@ unsafe fn public_window_callback_inner(
 
             unsafe { capture_mouse(window, &mut userdata.window_state_lock()) };
 
-            update_modifiers(window, userdata);
+            update_mouse_modifiers(window, userdata, wparam);
 
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
@@ -1899,7 +2050,7 @@ unsafe fn public_window_callback_inner(
 
             unsafe { release_mouse(userdata.window_state_lock()) };
 
-            update_modifiers(window, userdata);
+            update_mouse_modifiers(window, userdata, wparam);
 
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
@@ -1915,7 +2066,7 @@ unsafe fn public_window_callback_inner(
 
             unsafe { capture_mouse(window, &mut userdata.window_state_lock()) };
 
-            update_modifiers(window, userdata);
+            update_mouse_modifiers(window, userdata, wparam);
 
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
@@ -1931,7 +2082,7 @@ unsafe fn public_window_callback_inner(
 
             unsafe { release_mouse(userdata.window_state_lock()) };
 
-            update_modifiers(window, userdata);
+            update_mouse_modifiers(window, userdata, wparam);
 
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
@@ -1947,7 +2098,7 @@ unsafe fn public_window_callback_inner(
 
             unsafe { capture_mouse(window, &mut userdata.window_state_lock()) };
 
-            update_modifiers(window, userdata);
+            update_mouse_modifiers(window, userdata, wparam);
 
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
@@ -1963,7 +2114,7 @@ unsafe fn public_window_callback_inner(
 
             unsafe { release_mouse(userdata.window_state_lock()) };
 
-            update_modifiers(window, userdata);
+            update_mouse_modifiers(window, userdata, wparam);
 
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
@@ -1980,7 +2131,7 @@ unsafe fn public_window_callback_inner(
 
             unsafe { capture_mouse(window, &mut userdata.window_state_lock()) };
 
-            update_modifiers(window, userdata);
+            update_mouse_modifiers(window, userdata, wparam);
 
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
@@ -2005,7 +2156,7 @@ unsafe fn public_window_callback_inner(
 
             unsafe { release_mouse(userdata.window_state_lock()) };
 
-            update_modifiers(window, userdata);
+            update_mouse_modifiers(window, userdata, wparam);
 
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
@@ -2774,5 +2925,57 @@ fn get_pointer_move_kind(
         PointerMoveKind::Leave
     } else {
         PointerMoveKind::None
+    }
+}
+
+#[cfg(test)]
+mod timer_tests {
+    use std::time::{Duration, Instant};
+
+    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        PeekMessageW, PostThreadMessageW, MSG, PM_REMOVE, WM_USER,
+    };
+
+    use super::{wait_for_messages_impl, ControlFlow, TIMER_ARMS};
+
+    fn arms() -> u32 {
+        TIMER_ARMS.with(|arms| arms.get())
+    }
+    /// A wait that a message already queued ends at once.
+    fn wait_with_a_message(timer: &mut Option<super::HighResolutionTimer>, flow: ControlFlow) {
+        unsafe { PostThreadMessageW(GetCurrentThreadId(), WM_USER, 0, 0) };
+        wait_for_messages_impl(timer, None, flow, None);
+        let mut msg: MSG = unsafe { std::mem::zeroed() };
+        while unsafe { PeekMessageW(&mut msg, 0, 0, 0, PM_REMOVE) } != 0 {}
+    }
+
+    /// Turns that wait for one deadline, each ended by a message (pointer
+    /// moves, say), arm the timer once; a new deadline arms it again, and so
+    /// does one after the timer has fired, which consumed its signal.
+    #[test]
+    fn a_deadline_already_armed_isnt_armed_again() {
+        let mut timer = None;
+        let start = arms();
+        let later = Instant::now() + Duration::from_secs(10);
+        for _ in 0..100 {
+            wait_with_a_message(&mut timer, ControlFlow::WaitUntil(later));
+        }
+        assert_eq!(arms() - start, 1, "one deadline, armed once");
+        wait_with_a_message(&mut timer, ControlFlow::WaitUntil(later + Duration::from_secs(1)));
+        assert_eq!(arms() - start, 2, "a new deadline, armed again");
+        // Waiting indefinitely leaves it as it was.
+        wait_with_a_message(&mut timer, ControlFlow::Wait);
+        wait_with_a_message(&mut timer, ControlFlow::WaitUntil(later + Duration::from_secs(1)));
+        assert_eq!(arms() - start, 2);
+        // A deadline the wait reaches (the timer's signal or the wait's own
+        // timeout, whichever comes first) leaves it unarmed: the same deadline
+        // again would arm it again, and a new one does.
+        let soon = Instant::now() + Duration::from_millis(5);
+        wait_for_messages_impl(&mut timer, None, ControlFlow::WaitUntil(soon), None);
+        assert_eq!(arms() - start, 3);
+        assert!(timer.as_ref().is_some_and(|t| t.armed.is_none()), "unarmed at its deadline");
+        wait_with_a_message(&mut timer, ControlFlow::WaitUntil(later + Duration::from_secs(2)));
+        assert_eq!(arms() - start, 4, "armed anew after");
     }
 }

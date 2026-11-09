@@ -32,12 +32,14 @@ fn key(ui: &mut Ui, key: Key, modifiers: Modifiers) -> bool {
     ui.prepare_frame();
     prevented
 }
-/// The text nodes showing marks, by their text, and how many each.
+/// The text nodes showing marks, by their text, and how many each (an
+/// editor's matches, on an empty node of their own, left out).
 fn marked(ui: &Ui) -> Vec<(String, usize)> {
     let scene = ui.scene.borrow();
     let mut marked: Vec<(String, usize)> = scene
         .marked_text()
         .filter_map(|id| match scene.kind(id) {
+            NodeKind::Text { text, .. } if text.is_empty() => None,
             NodeKind::Text { text, .. } => Some((text.to_string(), scene.text_marks(id).len())),
             NodeKind::RichText { text } => {
                 Some((text.text().to_string(), scene.text_marks(id).len()))
@@ -175,6 +177,52 @@ fn a_lists_rows_are_counted_unmounted_in_slices_and_then_nothing_runs() {
         .find(|id| matches!(scene.kind(*id), NodeKind::Text { text, .. } if &**text == "a needle here"))
         .expect("the row mounted and marked");
     assert_eq!(scene.text_marks(row)[0].color, current);
+}
+
+/// A list that scrolls with the scroll view around it: its rows counted
+/// unmounted, and stepping to one scrolls that view to it, where it mounts.
+#[test]
+fn a_list_scrolled_with_the_view_around_it_finds_a_row_it_has_not_built() {
+    let mut ui = Ui::new(400., 300.);
+    let panel = ui.signal(0.);
+    let name = |n: usize| match n {
+        700 => "a needle here".to_string(),
+        n => format!("Row {n}"),
+    };
+    ui.mount(
+        scroll(panel.clone()).w(300.).h(200.).child(
+            column().w_full().child(text("Sections")).child(
+                virtual_list(
+                    ui.signal(0.),
+                    20.,
+                    1,
+                    || 1000,
+                    |n| n,
+                    move |_, n, _| text(name(n)),
+                )
+                .row_text(move |n| (n < 1000).then(|| name(n)))
+                .virtualize_in_ancestor()
+                .w_full(),
+            ),
+        ),
+    );
+    ui.prepare_frame();
+    ui.find_text("NEEDLE");
+    settle(&mut ui);
+    let status = ui.find_status();
+    assert_eq!(status.count, 1, "{status:?}");
+    ui.find_next();
+    ui.prepare_frame();
+    assert!(
+        (panel.get() - 700. * 20.).abs() < 200.,
+        "the view around it scrolled to the row: {}",
+        panel.get()
+    );
+    let scene = ui.scene.borrow();
+    let row = scene.marked_text().find(
+        |id| matches!(scene.kind(*id), NodeKind::Text { text, .. } if &**text == "a needle here"),
+    );
+    assert!(row.is_some(), "the row mounted and marked");
 }
 
 #[test]
@@ -318,4 +366,31 @@ fn use_selection_for_find_looks_for_what_is_selected() {
     }
     assert_eq!(ui.find_status().query, "apple");
     assert_eq!(ui.find_status().count, 2);
+}
+
+/// Each match is a shape as a selection is, rounded by `$mark.radius`,
+/// which follows `$selection.radius` unless a theme sets it.
+#[test]
+fn matches_are_shapes_rounded_by_the_mark_radius() {
+    let mut ui = Ui::new(500., 400.);
+    ui.mount(column().child(text("a cafe, then cafe")));
+    ui.prepare_frame();
+    ui.find_text("cafe");
+    let theme = ui.theme().root().clone();
+    assert_eq!(
+        theme.number_untracked(zgx::theme::tok::MARK_RADIUS),
+        theme.number_untracked(zgx::theme::tok::SELECTION_RADIUS)
+    );
+    let scene = ui.scene.borrow();
+    let node = scene.marked_text().next().expect("a marked text");
+    let pieces = scene
+        .text_mark_pieces(node, 0., 0., 2.)
+        .expect("drawn as shapes");
+    assert_eq!(pieces.len(), 2, "two matches, a shape each");
+    let radius = theme.number_untracked(zgx::theme::tok::MARK_RADIUS);
+    for (piece, _) in pieces {
+        assert!(
+            matches!(piece, zgx::scene::HighlightPiece::Run { radii, .. } if radii == [radius; 4])
+        );
+    }
 }

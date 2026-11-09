@@ -38,11 +38,14 @@ pub enum NativeContent {
     /// A platform view the host knows how to mount: on macOS a
     /// `Retained<NSView>` (see `zgx_desktop::native_view`).
     Platform(Rc<dyn Any>),
+    /// The system's glass (see [`crate::glass`]).
+    Glass(crate::glass::GlassPane),
 }
 impl NativeContent {
     /// A short description for placeholders and diagnostics.
     pub fn label(&self) -> String {
         match self {
+            Self::Glass(_) => "Glass".into(),
             Self::Web(web) => {
                 let url = web.state().with_untracked(|state| state.url.clone());
                 if url.is_empty() {
@@ -86,6 +89,7 @@ struct Inner {
     next: Cell<u64>,
     revision: Cell<u64>,
     supported: Cell<bool>,
+    glass_supported: Cell<bool>,
     split: RefCell<Rc<PlaneSplit>>,
 }
 /// A window's mounted native views: provided to components by the desktop
@@ -117,6 +121,14 @@ impl NativeViews {
     /// No native views, and not supported until `set_supported`.
     pub fn new() -> Self {
         Self::default()
+    }
+    /// Whether the host shows the system's glass (`crate::glass`).
+    pub fn set_glass_supported(&self, supported: bool) {
+        self.0.glass_supported.set(supported);
+    }
+    /// Whether the host shows the system's glass (`crate::glass`).
+    pub fn glass_supported(&self) -> bool {
+        self.0.glass_supported.get()
     }
     /// Whether this window composites native views itself. Without it (the
     /// software renderer, headless tests, platforms without a backend yet),
@@ -485,6 +497,9 @@ pub struct PlaneSplit {
     /// Layers whose split changed since the previous frame: renderers drop
     /// their cached textures.
     changed_layers: Vec<NodeId>,
+    /// Native views inside zoomed nodes, with how much they show zoomed
+    /// (`Scene::zoom_around`): their content follows (`native_zoom`).
+    zooms: Vec<(NodeId, f32)>,
 }
 
 /// The overlay region is kept as at most this many rectangles; beyond, the
@@ -669,7 +684,17 @@ impl Walk<'_> {
                 .collect();
             rounded.extend(context.rounded.iter().copied());
             if item.isolated {
-                let inner = self.scene.layer_items(Some(item.id));
+                let mut inner = self.scene.layer_items(Some(item.id));
+                // The layer's root comes without its effects (its composite
+                // applies them), but its backdrop blur is over what is under
+                // it, native views included: the platform still draws it.
+                if item.effects.blur_radius > 0.
+                    && let Some(root) = inner
+                        .iter_mut()
+                        .find(|inner| inner.id == item.id && !inner.border_pass)
+                {
+                    root.effects.blur_radius = item.effects.blur_radius;
+                }
                 let matrix = match (item.projective(), context.matrix) {
                     (Some(own), Some(outer)) => Some(own.then(outer)),
                     (own, outer) => own.or(outer),
@@ -732,6 +757,10 @@ impl Walk<'_> {
                 }
                 self.split.native_nodes.insert(item.id);
                 self.split.natives.push(placement);
+                let zoom = self.scene.zoom_around(item.id);
+                if zoom != 1. {
+                    self.split.zooms.push((item.id, zoom));
+                }
                 // Its own background paints under it.
                 if paints(item) {
                     base = true;
@@ -983,6 +1012,16 @@ impl PlaneSplit {
     pub fn native(&self, node: NodeId) -> Option<&NativePlacement> {
         self.natives.iter().find(|placement| placement.node == node)
     }
+    /// How much native view `node` shows zoomed by zoomed nodes around it
+    /// (`Scene::set_zoom`): 1 outside any. Its frame is zoomed already; its
+    /// content (a page's zoom, a terminal's text) follows this, times the
+    /// window's.
+    pub fn native_zoom(&self, node: NodeId) -> f32 {
+        self.zooms
+            .iter()
+            .find(|(other, _)| *other == node)
+            .map_or(1., |(_, zoom)| *zoom)
+    }
     /// Whether `node` is a native view this frame.
     pub fn is_native(&self, node: NodeId) -> bool {
         self.native_nodes.contains(&node)
@@ -1065,6 +1104,9 @@ impl PlaneSplit {
         }
         let root = scene.root();
         'hits: for hit in scene.hit_test_all(x, y) {
+            if input.boxless(scene, hit) {
+                continue;
+            }
             match input.try_receives_pointer(scene, hit) {
                 None => return PointerRoute::Ui,
                 Some(false) => continue,
@@ -1077,7 +1119,7 @@ impl PlaneSplit {
             while let Some(id) = node {
                 match input.try_options(id) {
                     None => return PointerRoute::Ui,
-                    Some(Some(options)) if options.passes(scene, id) => continue 'hits,
+                    Some(Some(options)) if input.passes(scene, id, &options) => continue 'hits,
                     _ => {}
                 }
                 if id == root || self.native_nodes.contains(&id) {

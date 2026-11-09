@@ -9,6 +9,28 @@ use zgx::input::{Key, Modifiers};
 use zgx_desktop::{AppMenu, AppMenuEntry, Application, MenuAccelerator, WindowOptions};
 use zgx_script::{Command, ScriptHost};
 
+pub mod audit;
+#[cfg(feature = "fetch")]
+mod fetch;
+/// Give `host` the fetcher `run` gives a script (feature `fetch`, on by
+/// default): `ui.fetch` and remote images over HTTP and HTTPS, each request
+/// on a thread of its own, its body streamed to the script as it arrives,
+/// a cancelled one stopped. For a host made outside `run`.
+#[cfg(feature = "fetch")]
+pub fn install_fetcher(host: &ScriptHost) {
+    fetch::install(host);
+}
+
+#[cfg(feature = "socket")]
+mod socket;
+/// Give `host` the connector `run` gives a script (feature `socket`, on by
+/// default): `ui.socket` over WebSockets, `ws://` and `wss://`, each
+/// connection on a thread of its own. For a host made outside `run`.
+#[cfg(feature = "socket")]
+pub fn install_connector(host: &ScriptHost) {
+    socket::install(host);
+}
+
 /// Menus in the order the script first names them, items in its order.
 pub fn menus(commands: &[Command]) -> Vec<AppMenu> {
     let mut menus: Vec<AppMenu> = Vec::new();
@@ -107,10 +129,39 @@ pub struct AppConfig {
     /// and on Windows a second launch's go to the first.
     pub application_id: Option<String>,
 }
+/// What zgx.json says of the window beyond [`AppConfig`]'s fields, read by
+/// [`AppConfig::read`] and handed to the window's options: kept out of
+/// `AppConfig`, a struct Rust hosts build by literal.
+#[derive(Debug)]
+struct WindowConfig {
+    /// The name its frame is saved under (`frame_autosave`: `true` is the
+    /// `app_id`, so apps zgx-run runs keep theirs apart; a string, that
+    /// name).
+    frame_autosave: Option<String>,
+    /// False: it opens hidden, laid out and drawn, until the script shows it
+    /// (`ui.window.visible:set(true)`): an app showing an intro of its own
+    /// first.
+    visible: bool,
+    /// Its largest size in points (`max_width` and `max_height`): the
+    /// same as `min_width` and `min_height`, a window of fixed size that a
+    /// window manager can still move.
+    max_size: Option<(f64, f64)>,
+    /// How tall `titlebar: "inset"`'s caption buttons are on Windows, in the
+    /// content's points (`caption_height`; `WindowOptions::caption_height`).
+    caption_height: Option<f64>,
+}
 impl AppConfig {
     /// The config for the script at `script`: its directory's `zgx.json`
     /// (or `zgui.json`, deprecated), or the defaults (named after the directory). rename-to-zgx: keep
     pub fn for_script(script: &Path) -> Result<Self, String> {
+        Self::read(script).map(|(config, _, _)| config)
+    }
+    /// As [`for_script`](Self::for_script), with what it gives the script's
+    /// host (`zgx_script::app_config`: its packages, what it exposes to
+    /// plugins, and its plugins), and what it says of the window besides.
+    fn read(
+        script: &Path,
+    ) -> Result<(Self, zgx_script::app_config::AppHost, WindowConfig), String> {
         let dir = script.parent().unwrap_or(Path::new("."));
         let name = dir
             .canonicalize()
@@ -135,7 +186,16 @@ impl AppConfig {
             path = old;
         }
         let Ok(text) = std::fs::read_to_string(&path) else {
-            return Ok(config);
+            return Ok((
+                config,
+                Default::default(),
+                WindowConfig {
+                    frame_autosave: None,
+                    visible: true,
+                    max_size: None,
+                    caption_height: None,
+                },
+            ));
         };
         let fail = |e: String| format!("{}: {e}", path.display());
         let json: serde_json::Value =
@@ -167,13 +227,19 @@ impl AppConfig {
                 "width",
                 "height",
                 "min_width",
+                "max_width",
+                "max_height",
                 "min_height",
                 "titlebar",
+                "caption_height",
                 "glass",
                 "app_id",
                 "application_id",
+                "frame_autosave",
+                "visible",
             ]
             .contains(&key.as_str())
+                && !zgx_script::app_config::KEYS.contains(&key.as_str())
             {
                 return Err(fail(format!("unknown key `{key}`")));
             }
@@ -188,6 +254,17 @@ impl AppConfig {
         } else if number("min_width")?.is_some() || number("min_height")?.is_some() {
             return Err(fail("`min_width` and `min_height` go together".into()));
         }
+        let max_size = match (number("max_width")?, number("max_height")?) {
+            (Some(w), Some(h)) => Some((w, h)),
+            (None, None) => None,
+            _ => return Err(fail("`max_width` and `max_height` go together".into())),
+        };
+        let caption_height = match number("caption_height")? {
+            Some(height) if !(height.is_finite() && height > 0.) => {
+                return Err(fail(format!("`caption_height` is {height}: not positive")));
+            }
+            height => height,
+        };
         config.titlebar = match string("titlebar")?.as_deref() {
             None | Some("standard") => zgx_desktop::Titlebar::Standard,
             Some("inset") => zgx_desktop::Titlebar::Inset,
@@ -204,11 +281,35 @@ impl AppConfig {
                 .as_bool()
                 .ok_or_else(|| fail("`glass` is not a boolean".into()))?,
         };
+        let visible = match object.get("visible") {
+            None => true,
+            Some(v) => v
+                .as_bool()
+                .ok_or_else(|| fail("`visible` is not a boolean".into()))?,
+        };
         if let Some(id) = string("app_id")? {
             config.app_id = id;
         }
         config.application_id = string("application_id")?;
-        Ok(config)
+        let frame_autosave = match object.get("frame_autosave") {
+            None | Some(serde_json::Value::Bool(false)) => None,
+            Some(serde_json::Value::Bool(true)) => Some(config.app_id.clone()),
+            Some(serde_json::Value::String(name)) if !name.is_empty() => Some(name.clone()),
+            Some(_) => {
+                return Err(fail("`frame_autosave` is not true, false or a name".into()));
+            }
+        };
+        let app = zgx_script::app_config::from_object(dir, object).map_err(fail)?;
+        Ok((
+            config,
+            app,
+            WindowConfig {
+                frame_autosave,
+                visible,
+                max_size,
+                caption_height,
+            },
+        ))
     }
 }
 
@@ -262,7 +363,8 @@ pub fn run_with(path: &Path, args: Vec<String>) -> Result<(), Box<dyn std::error
 
 /// As [`run_with`], `host` given the script's host before it loads: an app
 /// that serves its script (a fetcher, actions, shared state) keeps
-/// everything `run` gives it, the menu bar of its commands included.
+/// everything `run` gives it, the menu bar of its commands included. A
+/// fetcher it sets replaces the default one (`install_fetcher`).
 pub fn run_hosting(
     path: &Path,
     args: Vec<String>,
@@ -274,14 +376,27 @@ pub fn run_hosting(
     if !script.is_file() {
         return Err(format!("{}: no such script", script.display()).into());
     }
-    let config = AppConfig::for_script(&script)?;
+    // Its modules compile on a worker while AppKit, the GPU and the window
+    // are set up, not one by one on the main thread at each `require`.
+    zgx_script::compile_ahead(&script, &[]);
+    let (config, app_host, window_config) = AppConfig::read(&script)?;
+    let WindowConfig {
+        frame_autosave,
+        visible,
+        max_size,
+        caption_height,
+    } = window_config;
     let options = WindowOptions {
         title: config.title.clone(),
         width: config.width,
         height: config.height,
         min_size: config.min_size,
+        max_size,
         titlebar: config.titlebar,
+        caption_height,
         glass: config.glass.then(zgx_desktop::Glass::default),
+        frame_autosave,
+        visible,
         ..Default::default()
     };
     let launched: Vec<PathBuf> = args
@@ -318,9 +433,9 @@ pub fn run_hosting(
             });
     }
     app.run(move |cx| {
-        let host = ScriptHost::new(&cx.ui.runtime, script.clone())
-            .app_id(&config.app_id)
-            .args(args.clone());
+        // Its packages, what it exposes to plugins, and its plugins.
+        let host = app_host.apply(ScriptHost::new(&cx.ui.runtime, script.clone()));
+        let host = host.app_id(&config.app_id).args(args.clone());
         // The launch's files, and what the system opened meanwhile:
         // they wait for the script's `ui.on_open`.
         host.open(launched.clone(), Vec::new());
@@ -335,6 +450,36 @@ pub fn run_hosting(
         );
         // `ui.window.zoom`: the window's zoom, as its keys or the script set it.
         host.window_zoom(&cx.ui);
+        // `ui.window.active` and `ui.window.shown`.
+        host.window_state(&cx.ui);
+        // `ui.window.size`.
+        host.window_size(cx.viewport.clone());
+        // `ui.window.maximized`.
+        host.window_maximized(cx.maximized.clone());
+        // `ui.window.full_screen` and `ui.window.full_screen_transition`.
+        {
+            let transition = cx.full_screen_transition.clone();
+            host.window_full_screen(cx.window_info.fullscreen.clone(), move || {
+                transition.get().map(|transition| match transition {
+                    zgx_desktop::FullScreenTransition::Entering(duration) => {
+                        (true, duration.as_secs_f64())
+                    }
+                    zgx_desktop::FullScreenTransition::Leaving(duration) => {
+                        (false, duration.as_secs_f64())
+                    }
+                })
+            });
+        }
+        // `ui.window.visible`: shown as zgx.json says, and as the script sets it.
+        {
+            let window = cx.window.clone();
+            host.window_visible(visible, move |visible| window.set_visible(visible));
+        }
+        // The network, unless the host's setup brings its own transport.
+        #[cfg(feature = "fetch")]
+        fetch::install(&host);
+        #[cfg(feature = "socket")]
+        socket::install(&host);
         configure(&host);
         let _ = host.reload();
         cx.tasks.spawn(host.watch(Duration::from_millis(250)));
@@ -419,18 +564,27 @@ fn inspect(
 
 /// `host`'s commands (`ui.command`) as the application's menu bar, kept
 /// current as a reload changes them, each item running its command: their
-/// shortcuts work wherever focus is, as `run` gives them. For a Rust host
-/// that makes its own window; keep the effect it returns while the window
-/// lives.
+/// shortcuts work wherever focus is, as `run` gives them, and those the
+/// scripts reserve (`reserved = true`) come before a focused page or
+/// terminal. For a Rust host that makes its own window; keep the effect it
+/// returns while the window lives.
 pub fn serve_commands(
     host: &ScriptHost,
     cx: &mut zgx_desktop::WindowContext,
 ) -> zgx::reactive::Effect {
-    let commands = host.commands();
+    let (commands, reserved) = (host.commands(), host.reserved_keys());
     let windows = cx.windows.clone();
     let follow = cx.ui.runtime.effect(move || {
         if let Err(error) = windows.set_menus(menus(&commands.get())) {
             eprintln!("zgx run: menus: {error}");
+        }
+        let keys = reserved
+            .get()
+            .iter()
+            .filter_map(|key| accelerator(key))
+            .collect();
+        if let Err(error) = windows.set_reserved_shortcuts(keys) {
+            eprintln!("zgx run: reserved shortcuts: {error}");
         }
     });
     let run = host.clone();
@@ -451,33 +605,110 @@ pub fn follow_windows(host: &ScriptHost, cx: &zgx_desktop::WindowContext) -> zgx
     let open: Rc<RefCell<HashMap<String, zgx_desktop::WindowHandle>>> = Rc::default();
     let (list, host) = (host.windows(), host.clone());
     cx.ui.runtime.effect(move || {
-        for window in list.get() {
+        let windows = list.get();
+        // Gone from the list (an item's window, its item let go): closed.
+        let gone: Vec<String> = open
+            .borrow()
+            .keys()
+            .filter(|id| !windows.iter().any(|w| &w.id == *id))
+            .cloned()
+            .collect();
+        for id in gone {
+            if let Some(handle) = open.borrow_mut().remove(&id) {
+                runtime.untracked(|| handle.close());
+            }
+        }
+        for window in windows {
             let wanted = window.open.get().truthy();
             let shown = open
                 .borrow()
                 .get(&window.id)
                 .is_some_and(|handle| !handle.is_closed());
             if wanted && !shown {
+                let (min_size, max_size) = host.window_size_limits(&window.id);
+                let extras = host.window_extras(&window.id);
                 let options = WindowOptions {
                     title: window.title.clone(),
+                    min_size,
+                    max_size,
                     width: window.width,
                     height: window.height,
                     frame_autosave: window.frame_autosave.clone(),
+                    under_pointer: extras.under_pointer,
                     tabbing: match window.tabbing.as_deref() {
                         Some("preferred") => zgx_desktop::Tabbing::Preferred,
                         Some("disallowed") => zgx_desktop::Tabbing::Disallowed,
                         _ => zgx_desktop::Tabbing::Automatic,
                     },
+                    visible: extras
+                        .visible
+                        .as_ref()
+                        .is_none_or(|visible| visible.with_untracked(Value::truthy)),
                     ..Default::default()
                 };
                 let (view_host, state, id) = (host.clone(), window.open.clone(), window.id.clone());
+                let own = extras.state.clone();
+                let visible = extras.visible.clone();
+                // Devtools reach it too, while it is open (`zgx inspect`'s
+                // `window`).
+                let devtools = inspect_asked().then(|| window.title.clone());
                 let handle = factory.open(options, move |wcx| {
+                    // The window's own state, as its content reads it (`win`).
+                    if let Some(own) = own {
+                        let runtime = wcx.ui.runtime.clone();
+                        let (active, shown, viewport) = (
+                            wcx.ui.observe_window_active(),
+                            wcx.ui.observe_shown(),
+                            wcx.viewport.clone(),
+                        );
+                        let keep = runtime.effect(move || {
+                            let pairs = [
+                                (&own.active, Value::Bool(active.get())),
+                                (&own.shown, Value::Bool(shown.get())),
+                            ];
+                            for (state, now) in pairs {
+                                if state.with_untracked(|was| *was != now) {
+                                    state.set(now);
+                                }
+                            }
+                            let (width, height) = viewport.get();
+                            let now = zgx_script::window_size_value(width, height);
+                            if own.size.with_untracked(|was| *was != now) {
+                                own.size.set(now);
+                            }
+                        });
+                        wcx.on_closed(move || drop(keep));
+                    }
+                    // Shown and hidden as its `visible` state says.
+                    if let Some(visible) = visible {
+                        let window = wcx.window.clone();
+                        let keep = wcx.ui.runtime.effect(move || {
+                            window.set_visible(visible.get().truthy());
+                        });
+                        wcx.on_closed(move || drop(keep));
+                    }
+                    let closing = id.clone();
                     wcx.on_closed(move || {
                         if state.with_untracked(Value::truthy) {
                             state.set(Value::Bool(false));
                         }
+                        #[cfg(feature = "inspect")]
+                        zgx_script::inspect::forget_window(&closing);
+                        let _ = &closing;
                     });
-                    wcx.render(view_host.window_view(&id));
+                    let handle = wcx.render(view_host.window_view(&id));
+                    #[cfg(feature = "inspect")]
+                    if let Some(title) = devtools {
+                        let session = zgx_script::inspect::Session::new(
+                            &wcx.ui,
+                            handle,
+                            &view_host,
+                            Some(wcx.inspector.clone()),
+                        );
+                        zgx_script::inspect::register_window(&id, &title, session);
+                    }
+                    #[cfg(not(feature = "inspect"))]
+                    let _ = (handle, devtools);
                 });
                 open.borrow_mut().insert(window.id.clone(), handle);
             } else if !wanted
@@ -512,6 +743,32 @@ mod tests {
             ("Mail", 1100., Some((600., 400.)))
         );
         assert_eq!(config.titlebar, zgx_desktop::Titlebar::Inset);
+        // A fixed size that stays resizable: min and max the same.
+        std::fs::write(
+            dir.join("zgx.json"),
+            r#"{ "min_width": 400, "min_height": 300, "max_width": 400, "max_height": 300 }"#,
+        )
+        .unwrap();
+        let (config, _, window) = AppConfig::read(&script).unwrap();
+        assert_eq!(
+            (config.min_size, window.max_size),
+            (Some((400., 300.)), Some((400., 300.)))
+        );
+        std::fs::write(dir.join("zgx.json"), r#"{ "max_width": 400 }"#).unwrap();
+        let error = AppConfig::for_script(&script).unwrap_err();
+        assert!(
+            error.contains("`max_width` and `max_height` go together"),
+            "{error}"
+        );
+        std::fs::write(dir.join("zgx.json"), "{}").unwrap();
+        let visible = |script: &Path| AppConfig::read(script).unwrap().2.visible;
+        assert!(visible(&script));
+        // Opened hidden, for the script to show.
+        std::fs::write(dir.join("zgx.json"), r#"{ "visible": false }"#).unwrap();
+        assert!(!visible(&script));
+        std::fs::write(dir.join("zgx.json"), r#"{ "visible": "no" }"#).unwrap();
+        let error = AppConfig::for_script(&script).unwrap_err();
+        assert!(error.contains("`visible` is not a boolean"), "{error}");
         std::fs::write(dir.join("zgx.json"), r#"{ "widht": 3 }"#).unwrap();
         let error = AppConfig::for_script(&script).unwrap_err();
         assert!(error.contains("unknown key `widht`"), "{error}");
@@ -528,6 +785,36 @@ mod tests {
         .unwrap();
         let config = AppConfig::for_script(&script).unwrap();
         assert_eq!(config.application_id.as_deref(), Some("dev.zgx.code"));
+        let frame = |script: &Path| AppConfig::read(script).unwrap().2.frame_autosave;
+        assert_eq!(frame(&script), None);
+        // The window's frame kept: under the app's id, or a name given.
+        std::fs::write(
+            dir.join("zgx.json"),
+            r#"{ "app_id": "assets", "frame_autosave": true }"#,
+        )
+        .unwrap();
+        assert_eq!(frame(&script).as_deref(), Some("assets"));
+        std::fs::write(dir.join("zgx.json"), r#"{ "frame_autosave": "library" }"#).unwrap();
+        assert_eq!(frame(&script).as_deref(), Some("library"));
+        std::fs::write(dir.join("zgx.json"), r#"{ "frame_autosave": 1 }"#).unwrap();
+        let error = AppConfig::for_script(&script).unwrap_err();
+        assert!(error.contains("`frame_autosave` is not"), "{error}");
+        // Packages, from the config's directory, are folders.
+        std::fs::create_dir_all(dir.join("kit")).unwrap();
+        std::fs::write(
+            dir.join("zgx.json"),
+            r#"{ "packages": { "kit": "./kit" } }"#,
+        )
+        .unwrap();
+        let (_, app, _) = AppConfig::read(&script).unwrap();
+        assert_eq!(app.packages, [("kit".to_string(), dir.join("./kit"))]);
+        std::fs::write(
+            dir.join("zgx.json"),
+            r#"{ "packages": { "kit": "./none" } }"#,
+        )
+        .unwrap();
+        let error = AppConfig::read(&script).unwrap_err();
+        assert!(error.contains("is not a folder"), "{error}");
         std::fs::remove_dir_all(dir).ok();
     }
 

@@ -147,8 +147,8 @@ impl SurfaceCache {
             self.retired.retain(|(epoch, _)| *epoch > completed);
         }
         if retained_bytes(self).saturating_add(bytes) > 64 * 1024 * 1024 {
-            return Err(GpuError::over_texture_budget(
-                "active and in-flight CoreVideo surfaces exceed 64 MiB",
+            return Err(GpuError(
+                "active and in-flight CoreVideo surfaces exceed 64 MiB".into(),
             ));
         }
         if self.entries.len() + self.retired.len() >= 1024 {

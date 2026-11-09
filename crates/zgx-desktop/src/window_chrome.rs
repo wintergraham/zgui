@@ -1,7 +1,10 @@
 //! Window chrome from `WindowOptions`: the title bar's style and a frosted
 //! glass behind a translucent window. Applied when the window is made, on
 //! macOS and Windows; on Linux zgx draws an undecorated window's buttons
-//! and resizes it from its edges, and draws no glass.
+//! and resizes it from its edges, and asks the compositor to blur what is
+//! behind a window with glass (`ext-background-effect-v1`, or KWin's blur
+//! protocol on Wayland). How much it blurs is the compositor's: Hyprland's
+//! is its `decoration:blur` settings, and only when blur is enabled there.
 
 /// How a window's title bar looks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -11,9 +14,12 @@ pub enum Titlebar {
     Standard,
     /// Transparent, without the title: content runs under it, the window
     /// buttons (the traffic lights) inset over it in a 40-point strip, as
-    /// Electron's `hiddenInset`. Mark the strip `View::window_drag` so it
+    /// Electron's `hiddenInset`; a zoomed window's strip is 40 of its zoomed
+    /// points, the traffic lights centred in it (`zoom_buttons`). Mark the strip `View::window_drag` so it
     /// moves the window. On Windows, zgx draws Windows 11's caption buttons
-    /// over the content's top right (46 by 32 points each) and Windows takes
+    /// over the content's top right (46 by 32 points of the display each,
+    /// whatever the window's zoom, or as tall as `WindowOptions::caption_height`;
+    /// a window the person can't resize has no Maximize) and Windows takes
     /// them for its own: their tooltips, and snap layouts on maximize. On
     /// Linux the window is undecorated, as a GTK header bar's, and zgx
     /// draws libadwaita's window buttons over the strip, in the order the
@@ -27,15 +33,21 @@ pub enum Titlebar {
 
 /// A blurred desktop behind a translucent window (macOS's behind-window
 /// `NSVisualEffectView`, cut to the window's rounded corners; on Windows 11
-/// the system backdrop nearest its material, Acrylic or Mica). The window is
-/// transparent where zgx paints nothing (or translucent colour).
+/// the system backdrop nearest its material, Acrylic or Mica, or for plain
+/// glass an untinted acrylic blur behind the window; on Linux the
+/// compositor's blur, asked for where it has a protocol for it, with no
+/// material, tint or saturation of zgx's). The window is transparent where
+/// zgx paints nothing (or translucent colour).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Glass {
     /// The blur's material.
     pub material: GlassMaterial,
     /// Only the blur: no tint from the desktop, no saturation boost, a
     /// 60-point gaussian, as gpui's `BlurredView` (for apps laying their own
-    /// tint over it).
+    /// tint over it). On Windows (10 1809 and later) whatever the material:
+    /// the blur of what is behind the window, untinted, with no system
+    /// backdrop, as gpui's `WindowBackgroundAppearance::Blurred` asks; with
+    /// Transparency effects off, the material's backdrop, which goes solid.
     pub plain: bool,
 }
 impl Glass {
@@ -63,6 +75,9 @@ pub enum GlassMaterial {
     /// A dark, saturated heads-up-display glass.
     #[default]
     Hud,
+    /// The system's newest glass: macOS 26's `NSGlassEffectView`, where it
+    /// has one; elsewhere, as `Hud`.
+    Liquid,
     /// The colourless material under a window's own background.
     UnderWindowBackground,
     /// The material behind a page's content.
@@ -102,7 +117,7 @@ impl GlassMaterial {
             Self::HeaderView => 10,
             Self::Sheet => 11,
             Self::WindowBackground => 12,
-            Self::Hud => 13,
+            Self::Hud | Self::Liquid => 13,
             Self::FullScreenUi => 15,
             Self::ToolTip => 17,
             Self::ContentBackground => 18,
@@ -119,18 +134,20 @@ pub(crate) fn apply(
     window: &winit::window::Window,
     titlebar: Titlebar,
     glass: Option<Glass>,
+    caption_height: Option<f64>,
 ) -> f64 {
     #[cfg(target_os = "macos")]
     {
+        let _ = caption_height;
         mac::apply(window, titlebar, glass)
     }
     #[cfg(windows)]
     {
-        win::apply(window, titlebar, glass)
+        win::apply(window, titlebar, glass, caption_height)
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {
-        let _ = (window, titlebar, glass);
+        let _ = (window, titlebar, glass, caption_height);
         0.
     }
 }
@@ -151,6 +168,39 @@ pub(crate) fn set_background_blur(window: &winit::window::Window, radius: u32) {
     let _ = (window, radius);
 }
 
+/// Give `window` `glass` in place of the glass it has (`None`: none), as
+/// `WindowHandle::set_glass` asks. Its content shows the glass only where
+/// it is transparent: a window made opaque (neither `transparent` nor with
+/// glass) shows none.
+pub(crate) fn set_glass(window: &winit::window::Window, glass: Option<Glass>) {
+    #[cfg(target_os = "macos")]
+    mac::set_glass(window, glass);
+    #[cfg(windows)]
+    win::set_glass(window, glass);
+    // The compositor's blur follows the glass, on and off (Wayland; a no-op
+    // on X11), from the surface's next commit: the redraw the caller asks.
+    #[cfg(target_os = "linux")]
+    window.set_blur(glass.is_some());
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+    let _ = (window, glass);
+}
+
+/// Place an inset title bar's window buttons for a window zoomed to `zoom`
+/// (`Ui::zoom`): on macOS the traffic lights, which AppKit places in points
+/// the zoom does not touch, move to where the zoomed content's strip has
+/// them (centred in 40 × zoom points, as far in as the zoom makes AppKit's
+/// inset), so a title bar laid out around them lines up at any zoom. Back at
+/// 100%, AppKit's places. AppKit lays them out again as the window resizes:
+/// the host calls this after.
+pub(crate) fn zoom_buttons(window: &winit::window::Window, titlebar: Titlebar, zoom: f64) {
+    #[cfg(target_os = "macos")]
+    if titlebar == Titlebar::Inset {
+        mac::zoom_buttons(window, zoom);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, titlebar, zoom);
+}
+
 /// The title bar's free area and the window's buttons in it, in points
 /// (`WindowInfo::titlebar_area`, `controls`): `None` for a standard title
 /// bar and in fullscreen.
@@ -164,7 +214,8 @@ pub(crate) fn titlebar_area(
     let size = window.inner_size().to_logical::<f32>(window.scale_factor());
     #[cfg(windows)]
     {
-        win::titlebar_area(size.width, titlebar)
+        let _ = size;
+        win::titlebar_area(window, titlebar)
     }
     #[cfg(target_os = "linux")]
     {
@@ -183,7 +234,7 @@ pub(crate) fn titlebar_area(
 }
 
 #[cfg(windows)]
-pub(crate) use win::{CaptionHost, fit_work_area, menu_theme};
+pub(crate) use win::{CaptionHost, blur_behind, fit_work_area, menu_theme, popup_blur_behind};
 
 #[cfg(windows)]
 mod win {
@@ -196,7 +247,9 @@ mod win {
     //! (`WM_NCHITTEST`), so it shows the maximize button's snap layouts and
     //! the buttons' tooltips. Windows' own handling of a press on them draws
     //! classic buttons into the window, so the subclass handles them itself.
+    //! Where they are and what shows them is `crate::windows_caption`'s.
     use super::{Glass, GlassMaterial, Titlebar};
+    use crate::windows_caption::{CaptionButton, CaptionLook, Geometry, Hit};
     use std::{
         cell::{Cell, RefCell},
         rc::Rc,
@@ -206,7 +259,7 @@ mod win {
         Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::{
             Dwm::{
-                DWM_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW, DWMSBT_TABBEDWINDOW,
+                DWM_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TABBEDWINDOW,
                 DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
                 DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmExtendFrameIntoClientArea,
                 DwmSetWindowAttribute,
@@ -232,35 +285,40 @@ mod win {
         raw_window_handle::{HasWindowHandle, RawWindowHandle},
         window::Window,
     };
-    use zgx::{compose::prelude::*, scene::Color, style::Styled, widgets::Ui};
+    use zgx::widgets::Ui;
 
-    /// Windows 11's caption buttons, in logical pixels.
-    const BUTTON_WIDTH: f64 = 46.;
-    const BUTTON_HEIGHT: f64 = 32.;
-    /// Resize bands inside a frameless window's edges, in logical pixels:
-    /// it has no frame outside them to take the pointer.
-    const RESIZE_BAND: f64 = 5.;
     /// Windows 11's window corner radius, in logical pixels.
     const CORNER_RADIUS: f64 = 8.;
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub(crate) enum CaptionButton {
-        Minimize,
-        Maximize,
-        Close,
-    }
-    impl CaptionButton {
-        fn hit(self) -> u32 {
-            match self {
-                Self::Minimize => HTMINBUTTON,
-                Self::Maximize => HTMAXBUTTON,
-                Self::Close => HTCLOSE,
-            }
+    /// What `WM_NCHITTEST` answers for `button`, as Windows' own buttons do.
+    fn button_hit(button: CaptionButton) -> u32 {
+        match button {
+            CaptionButton::Minimize => HTMINBUTTON,
+            CaptionButton::Maximize => HTMAXBUTTON,
+            CaptionButton::Close => HTCLOSE,
         }
-        fn from_hit(hit: usize) -> Option<Self> {
-            [Self::Minimize, Self::Maximize, Self::Close]
-                .into_iter()
-                .find(|button| button.hit() as usize == hit)
+    }
+    fn button_of(hit: usize) -> Option<CaptionButton> {
+        [
+            CaptionButton::Minimize,
+            CaptionButton::Maximize,
+            CaptionButton::Close,
+        ]
+        .into_iter()
+        .find(|button| button_hit(*button) as usize == hit)
+    }
+    /// What `WM_NCHITTEST` answers for `hit`.
+    fn hit_code(hit: Hit) -> u32 {
+        match hit {
+            Hit::Button(button) => button_hit(button),
+            Hit::Left => HTLEFT,
+            Hit::Right => HTRIGHT,
+            Hit::Top => HTTOP,
+            Hit::Bottom => HTBOTTOM,
+            Hit::TopLeft => HTTOPLEFT,
+            Hit::TopRight => HTTOPRIGHT,
+            Hit::BottomLeft => HTBOTTOMLEFT,
+            Hit::BottomRight => HTBOTTOMRIGHT,
         }
     }
 
@@ -274,9 +332,23 @@ mod win {
         rtl: bool,
         /// The buttons show: not in fullscreen, where a window has none.
         shown: Cell<bool>,
+        /// `WindowOptions::caption_height`.
+        height: Option<f64>,
+        /// The window's zoom, and whether the person can resize it, as of
+        /// its last frame: what the geometry hit-tests by.
+        zoom: Cell<f64>,
+        resizable: Cell<bool>,
+        /// Its smallest and largest sizes are the same: a window of fixed
+        /// size, though window managers can still move it (`CaptionHost::
+        /// set_fixed_size`).
+        fixed_size: Cell<bool>,
         /// The system's settings or colours changed (high contrast, the
         /// accent, animations) since the host last read them.
         settings_changed: Cell<bool>,
+        /// The window's glass, for plain glass to follow Transparency effects.
+        glass: Cell<Option<Glass>>,
+        /// Whether the window's accent is on (`blur_behind`).
+        accent: Cell<bool>,
         hovered: Cell<Option<CaptionButton>>,
         pressed: Cell<Option<CaptionButton>>,
         tracking: Cell<bool>,
@@ -284,6 +356,29 @@ mod win {
         wake: RefCell<Option<Box<dyn Fn()>>>,
     }
     impl Caption {
+        /// Plain glass again as Transparency effects now ask, if they changed;
+        /// other glass has nothing of ours to change (Windows solidifies its
+        /// backdrop itself), so nothing to read.
+        fn follow_transparency(&self, hwnd: HWND) {
+            let Some(glass) = self.glass.get().filter(|glass| glass.plain) else {
+                return;
+            };
+            let accent = self.accent.get();
+            if crate::system_colors::windows_transparency_off() == accent {
+                self.accent.set(frost(hwnd, Some(glass), accent));
+            }
+        }
+        /// Where its buttons are, at display `scale`: the same for what
+        /// draws them, hit-tests them and reports them.
+        fn geometry(&self, scale: f64) -> Geometry {
+            Geometry::new(
+                scale,
+                self.zoom.get(),
+                self.height,
+                self.resizable.get() && !self.fixed_size.get(),
+                self.rtl,
+            )
+        }
         fn set(&self, hovered: Option<CaptionButton>, pressed: Option<CaptionButton>) {
             let hover_changed = self.hovered.replace(hovered) != hovered;
             let press_changed = self.pressed.replace(pressed) != pressed;
@@ -315,6 +410,7 @@ mod win {
             | GlassMaterial::Sidebar => DWMSBT_MAINWINDOW,
             GlassMaterial::Titlebar | GlassMaterial::HeaderView => DWMSBT_TABBEDWINDOW,
             GlassMaterial::Hud
+            | GlassMaterial::Liquid
             | GlassMaterial::Menu
             | GlassMaterial::Popover
             | GlassMaterial::ToolTip
@@ -324,38 +420,238 @@ mod win {
         }
     }
 
-    /// Put the system's backdrop behind the window: the frame, and its
-    /// material, extended under the whole client, which shows it where zgx
-    /// paints nothing. Windows 11 (22H2) only; elsewhere the window is
-    /// transparent alone. `Glass::plain` has no Windows equivalent.
-    fn frost(hwnd: HWND, glass: Glass, dark: bool) {
-        // From the bottom, over the whole client: extended from the top, the
-        // frame brings Windows' own caption buttons into the client, under
-        // zgx's (or under nothing, where it paints none).
-        let margins = MARGINS {
-            cxLeftWidth: 0,
-            cxRightWidth: 0,
-            cyTopHeight: 0,
-            cyBottomHeight: i32::from(u16::MAX),
+    /// The window's backdrop replaced (`super::set_glass`): `None` takes the
+    /// system's backdrop and the frame extended under the client away. Only
+    /// a window with the accent on asks Windows to take it off; one `apply`
+    /// could not subclass, which keeps no record, counts as having it.
+    pub(super) fn set_glass(window: &Window, glass: Option<Glass>) {
+        let Some(hwnd) = hwnd(window) else {
+            return;
         };
-        let kind = backdrop(glass.material);
+        if glass.is_some() {
+            darken(hwnd, window.theme() != Some(winit::window::Theme::Light));
+        }
+        let caption = caption_of(hwnd.0 as usize);
+        let accent = frost(hwnd, glass, caption.as_ref().is_none_or(|c| c.accent.get()));
+        if let Some(caption) = caption {
+            caption.glass.set(glass);
+            caption.accent.set(accent);
+        }
+    }
+
+    /// The frame under the glass dark or light.
+    fn darken(hwnd: HWND, dark: bool) {
         let dark = i32::from(dark);
-        // SAFETY: our own window; each attribute is given its own size.
+        // SAFETY: our own window; the attribute is given its size.
         unsafe {
-            let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
             let _ = DwmSetWindowAttribute(
                 hwnd,
                 DWMWA_USE_IMMERSIVE_DARK_MODE,
                 &dark as *const _ as *const _,
                 size_of_val(&dark) as u32,
             );
-            let _ = DwmSetWindowAttribute(
-                hwnd,
-                DWMWA_SYSTEMBACKDROP_TYPE,
-                &kind as *const _ as *const _,
-                size_of_val(&kind) as u32,
-            );
         }
+    }
+
+    /// One thing a window's glass asks of Windows (`glass_steps`).
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum GlassStep {
+        /// The acrylic accent's blur, on or off (`blur_behind`).
+        Accent(bool),
+        /// The frame extended under the whole client, or not.
+        Frame(bool),
+        /// The system's backdrop.
+        Backdrop(DWM_SYSTEMBACKDROP_TYPE),
+    }
+
+    /// What `glass` asks of Windows, in order, of a window with its accent on
+    /// or off (`accent`), Transparency effects off or on (`reduced`).
+    ///
+    /// The system's backdrop shows through the frame, and its material,
+    /// extended under the whole client, where zgx paints nothing. Windows 11
+    /// (22H2) only; elsewhere the window is transparent alone. `Glass::plain`
+    /// has no backdrop but the acrylic accent's blur, untinted, from Windows
+    /// 10 1809, and no frame under the client: DWM draws the extended frame
+    /// over the accent's blur, which then shows little of what is behind.
+    /// With Transparency effects off Windows stops that blur and shows the
+    /// accent's tint, black: the material's backdrop then, which goes solid in
+    /// the window's light or dark. The accent's blur and a system backdrop
+    /// never stand together: the one off before the other goes on.
+    fn glass_steps(glass: Option<Glass>, reduced: bool, accent: bool) -> Vec<GlassStep> {
+        let blur = glass.is_some_and(|glass| glass.plain) && !reduced;
+        let mut steps = Vec::with_capacity(3);
+        if accent && !blur {
+            steps.push(GlassStep::Accent(false));
+        }
+        steps.push(GlassStep::Frame(glass.is_some() && !blur));
+        steps.push(GlassStep::Backdrop(match glass {
+            Some(glass) if !blur => backdrop(glass.material),
+            _ => DWMSBT_NONE,
+        }));
+        if blur && !accent {
+            steps.push(GlassStep::Accent(true));
+        }
+        steps
+    }
+
+    /// Give the window `glass` (`glass_steps`). Whether its accent is on now.
+    fn frost(hwnd: HWND, glass: Option<Glass>, accent: bool) -> bool {
+        let reduced = glass.is_some_and(|glass| glass.plain)
+            && crate::system_colors::windows_transparency_off();
+        run_glass_steps(hwnd, &glass_steps(glass, reduced, accent), accent)
+    }
+
+    /// `steps` asked of Windows. Whether the window's accent is on after them,
+    /// from `accent`, before them.
+    fn run_glass_steps(hwnd: HWND, steps: &[GlassStep], mut accent: bool) -> bool {
+        for step in steps {
+            match *step {
+                GlassStep::Accent(on) => {
+                    blur_behind(hwnd, on);
+                    accent = on;
+                }
+                GlassStep::Frame(extended) => {
+                    // From the bottom, over the whole client: extended from
+                    // the top, the frame brings Windows' own caption buttons
+                    // into the client, under zgx's (or under nothing, where
+                    // it paints none).
+                    let margins = MARGINS {
+                        cyBottomHeight: if extended { i32::from(u16::MAX) } else { 0 },
+                        ..Default::default()
+                    };
+                    // SAFETY: our own window.
+                    unsafe {
+                        let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+                    }
+                }
+                GlassStep::Backdrop(kind) => {
+                    // SAFETY: our own window; the attribute is given its size.
+                    unsafe {
+                        let _ = DwmSetWindowAttribute(
+                            hwnd,
+                            DWMWA_SYSTEMBACKDROP_TYPE,
+                            &kind as *const _ as *const _,
+                            size_of_val(&kind) as u32,
+                        );
+                    }
+                }
+            }
+        }
+        accent
+    }
+
+    /// A window's accent (`SetWindowCompositionAttribute`'s
+    /// `WCA_ACCENT_POLICY`): its state, flags, tint (`0xAABBGGRR`) and
+    /// animation. Read by user32 (and the tests), not by Rust.
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default)]
+    #[allow(dead_code)]
+    struct AccentPolicy {
+        state: u32,
+        flags: u32,
+        tint: u32,
+        animation: u32,
+    }
+    /// A composition attribute and its data, as user32 takes them.
+    #[repr(C)]
+    #[allow(dead_code)]
+    struct CompositionAttribute {
+        attribute: u32,
+        data: *mut std::ffi::c_void,
+        size: usize,
+    }
+    const WCA_ACCENT_POLICY: u32 = 19;
+    const ACCENT_DISABLED: u32 = 0;
+    const ACCENT_ENABLE_ACRYLICBLURBEHIND: u32 = 4;
+    /// The acrylic accent's tint: black at an alpha of 1 of 255, as gpui's,
+    /// for an alpha of 0 is drawn as an opaque tint.
+    const UNTINTED: u32 = 0x0100_0000;
+    type Composition =
+        unsafe extern "system" fn(HWND, *mut CompositionAttribute) -> windows::core::BOOL;
+
+    /// Windows' build number (17763 is Windows 10 1809, 22000 Windows 11),
+    /// 0 before Windows 10 or unread.
+    fn build() -> u32 {
+        use std::sync::OnceLock;
+        use windows::{
+            Wdk::System::SystemServices::RtlGetVersion,
+            Win32::System::SystemInformation::OSVERSIONINFOW,
+        };
+        static BUILD: OnceLock<u32> = OnceLock::new();
+        *BUILD.get_or_init(|| {
+            let mut version = OSVERSIONINFOW {
+                dwOSVersionInfoSize: size_of::<OSVERSIONINFOW>() as u32,
+                ..Default::default()
+            };
+            // SAFETY: fills `version`, whose size it is given.
+            if unsafe { RtlGetVersion(&mut version) }.is_err() || version.dwMajorVersion < 10 {
+                return 0;
+            }
+            version.dwBuildNumber
+        })
+    }
+
+    /// user32's `SetWindowCompositionAttribute`: from Windows 10 1809
+    /// (17763), whose accent has the acrylic blur; `None` before.
+    fn composition() -> Option<Composition> {
+        use std::sync::OnceLock;
+        use windows::{
+            Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress},
+            core::{s, w},
+        };
+        type Proc = unsafe extern "system" fn() -> isize;
+        static SET: OnceLock<Option<Composition>> = OnceLock::new();
+        *SET.get_or_init(|| {
+            if build() < 17763 {
+                return None;
+            }
+            // SAFETY: user32 stays loaded in a process with windows.
+            // Undocumented, the function has kept this signature since
+            // Windows 7.
+            unsafe {
+                let user32 = GetModuleHandleW(w!("user32.dll")).ok()?;
+                let proc = GetProcAddress(user32, s!("SetWindowCompositionAttribute"))?;
+                Some(std::mem::transmute::<Proc, Composition>(proc))
+            }
+        })
+    }
+
+    /// The acrylic blur of what is behind the window, untinted, on or off:
+    /// `Glass::plain`, what gpui's `WindowBackgroundAppearance::Blurred`
+    /// asks of Windows. DWM draws it where a system backdrop would go, under
+    /// the client the frame is extended over. Before 1809, nothing. Whether
+    /// Windows took it: it has no getter for an accent to read it back by
+    /// (`GetWindowCompositionAttribute` refuses `WCA_ACCENT_POLICY`).
+    pub(crate) fn blur_behind(hwnd: HWND, on: bool) -> bool {
+        let Some(set) = composition() else {
+            return false;
+        };
+        let mut accent = AccentPolicy {
+            state: if on {
+                ACCENT_ENABLE_ACRYLICBLURBEHIND
+            } else {
+                ACCENT_DISABLED
+            },
+            tint: if on { UNTINTED } else { 0 },
+            ..Default::default()
+        };
+        let mut attribute = CompositionAttribute {
+            attribute: WCA_ACCENT_POLICY,
+            data: &mut accent as *mut _ as *mut _,
+            size: size_of_val(&accent),
+        };
+        // SAFETY: our own window; the accent outlives the call, and is given
+        // its size.
+        unsafe { set(hwnd, &mut attribute) }.as_bool()
+    }
+
+    /// Whether a popup's window can have the accent's blur behind its panel
+    /// (`popup_window/win32.rs`): Windows 11, whose DWM rounds a popup's
+    /// corners, and its blur with them. Windows 10's square blur would show
+    /// past a rounded panel's corners. The accent, unlike a system backdrop,
+    /// blurs behind a window never activated, as a popup's is.
+    pub(crate) fn popup_blur_behind() -> bool {
+        build() >= 22000 && composition().is_some()
     }
 
     /// The executable's own icon (its first icon group, the one Explorer
@@ -478,36 +774,24 @@ mod win {
         }
     }
 
-    /// The caption strip of a frameless window `width` points wide, and the
-    /// caption buttons `Inset` draws at its right, or its left where windows
-    /// run right to left (none for `Hidden`).
+    /// The caption strip of a frameless window, and the caption buttons
+    /// `Inset` draws at its right, or its left where windows run right to
+    /// left (none for `Hidden`), in points of the display.
     pub(super) fn titlebar_area(
-        width: f32,
+        window: &Window,
         titlebar: Titlebar,
     ) -> (Option<zgx::scene::Rect>, Option<zgx::scene::Rect>) {
-        caption_strip(width, titlebar, rtl())
-    }
-    fn caption_strip(
-        width: f32,
-        titlebar: Titlebar,
-        rtl: bool,
-    ) -> (Option<zgx::scene::Rect>, Option<zgx::scene::Rect>) {
-        use zgx::scene::Rect;
-        let height = BUTTON_HEIGHT as f32;
-        if titlebar != Titlebar::Inset {
-            return (Some(Rect::new(0., 0., width, height)), None);
-        }
-        let buttons = (3. * BUTTON_WIDTH as f32).min(width);
-        if rtl {
-            return (
-                Some(Rect::new(buttons, 0., width - buttons, height)),
-                Some(Rect::new(0., 0., buttons, height)),
-            );
-        }
-        (
-            Some(Rect::new(0., 0., width - buttons, height)),
-            Some(Rect::new(width - buttons, 0., buttons, height)),
-        )
+        let caption = hwnd(window).and_then(|hwnd| caption_of(hwnd.0 as usize));
+        let geometry = Geometry::new(
+            window.scale_factor(),
+            crate::popup_window::zoom_of(window.id()),
+            caption.as_ref().and_then(|caption| caption.height),
+            window.is_resizable() && !caption.is_some_and(|caption| caption.fixed_size.get()),
+            rtl(),
+        );
+        let width = window.inner_size().width as i32;
+        let (area, controls) = geometry.strip(width, titlebar == Titlebar::Inset);
+        (Some(area), controls)
     }
 
     /// Fit a new window to its monitor's work area (the screen less the
@@ -665,19 +949,21 @@ mod win {
         }
     }
 
-    pub(super) fn apply(window: &Window, titlebar: Titlebar, glass: Option<Glass>) -> f64 {
+    pub(super) fn apply(
+        window: &Window,
+        titlebar: Titlebar,
+        glass: Option<Glass>,
+        caption_height: Option<f64>,
+    ) -> f64 {
         let Some(hwnd) = hwnd(window) else {
             return 0.;
         };
         menu_theme(window);
         icon(hwnd);
-        if let Some(glass) = glass {
-            frost(
-                hwnd,
-                glass,
-                window.theme() != Some(winit::window::Theme::Light),
-            );
-        }
+        let accent = glass.is_some() && {
+            darken(hwnd, window.theme() != Some(winit::window::Theme::Light));
+            frost(hwnd, glass, false)
+        };
         // A frameless window is square unless asked; Windows 10 has no
         // rounded windows and refuses.
         let frameless = titlebar != Titlebar::Standard;
@@ -699,7 +985,13 @@ mod win {
             buttons: titlebar == Titlebar::Inset,
             rtl: rtl(),
             shown: Cell::new(true),
+            height: caption_height,
+            zoom: Cell::new(crate::popup_window::zoom_of(window.id())),
+            resizable: Cell::new(window.is_resizable()),
+            fixed_size: Cell::new(false),
             settings_changed: Cell::new(false),
+            glass: Cell::new(glass),
+            accent: Cell::new(accent),
             hovered: Cell::new(None),
             pressed: Cell::new(None),
             tracking: Cell::new(false),
@@ -729,6 +1021,17 @@ mod win {
         static CAPTIONS: RefCell<Vec<(usize, Rc<Caption>)>> = const { RefCell::new(Vec::new()) };
     }
 
+    /// The caption of the window at `hwnd`, if `apply` subclassed it.
+    fn caption_of(hwnd: usize) -> Option<Rc<Caption>> {
+        CAPTIONS.with(|captions| {
+            captions
+                .borrow()
+                .iter()
+                .find(|(window, _)| *window == hwnd)
+                .map(|(_, caption)| caption.clone())
+        })
+    }
+
     fn scale(hwnd: HWND) -> f64 {
         // SAFETY: reads our own window's DPI.
         f64::from(unsafe { GetDpiForWindow(hwnd) }.max(96)) / 96.
@@ -749,65 +1052,20 @@ mod win {
         }
         // SAFETY: reads our own window's state.
         let maximized = unsafe { IsZoomed(hwnd) }.as_bool();
-        hit(
-            (point.x, point.y),
-            (client.right, client.bottom),
-            scale(hwnd),
-            maximized,
-            caption.buttons && caption.shown.get(),
-            caption.rtl,
-        )
+        caption
+            .geometry(scale(hwnd))
+            .hit(
+                (point.x, point.y),
+                (client.right, client.bottom),
+                maximized,
+                caption.buttons && caption.shown.get(),
+            )
+            .map(hit_code)
     }
     /// Whether windows run right to left (the user's language,
     /// `ZGX_DIRECTION`), as their title bars then do.
     fn rtl() -> bool {
         crate::system_colors::locale_direction() == zgx::scene::Direction::Rtl
-    }
-
-    /// What client point (`x`, `y`) of a frameless window `width` by
-    /// `height` physical pixels is at `scale`, if not its content: a resize
-    /// band or one of its caption buttons (`buttons`), at its top right, or
-    /// top left where the window runs right to left (`rtl`), as Windows lays
-    /// out a mirrored (`WS_EX_LAYOUTRTL`) window's.
-    fn hit(
-        (x, y): (i32, i32),
-        (width, height): (i32, i32),
-        scale: f64,
-        maximized: bool,
-        buttons: bool,
-        rtl: bool,
-    ) -> Option<u32> {
-        let band = if maximized {
-            0
-        } else {
-            (RESIZE_BAND * scale).round() as i32
-        };
-        let (left, right) = (x < band, x >= width - band);
-        let (top, bottom) = (y < band, y >= height - band);
-        // The caption buttons keep all but the window's outermost pixels.
-        if buttons && y >= band.min(1) && f64::from(y) < BUTTON_HEIGHT * scale {
-            let button = (BUTTON_WIDTH * scale).round() as i32;
-            // Close nearest the edge they sit at.
-            let from_edge = if rtl { x } else { width - 1 - x };
-            if (band.min(1)..3 * button).contains(&from_edge) {
-                return Some(match from_edge / button {
-                    0 => HTCLOSE,
-                    1 => HTMAXBUTTON,
-                    _ => HTMINBUTTON,
-                });
-            }
-        }
-        Some(match (top, bottom, left, right) {
-            (true, _, true, _) => HTTOPLEFT,
-            (true, _, _, true) => HTTOPRIGHT,
-            (_, true, true, _) => HTBOTTOMLEFT,
-            (_, true, _, true) => HTBOTTOMRIGHT,
-            (true, ..) => HTTOP,
-            (_, true, ..) => HTBOTTOM,
-            (.., true, _) => HTLEFT,
-            (.., true) => HTRIGHT,
-            _ => return None,
-        })
     }
 
     /// # Safety
@@ -835,6 +1093,7 @@ mod win {
         match message {
             // High contrast on or off, the accent, animations, the colours.
             WM_SETTINGCHANGE | WM_SYSCOLORCHANGE => {
+                caption.follow_transparency(hwnd);
                 caption.settings_changed.set(true);
                 if let Some(wake) = &*caption.wake.borrow() {
                     wake();
@@ -845,6 +1104,20 @@ mod win {
                 if let Some(hit) = hit_test(hwnd, caption, x, y) {
                     return LRESULT(hit as isize);
                 }
+            }
+            // Every window's, buttons or not.
+            WM_NCDESTROY => {
+                release_icons(hwnd);
+                // SAFETY: removes this subclass and takes back its reference.
+                unsafe {
+                    let _ = RemoveWindowSubclass(hwnd, Some(subclass), SUBCLASS_ID);
+                    drop(Rc::from_raw(data as *const Caption));
+                }
+                CAPTIONS.with(|captions| {
+                    captions
+                        .borrow_mut()
+                        .retain(|(window, _)| *window != hwnd.0 as usize)
+                });
             }
             // A standard frame's own buttons are the frame's.
             _ if !caption.buttons => {}
@@ -859,7 +1132,7 @@ mod win {
                     // SAFETY: tracks our own window.
                     let _ = unsafe { TrackMouseEvent(&mut track) };
                 }
-                let hovered = CaptionButton::from_hit(wparam.0);
+                let hovered = button_of(wparam.0);
                 let pressed = caption.pressed.get().filter(|_| hovered.is_some());
                 caption.set(hovered, pressed);
             }
@@ -869,13 +1142,13 @@ mod win {
             }
             WM_MOUSEMOVE => caption.set(None, None),
             WM_NCLBUTTONDOWN | WM_NCLBUTTONDBLCLK => {
-                if let Some(button) = CaptionButton::from_hit(wparam.0) {
+                if let Some(button) = button_of(wparam.0) {
                     caption.set(Some(button), Some(button));
                     return LRESULT(0);
                 }
             }
             WM_NCLBUTTONUP => {
-                if let Some(button) = CaptionButton::from_hit(wparam.0) {
+                if let Some(button) = button_of(wparam.0) {
                     let pressed = caption.pressed.get() == Some(button);
                     caption.set(Some(button), None);
                     if pressed {
@@ -903,19 +1176,6 @@ mod win {
                     return LRESULT(0);
                 }
             }
-            WM_NCDESTROY => {
-                release_icons(hwnd);
-                // SAFETY: removes this subclass and takes back its reference.
-                unsafe {
-                    let _ = RemoveWindowSubclass(hwnd, Some(subclass), SUBCLASS_ID);
-                    drop(Rc::from_raw(data as *const Caption));
-                }
-                CAPTIONS.with(|captions| {
-                    captions
-                        .borrow_mut()
-                        .retain(|(window, _)| *window != hwnd.0 as usize)
-                });
-            }
             _ => {}
         }
         // SAFETY: forwards to the next procedure in the chain (winit's).
@@ -930,12 +1190,7 @@ mod win {
     pub(crate) struct CaptionHost {
         caption: Rc<Caption>,
         window: std::sync::Weak<Window>,
-        hovered: zgx::reactive::Signal<Option<CaptionButton>>,
-        pressed: zgx::reactive::Signal<Option<CaptionButton>>,
-        maximized: zgx::reactive::Signal<bool>,
-        active: zgx::reactive::Signal<bool>,
-        dark: zgx::reactive::Signal<bool>,
-        fullscreen: zgx::reactive::Signal<bool>,
+        look: CaptionLook,
         view: Option<zgx::compose::ViewHandle>,
     }
     impl CaptionHost {
@@ -945,26 +1200,21 @@ mod win {
             ui: &Ui,
             wake: impl Fn() + 'static,
         ) -> Option<Self> {
-            let hwnd = hwnd(window)?.0 as usize;
-            let caption = CAPTIONS.with(|captions| {
-                captions
-                    .borrow()
-                    .iter()
-                    .find(|(window, _)| *window == hwnd)
-                    .map(|(_, caption)| caption.clone())
-            })?;
+            let caption = caption_of(hwnd(window)?.0 as usize)?;
             *caption.wake.borrow_mut() = Some(Box::new(wake));
+            let look = CaptionLook::new(ui, caption.geometry(window.scale_factor()));
             Some(Self {
                 caption,
                 window: Arc::downgrade(window),
-                hovered: ui.signal(None),
-                pressed: ui.signal(None),
-                maximized: ui.signal(false),
-                active: ui.signal(true),
-                dark: ui.signal(true),
-                fullscreen: ui.signal(false),
+                look,
                 view: None,
             })
+        }
+        /// The window's smallest and largest sizes are the same (or no
+        /// longer are): no resize bands and no Maximize, as for one that
+        /// isn't resizable.
+        pub(crate) fn set_fixed_size(&self, fixed: bool) {
+            self.caption.fixed_size.set(fixed);
         }
         /// Before a frame: bring the buttons up to date, and back if the
         /// content was rendered again over them.
@@ -977,101 +1227,31 @@ mod win {
                 return;
             }
             if let Some(window) = self.window.upgrade() {
-                self.maximized.set(window.is_maximized());
-                self.active.set(window.has_focus());
-                self.dark
-                    .set(window.theme() != Some(winit::window::Theme::Light));
+                self.caption.zoom.set(ui.zoom());
+                self.caption.resizable.set(window.is_resizable());
+                let geometry = self.caption.geometry(window.scale_factor());
+                if self.look.geometry.with_untracked(|old| *old != geometry) {
+                    self.look.geometry.set(geometry);
+                }
+                self.look.maximized.set(window.is_maximized());
+                self.look.active.set(window.has_focus());
+                let high_contrast = ui.theme().system_preferences().increased_contrast;
+                if self
+                    .look
+                    .high_contrast
+                    .with_untracked(|old| *old != high_contrast)
+                {
+                    self.look.high_contrast.set(high_contrast);
+                }
                 let fullscreen = window.fullscreen().is_some();
-                self.fullscreen.set(fullscreen);
+                self.look.fullscreen.set(fullscreen);
                 self.caption.shown.set(!fullscreen);
             }
-            self.hovered.set(self.caption.hovered.get());
-            self.pressed.set(self.caption.pressed.get());
+            self.look.hovered.set(self.caption.hovered.get());
+            self.look.pressed.set(self.caption.pressed.get());
             if !self.view.as_ref().is_some_and(|view| view.is_mounted()) {
-                self.view = Some(ui.mount(self.buttons()));
+                self.view = Some(ui.mount(self.look.view(self.caption.rtl)));
             }
-        }
-        fn buttons(&self) -> View {
-            // Windows 11's icon font; Windows 10's has the same glyphs.
-            let font = if std::path::Path::new(r"C:\Windows\Fonts\SegoeIcons.ttf").exists() {
-                "Segoe Fluent Icons"
-            } else {
-                "Segoe MDL2 Assets"
-            };
-            let button = |kind: CaptionButton| {
-                let (hovered, pressed, dark) = (
-                    self.hovered.clone(),
-                    self.pressed.clone(),
-                    self.dark.clone(),
-                );
-                let (glyph_hovered, glyph_dark, active, maximized) = (
-                    self.hovered.clone(),
-                    self.dark.clone(),
-                    self.active.clone(),
-                    self.maximized.clone(),
-                );
-                div()
-                    .size(BUTTON_WIDTH as f32, BUTTON_HEIGHT as f32)
-                    .items_center()
-                    .justify_center()
-                    .reactive_style(move || {
-                        let hover = hovered.get() == Some(kind);
-                        let down = hover && pressed.get() == Some(kind);
-                        // WinUI's caption button brushes.
-                        let fill = match (kind, hover, down, dark.get()) {
-                            (_, false, ..) => Color(0, 0, 0, 0),
-                            (CaptionButton::Close, _, false, _) => Color(196, 43, 28, 255),
-                            (CaptionButton::Close, _, true, _) => Color(196, 43, 28, 230),
-                            (_, _, false, true) => Color(255, 255, 255, 15),
-                            (_, _, true, true) => Color(255, 255, 255, 10),
-                            (_, _, false, false) => Color(0, 0, 0, 9),
-                            (_, _, true, false) => Color(0, 0, 0, 6),
-                        };
-                        Styles::new().bg(fill)
-                    })
-                    .child(
-                        text_signal(move || {
-                            match kind {
-                                CaptionButton::Minimize => "\u{e921}",
-                                CaptionButton::Maximize if maximized.get() => "\u{e923}",
-                                CaptionButton::Maximize => "\u{e922}",
-                                CaptionButton::Close => "\u{e8bb}",
-                            }
-                            .to_owned()
-                        })
-                        .font_family(font)
-                        .text_size(10.)
-                        .reactive_style(move || {
-                            let red =
-                                kind == CaptionButton::Close && glyph_hovered.get() == Some(kind);
-                            let color = match (red, glyph_dark.get(), active.get()) {
-                                (true, ..) => Color(255, 255, 255, 255),
-                                (_, true, true) => Color(255, 255, 255, 255),
-                                (_, true, false) => Color(255, 255, 255, 93),
-                                (_, false, true) => Color(0, 0, 0, 228),
-                                (_, false, false) => Color(0, 0, 0, 92),
-                            };
-                            Styles::new().text_color(color)
-                        }),
-                    )
-            };
-            let fullscreen = self.fullscreen.clone();
-            // At the top right, or the top left right to left: there the
-            // row runs from the right, Close outermost still.
-            let strip = row().absolute().top(0.);
-            let strip = if self.caption.rtl {
-                strip.left(0.)
-            } else {
-                strip.right(0.)
-            };
-            strip
-                .pointer_events(false)
-                .reactive_style(move || {
-                    Styles::new().opacity(if fullscreen.get() { 0. } else { 1. })
-                })
-                .child(button(CaptionButton::Minimize))
-                .child(button(CaptionButton::Maximize))
-                .child(button(CaptionButton::Close))
         }
     }
 
@@ -1150,86 +1330,182 @@ mod win {
             }
         }
 
+        /// The system's settings changing reaches the host (`Caption::
+        /// settings_changed`, then `system_colors::sync`): how Windows' colour
+        /// settings, transparency effects among them, are read again.
         #[test]
-        fn a_frameless_windows_edges_resize_and_its_corner_buttons_answer() {
-            let size = (800, 600);
-            let at = |x, y| hit((x, y), size, 1., false, true, false);
-            assert_eq!(at(400, 300), None, "content");
-            assert_eq!(at(0, 300), Some(HTLEFT));
-            assert_eq!(at(799, 300), Some(HTRIGHT));
-            assert_eq!(at(400, 599), Some(HTBOTTOM));
-            assert_eq!(at(0, 0), Some(HTTOPLEFT));
-            assert_eq!(at(799, 599), Some(HTBOTTOMRIGHT));
-            // The buttons, 46 wide from the right, 32 tall; the outermost
-            // pixel stays the resize band.
-            assert_eq!(at(790, 10), Some(HTCLOSE));
-            assert_eq!(at(799, 10), Some(HTRIGHT));
-            assert_eq!(at(799, 2), Some(HTTOPRIGHT));
-            assert_eq!(at(740, 10), Some(HTMAXBUTTON));
-            assert_eq!(at(700, 10), Some(HTMINBUTTON));
-            assert_eq!(at(640, 10), None, "left of the buttons");
-            assert_eq!(at(790, 40), None, "below the buttons");
-            // Without buttons (`Titlebar::Hidden`) the corner resizes.
-            assert_eq!(hit((790, 2), size, 1., false, false, false), Some(HTTOP));
-        }
-
-        #[test]
-        fn bands_and_buttons_scale_and_a_maximized_window_has_no_bands() {
-            let size = (1600, 1200);
-            // At 200% the band is 10 pixels and the buttons 92 by 64.
-            assert_eq!(hit((9, 600), size, 2., false, false, false), Some(HTLEFT));
-            assert_eq!(hit((10, 600), size, 2., false, false, false), None);
-            assert_eq!(
-                hit((1599 - 91, 60), size, 2., false, true, false),
-                Some(HTCLOSE)
-            );
-            assert_eq!(
-                hit((1599 - 92, 60), size, 2., false, true, false),
-                Some(HTMAXBUTTON)
-            );
-            // Maximized, the edges are the screen's: nothing resizes, and the
-            // buttons reach the very corner.
-            assert_eq!(hit((0, 600), size, 1., true, true, false), None);
-            assert_eq!(hit((1599, 0), size, 1., true, true, false), Some(HTCLOSE));
-        }
-
-        #[test]
-        fn the_titlebar_area_is_the_caption_strip_less_the_buttons() {
-            use zgx::scene::Rect;
-            assert_eq!(
-                caption_strip(800., Titlebar::Inset, false),
-                (
-                    Some(Rect::new(0., 0., 662., 32.)),
-                    Some(Rect::new(662., 0., 138., 32.))
+        fn a_settings_change_wakes_the_host_to_read_them_again() {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_POPUP,
+            };
+            let woken = Rc::new(Cell::new(0));
+            let wake = woken.clone();
+            // Plain glass whose accent disagrees with the setting, as it does
+            // the moment the setting changes, whichever way that is.
+            let off = crate::system_colors::windows_transparency_off();
+            let glass = Some(Glass::new(GlassMaterial::UnderWindowBackground).plain());
+            let accent = off;
+            let caption = Rc::new(Caption {
+                frameless: false,
+                buttons: false,
+                rtl: false,
+                shown: Cell::new(true),
+                height: None,
+                zoom: Cell::new(1.),
+                resizable: Cell::new(true),
+                fixed_size: Cell::new(false),
+                settings_changed: Cell::new(false),
+                glass: Cell::new(glass),
+                accent: Cell::new(accent),
+                hovered: Cell::new(None),
+                pressed: Cell::new(None),
+                tracking: Cell::new(false),
+                wake: RefCell::new(Some(Box::new(move || wake.set(wake.get() + 1)))),
+            });
+            // SAFETY: a plain window of a system class, made and destroyed
+            // here, with the subclass `apply` installs and its reference,
+            // which it takes back on WM_NCDESTROY.
+            unsafe {
+                let hwnd = CreateWindowExW(
+                    WINDOW_EX_STYLE(0),
+                    windows::core::w!("STATIC"),
+                    None,
+                    WS_POPUP,
+                    0,
+                    0,
+                    10,
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
                 )
+                .unwrap();
+                let data = Rc::into_raw(caption.clone()) as usize;
+                assert!(SetWindowSubclass(hwnd, Some(subclass), SUBCLASS_ID, data).as_bool());
+                SendMessageW(hwnd, WM_SETTINGCHANGE, None, None);
+                assert!(caption.settings_changed.get());
+                assert_eq!(woken.get(), 1);
+                assert_eq!(
+                    caption.accent.get(),
+                    !off,
+                    "plain glass follows the setting"
+                );
+                let _ = DestroyWindow(hwnd);
+            }
+            assert_eq!(Rc::strong_count(&caption), 1, "given back with the window");
+        }
+
+        /// What each glass asks of Windows, which reads no accent back. Plain
+        /// glass is the accent's blur, with no system backdrop and no frame
+        /// under the client; with Transparency effects off, the material's
+        /// backdrop. Glass that never had the accent never asks Windows to
+        /// take it away.
+        #[test]
+        fn plain_glass_is_the_accents_blur_until_transparency_effects_go_off() {
+            use GlassStep::{Accent, Backdrop, Frame};
+            let plain = Some(Glass::new(GlassMaterial::UnderWindowBackground).plain());
+            let hud = Some(Glass::default());
+            let (mica, acrylic) = (
+                Backdrop(DWMSBT_MAINWINDOW),
+                Backdrop(DWMSBT_TRANSIENTWINDOW),
             );
-            // `Hidden` has no buttons: the whole strip is the app's.
+            let none = Backdrop(DWMSBT_NONE);
             assert_eq!(
-                caption_strip(800., Titlebar::Hidden, false),
-                (Some(Rect::new(0., 0., 800., 32.)), None)
+                glass_steps(plain, false, false),
+                [Frame(false), none, Accent(true)],
+                "made"
+            );
+            assert_eq!(
+                glass_steps(plain, false, true),
+                [Frame(false), none],
+                "kept"
+            );
+            assert_eq!(
+                glass_steps(plain, true, true),
+                [Accent(false), Frame(true), mica],
+                "transparency turned off"
+            );
+            assert_eq!(
+                glass_steps(plain, true, false),
+                [Frame(true), mica],
+                "made so"
+            );
+            assert_eq!(glass_steps(hud, false, false), [Frame(true), acrylic]);
+            assert_eq!(glass_steps(hud, true, false), [Frame(true), acrylic]);
+            assert_eq!(
+                glass_steps(hud, false, true),
+                [Accent(false), Frame(true), acrylic],
+                "replacing plain glass"
+            );
+            assert_eq!(glass_steps(None, false, false), [Frame(false), none]);
+            assert_eq!(
+                glass_steps(None, false, true),
+                [Accent(false), Frame(false), none],
+                "taking plain glass away"
             );
         }
 
+        /// Those steps on a real window: the backdrop read back from DWM as
+        /// another process would, the accent taken, on and off.
         #[test]
-        fn right_to_left_the_buttons_and_the_titlebar_area_mirror() {
-            use zgx::scene::Rect;
-            // As Windows lays out a mirrored window's: the buttons at the
-            // top left, Close outermost.
-            let size = (800, 600);
-            let at = |x, y| hit((x, y), size, 1., false, true, true);
-            assert_eq!(at(10, 10), Some(HTCLOSE));
-            assert_eq!(at(60, 10), Some(HTMAXBUTTON));
-            assert_eq!(at(100, 10), Some(HTMINBUTTON));
-            assert_eq!(at(160, 10), None, "right of the buttons");
-            assert_eq!(at(798, 10), Some(HTRIGHT), "the right edge only resizes");
-            assert_eq!(at(0, 10), Some(HTLEFT), "the outermost pixel still resizes");
-            assert_eq!(
-                caption_strip(800., Titlebar::Inset, true),
-                (
-                    Some(Rect::new(138., 0., 662., 32.)),
-                    Some(Rect::new(0., 0., 138., 32.))
+        fn windows_takes_the_steps_of_each_glass() {
+            use windows::Win32::{
+                Graphics::Dwm::DwmGetWindowAttribute,
+                UI::WindowsAndMessaging::{
+                    CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_POPUP,
+                },
+            };
+            // SAFETY: a plain window of a system class, made and destroyed
+            // here; its backdrop read into a local of its size.
+            unsafe {
+                let hwnd = CreateWindowExW(
+                    WINDOW_EX_STYLE(0),
+                    windows::core::w!("STATIC"),
+                    None,
+                    WS_POPUP,
+                    0,
+                    0,
+                    10,
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
                 )
-            );
+                .unwrap();
+                // Windows 11 (22H2) only: `None` before it.
+                let backdrop = || {
+                    let mut kind = DWM_SYSTEMBACKDROP_TYPE::default();
+                    DwmGetWindowAttribute(
+                        hwnd,
+                        DWMWA_SYSTEMBACKDROP_TYPE,
+                        &mut kind as *mut _ as *mut _,
+                        size_of_val(&kind) as u32,
+                    )
+                    .ok()
+                    .map(|()| kind)
+                };
+                let plain = Some(Glass::new(GlassMaterial::UnderWindowBackground).plain());
+                let run = |glass, reduced, accent| {
+                    run_glass_steps(hwnd, &glass_steps(glass, reduced, accent), accent)
+                };
+                // From Windows 10 1809, the accent is taken, on and off.
+                let accents = composition().is_some();
+                assert_eq!(blur_behind(hwnd, true), accents);
+                assert_eq!(blur_behind(hwnd, false), accents);
+                assert!(run(plain, false, false));
+                assert!(backdrop().is_none_or(|kind| kind == DWMSBT_NONE));
+                assert!(!run(plain, true, true));
+                assert!(backdrop().is_none_or(|kind| kind == DWMSBT_MAINWINDOW));
+                assert!(run(plain, false, false));
+                assert!(backdrop().is_none_or(|kind| kind == DWMSBT_NONE));
+                assert!(!run(Some(Glass::default()), false, true));
+                assert!(backdrop().is_none_or(|kind| kind == DWMSBT_TRANSIENTWINDOW));
+                assert!(!run(None, false, false));
+                assert!(backdrop().is_none_or(|kind| kind == DWMSBT_NONE));
+                let _ = DestroyWindow(hwnd);
+            }
         }
 
         #[test]
@@ -1739,6 +2015,63 @@ impl TitlebarAction {
     }
 }
 
+/// A window's full-screen notification, queued (`watch_full_screen`): its
+/// window number, what AppKit said, about how long the animation it began
+/// takes, and the transition it belongs to (a will's number, which its
+/// `Settled` carries).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) type FullScreenNote = (
+    isize,
+    crate::window_info::FullScreenPhase,
+    std::time::Duration,
+    u64,
+);
+
+/// From now on, AppKit's full-screen notifications for every window are
+/// queued for `take_full_screen` and `wake` is called (macOS; elsewhere
+/// none come, and `window_info.fullscreen` follows resizes). Once per
+/// process: a few observers, nothing per frame.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn watch_full_screen(wake: impl Fn() + 'static) {
+    #[cfg(target_os = "macos")]
+    mac::watch_full_screen(wake);
+    #[cfg(not(target_os = "macos"))]
+    let _ = wake;
+}
+
+/// The full-screen notifications queued since the last call.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn take_full_screen() -> Vec<FullScreenNote> {
+    #[cfg(target_os = "macos")]
+    {
+        mac::take_full_screen()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Vec::new()
+    }
+}
+
+/// Whether AppKit counts `window` covered (its occlusion state not
+/// visible), as it is now; `None` where zgx can't ask (not macOS).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn occluded(window: &winit::window::Window) -> Option<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        let window = mac::ns_window(window)?;
+        Some(
+            !window
+                .occlusionState()
+                .contains(objc2_app_kit::NSWindowOcclusionState::Visible),
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window;
+        None
+    }
+}
+
 pub(crate) fn double_click(window: &winit::window::Window) {
     #[cfg(target_os = "macos")]
     mac::double_click(window);
@@ -1750,7 +2083,7 @@ pub(crate) fn double_click(window: &winit::window::Window) {
 mod mac {
     use super::{Glass, Titlebar};
     use objc2::{
-        DefinedClass, MainThreadOnly, define_class, msg_send,
+        ClassType, DefinedClass, MainThreadOnly, define_class, msg_send,
         rc::Retained,
         runtime::{AnyClass, AnyObject},
         sel,
@@ -1823,6 +2156,10 @@ mod mac {
         }
     }
 
+    /// The inset title bar's toolbar's identifier (`inset_buttons`), by which
+    /// full screen finds it (`watch_fullscreen`).
+    const INSET_TOOLBAR: &str = "zgx.titlebar.inset";
+
     /// An empty compact unified toolbar: it centres the traffic lights in a
     /// 40-point strip.
     fn inset_buttons(window: &NSWindow) {
@@ -1834,7 +2171,7 @@ mod mac {
         // and NSWindowToolbarStyle (NSInteger) setters; the window retains
         // its toolbar.
         unsafe {
-            let id = NSString::from_str("zgx.titlebar.inset");
+            let id = NSString::from_str(INSET_TOOLBAR);
             let toolbar: Retained<AnyObject> =
                 msg_send![msg_send![class, alloc], initWithIdentifier: &*id];
             let _: () = msg_send![&*toolbar, setShowsBaselineSeparator: false];
@@ -1843,6 +2180,251 @@ mod mac {
             let _: () = msg_send![window, setToolbarStyle: 4_isize];
         }
         toolbar_passes_through();
+        watch_fullscreen();
+    }
+
+    /// In full screen AppKit moves a window's toolbar into a window of its
+    /// own above it (NSToolbarFullScreenWindow), which the title bar's
+    /// transparency doesn't reach: the inset title bar's empty toolbar showed
+    /// there as an opaque 40-point bar over the content's top. It is hidden as
+    /// a window goes into full screen (the green button, `set_fullscreen`)
+    /// and shown again once it is out, where it centres the traffic lights
+    /// again. A transition that fails after it began (AppKit tells only the
+    /// window's delegate, winit's) would leave it hidden on a window that
+    /// isn't in full screen: `RESTORE_AFTER` on, one not in full screen gets
+    /// it back. One that fails to exit stays in full screen, its toolbar
+    /// rightly hidden. Once per process; only zgx's inset toolbar is touched.
+    fn watch_fullscreen() {
+        use objc2_app_kit::{
+            NSWindowDidExitFullScreenNotification, NSWindowWillEnterFullScreenNotification,
+        };
+        use objc2_foundation::{NSNotification, NSNotificationCenter};
+        thread_local! {
+            static WATCHING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        if WATCHING.replace(true) {
+            return;
+        }
+        let center = NSNotificationCenter::defaultCenter();
+        for (name, visible) in [
+            // SAFETY: AppKit's own notification names, constant statics.
+            (unsafe { NSWindowWillEnterFullScreenNotification }, false),
+            (unsafe { NSWindowDidExitFullScreenNotification }, true),
+        ] {
+            let block = block2::RcBlock::new(move |note: std::ptr::NonNull<NSNotification>| {
+                // SAFETY: AppKit passes a valid notification for the
+                // block's duration; a window's notification's object is
+                // that NSWindow.
+                let note = unsafe { note.as_ref() };
+                let Some(object) = note.object() else {
+                    return;
+                };
+                let Ok(window) = object.downcast::<NSWindow>() else {
+                    return;
+                };
+                inset_toolbar_visible(&window, visible);
+                if !visible {
+                    restore_unless_fullscreen(window.windowNumber());
+                }
+            });
+            // SAFETY: with no queue given the block runs where AppKit posts
+            // the notification (the main thread); the observers live as
+            // long as the app.
+            let observer = unsafe {
+                center.addObserverForName_object_queue_usingBlock(Some(name), None, None, &block)
+            };
+            std::mem::forget(observer);
+        }
+    }
+
+    thread_local! {
+        static FULL_SCREEN: std::cell::RefCell<Vec<super::FullScreenNote>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static FULL_SCREEN_WAKE: std::cell::RefCell<Option<std::rc::Rc<dyn Fn()>>> =
+            const { std::cell::RefCell::new(None) };
+        static FULL_SCREEN_SEQ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+        /// How long the last transition each way took, will to did (going
+        /// in, then out): AppKit says nothing of its full-screen animation's
+        /// length.
+        static FULL_SCREEN_TOOK: std::cell::Cell<[Option<std::time::Duration>; 2]> =
+            const { std::cell::Cell::new([None; 2]) };
+        /// When each window's transition began, by window number.
+        static FULL_SCREEN_BEGAN: std::cell::RefCell<Vec<(isize, std::time::Instant)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// Every window's `NSWindowWill…`/`NSWindowDid…FullScreen`, queued with
+    /// the window's number (`super::watch_full_screen`). A will also queues
+    /// `Settled` once its animation has had time to end, as a transition
+    /// that fails says so only to winit's delegate.
+    pub(super) fn watch_full_screen(wake: impl Fn() + 'static) {
+        use crate::window_info::FullScreenPhase;
+        use objc2_app_kit::{
+            NSWindowDidEnterFullScreenNotification, NSWindowDidExitFullScreenNotification,
+            NSWindowWillEnterFullScreenNotification, NSWindowWillExitFullScreenNotification,
+        };
+        use objc2_foundation::{NSNotification, NSNotificationCenter};
+        if FULL_SCREEN_WAKE.with_borrow(Option::is_some) {
+            return;
+        }
+        FULL_SCREEN_WAKE.set(Some(std::rc::Rc::new(wake)));
+        let center = NSNotificationCenter::defaultCenter();
+        for (name, phase) in [
+            // SAFETY: AppKit's own notification names, constant statics.
+            (
+                unsafe { NSWindowWillEnterFullScreenNotification },
+                FullScreenPhase::WillEnter,
+            ),
+            (
+                unsafe { NSWindowDidEnterFullScreenNotification },
+                FullScreenPhase::DidEnter,
+            ),
+            (
+                unsafe { NSWindowWillExitFullScreenNotification },
+                FullScreenPhase::WillExit,
+            ),
+            (
+                unsafe { NSWindowDidExitFullScreenNotification },
+                FullScreenPhase::DidExit,
+            ),
+        ] {
+            let block = block2::RcBlock::new(move |note: std::ptr::NonNull<NSNotification>| {
+                // SAFETY: AppKit passes a valid notification for the
+                // block's duration; a window's notification's object is
+                // that NSWindow.
+                let note = unsafe { note.as_ref() };
+                let Some(window) = note
+                    .object()
+                    .and_then(|object| object.downcast::<NSWindow>().ok())
+                else {
+                    return;
+                };
+                let number = window.windowNumber();
+                let will = matches!(
+                    phase,
+                    FullScreenPhase::WillEnter | FullScreenPhase::WillExit
+                );
+                let way = usize::from(matches!(
+                    phase,
+                    FullScreenPhase::WillExit | FullScreenPhase::DidExit
+                ));
+                let (duration, seq) = if will {
+                    // As long as the last one this way took; the first, as
+                    // long as AppKit's takes (`FULL_SCREEN_FIRST`).
+                    let duration = FULL_SCREEN_TOOK.get()[way].unwrap_or(FULL_SCREEN_FIRST);
+                    FULL_SCREEN_BEGAN.with_borrow_mut(|began| {
+                        began.retain(|(window, _)| *window != number);
+                        began.push((number, std::time::Instant::now()));
+                    });
+                    let seq = FULL_SCREEN_SEQ.get() + 1;
+                    FULL_SCREEN_SEQ.set(seq);
+                    (duration, seq)
+                } else {
+                    // Done: how long it took, for the next this way.
+                    let began = FULL_SCREEN_BEGAN.with_borrow_mut(|began| {
+                        let at = began.iter().position(|(window, _)| *window == number)?;
+                        Some(began.swap_remove(at).1)
+                    });
+                    if let Some(began) = began {
+                        let mut took = FULL_SCREEN_TOOK.get();
+                        took[way] = Some(began.elapsed());
+                        FULL_SCREEN_TOOK.set(took);
+                    }
+                    (std::time::Duration::ZERO, FULL_SCREEN_SEQ.get())
+                };
+                note_full_screen((number, phase, duration, seq));
+                if will {
+                    // Past its animation, and past an inset toolbar's own
+                    // restore (`RESTORE_AFTER`): the buttons read then are
+                    // where they stay.
+                    let after = (duration + SETTLE_AFTER).max(RESTORE_AFTER + SETTLE_MARGIN);
+                    settle_after(number, after, seq);
+                }
+            });
+            // SAFETY: with no queue given the block runs where AppKit posts
+            // the notification (the main thread); the observers live as
+            // long as the app.
+            let observer = unsafe {
+                center.addObserverForName_object_queue_usingBlock(Some(name), None, None, &block)
+            };
+            std::mem::forget(observer);
+        }
+    }
+
+    /// How long a window's first transition each way is said to take: about
+    /// what AppKit's took on macOS 26 (0.52 to 0.58 s, in and out).
+    /// `animationResizeTime`, a resize's, says 0.35 s in and 0.07 s out.
+    const FULL_SCREEN_FIRST: std::time::Duration = std::time::Duration::from_millis(550);
+    /// How long past a transition's estimated end its `Settled` comes, and
+    /// past an inset toolbar's restore at the soonest.
+    const SETTLE_AFTER: std::time::Duration = std::time::Duration::from_millis(1500);
+    const SETTLE_MARGIN: std::time::Duration = std::time::Duration::from_millis(250);
+
+    fn note_full_screen(note: super::FullScreenNote) {
+        FULL_SCREEN.with_borrow_mut(|queue| queue.push(note));
+        if let Some(wake) = FULL_SCREEN_WAKE.with_borrow(Clone::clone) {
+            wake();
+        }
+    }
+
+    /// `after` on, the transition `seq` of the window numbered `number` is
+    /// over, if it is not yet.
+    fn settle_after(number: isize, after: std::time::Duration, seq: u64) {
+        let Ok(when) = dispatch2::DispatchTime::try_from(after) else {
+            return;
+        };
+        let _ = dispatch2::DispatchQueue::main().after(when, move || {
+            note_full_screen((
+                number,
+                crate::window_info::FullScreenPhase::Settled,
+                std::time::Duration::ZERO,
+                seq,
+            ));
+        });
+    }
+
+    pub(super) fn take_full_screen() -> Vec<super::FullScreenNote> {
+        FULL_SCREEN.with_borrow_mut(std::mem::take)
+    }
+
+    /// How long after a window began going into full screen its transition
+    /// is over, if it is: AppKit's animation takes about half a second.
+    const RESTORE_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
+
+    /// `RESTORE_AFTER` on, the window numbered `number` gets its inset
+    /// toolbar back unless it is in full screen (its transition failed).
+    fn restore_unless_fullscreen(number: isize) {
+        let Ok(when) = dispatch2::DispatchTime::try_from(RESTORE_AFTER) else {
+            return;
+        };
+        let _ = dispatch2::DispatchQueue::main().after(when, move || {
+            let Some(mtm) = objc2::MainThreadMarker::new() else {
+                return;
+            };
+            let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+            let Some(window) = app.windowWithWindowNumber(number) else {
+                return;
+            };
+            if !window.styleMask().contains(NSWindowStyleMask::FullScreen) {
+                inset_toolbar_visible(&window, true);
+            }
+        });
+    }
+
+    /// Show or hide `window`'s toolbar if it is the inset title bar's.
+    fn inset_toolbar_visible(window: &NSWindow, visible: bool) {
+        // SAFETY: `-toolbar` returns the window's NSToolbar or nil, retained
+        // here; `-identifier` an NSString; `-setVisible:` takes a BOOL.
+        unsafe {
+            let toolbar: Option<Retained<AnyObject>> = msg_send![window, toolbar];
+            let Some(toolbar) = toolbar else {
+                return;
+            };
+            let id: Option<Retained<NSString>> = msg_send![&*toolbar, identifier];
+            if id.is_some_and(|id| id.to_string() == INSET_TOOLBAR) {
+                let _: () = msg_send![&*toolbar, setVisible: visible];
+            }
+        }
     }
 
     /// The empty toolbar is only there to centre the traffic lights: presses
@@ -1959,6 +2541,34 @@ mod mac {
         }
     );
 
+    /// The window's glass replaced (`super::set_glass`): the effect view
+    /// `frost` put under the content goes, and `glass`'s takes its place.
+    pub(super) fn set_glass(window: &winit::window::Window, glass: Option<Glass>) {
+        use objc2::runtime::NSObjectProtocol as _;
+        let Some(window) = ns_window(window) else {
+            return;
+        };
+        // SAFETY: the window's frame view, kept while it holds its content.
+        let Some(frame) = window
+            .contentView()
+            .and_then(|content| unsafe { content.superview() })
+        else {
+            return;
+        };
+        let liquid = objc2::runtime::AnyClass::get(c"NSGlassEffectView");
+        for view in frame.subviews() {
+            if view.isKindOfClass(GlassView::class())
+                || liquid.is_some_and(|class| view.isKindOfClass(class))
+            {
+                view.removeFromSuperview();
+            }
+        }
+        match glass {
+            Some(glass) => frost(&window, glass),
+            None => window.invalidateShadow(),
+        }
+    }
+
     /// Put a behind-window effect view under the (transparent) zgx view.
     /// Unlike the private CGS window blur, it can be clipped to the window's
     /// rounded shape, so neither blur nor shadow is left square.
@@ -1972,6 +2582,30 @@ mod mac {
             return;
         };
         let mtm = window.mtm();
+        // The system's newest, behind the whole window, where it has one.
+        if glass.material == crate::GlassMaterial::Liquid
+            && let Some(class) = objc2::runtime::AnyClass::get(c"NSGlassEffectView")
+        {
+            // SAFETY: `new` on an NSView subclass on the main thread, and its
+            // own setters.
+            let effect: Retained<NSView> = unsafe {
+                let effect: Retained<NSView> = msg_send![class, new];
+                let _: () = msg_send![&*effect, setCornerRadius: radius(window)];
+                effect
+            };
+            effect.setFrame(frame.bounds());
+            effect.setAutoresizingMask(
+                NSAutoresizingMaskOptions::ViewWidthSizable
+                    | NSAutoresizingMaskOptions::ViewHeightSizable,
+            );
+            frame.addSubview_positioned_relativeTo(
+                &effect,
+                objc2_app_kit::NSWindowOrderingMode::Below,
+                Some(&content),
+            );
+            window.invalidateShadow();
+            return;
+        }
         // SAFETY: NSView's designated initializer, on a fresh allocation
         // with its ivars set.
         let effect: Retained<GlassView> = unsafe {
@@ -2016,6 +2650,104 @@ mod mac {
     /// title bar's own height, so a toolbar's taller bar, a right-to-left
     /// layout (buttons at the right, the strip left of them) and hidden
     /// buttons come out as AppKit lays them out. None in fullscreen.
+    /// AppKit's own places for a window's traffic lights, in its frame's
+    /// points: the first's left, the step from one to the next, the
+    /// centres' distance below the top, and the title bar container's
+    /// height. Kept from before zgx first moves them.
+    #[derive(Clone, Copy)]
+    struct Buttons {
+        left: f64,
+        step: f64,
+        centre: f64,
+        container: f64,
+    }
+    thread_local! {
+        static BUTTONS: std::cell::RefCell<std::collections::HashMap<isize, Buttons>> =
+            Default::default();
+    }
+
+    pub(super) fn zoom_buttons(window: &winit::window::Window, zoom: f64) {
+        use objc2_foundation::{NSPoint, NSRect, NSSize};
+        let Some(window) = ns_window(window) else {
+            return;
+        };
+        if window.styleMask().contains(NSWindowStyleMask::FullScreen) {
+            return;
+        }
+        // NSWindowCloseButton, MiniaturizeButton, ZoomButton.
+        let buttons: Vec<Retained<NSView>> = [0_usize, 1, 2]
+            .into_iter()
+            .filter_map(|button| {
+                // SAFETY: `-standardWindowButton:` takes an NSUInteger and
+                // returns an NSButton (a view) or nil, retained here.
+                unsafe { msg_send![&*window, standardWindowButton: button] }
+            })
+            .collect();
+        let [close, next, ..] = buttons.as_slice() else {
+            return;
+        };
+        let height = window.frame().size.height;
+        // A view's frame in the window's (bottom-up) points.
+        let in_window = |view: &NSView| view.convertRect_toView(view.bounds(), None);
+        // SAFETY: a superview clears its subviews' back pointer as it lets
+        // them go, so one still set is alive (main thread).
+        let Some(container) =
+            (unsafe { close.superview() }).and_then(|bar| unsafe { bar.superview() })
+        else {
+            return;
+        };
+        // AppKit's own layout first (a resize leaves it pending): done now, it
+        // has nothing left to put back over what follows.
+        container.layoutSubtreeIfNeeded();
+        let number = window.windowNumber();
+        let base = BUTTONS.with_borrow_mut(|known| {
+            *known.entry(number).or_insert_with(|| {
+                let (first, second) = (in_window(close), in_window(next));
+                Buttons {
+                    left: first.origin.x,
+                    step: second.origin.x - first.origin.x,
+                    centre: height - (first.origin.y + first.size.height / 2.),
+                    container: container.frame().size.height,
+                }
+            })
+        });
+        // Room for them: the container at the window's top (placed from the
+        // window's height, not its own frame: a resize moves it later) and at
+        // least as tall as they reach.
+        let size = close.frame().size;
+        let reach = (base.centre * zoom + size.height / 2. + 4.).max(base.container);
+        let wanted = if zoom == 1. { base.container } else { reach };
+        // SAFETY: as above, a set back pointer is a live superview.
+        if let Some(frame_view) = unsafe { container.superview() } {
+            let bounds = frame_view.bounds();
+            let y = match frame_view.isFlipped() {
+                true => 0.,
+                false => bounds.size.height - wanted,
+            };
+            let placed = NSRect::new(NSPoint::new(0., y), NSSize::new(bounds.size.width, wanted));
+            if container.frame() != placed {
+                container.setFrame(placed);
+            }
+        }
+        for (index, button) in buttons.iter().enumerate() {
+            let x = base.left * zoom + base.step * index as f64;
+            let y = height - base.centre * zoom - size.height / 2.;
+            // SAFETY: as above, a set back pointer is a live superview.
+            let Some(bar) = (unsafe { button.superview() }) else {
+                continue;
+            };
+            let origin = bar.convertPoint_fromView(NSPoint::new(x, y), None);
+            if button.frame().origin != origin {
+                button.setFrameOrigin(origin);
+            }
+        }
+        // Back in AppKit's places: read them again next time (another window
+        // may take this one's number).
+        if zoom == 1. {
+            BUTTONS.with_borrow_mut(|known| known.remove(&number));
+        }
+    }
+
     pub(super) fn titlebar_area(
         window: &winit::window::Window,
     ) -> (Option<zgx::scene::Rect>, Option<zgx::scene::Rect>) {
@@ -2178,8 +2910,23 @@ mod mac {
         match action.as_str() {
             "Minimize" => window.miniaturize(None),
             "None" => {}
-            // "Maximize" (zoom), "Fill" and anything newer: zoom.
-            _ => window.zoom(None),
+            // "Maximize" (zoom), "Fill" and anything newer: zoom, once the
+            // event that asked has been handled. AppKit animates within
+            // `zoom:`, and winit queues what it reports while an event is being
+            // handled: every size of the animation would wait until it ended,
+            // with the last frame stretched over the window meanwhile.
+            //
+            // SAFETY: NSObject's `performSelectorOnMainThread:withObject:waitUntilDone:`
+            // with NSWindow's `zoom:`, which takes an optional sender; the
+            // run loop keeps the window until it runs.
+            _ => unsafe {
+                let _: () = msg_send![
+                    &*window,
+                    performSelectorOnMainThread: sel!(zoom:),
+                    withObject: None::<&AnyObject>,
+                    waitUntilDone: false
+                ];
+            },
         }
     }
 

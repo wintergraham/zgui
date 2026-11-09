@@ -38,7 +38,19 @@ python3 scripts/desktop_soak.py target/release/examples/desktop_soak --cycles 30
 
 It opens windows for the whole run (a cycle a second); leave the machine to it. `desktop_soak 400 --pause 100` pauses with its windows closed every 100 cycles, a still moment to compare the heap (`heap -s`, or with `MallocStackLogging=1` and a binary signed with `get-task-allow`, `malloc_history -allBySize`). That found two leaks per closed window, both fixed: its popup host stayed registered with the popup windows' watcher when it closed with a menu open, and its Metal layer, freed after the view it observes, left AppKit's records of the observation behind. Measured after the fixes on macOS, 600 cycles: descriptors, ports and threads flat, the footprint's quarter means 290.5, 303.7, 303.9 and 305.6 MB (warm-up, then within 2 MB); the live heap, paused, 17.4 MB at cycles 100, 200 and 300 within 0.3 MB, what grows being libdispatch's own cached blocks.
 
+`examples/viewport.rs` draws a lit cube with wgpu in a GPU view (`docs/gpu-views.md`), for `scripts/viewport_smoke.py` (a Linux native smoke): one frame as it shows, one a refresh over 30 refreshes of spinning, none once it stops. `crates/zgx-gpu/tests/gpu_views.rs` checks frames' sizes, compositing (rounded clips, opacity, perspective) and that nothing else draws one; `crates/zgx/tests/gpu_views.rs` the frames and damage the core makes.
+
 `examples/failures.rs` fails twice while it animates, for `scripts/failures_smoke.py` (a Linux native smoke): a task panics, which the host contains and shows in a banner, then its GPU device is lost (`WindowHandle::debug_lose_gpu`), and it makes a new renderer and draws on. `crates/zgx-gpu/tests/device_loss.rs` checks the renderer's side; `crates/zgx-script/tests/failures.rs` a script's runtime error, a missing image and a missing font.
+
+### A window at rest on macOS
+
+A window left alone after a scroll sets no timer, runs no display link and wakes no thread of its own. Measured on an M5 Max, release build, with a plain scroll app: real system scroll events were posted (a flick and its coast), then the window was left for 60 s. The process's own counters (`proc_pid_rusage`) and a 20 s `sample` were read over that time. Two runs of each:
+
+- Scrolled, then 60 s at rest: 24.7–25.2 ms CPU and 20 interrupt wakeups, the same as a window never scrolled (23.0–25.4 ms, 19–20). A scroll leaves nothing running.
+- A bare AppKit window, active and key: 33.9–35.0 ms CPU and 6–7 wakeups over the same 60 s.
+- What wakes it: once the startup trim has run, 1.35 s after launch, every wait is untimed (`ControlFlow::Wait`). Every thread is parked. The main thread works 10 ms in 20 s, answering system messages on its run loop, mostly an accessibility client reading the focused element, and updates once after each.
+
+zgx's extra wakeups over a bare window are those messages; the run loop has no timer of zgx's in it. A richer accessibility tree may draw more queries from a client, and their number depends on the clients running.
 
 ### NVIDIA on Windows: devices made and released concurrently
 
@@ -65,7 +77,7 @@ Native examples run under Xvfb with Openbox, using llvmpipe Vulkan:
 - The workbench passes virtual-row selection, note editing/autosave across selection changes, menu opening/dismissal, modal confirmation and viewport resizing. See [workbench](images/workbench.png) and [dialog](images/workbench-dialog.png). Its draft storage is session-only memory.
 - GPUI, QuickGUI and zgx render the same frozen deterministic workload using their actual pinned frameworks. Geometry/content/colors match; native text rasterization/baseline differences remain. See the [comparison protocol](benchmarking.md) and [raw results](results/README.md).
 
-Further native Linux probes, each on a private Xvfb/Openbox desktop or a nested Sway or Weston compositor:
+Further native Linux probes, each on a private Xvfb/Openbox desktop or a nested Sway or Weston compositor. `scripts/linux_smokes.py` runs them many at once; an Xvfb that exits before reporting a display (a number taken from a server still closing) is started again by `scripts/xvfb_retry/Xvfb`, and each probe waits up to 30 s for its display:
 
 - Wayland clipboard: copy and paste go through the compositor (`set_selection`, `receive`, `send` in the protocol trace) via one data device per seat, which Weston requires (`wayland_input_smoke.py`).
 - The primary selection: an editor's double-clicked word and Ctrl+A reach other clients, and another client's selection lands where a middle click puts the caret, on X11 (`xclip`) and as a native Wayland client of Sway (`wl-paste`/`wl-copy --primary`) (`primary_selection_smoke.py`). Selected display text is the primary selection too (`selectable_text_smoke.py`).
@@ -73,8 +85,16 @@ Further native Linux probes, each on a private Xvfb/Openbox desktop or a nested 
 - A window's zoom on X11, with real keys: zoom_probe's Ctrl+= twice, Ctrl+- and Ctrl+0 step through 110%, 125%, 110% and 100%, and Control with a wheel notch up and one down steps to 110% and back; the logical viewport shrinks by the zoom while the window keeps its size, and text keeps its size in points (`zoom_smoke.py`).
 - Copying display text reaches other clients: selectable_text's document, pressed on and selected whole with Ctrl+A, copied with Ctrl+C, is read back by xclip on X11 and by wl-paste through Sway as `text/html` and UTF-8 plain text, both with all 10,000 lines of its transcript's virtual list in order (the rows it never mounted included) and none of the part marked unselectable: 10,012 lines, 669 KB of HTML (`selection_copy_smoke.py`).
 - An input method that goes with a focus queued for the app (ibus-x11 killed while the app is stopped and focus moves to it): the app takes the focus without a round trip to the gone server, keeps answering, and closes on Alt+F4; before, it waited in libX11's `_XimRead` forever (`native_ime_smoke.py --server-gone`).
+- An input method that is there but answers nothing (ibus-x11 stopped) as the app closes its focused window: the app exits, its hidden window making no input context round trip and its exit destroying no context one by one; before, it waited in `XUnsetICFocus` or `XDestroyIC` forever (`native_ime_smoke.py --server-stopped`, #564).
+- A password field takes no input method, as a browser's doesn't: pinyin typed into one types its letters (`nihao `), with no preedit and nothing composed (`native_ime_smoke.py --password`). On macOS the host also turns on secure keyboard entry while one has the keyboard (unit-tested; not probed: a probe would have to make its window key).
 - Images through the clipboard, on X11 (`xclip`) and as a Wayland client of Sway (`wl-copy`, `wl-paste`): clipboard_image's Paste takes a 30 by 20 PNG another client offered as `image/png`, its half-transparent columns' alpha straight, at its size and pixels (their digest); its Copy offers its 64 by 48 gradient as `image/png`, read back pixel for pixel, its transparent column included (`clipboard_image_smoke.py`).
+- `zgx inspect memory` from a real window on X11 (`inspect_memory_smoke.py`, on zgx-run): over its socket the app answers with the lines only its host knows (the process, its allocator, the glyph atlas) beside the script's and the scene's.
+- A declared window's own state follows the real window on X11 (`window_state_smoke.py`, on zgx-run under Openbox): a `ui.windows` window's `win.active`, `win.shown` and `win.size`, copied into the app's states, read over the devtools socket as the window is activated, another activated, resized, minimized and restored.
+- A covered window on X11 (`covered_window_smoke.py`, on zgx-run): covered whole by another window it stops drawing, its state still changing; with `ZGX_RENDER_WHEN_COVERED=1` it goes on.
+- A covered window on Windows (`windows_occlusion_smoke.py`, on zgx-run, on a real desktop, not in CI): opaque windows leaving none of it stop it, each confirmed above it; a pixel left, a framed window's corners, and layered, click-through, tool, acrylic, composed, shaped, cloaked and owned windows don't; it draws again however the cover goes, a change no event reports included. Snapped, maximized, minimized and on another virtual desktop too. Not run on more than one monitor: there it keeps drawing unless a window and its covers are whole on one monitor, all monitors of one scale at positive coordinates, by construction and unit tests on made-up layouts (`winit`'s `occlusion_area`).
 - A Luau board and a measured list, on X11 and as a Wayland client of Sway (`scripts/luau_views/app.luau` under the luau_probe example, read from screen captures and from what it prints): the canvas's `bg_grid` shows its 2-pixel dots every 20 points and `each`'s shapes where `draw_item` drew them, once each; wheel buttons (X11) or two fingers (Wayland) pan its `view` and the shapes and grid move by the view's offset to the pixel, nothing drawn again; doubling the zoom shows the shapes twice the size at twice their place and the grid's marks 40 pixels apart, still 2 across, nothing drawn again; a press recolouring one shape (`set_key`) draws that item alone. `el:scroll_to_row(2000, { align = "center" })` on a `measured = true` list of 3,000 rows, guessed 30 points, centres row 2000 to the pixel at its measured 108 pixels, its neighbours at theirs. A chip dragged (`on_drag`) onto the board and resting springs it open (`on_drag_spring`) 0.5 s after it came onto it, not before, once however it then moves within, and drops there (`on_drop`) (`luau_views_smoke.py`).
+- Pointer lock, on X11 and as a Wayland client of Sway (`scripts/pointer_lock/app.luau` under the luau_probe example, read from what it prints): a press locks the pointer (`el:lock_pointer()`, `on_pointer_lock(true)`); the mouse's motion arrives raw as `on_pointer_move`'s `dx`, `dy` with `locked` (X11's XInput2 raw motion, Wayland's relative pointer); on X11, which confines rather than locks, the pointer stays inside the window however far it moves; other keys still reach the focused element's `on_key`; Escape lets it go, reaches no `on_key`, and is no gesture to lock with (the unlock handler's own `lock_pointer` is refused); the pointer is back where it locked and motion stops; the next key reaches `on_key`. On Wayland (Sway nested on the Xvfb, with its keyboard and pointer) the lock is a `zwp_locked_pointer_v1` that holds, relative motion arrives as `dx`, `dy`, and Escape lets it go the same way, the locked pointer destroyed (`pointer_lock_smoke.py`).
+- A terminal zgx draws, on X11 (`terminal_pane` with the `terminal` feature: the login shell on openpty, read from screen captures by the colours it prints): a command the app types into its session (`Terminal::input`) runs; X11 keys typed into the window reach the shell through the hidden editor at its cursor; Ctrl+C interrupts `sleep 30` and the shell takes the next command at once; a bar `tput cols` wide shrinks with the window, so the grid follows its size; an idle, focused terminal spends no CPU in 2 s (`terminal_smoke.py`). zgx-terminal's own tests run programs on real ptys on all three platforms (openpty, ConPTY): exact cells (wide characters, true colour, SGR), input and echo, Ctrl+C, resizes reaching the program, exit codes, the order of titles, directories, progress and command reports, and, headless, output reaching the rows, typing reaching the program, a session outliving its view and an app's resolver naming what is in front.
 - Cursor styles as a native Wayland client: `wp_cursor_shape_v1` shapes for move, not-allowed, crosshair, a reactive wait and the default (`wayland_cursors_smoke.py`), beside the X11 cursor-image check.
 - An undecorated window's title bar (`Titlebar::Inset`): no window manager frame, its drawn buttons maximize, restore, minimize and close it, a press on its corner resizes it through the window manager, and on its drag strip a double click maximizes and restores it and a drag moves it (`window_buttons_smoke.py`).
 - The desktop's interface font: GNOME's `font-name` from a stand-in portal reaches the gallery's sans-serif text, and on X11 xsettingsd's `Gtk/FontName` comes before it (the window under the portal's "DejaVu Sans 11" and XSETTINGS' "DejaVu Serif 11" is pixel for pixel the serif one) (`desktop_font_smoke.py`).
@@ -83,16 +103,18 @@ Further native Linux probes, each on a private Xvfb/Openbox desktop or a nested 
 - The double-click time follows the desktop's (GNOME's `double-click` from a stand-in portal): at 1000 ms two presses 700 ms apart select a word, at 300 ms two 450 ms apart do not (`double_click_time_smoke.py`).
 - The drag threshold follows the desktop's (GNOME's `drag-threshold` from a stand-in portal): at 24 a press on drag_drop's card moved 12 pixels is no drag and one moved 40 is; with no setting GTK's 8 holds, 6 pixels no drag and 12 one (`drag_threshold_smoke.py`).
 - A title bar's double click follows GNOME's `action-double-click-titlebar` (from a stand-in portal, changed live): glass_counter's drag strip minimizes its window under "minimize", does nothing under "none" and maximizes it under "toggle-maximize" (`titlebar_double_click_smoke.py`).
+- A window's glass asks the compositor to blur behind it (`linux_glass_blur_smoke.py`, glass_counter with `WAYLAND_DEBUG=1` under a headless sway): the window is configured and drawn with no protocol error; where the compositor advertises `ext_background_effect_manager_v1` its surface asks for a background effect and a blur region, where only KWin's blur is advertised it asks KWin's, and where neither is (sway 1.9 here) nothing is asked; on X11 the window runs. A compositor with the protocol (Hyprland 0.57) was checked by hand: `get_background_effect` and `set_blur_region` sent, no error.
 - Middle-click paste follows GNOME's `gtk-enable-primary-paste` (from a stand-in portal): off, a middle click in primary_selection's empty editor pastes nothing though another client owns the primary selection; on, it pastes that (`primary_paste_setting_smoke.py`).
 - Overlay scrollbars follow GNOME's `overlay-scrolling` (from a stand-in portal): on, the scrollbars example's vertical scrollbar is hidden at rest, shows as its view is scrolled with the wheel and hides again 2.5 s after; off, it shows at rest (`overlay_scrolling_smoke.py`).
 - XSETTINGS on X11 come ahead of the portal, as GTK takes them there: xsettingsd's `Net/DndDragThreshold` 30 and `Net/DoubleClickTime` 1000 hold over a stand-in portal's GNOME 8 and 300 (XFCE with the GTK portal installed): 20 pixels is no drag and 40 one, two presses 700 ms apart a double click; changed to 10 and reloaded, 20 pixels drags once the window is activated again. With the portal's `color-scheme` no preference, `Net/ThemeName` "Greybird" makes the primary_selection example light, and changed to "Greybird-dark", dark once its window is activated again (`xsettings_smoke.py`).
 - A touchpad flick coasts on as a native Wayland client of a headless sway: a virtual pointer (`wayland_pointer.py`, `zwlr_virtual_pointer_v1` in plain Python) scrolls with two fingers at 120 Hz and lifts them; the rows still move between 80 and 500 ms after the lift and have stopped by 2 s (`touchpad_fling_smoke.py`).
 - A wheel tape (devtools' `zgx inspect replay`) plays back through a real X11 window's input path: its pixel motion and wheel line, at their times, scroll the window's view by exactly what they hold (`wheel-tape`, a host test in `zgx-desktop`).
+- A web page on Linux (`web_view_smoke.py`, the `web_view_probe` example with the `webkitgtk` feature), on X11 and as a Wayland client of Sway: WebKitGTK's page shows in its box, clipped to its rounded corners, with a zgx square drawn over it (read from screen captures); a click lands at its place on the page, typing reaches the page's field, a wheel scrolls it and its `<select>` popup (a zgx menu) chooses Beta from the keyboard; a `download` link saves nothing in the downloads folder (WebKit's own handling would), and once the app has a download handler (Ctrl+D) saves where it says and only there, its name and type told; Ctrl+F finds the heading's word in the page (`WebView::find`, WebKit's find controller), found with its matches counted, and Ctrl+G a word the page hasn't, not found; a right click on the page's link shows WebKit's menu for it as a zgx menu, whose Copy Link Location copies the link's address (read by xclip, or wl-paste); on X11 the app's `print` and the page's `window.print()` each open GTK's print dialog transient for the app's window, closed by Escape; on X11 the page's file input opens the window's own file dialog (zenity's, with no portal on the bus), and the file typed into it reaches the input; Ctrl+J, which the page takes, stays the page's, Ctrl+K, which it leaves alone, reaches the app's binding, and a reserved Ctrl+L reaches the app and never the page; what the page copies, xclip or wl-paste reads, and what xclip or wl-copy copies, Ctrl+V pastes into the page; on Wayland a selection the page copies reaches other apps with its HTML (`wl-paste --type text/html`), and an image it copies (the clipboard API, a canvas's PNG) as `image/png`; a script evaluates and the page's messages carry its origin. On X11 and on Wayland, with real input, the page's link dragged out drops on a zgx target beside it (its address, the page hearing `dragend`, GTK warning of no drag) and on a GTK window of another process (its address, as a URI list), and its image there as PNG, its bytes from WebKit. On X11 and on Wayland the page's own card dragged onto its drop zone drops there with the data its `dragstart` set (`text/x-card`), and on X11 a file dragged from a GTK window of another process drops on the zone as a `File`, its name, type and size the file's; a file dropped from another app on Wayland is untested. With `--ime`, Pinyin composes 你好 into the page's field through IBus (XIM, its candidates under the page's caret, also when WebKit reports the caret 800 ms late, after the candidates showed: `web-view-ime-slow-replies`) and through Fcitx5 (text-input-v3); with `--transparent` a transparent page shows its box's colour through it; with `--unaccelerated` (`accelerated: false`, the page painted on the CPU) it passes the same checks, and two dots 260 points apart that F8 turns green show, uploaded as parts of a tenth of the page or less (`ZGX_WEB_DAMAGE`), not their box; with `--orca`, over a private AT-SPI bus, the page's document (its heading, field and select) sits under its box, an internal frame, with the box for its ancestor, and, once AT-SPI's registry has given Orca a click's button (else the run fails saying so), Orca reads the page's heading ("Probe heading heading level 1.") from browse mode, where its caret lands or by its previous-heading key, then says "Before page push button." for the app's own button and "Probe field entry." as Tab moves focus from it into the page, onto the page's first field (6 runs of 6 in the container, with no retry). With `--media`, a page served from localhost plays a VP8 WebM past half a second and, after a click, runs an `AudioContext` (WebKitGTK starts no media in a `GtkOffscreenWindow`; a page's window is zgx's own). With `--inspector`, on X11 and Wayland, on a page box large enough for WebKit to dock Web Inspector in (900 × 650), Ctrl+I opens the inspector in a window of its own, the page's viewport never shrinking for it and the page showing as before, and its console, typed into, reaches the page. `web-view-schemes` serves a page from an app scheme (its own origin, a secure context), runs a script before the page's, cancels a navigation by policy and fails a load whose responder was dropped.
 - A launcher's token reaches the first window: on X11 its startup notification ends (`_NET_STARTUP_INFO` on the root window), as a Wayland client of sway it activates its surface with the token (`launch_token_smoke.py`).
 - A file dialog through the desktop portal (xdg-desktop-portal and its GTK backend, on a private session bus): the chooser is modal and transient for the app's window, the path typed into it reaches the app, Escape is no choice rather than an error, and a save starts in the folder and with the name given (`portal_dialog_smoke.py`).
 - A file dialog with no portal on the session bus: zenity's chooser shows, the path typed into it reaches the app, and closing the app's window while it shows ends it (`zenity_dialog_smoke.py`).
 - The catalogue's components over a private AT-SPI bus with real X11 keys (`components_atspi_smoke.py`, on `components_probe`): each one's role and name (radio buttons, spin buttons, combo box, page tabs, trees, a table and its column headers); a field with an error `INVALID_ENTRY`, its `ERROR_MESSAGE` relation the label showing the error (not said again in its description), a valid one not flagged; the data grid as a table of 21 rows (its header's and those not built counted) and 2 columns, saying several rows can be selected, and which are; a tree opening with Right, and right to left with Left, its item saying it is expandable and then open and its child showing in the tree; grid rows selected by the arrows and Shift and copied with Ctrl+C as text and as an HTML table (`xclip`); Enter on a header sorting; and the segmented control, stepper, time field, date picker and tabs answering their keys.
-- Popups past the window on X11: popup_probe's menu shows in its own override-redirect window, typed a popup menu and transient for its parent, past the window's bottom edge, drawn and chosen there; a press on the bare desktop closes it; no popup window exists before one is near, none shows after, and the app is idle; at a scale of 2 its window is its size in the screen's pixels (400 × 404), where the scene put it, drawn to its far corner, and its last item is chosen there (`popup_windows_smoke.py`). The menus, submenus and overlays probes run through popup windows too: a submenu flips at the screen's edge, and a panel hangs past a short window's bottom edge.
+- Popups past the window on X11: popup_probe's menu shows in its own override-redirect window, typed a popup menu and transient for its parent, past the window's bottom edge, drawn and chosen there; a press on the bare desktop closes it; no popup window exists before one is near, none shows after, and the app is idle; at a scale of 2 its window is its size in the screen's pixels (400 × 404), where the scene put it, drawn to its far corner, and its last item is chosen there (`popup_windows_smoke.py`). The menus, submenus and overlays probes run through popup windows too: a submenu flips at the screen's edge, and a panel hangs past a short window's bottom edge. With no compositor (Openbox alone) a rounded menu with a wide shadow has a window its panel's size, its corners cut to the desktop, and the system reports reduced transparency; under picom with its shadows on, the window keeps its margin and picom draws no shadow round it.
 - Drag previews on X11 (under picom): the drag_drop example's card preview shows in its own override-redirect window, drawn, the pointer passing through it (an empty input shape); it follows 30 pointer moves past the window's edge pixel for pixel with no frame drawn in it or the window; released on nothing, it slides back to its card and hides; dropped on the destination, it goes at once; and the app is idle after (`drag_preview_smoke.py`).
 - Drags between windows on X11 (under picom): drag_probe's tab dropped on its other window's strip lands there; over an xmessage window covering that strip it does not, and released there it is torn off; tab_windows' tab torn off below its window opens with the tab's grabbed point under the pointer, to the pixel; that window's only tab moves the window, which follows the pointer to the pixel and stays where it is let go, and dropped on the other window's strip merges into it (`drag_windows_smoke.py`).
 - Where windows open on Linux: on X11 (Openbox) a second window opens a title bar's height down and right of the first; a window with `frame_autosave` moved and resized is saved once the moves settle (the app then killed), and reopens there at its size; maximized and closed at once with Alt+F4 it reopens maximized, and restores to the frame before; at a saved frame no monitor shows it opens on the screen at its saved size. Under Weston it reopens at its saved size, or maximized from its first frame, no buffer drawn at the saved size (Weston's protocol trace) (`window_frames_smoke.py`).
@@ -102,7 +124,9 @@ Further native Linux probes, each on a private Xvfb/Openbox desktop or a nested 
 - No fonts at all: the gallery on Xvfb, its fontconfig listing only an empty directory, draws its window (every control, no text), says once on stderr why its text does not show, and does not panic (`no_fonts_smoke.py`).
 - X screens of 16 and 30 bits: the gallery on Xvfb at each depth shows a window of a 32-bit visual, drawing exactly the pixels it draws on a 24-bit screen, with no panic (`x11_depths_smoke.py`).
 - GL where no Vulkan driver is: the gallery on Xvfb with no Vulkan driver to find starts and draws the same pixels as through lavapipe, with Mesa's GL loaded; with Vulkan, no GL driver is mapped (`gl_fallback_smoke.py`).
-- Popups past the window on Wayland: under sway, popup_probe's menu clicked open with a virtual pointer shows as an `xdg_popup` past the window's bottom edge, exactly where the scene placed it, drawn; its last item, below the window, clicked, is chosen and the popup goes; opened again, a press in the window closes it; the window moved near the output's bottom, the menu flips above its trigger, 4 points off it, and its first item takes a click there. The submenus example's submenu, a popup of its menu, opens beside that menu where the compositor flipped it (48 points down it, at its right edge). A menu of 60 items, taller than the 960-point output, is cut to it by the compositor, laid out 960 high, and scrolled to its last item, which takes a click. A popover with an arrow, flipped above its trigger by the compositor near the output's bottom, is placed there by the scene, its arrow's tip on its bottom edge, centred on the trigger. On outputs scaled 2× and 1.5× (fractional, through the viewporter), the menu's buffer is its size in the output's pixels (400 × 404, 300 × 303), it shows where the scene put it in those pixels, within one, and its last item takes a click. Under Weston, the menu opened by the app sits the same on the content, below the title bar winit draws (`wayland_popups_smoke.py`).
+- Decision controls on X11 (`decision_probe_smoke.py`, the `decision_probe` example): a plugin's overflowing popover shows in a window of its own, then none once a `ui.decision` is up, counted by the X server, and with a plugin's modal and its nested popover up; the app's own popup keeps its window. Real pointer clicks at the control's button reach it through all of that. On macOS the same example counts the system's windows itself; on Windows this is by reading the code (the hold is in compose, and every backend draws `Scene::popups`), not run.
+- Sealed regions on X11 (the same smoke, `--sealed`): a plugin's modal over a `ui.sealed` page, and one it opens in its own page, which stays in that page's box; real pointer clicks reach the region's own buttons through each, and no popup shows in a window of its own. An oversized node and modal in the page show no further than its box, and real clicks past its right and bottom edges, in blank space where nothing paints after it, reach nothing of the plugin's.
+- Popups past the window on Wayland: under sway, popup_probe's menu clicked open with a virtual pointer shows as an `xdg_popup` past the window's bottom edge, exactly where the scene placed it, drawn; its last item, below the window, clicked, is chosen and the popup goes; opened again, a press in the window closes it; the window moved near the output's bottom, the menu flips above its trigger, 4 points off it, and its first item takes a click there. The submenus example's submenu, a popup of its menu, opens beside that menu where the compositor flipped it (48 points down it, at its right edge). A menu of 60 items, taller than the 960-point output, is cut to it by the compositor, laid out 960 high, and scrolled to its last item, which takes a click. A popover with an arrow, flipped above its trigger by the compositor near the output's bottom, is placed there by the scene, its arrow's tip on its bottom edge, centred on the trigger. Under Weston (whose `xdg_wm_base` is v5; sway 1.9's v2 has no reposition, so there it shows anew), a popover grown and shrunk a step a frame (`POPUP_PROBE_GROW`, as an animated one is) stays one popup the whole time, moved and resized in place (`xdg_popup.reposition`, at least 60 times), never shown anew. On outputs scaled 2× and 1.5× (fractional, through the viewporter), the menu's buffer is its size in the output's pixels (400 × 404, 300 × 303), it shows where the scene put it in those pixels, within one, and its last item takes a click. Under Weston, the menu opened by the app sits the same on the content, below the title bar winit draws (`wayland_popups_smoke.py`). Under Weston, a menu opened between pixels has a buffer exactly the size its viewport shows it.
 - Drags out to other apps on Wayland: under sway, drag_probe's chip dragged with a virtual pointer onto a GTK window of the probe's own (`GDK_BACKEND=wayland`) is taken as `UTF8_STRING`, under its icon, and the source hears it accepted; back over its own window, or over a GTK target that refuses it and hears it move, nothing is dropped and the source hears it not taken; a text field's selected words, pressed on and dragged out onto the GTK target, arrive there as text; drag_probe's tab, carrying nothing to other apps, drops on the Other window's strip (accepted) and, let go on the bare desktop, is torn off; a window's only tab moves its window with the pointer, by the compositor's move (`wayland_drag_out_smoke.py`).
 - Text dragged in from other apps on Wayland: under sway, the same GTK source (`GDK_BACKEND=wayland`) dragged with a virtual pointer onto drag_probe's Words field drops its text at the field's end, hovering changing nothing, and the source hears it taken; let go over the chip it is refused (`wayland_text_drop_smoke.py`).
 - A window manager's resize waits for zgx's frames on X11: window_probe's window names `_NET_WM_SYNC_REQUEST` and its counter, and through an Openbox Alt and right button resize of 12 steps the counter goes from 0 to Openbox's last request, the window takes the pointer's size and a frame is drawn for each step (`resize_sync_smoke.py`).
@@ -123,7 +147,33 @@ python3 scripts/linux_smokes.py --only wayland --only primary
 
 CI builds only the examples the probes run (`linux_smokes.py --fixtures` prints them as `cargo build` flags: every `{bin}/name` in a probe's command, and `FIXTURES`, those a probe runs by name from the examples directory). A probe that starts another example by name adds it to `FIXTURES`.
 
-CI runs on every push to main and every pull request (`.github/workflows/ci.yml`): a Linux job (fmt, stylua, clippy, `zgx lint` and `zgx check` over every example script, unit and doc tests (zgx-script's included), Vulkan rendering tests on llvmpipe, then every native probe above, four at a time), a macOS job (clippy, tests, Metal rendering and readback, component window lifecycle) and a Windows job (check, core and bundle tests, Direct3D 12 border and transform pixel tests on WARP). Probes wait for what they drive (the window manager, IBus's XIM server and engine, a mapped window) rather than sleeping, so a loaded runner slows them without failing them.
+CI runs on every push to main and every pull request (`.github/workflows/ci.yml`): a Linux job (fmt, stylua, clippy, `zgx lint` and `zgx check` over every example script, unit and doc tests (zgx-script's included), Vulkan rendering tests on llvmpipe, zgx-3d's on llvmpipe too (`ZGX_REQUIRE_GPU`, or they'd pass without drawing where there's no GPU), then every native probe above, four at a time), a macOS job (clippy, tests, Metal rendering and readback, component window lifecycle) and a Windows job (check, core and bundle tests, Direct3D 12 border and transform pixel tests on WARP). Probes wait for what they drive (the window manager, IBus's XIM server and engine, a mapped window) rather than sleeping, so a loaded runner slows them without failing them.
+
+## Linux desktops, headless
+
+`scripts/linux_desktops_smoke.py` (`--only linux-desktops`) runs a window and a popup on each desktop a machine has, in software, with no GPU or screen. A desktop not installed is skipped and named, so CI covers only what its packages include. Everything is drawn by llvmpipe, so it says nothing about GPU speed.
+
+| Desktop | How it runs | Checked |
+| --- | --- | --- |
+| KWin 5.27, Wayland | `kwin_wayland --virtual`, GL compositing on llvmpipe, blur effect loaded | popup_probe's menu is drawn; glass_counter's glass blurs hard stripes behind it (2.4% of their roughness kept) |
+| GNOME Shell 46, Wayland | `gnome-shell --headless --unsafe-mode` | the menu is drawn |
+| sway, Wayland | `WLR_BACKENDS=headless`, pixman | the menu is drawn; glass shows the stripes sharp (62.6% kept), as sway has no blur protocol |
+| labwc 0.7, Wayland | `WLR_BACKENDS=headless`, pixman | the menu is drawn |
+| Weston 13, Wayland | `--backend=headless` | the menu is drawn |
+| Openbox, X11 | Xvfb, no compositor | the menu is drawn |
+| Openbox and picom, X11 | Xvfb, `picom --backend xrender --shadow` | the menu is drawn |
+| xfwm4, X11 | Xvfb, `--compositor=on` | the menu is drawn |
+| KWin 5.27, X11 | Xvfb, `kwin_x11` | the menu is drawn |
+| Mutter 46, X11 | Xvfb, `mutter --x11` | the menu is drawn |
+
+On each, `WindowCapabilities::blur_behind` is true on KWin alone, and on each but sway, which doesn't maximize a window that asks, `WindowContext::maximized` follows the system. Those results are from an Ubuntu 24.04 arm64 container with no `/dev/dri`. `mutter --headless` also starts, but has no capture of its own, so it isn't in the script. fluxbox and i3 were looked at by hand on X11 and aren't either.
+
+Not run: Wayfire stops without a DRM device, which a container doesn't have. Hyprland has no Ubuntu 24.04 package and wasn't built; it is expected to stop the same way.
+
+Two things seen only with no GPU, neither of them in zgx as far as these runs show:
+
+- With no DRM device, Mesa's Vulkan device-select layer can wait for ever under KWin as an app enumerates GPUs, so its window never shows. The script disables the layer (`VK_LOADER_LAYERS_DISABLE=*MESA_device_select*`) when there is no `/dev/dri`.
+- KWin 5.27 shows a buffer with padded rows sheared. lavapipe pads an odd width (stride 816 for 201 pixels) and declares it, and the same buffers draw correctly on sway, Weston and GNOME. Real GPUs use dmabuf, which wasn't run here.
 
 ## Platform coverage
 
@@ -136,6 +186,10 @@ Recorded native runs use `scripts/platform_smoke.py`, which creates and cleans u
 | Linux Wayland, headless Weston/pixman | Captured actual gallery surface, semantic snapshot, timed close, multi-window survival/close-policy/exactly-once cleanup | This historical headless run had no input seat; see the newer nested-seat input run below |
 | macOS ARM64 target | `cargo check --workspace --all-targets --target aarch64-apple-darwin --locked` passes from Linux | Type checking only: no native linking, execution, Metal or AppKit interaction evidence |
 | macOS 26, Apple silicon, two 2× displays: popups, drags and windows ([multi-window](multi-window.md)) | `popup_probe`, `drag_probe`, `window_probe` and `corners_probe` post AppKit events to their own windows: menus past the window, press-drag-release, close on deactivation and minimize, drags within and between windows, tear-off, a window moved by its only tab, the Window menu, cascading, saved frames; text another app drags in (a pasteboard of the probe's own handed to the window's dragging destination as AppKit hands it one: refused over the chip, a copy over the Words field, nothing changed by hovering, dropped there at its end, focused and selected, `TEXT_DROP`). By hand (2026-10-23): ⌘` cycles `tab_windows`' windows | Drops into other apps, fullscreen and Space switches, and displays of different scales are not probed (a synthetic drag-out would drop at the real pointer; fullscreen takes the screen) |
+| macOS 26, Apple silicon: focus as Escape closes a popup | `escape_focus_probe` (`scripts/macos_escape_focus_probe.py`) posts AppKit key and mouse events to its own windows, its menu in a popup window of its own: opened with nothing focused, nothing is focused after Escape (not the window's first button); opened after a click on a button, that button has focus back without a ring; opened with Return and moved with an arrow, its trigger has focus with its ring | Run locally, as `popup_probe` and the other AppKit-event probes are (CI's macOS job runs none of them): all five checks passed on 2026-11-01. The ring is read from the input's modality (`focus_visible_now`), not a capture. The same rules on X11, Wayland and Windows come from the same scene code (popup windows keep their content's focus in the parent's scene): their own probes don't press Escape |
+| macOS 26, Apple silicon: a double click on a `window_drag` region zooming the window | `double_click_zoom_probe` (`scripts/macos_double_click_zoom_probe.py`) posts an AppKit double click to its own window: each size the animation passes through reaches the app while the window has it (0 of 42 sizes stale, 41 of 42 before the fix, the first arriving 350 ms late) | Run locally |
+| macOS 26, Apple silicon: sliders to VoiceOver | `scripts/macos_ax_slider.swift` reads the `atspi` example's two sliders through the accessibility API (as VoiceOver does) and moves them, 5 of 5 runs: a row of the app's own with `role = "slider"` and `ui.slider` are each an `AXSlider` whose `AXValue` is its value text ("Medium", "25 percent"), with its minimum and maximum (1–4, 0–100) and `AXIncrement`/`AXDecrement`; each action moves it by its step (2→3→2, 25→30→25), as the app's own log shows | Run locally (2026-11-01); it needs Accessibility permission for the process running it, so CI does not run it. It waits up to 5 s for `AXValue` to follow an action, which trails the app's tree update |
+| Windows 11 25H2: sliders to UI Automation | The `atspi` example's two sliders through UI Automation (`System.Windows.Automation`, `scripts/windows_uia_dump.ps1`): each a `Slider`, its RangeValue 2 in 1–4 with SmallChange 1 and 25 in 0–100 with SmallChange 5, its Value pattern the value text ("Medium", "25 percent"); RangeValue's `SetValue` moves each, read back as 3 ("High") and 65 ("65 percent"), as the app's own log shows (`effort=3 amount=65`) | Run on WING-PC (2026-11-01). `SetValue` was called on the window in the background, a system notification holding the foreground throughout (UI Automation's patterns need none) |
 
 All native rendering above uses llvmpipe, not a hardware GPU. Reproduce the isolated runs with:
 
@@ -147,9 +201,37 @@ python3 scripts/platform_smoke.py target/debug/examples/gallery \
 
 The script requires Xvfb, Openbox, xdotool, Weston, weston-screenshooter and Python Pillow. It writes screenshots, compositor logs and `results.json`; the Wayland screenshot check rejects an absent gallery surface. X11 checks assert actual native window dimensions and the model's final logical viewport, so merely issuing a resize command cannot pass validation.
 
+## Text in every script
+
+Real text, shaped in each system's own fonts, as an editor shows, walks, selects and deletes it. [`text_scripts.rs`](../crates/zgx-gpu/tests/text_scripts.rs) runs in every platform's CI job, beside `editor_selection.rs`. The [probe](platform-validation/text-scripts/app.luau) is the same text in a real window (`zgx-run --inspect`), its marks row selected with `zgx inspect drag`. The captures are below.
+
+| Check | macOS 26 (Apple silicon) | Linux (Xvfb, llvmpipe) | Windows 11 (WING-PC) |
+| --- | --- | --- | --- |
+| ZWJ, flag, tag-flag, keycap and skin-tone emoji: one glyph each | Pass (Apple Color Emoji) | Pass with Noto Color Emoji; a box per code point without an emoji font | Pass (Segoe UI Emoji); the keycap only since this change, as it drew in black from Segoe UI before (a control without the fix fails the test on that font). Country and England's flags draw as letters and a black flag, as in Windows' own apps: Segoe UI Emoji has no flags |
+| The same emoji: a click never puts the caret inside one; the arrows, Shift+arrow, Backspace and Delete take each whole; side-by-side flags stay apart | Pass | Pass | Pass |
+| A click in mixed-direction text (Hebrew, Arabic, numbers inside them, brackets) puts the caret at the nearest place a caret can be | Pass | Pass | Pass |
+| The arrows walk that text in the order it shows, stopping at every place, including after a number that ends a right-to-left run (fixed in this change) | Pass | Pass | Pass |
+| A selection in that text is one logical range; its pieces never overlap and are as wide as the characters they hold | Pass | Pass | Pass |
+| Combining marks (decomposed Latin, Vietnamese, Hebrew points, Devanagari, Thai): the caret stops only between graphemes; a word selects in one rounded piece, its marks inside | Pass, in the window too | Pass, in the window too | Pass; the window's selection wasn't captured (a system notification held the foreground) |
+| Backspace after a mark: the platform's rule (macOS: an accent with its letter, one mark at a time in Hebrew to Thai; elsewhere one code point, emoji whole); Delete takes the grapheme | Pass | Pass | Pass |
+| Chinese and Japanese: no line starts with closing punctuation, small kana, `々` or `ー`, and none ends with opening punctuation, from 5 em wide | Pass, in the window too | Pass with Noto Sans CJK, in the window too | Pass, in the window too |
+| A Japanese line's kanji come from its kana's font, not the system language's Chinese one (fixed in this change: macOS drew them in Arial Unicode MS, Windows in Microsoft YaHei UI); a Chinese line's stay Chinese | Pass | Pass with Noto Sans CJK | Pass; the window wasn't captured (a system notification held the foreground) |
+| Chinese text takes the system's Chinese face in each Chinese (`chinese_text_on_macos_takes_the_systems_chinese_face_in_each_chinese`) | Pass: PingFang SC, TC and HK; on macOS 26.4 their shapes are only in Apple's `hvgl` table (FontServices' Reserved `PingFangUI.ttc`), which Core Text draws (`core_text_glyphs`); elsewhere such a face is passed by for Heiti SC or TC (Arial Unicode MS before 22fb994f7, PingFang drawn blank from it to 0.1.7) | Not run: macOS only (Noto Sans CJK SC, TC, HK by the locale) | Not run: macOS only (Microsoft YaHei UI, JhengHei UI, MingLiU_HKSCS) |
+| Chinese text on macOS draws: simplified and traditional light more pixels than Latin of as many characters (`chinese_text_on_macos_draws`) | Pass on macOS 26.4 (it fails with PingFang's `hvgl`-only faces taken, as 0.1.7 took them) | Not run: macOS only | Not run: macOS only |
+| A glyph drawn through Core Text (for faces swash can't draw) matches swash's of the same unhinted glyph: from 18 px coverage within 15% of its ink, ink within 3% and placed within 0.1 px, at subpixel offsets; at 13 px placed within half a pixel and ink within 12% (`core_text_glyphs`) | Pass on macOS 26.4 (fails with the subpixel offset dropped) | Not run: macOS only | Not run: macOS only |
+| A text's `lang` decides its Han characters' fonts: a Chinese quote in a Japanese app takes a traditional Chinese face, over the app's language and a line's kana, and a span's over its paragraph's (`a_texts_lang_decides_its_han_fonts_over_its_kana_and_its_paragraphs`) | Pass (PingFang TC) | Pass with Noto Sans CJK; skipped on CI's runner, which has no traditional Chinese font | Pass on WING-PC (Microsoft JhengHei; without the Chinese lists, simplified Microsoft YaHei UI) |
+
+The fonts are the systems' own: Apple's on macOS, and Windows' on WING-PC. Linux has whatever its distribution installs: CI's runner has DejaVu and Droid Sans Fallback, with no color emoji font. The Linux window above used Ubuntu 24.04's Noto Color Emoji, Noto Sans CJK and Noto Sans (Hebrew, Arabic, Devanagari, Thai), loaded from a private `XDG_DATA_HOME`. The same tests also pass with DejaVu alone, where emoji and CJK draw as boxes.
+
+Narrower than 5 em, a run that may not break (a closing mark, an opening quote and the characters held to them) can be wider than the line. The line then breaks inside it, as text that can't fit must, and a `“` can end it.
+
+[macOS](platform-validation/text-scripts/macos.png) · [Linux](platform-validation/text-scripts/linux.png) · [Windows](platform-validation/text-scripts/windows.png) (WING-PC's `PrintWindow` capture, as `zgx inspect snapshot` captures only macOS windows; the marks row unselected).
+
+Autocorrect and smart punctuation (`View::autocorrect`, `smart_punctuation`) go through macOS's `NSSpellChecker`. Windows' spelling service (`ISpellChecker`, en-US) has no corrections of its own, giving no replacement for "teh" on WING-PC, and no smart quotes or dashes, so both options change nothing on Windows and Linux.
+
 ## Unverified platform behavior
 
-Real macOS windows, Metal presentation, native macOS clipboard/IME/accessibility interaction, Wayland/macOS transparent-window composition and hardware-GPU throughput/energy have not been validated here. Native X11 alpha composition now passes under the owned picom setup recorded below. A private live Linux AT-SPI client now validates text, actions, state changes and accessibility reactivation. Orca end-user usability remains unvalidated; bus-client checks do not establish the complete screen-reader experience. Native IBus/libpinyin composition, cancellation, focus changes and candidate placement now pass on X11; Wayland and macOS IME services remain unvalidated.
+Real macOS windows, Metal presentation, the native clipboard (Unicode exchange with TextEdit), dead-key composition and the accessibility tree and actions are observed on an Apple M5 Max in the [Mac continuation packet](platform-validation/macos-continuation/README.md), and the macOS suite records hardware-GPU throughput and energy (`docs/results/suite-macos-*`: GPU Mcycles per second, GPU system watts). Still unvalidated: macOS candidate (Pinyin) input and a complete VoiceOver usability audit. Transparent-window composition is checked on X11, Wayland and macOS ([below](#native-macos-transparent-window-composition)). Native X11 alpha composition now passes under the owned picom setup recorded below. A private live Linux AT-SPI client now validates text, actions, state changes and accessibility reactivation. Orca end-user usability remains unvalidated; bus-client checks do not establish the complete screen-reader experience. Native IBus/libpinyin composition, cancellation, focus changes and candidate placement now pass on X11, and Wayland text-input-v3 composition passes a paced Sway/Fcitx5 smoke and a burst one ([below](#real-wayland-input-method-composition)). macOS candidate input is unvalidated.
 
 Use a real display and equivalent hardware renderer configurations for performance conclusions. In llvmpipe measurements, process CPU includes CPU execution of GPU shaders and driver allocations can dominate RSS. Keep these results distinct from hardware-backed measurements and from core microbenchmarks.
 
@@ -169,7 +251,7 @@ A [same-binary backend-initialization ablation](results/component-memory/README.
 
 The primary-backend build passes a fresh native X11 1.5×/2× input/resize smoke and Wayland presentation/multiwindow smoke; [artifacts](platform-validation/primary-backend/results.json) preserve those runs. That historical Wayland run used a headless compositor without an input seat.
 
-Rendering now stops before layout preparation/scene flushing for native-confirmed hidden, minimized, occluded or zero-sized surfaces. Unit tests preserve queued damage, cancel retry deadlines and prevent redraw requests from overriding native occlusion. The [hidden-update native regression](platform-validation/hidden-updates/results.json) verifies unmapped X11 states, 40 model updates and 42,000 expected latest-state pixels after both show and restore. A 100,000-node-replacement core regression bounds stale dirty generations without any frame flush, preventing hidden virtual-list churn from growing the queue indefinitely. X11 minimized-property roundtrips are skipped for focused and already-hidden windows.
+Rendering now stops before layout preparation/scene flushing for native-confirmed hidden, minimized, occluded or zero-sized surfaces. Unit tests preserve queued damage, cancel retry deadlines and prevent redraw requests from overriding native occlusion. The [hidden-update native regression](platform-validation/hidden-updates/results.json) verifies unmapped X11 states, 40 model updates and 42,000 expected latest-state pixels after both show and restore. A 100,000-node-replacement core regression bounds stale dirty generations without any frame flush, preventing hidden virtual-list churn from growing the queue indefinitely. X11 minimized-property roundtrips are skipped for focused and already-hidden windows. A window made hidden (`WindowOptions::visible`) is checked by `hidden_window_x11_smoke.py`: not mapped before it shows, and from its mapping to its first frame its theme's background on screen, never black (without the background set, a run catches black); `hidden_window_probe.py` checks macOS, where it appears drawn.
 
 Keyed constructor recovery regressions cover both public components and low-level scopes: a late failure after an earlier new child has mounted releases all staged subscriptions/resources, preserves the original child order/identity/local state and permits successful retry. The complete workspace passes 214 tests, 15 doctests, strict Clippy, formatting and macOS ARM64 all-target cross-check after this change.
 
@@ -206,6 +288,13 @@ resize flipping, Tab containment, nested popups and dismissal. The final integra
 check logs are retained with that evidence. Closed panels keep their subscriptions;
 this is not a claim that all hidden-subtree computation is suspended.
 
+
+Standard Edit items (Copy, Cut, Paste, Select All, Undo, Redo) in zgx's menu
+bar outside macOS do what their shortcut does to the focused editor and, with
+nothing to take them, reach the app as their action: on X11, the
+`standard_menu_items` example chooses Edit → Copy and an ordinary item through
+`WindowHandle::dispatch_menu_action` and hears `[standard:copy, control]`
+(`standard-menu-items` in `linux_smokes.py`). On macOS they stay AppKit's.
 
 Declarative menus now expose accessible menu/item roles, trigger popup/expanded
 state, retained component/keyed items, disabled-item skipping, bounded Unicode
@@ -277,7 +366,10 @@ editor changes, with two model-level regressions supplementing native evidence.
 
 [Held-key focus transfer](platform-validation/held-keys/README.md) verifies that
 synthetic X11 key presses/releases cannot type or activate controls, while actual
-subsequent input works. [Live Wayland scaling](platform-validation/dpi-transition/README.md)
+subsequent input works. The held-modifiers probe (`scripts/held_modifiers_smoke.py`)
+presses Super and Shift alone with XTEST and checks that `Ui::modifiers` reports each
+going down and up. It then holds Super while the window is minimized, and checks that
+losing focus clears it. [Live Wayland scaling](platform-validation/dpi-transition/README.md)
 checks 1×→2×→1× with native protocol events, fixed physical surface size, correct
 logical viewports and caret coordinates, actual pointer edits, and exactly doubled
 editor pixels at 2×. The application cannot fall back to X11 in that test.
@@ -376,6 +468,14 @@ collapsed states: a data grid reads as a table of all its rows, its cells
 with their row, column and header, and a tree item as open or closed
 (zgx-desktop's `atspi_tests`).
 
+Sliders, `ui.slider` and an element of the app's own with `role = "slider"`,
+reach AT-SPI in CI's `atspi_smoke.py` (the `atspi` example): each a slider
+with its value, range and minimum increment (its step), and a value set
+through AT-SPI moving it (`ui.slider` to 65, the app's own to 3). Where the
+client's libatspi reads it, its value text (`Value.Text`, AT-SPI 2.46, added
+in the vendored bridge) is checked too, and follows the set value ("High").
+macOS and Windows read the same sliders (Platform coverage).
+
 [Image fitting](platform-validation/image-fit/README.md) now supports local fluent
 Fill/Contain/Cover/None/ScaleDown styles with centered padded clipping. Core
 checks cover ownership, reactive precedence, intrinsic sizing and idle updates;
@@ -465,8 +565,18 @@ removing SetValue. Native X11 clipboard/input tests and isolated real IBus
 composition cancellation pass, along with the existing two IME suites.
 [Archived source, commands and results](platform-validation/read-only/README.md)
 include 497 tests, 29 doctests, Clippy, formatting and the macOS cross-check.
-Native macOS behavior and arbitrary delayed Wayland server commits remain
-outside this evidence.
+Arbitrary delayed Wayland server commits remain outside this evidence.
+
+On macOS, `scripts/macos_read_only_probe.py` (the `read_only_probe` example)
+posts AppKit events to its own window and calls its own text input view: a
+click focuses the read-only editor, a letter, Backspace and Return change
+nothing, Command-A selects the whole text and an arrow then moves the caret,
+and an input method's marked and committed text sent straight to the view
+leave no composition and no text (a real input method never gets that far:
+winit hands keys to input methods only while IME is allowed, and a read-only
+editor disallows it). 10 of 10 pass on an Apple M5 Max (macOS 26.4); with the
+editor made editable, 7 fail. Copying is not probed: it would write the
+user's pasteboard.
 
 ## Initial binding ownership and disposal
 
@@ -613,7 +723,7 @@ line endings, empty rows and trailing whitespace.
 
 The fresh owned X11 selection smoke passes nine stages, including real native
 Shift-click, double/triple clicks, reversed word dragging, wrapped line selection,
-fourth-click reset and read-only input rejection. Pointer-button chord/capture
+a fourth click keeping the paragraph and read-only input rejection. Pointer-button chord/capture
 and native IBus IME regressions also pass. The final integrated build passes
 555 ordinary tests, 29 documentation examples, strict Clippy, formatting, and
 macOS ARM64 cross-checking. Native macOS and hardware GPU execution remain
@@ -659,6 +769,29 @@ and binary hashes were independently verified. See the
 Linux native rendering uses llvmpipe; native macOS and hardware GPU evidence
 remain outstanding.
 
+
+## Automated accessibility audit
+
+`zgx-desktop`'s `accessibility_audit` test projects the widget gallery and 11
+Luau examples (catalog, dashboard, mail, chat, team, sketch, code editor,
+notes, popups, selectable, composer states) into the AccessKit tree the
+platform adapters receive, with labels made from state, and checks every
+node: controls, images and dialogs named; controls pressable, focusable and
+settable; check boxes, switches, radios and tabs saying their state, and
+sliders and progress their value and range; alerts and statuses live, and
+invalid fields saying why. It walks Tab from nothing focused: every
+focusable node outside an arrow-key group must be reached, and focus must
+come round (Control-Tab leaves a code field, Escape a modal scope). The
+catalogue is audited again with each of its toasts, menu, popover and dialog
+open, and the form fixture with its errors. Linux and macOS CI run it; any
+finding fails.
+
+It found and fixed: split dividers keeping every key, Tab included (a trap
+in every split view); alerts not live unless they said so; unnamed icons
+inside buttons read as bare images; and in the examples a focusable item
+with no role, an icon-only button with no name and a popover its button
+never opened. It needs no window and no permission, so it is no VoiceOver
+usability audit: what a person hears and how it flows remains a manual check.
 
 ## Native X11 transparent-window composition
 
@@ -710,6 +843,53 @@ This covers Sway nested over X11 with pixman and a llvmpipe-rendered client.
 Native macOS, hardware GPU composition, compositor backdrop blur and OS-native
 blur materials remain unverified.
 
+## Native macOS transparent-window composition
+
+The same fixture, run with `--composition` on a Mac, checks what the window
+server composites over the desktop, read in the process: no screen capture,
+so no Screen Recording permission. `WindowHandle::debug_composition` reports
+the native window's opacity and background, every layer of its tree (from
+the frame view's down) and the premultiplied pixels of the IOSurface its
+layer shows. Five stages (initial, colour change, hidden panel, restored,
+resized from 320x240 to 400x300 points) check that:
+
+- the window is not opaque and its background has alpha zero;
+- exactly one visible layer shows the surface read, and neither it, its
+  ancestors nor any layer of the content view is opaque or has a background;
+- eight sample positions (nine after the resize) hold the panels' premultiplied colours, their
+  source-over overlap, alpha zero where nothing is drawn (including the
+  area a resize adds) and alpha 255 on the opaque control, within two.
+
+It passes on an Apple M5 Max (macOS 26.4) at 2x. As a control, the same run
+with the window made opaque fails every kind of check above.
+`scripts/macos_native_validation.py` runs it on each macOS CI job. This
+verifies everything the window server is given; its own blending onto the
+desktop is not observed, which would need a capture.
+
+## A web page under glass on macOS
+
+`web_view --fixture` checks a WKWebView page in a zgx window from AppKit's
+own state, with no screen capture. The checks cover:
+
+- the page's frame, rounded cuts and CSS width following its node;
+- the composer's frosted backdrop shaped to its node, between the page and
+  the overlay plane;
+- clicks reaching WebKit or zgx by where they land, and focus going both ways;
+- the page hiding and showing again in place.
+
+The frosted menu opens past the window's right edge, so it shows in a popup
+window of its own (since 8b94376d1). Its backdrop is AppKit's material
+behind the panel there, which the report lists as an `NSVisualEffectView`
+at the menu's box with its 14-point radius; once the menu closes, it's
+gone. Before popup materials were reported, the check failed on every
+macOS run from that commit on, though the menu showed its glass; with
+`ZGX_POPUP_WINDOWS=0` (the menu inside the window) it passed.
+
+It passes 2 of 2 runs on an Apple M5 Max (macOS 26.4). It isn't in CI: the
+macOS runners draw no backdrops at all, so all four backdrop checks report
+none there (the composer's in-window one too), whatever zgx does. Run it
+locally: `cargo run -p zgx-desktop --example web_view -- --fixture`.
+
 ## Real Wayland input-method composition
 
 An isolated Sway/Fcitx5/Pinyin session exercises actual text-input-v3 preedit and
@@ -719,6 +899,12 @@ unset; protocol logs show native enable, cursor rectangle requests, preedit and
 commits. Candidate popup placement is not asserted. Private D-Bus disables
 service activation to avoid unrelated portal processes and mounts. CI installs
 the explicit input-method dependencies.
+
+`wayland-input-modes` (`wayland_ime_smoke.py --input-modes`) runs `native_ime
+--input-modes` in the same session: focusing its email field, then its numeric
+one, the client sends each field's content purpose with the input method's
+enable (`set_content_type` with email, then digits), as HTML's `inputmode`
+asks. What an input method or on-screen keyboard makes of it is not asserted.
 
 The [initial passing run](platform-validation/wayland-ime/native/result.json)
 and [metadata](platform-validation/wayland-ime/metadata.json) preserve 162 inputs
@@ -734,6 +920,68 @@ is also preserved. Functional smoke tests now await client-visible preedit
 between characters. Passing them does not resolve these burst failures or prove
 rapid-input reliability. Transaction backlogs and delayed stale serials remain
 open compatibility work.
+
+The burst loss was zgx's. `wayland_ime_smoke.py --burst` (`wayland-ime-burst`)
+types "nihao" three times at 30 ms a key with nothing awaited between, each
+round's full preedit to show and its word to commit. Before the fix it failed
+5 runs in 10 (3 exactly as recorded above, the editor stopping at `n`; 2 on
+the harness's start). The trace showed why: Fcitx's first preedit
+(`preedit_string("n", 0, 1)`) moved the caret, zgx committed a new cursor
+rectangle right after its `done`, and the compositor's next input-method
+`done` made every update Fcitx already had in flight stale (input-method-v2
+drops a commit whose serial is behind), so they never reached the client. While
+a composition shows, a Wayland window's input-method area now stays where it
+began (the caret then), as candidates stay under a native field's marked text,
+and moves again when the composition ends: text-input-v3 asks a client to hold
+its pending state until a `done` with a matching serial. With it, 10 runs in 10
+pass, 4 cursor rectangles a run where there were 17.
+
+## Windows input methods with installed languages (manual review)
+
+`windows_tsf_chinese_smoke.py` (Microsoft Pinyin) and
+`windows_tsf_japanese_smoke.py` (the Microsoft Japanese IME), each through
+the Text Services Framework and through IMM32 (`--imm32`), run on WING-PC
+with Chinese (Simplified) and Japanese installed, a person watching. They
+are manual-review checks, not CI checks: CI has no language packs, and the
+probes print PENDING there.
+
+Oct 28, 2026, WING-PC (main 810a9da1):
+- **Pinyin:** passed through both paths. At b4e75f31, 4 of 4 (TSF ×2,
+  IMM32 ×2), every run ending exactly `first="你好" second=""`; at f9b8c071
+  again. No prompts appeared, and the cloud candidates stayed off.
+- **Japanese through IMM32:** passed at f9b8c071: the selected candidate
+  committed (日本語) and the target clause was underlined thick.
+- **Japanese through the Text Services Framework:** failed at f9b8c071 on
+  the probe, not zgx. `native_ime --open-ime` opens the IME through IMM32,
+  which doesn't reach a TSF window, so it stayed in direct input and
+  "nihongo" was typed as letters. `--open-tsf-ime` (the framework's
+  open-close and conversion compartments) replaces it; its rerun is next.
+- **Japanese reconversion (#886):** selecting 日本語 and pressing Convert
+  opened the candidates below it; Enter kept 日本語.
+
+What keeps them from accepting a prompt:
+- the keys they send: Pinyin gets letters, digits and Escape only;
+- a settings tripwire on the input methods' preferences, which stops a
+  probe on the keystroke that changed them and puts them back.
+
+Windows 11 draws its candidate UI in TextInputHost's "Windows Input
+Experience" window (a `Windows.UI.Core.CoreWindow` under an
+`ApplicationFrameWindow`), which `EnumWindows` doesn't list while the
+candidates show, so a check of new windows never sees it. Hit-testing the
+screen over the candidates (`WindowFromPoint`) finds it, and its UI
+Automation tree is readable: Menu "Microsoft Candidate UI" > List
+"Candidate Item Panel" > the candidates, and the toolbar buttons Previous
+Page, Next Page, Emoji and Symbol and Search Suggestion (the Japanese IME
+adds a "Pager" menu of "Page N" buttons, and both lay these out in unnamed
+Panes). The guard
+(014a4338) hit-tests just below the composition before every key and
+stops on anything else in that tree. Its first runs found the live host
+and stopped, sending nothing after the first key, on parts of ordinary
+candidate lists it didn't yet allow (unnamed Panes, the Japanese pager),
+and with "Next Page" taken off its list (`ZGX_GUARD_WITHOUT`) stopped on
+that button: input is blocked where it should be. With those parts allowed,
+its passing runs are next. The person's review of the screenshots
+stays part of each run.
 
 ## Wayland model and read-only composition cancellation
 
@@ -788,7 +1036,9 @@ duplicate/constructor rollback, reactive notification suppression, empty/shrunk
 lists, disposal and explicit scroll requests made by callbacks. Fixed-height
 lists receive the same callback request preservation fix. GPU damage/full-redraw
 comparison and 13 native stages pass; at most 14 rows are mounted for 100,000
-items. Heights are application-supplied, not automatically measured from text.
+items. Heights here are application-supplied; `measured_virtual_list` (zgx-script's
+`ui.list { measured = true }`) now measures mounted rows' natural content, covered
+by `tests/composition_measured_list.rs`.
 The recorded core microbenchmark is separate from GUI CPU/RSS comparisons.
 
 
@@ -923,6 +1173,129 @@ changes. It checks that ⌘F opens the bar, that the one match, in a
 transcript row of 10,000 the list had not mounted, is found and counted,
 that the transcript scrolls to it, and that Escape closes the bar. Passed
 on macOS 26 (M5), 2026-10-26.
+
+## macOS shortcuts while a page or a terminal has the keyboard
+
+`scripts/macos_key_routing_probe.py` runs the key_routing_probe example
+(`--ghostty`: with a terminal too) and posts keys to its own queue
+(`-[NSApplication postEvent:atStart:]`, as the keyboard's arrive; the
+keyboard and other apps hear nothing): a menu item's key nothing else uses
+(⌘U), a menu item's key the page takes and Ghostty binds (⌘K), and a zgx key
+binding in no menu (⌘⇧L). With zgx's own box focused all three fire. With
+the page focused it hears all three, and ⌘U and ⌘⇧L, which it leaves alone,
+still reach the app while ⌘K stays the page's; with the terminal focused ⌘U
+and ⌘⇧L reach the app and ⌘K stays Ghostty's. AppKit's own menu keys act
+with each focused: ⌘H hides the app, ⌘M minimizes the window and ⌘Q quits.
+With `--reserved`, ⌘K (a menu item's key, `Application::reserved_shortcuts`)
+and ⌘⇧L (`KeyBinding::reserved`) are the app's with the page or the terminal
+focused, though the page takes ⌘K and Ghostty binds it, and the page never
+hears them, while ⌘U, not reserved, is still the page's first and then the
+app's. Passed on macOS 26 (M5), 2026-10-28.
+
+## macOS Ghostty colours following the theme
+
+The ghostty_theme_probe example (`--features ghostty`) runs a program that
+prints a row of full blocks in the default colour and one in ANSI red, once,
+then sleeps. Three times over, it switches to a theme setting
+`terminal.foreground` and `terminal.ansi.1`, scopes `terminal.foreground`
+alone over the terminal, takes the scope away, and goes back to zgx's dark
+theme, which sets no terminal colours. Each time it reads Ghostty's own last
+frame (`Terminal::snapshot`). The printed blocks repaint in each step's
+colours: the scope's text colour with the theme's red, and the user's own
+Ghostty colours again at the end, as at first. The surface is the same
+throughout (its backend kept). Ghostty draws in Display P3, so a colour
+matches as given or converted to P3. It prints `GHOSTTY_THEME_DONE ok=true`,
+or exits 1. Passed three times out of three on macOS 26.0.1 (M1 Max),
+2026-11-03.
+
+## macOS glass and appearance set while a window shows
+
+`glass_counter --appearance-fixture` replaces the window's glass with
+another material (`WindowHandle::set_glass`), takes it away and gives it
+back, checking the effect views AppKit has under the content each time (one,
+of the material asked for, then none, then one again); then it shows the
+window light and dark (`set_theme`) and as the system does, checking
+`NSWindow.appearance` (Aqua, DarkAqua, none) and the appearance zgx's themes
+follow. Passed on macOS 26 (M5), 2026-10-28.
+
+## macOS swipe between pages
+
+`scripts/macos_swipe_probe.py` runs the swipe_probe example and sends
+trackpad scrolls (CGEvent scrolls with their phases) to its own window
+(`-[NSWindow sendEvent:]`; the trackpad and other apps hear nothing), over a
+page that goes back and forward (`View::on_navigate`): a row scrolling
+across takes what it can scroll (toward its end, back from the middle of its
+content) and nothing navigates, and a three-finger swipe (`swipeWithEvent:`)
+to the right goes back, to the left forward. With the system's "Swipe
+between pages" set to two fingers, a two-finger swipe over the plain box, or
+over the row at its start, goes back or forward instead of scrolling. Passed
+on macOS 26 (M5), 2026-10-29, where the setting is not two fingers: the
+two-finger swipes there scroll and navigate nothing, as they should. AppKit's
+tracking of a two-finger swipe (`trackSwipeEventWithOptions`) needs a real
+trackpad: `swipe_probe --manual` counts the steps.
+
+## macOS window deactivation and return
+
+`scripts/macos_deactivation_probe.py` (the `deactivation_probe` example, run
+with `ZGX_NATIVE_CARET=0` so the editor paints the caret it reads) has a
+helper window of its own take key status, as another app's window would, and
+give it back; no other app is activated. With a field focused, Shift held and
+the pointer over a button: away, the field keeps its focus but draws no caret
+and nothing is hovered; back, its caret returns, a key types into it with no
+Shift held. A press held on the button is let go as the window goes to the
+back, and released after coming back it clicks nothing. 9 of 9 pass on an
+Apple M5 Max (macOS 26.4); with the host's deactivation reset
+(`cancel_interactions` and the pointer's leave) taken out, 4 fail. The app
+itself stays active: AppKit tells the window it lost key status the same way
+when another app takes it, but the application's own `resignActive` is not
+exercised.
+
+## macOS menu bar set to hide itself
+
+`scripts/macos_menu_bar_probe.py` (the `menu_bar_probe` example, launched with
+`-_HIHideMenuBar YES`, the process's own setting) posts 200 mouse moves to its
+own window and counts the views AppKit makes for the menu bar over them,
+through a hook on its private `_newMenuBarStackViewWithAppearance:` (the
+probe's, not the library's). An app that activated before its first main menu
+was in (zgx sets its bar after the first frame; the activation winit asks for
+at launch arrives at about the same time) had AppKit make the bar's windows
+again for every move: 400 views over 200 moves, about 0.3 ms of the app's CPU
+a move, in most launches of the mail example. With the host showing the bar
+as it already is once its first bar is in (`+[NSMenu setMenuBarVisible:]`),
+the probe's launches that activated first make none over their moves (Apple
+M5 Max, macOS 26.4); without it, the first such launch made 400.
+
+## macOS cursors, Insert, held drags, file drops and title bars
+
+`scripts/macos_native_checks_probe.py` runs the native_checks_probe
+example. It answers AppKit's pointer location and pressed buttons itself
+(`+[NSEvent mouseLocation]`, `+pressedMouseButtons`), posts mouse events to
+its own window and sends it keys (`-[NSWindow sendEvent:]`). The user's
+pointer, keyboard and pasteboard hear nothing, and no drag leaves the
+window. It checks:
+- **Cursors:** over boxes asking for the pointer, text, move, not-allowed
+  and column-resize cursors, AppKit's cursor (`+[NSCursor currentCursor]`)
+  is each one's, and the arrow elsewhere.
+- **Insert:** the Help key a PC keyboard's Insert sends a Mac (0x72,
+  `NSHelpFunctionKey`) arrives as `Key::Insert`.
+- **Held drags:** a drag let go over its destination drops there. Held
+  there, Escape ends it, and letting go then drops nothing, the source told
+  it was not taken.
+- **Files:** two files, one name with a space, are handed to the window's
+  dragging destination as Finder hands them (file URLs on a pasteboard of
+  the probe's own), with the pointer last elsewhere. Dropped on a box
+  taking files, they arrive in one batch, in order. Dragged over it and out,
+  or let go beside it, nothing arrives.
+- **Title bar:** a press on a custom title bar's `window_drag` strip asks
+  AppKit to move the window from that press (`-performWindowDragWithEvent:`
+  with the mouse-down, recorded, not run). A press on a button in the strip
+  clicks it and asks for nothing.
+
+The window following the real pointer once the window server moves it is
+not checked: it would need the user's pointer. Passed on macOS 26 (M5),
+2026-10-28. Its first run found file drops going to the pointer's last
+place (fixed in winit's patch 12).
+
 ## macOS zoom (⌘=, ⌘-, ⌘0)
 
 `scripts/macos_zoom_probe.py` runs the zoom_probe example with `--drive`:
@@ -931,7 +1304,50 @@ it sends its own key window ⌘=, ⌘=, ⌘- and ⌘0
 size as they change. It checks that the keys step through Chrome's levels,
 that the viewport in points follows the zoom (480×360 at 100%, 384×288 at
 125%), and that text keeps its size in points. Passed on macOS 26 (M5),
-2026-10-26.
+2026-10-26. Then again with `--inset` (an inset title bar, a mark beside the
+traffic lights in its 40-point strip): the close button's centre, read from
+AppKit, is 20 × the zoom points below the window's top at each step (22 at
+110%, 25 at 125%, 20 again at 100%), the traffic lights moving with the
+zoomed strip rather than staying where AppKit put them. A window opened
+zoomed or resized while zoomed keeps them there (zoom_probe `--inset --zoom
+2`, resized to 620×420: 40 points, read from screen captures). Passed on
+macOS 27 (M4), 2026-10-26.
+
+## macOS baked loops
+
+`scripts/macos_baked_loops_probe.py` runs a Luau app in `zgx-run` with a shader
+ring and a pulsing dot, both `anime.animate` loops at 30 fps. While they play
+the app presents no frame (`ZGX_PRESENT_LOG`), its CPU time stands nearly
+still, and full-size captures over two seconds differ at the loops
+(`scripts/window_pixels.swift`). Its footprint then falls past the driver's
+hold (53 MB, M5 Max, macOS 26.4, 2026-10-30). `ZGX_PROBE_DIFFERENT=1` skips
+that last check on a Mac without the hold. `crates/zgx-gpu/tests/baked_loops.rs`
+covers what stays in the frames and what draws a sheet again, and
+`crates/zgx-script/tests/anime.rs` (`baked`) what hands a loop back to the engine.
+
+`scripts/macos_zoomed_loops_probe.py` zooms that window (100%, 110%, 90%): a
+loop's layer lies in a row with a still box the frames draw, its top, height
+and edge theirs, read from captures. `crates/zgx-gpu/tests/zoomed_layers.rs`
+covers the frames of loops' and GPU views' layers, the caret as read back, and
+what the frames draw themselves (moved, faded, turned, shaders', layers')
+under partial repaints, at each of those zooms.
+
+## macOS caret (Core Animation's)
+
+`scripts/macos_caret_probe.py` runs the caret_idle example, a focused field
+left alone, with the caret Core Animation draws and with the editor's own
+(`ZGX_NATIVE_CARET=0`), and captures the window at its full pixel size
+(`scripts/window_pixels.swift`, ScreenCaptureKit). With the system's blink
+held shown, the two match pixel for pixel at the start, middle and end of
+the text, in mixed and right-to-left text, and zoomed to 90%, 125% and
+175%; held hidden, the two match again and differ from shown at the caret's
+two columns alone, so the editor paints nothing under Core Animation's.
+Blinking as the system does, captures over two seconds see it show and
+hide while the app presents no frame, and 15 s on the app's footprint is
+30 MB against the editor caret's 210 (the Metal driver holds about 176 MB
+for a command queue some 8 s after it last ran). Needs Screen Recording
+permission for the shell, which it only checks. Passed on macOS 26 (M5),
+2026-10-27.
 
 ## macOS full-rate animation (the display's refresh)
 

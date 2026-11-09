@@ -19,6 +19,7 @@ import subprocess
 import time
 
 from platform_smoke import private_runtime, stop
+from sway_host import sway_config
 
 
 def main():
@@ -83,7 +84,7 @@ def main():
         xvfb = subprocess.Popen(["Xvfb", "-r", "-noreset", "-displayfd", "1", "-screen", "0", "1280x900x24", "-ac"],
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         processes.append(xvfb)
-        if not select.select([xvfb.stdout], [], [], 10)[0]:
+        if not select.select([xvfb.stdout], [], [], 30)[0]:
             raise RuntimeError("Xvfb startup timed out")
         env["DISPLAY"] = ":" + xvfb.stdout.readline().strip()
         xev_log = args.output / "xev.log"
@@ -113,7 +114,7 @@ def main():
         for key in ("DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS"):
             env.pop(key, None)
         config = pathlib.Path(private, "sway.conf")
-        config.write_text("output * mode 1280x800\n")
+        sway_config(config, "output * mode 1280x800\n")
         with (args.output / "sway.log").open("w") as out:
             sway = subprocess.Popen(["sway", "--unsupported-gpu", "-c", str(config)], env=env, stdout=out, stderr=out)
         try:

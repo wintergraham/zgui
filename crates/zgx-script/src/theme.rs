@@ -91,18 +91,38 @@ fn script_value(value: TokenValue) -> Value {
     }
 }
 
-/// `path` resolved from the script's directory, which it must stay in.
-fn file(dir: &Option<PathBuf>, path: &str) -> mlua::Result<PathBuf> {
+/// `path` resolved from the script's directory, or `@name/…` from one of
+/// the app's packages: it must stay in one of them.
+fn file(
+    dir: &Option<PathBuf>,
+    packages: &[(String, PathBuf)],
+    path: &str,
+) -> mlua::Result<PathBuf> {
     let Some(dir) = dir else {
         return Err(mlua::Error::runtime(
             "ui.theme.load needs a script loaded from a file",
         ));
     };
     let root = dir.canonicalize().unwrap_or_else(|_| dir.clone());
-    let full = crate::normalize(&root.join(path));
-    if !crate::within(&root, &full) {
+    let package = |name: &str| packages.iter().find(|(n, _)| n == name).map(|(_, d)| d);
+    let full = match path
+        .strip_prefix('@')
+        .map(|rest| rest.split_once('/').unwrap_or((rest, "")))
+    {
+        Some((name, rest)) => {
+            let Some(dir) = package(name) else {
+                return Err(mlua::Error::runtime(format!(
+                    "ui.theme.load(\"{path}\"): no package `{name}`"
+                )));
+            };
+            crate::normalize(&dir.join(rest))
+        }
+        None => crate::normalize(&root.join(path)),
+    };
+    if !crate::within(&root, &full) && !packages.iter().any(|(_, dir)| crate::within(dir, &full)) {
         return Err(mlua::Error::runtime(format!(
-            "ui.theme.load(\"{path}\"): theme files come from the script's directory or below"
+            "ui.theme.load(\"{path}\"): theme files come from the script's directory or below, \
+             or a package"
         )));
     }
     Ok(full)
@@ -126,8 +146,129 @@ fn fail(e: impl std::fmt::Display) -> mlua::Error {
     mlua::Error::runtime(e.to_string())
 }
 
+/// `ui.tokens`: every token as a path of fields, its value the token's
+/// string (`ui.tokens.surface.raised` is `"$surface.raised"`), for editors
+/// to complete and type check (`zgx types`). A group that is a token too
+/// has it as `value` (`ui.tokens.accent.value`, beside `.hover`); a
+/// number in a name is an index (`ui.tokens.space[3]`). Built from the
+/// applied theme the first time it is read, and again once its tokens
+/// change (`Themes::revision`): a script that never reads it builds
+/// nothing. A name no token has is an error, as its type says.
+fn install_tokens(lua: &Lua, ui: &Table) -> mlua::Result<()> {
+    let built: Rc<std::cell::RefCell<Option<(u64, Table)>>> = Rc::default();
+    let proxy = lua.create_table()?;
+    let meta = lua.create_table()?;
+    meta.set(
+        "__index",
+        lua.create_function(move |lua, (_, key): (mlua::Value, mlua::Value)| {
+            let themes = themes(lua)?;
+            let revision = themes.revision();
+            let cached = built
+                .borrow()
+                .as_ref()
+                .filter(|(at, _)| *at == revision)
+                .map(|(_, table)| table.clone());
+            let table = match cached {
+                Some(table) => table,
+                None => {
+                    let table = token_tree(lua, &themes.token_names())?;
+                    *built.borrow_mut() = Some((revision, table.clone()));
+                    table
+                }
+            };
+            missing(table.raw_get(key.clone())?, "", &key)
+        })?,
+    )?;
+    proxy.set_metatable(Some(meta))?;
+    proxy.set_readonly(true);
+    ui.set("tokens", proxy)
+}
+/// `value`, or the error a name no token has gets.
+fn missing(value: mlua::Value, group: &str, key: &mlua::Value) -> mlua::Result<mlua::Value> {
+    if !value.is_nil() {
+        return Ok(value);
+    }
+    let key = match key {
+        mlua::Value::String(s) => s.to_string_lossy(),
+        mlua::Value::Integer(i) => i.to_string(),
+        other => format!("{other:?}"),
+    };
+    let name = if group.is_empty() {
+        key
+    } else {
+        format!("{group}.{key}")
+    };
+    Err(fail(format!(
+        "ui.tokens has no `{name}`: no token or group of tokens has that name"
+    )))
+}
+/// The tables of `ui.tokens` for `names`.
+fn token_tree(lua: &Lua, names: &[std::sync::Arc<str>]) -> mlua::Result<Table> {
+    let root = lua.create_table()?;
+    let mut groups: Vec<Table> = Vec::new();
+    let key_of = |part: &str| -> mlua::Result<mlua::Value> {
+        Ok(match part.parse::<i64>() {
+            Ok(n) if !part.starts_with('0') || part == "0" => mlua::Value::Integer(n),
+            _ => mlua::Value::String(lua.create_string(part)?),
+        })
+    };
+    let group = |path: &str, groups: &mut Vec<Table>| -> mlua::Result<Table> {
+        let table = lua.create_table()?;
+        let meta = lua.create_table()?;
+        let path = path.to_owned();
+        meta.set(
+            "__index",
+            lua.create_function(move |_, (_, key): (mlua::Value, mlua::Value)| {
+                missing(mlua::Value::Nil, &path, &key)
+            })?,
+        )?;
+        table.set_metatable(Some(meta))?;
+        groups.push(table.clone());
+        Ok(table)
+    };
+    for name in names {
+        let leaf = mlua::Value::String(lua.create_string(format!("${name}"))?);
+        let parts: Vec<&str> = name.split('.').collect();
+        let mut node = root.clone();
+        for (i, part) in parts.iter().enumerate() {
+            let key = key_of(part)?;
+            let existing: mlua::Value = node.raw_get(key.clone())?;
+            if i + 1 == parts.len() {
+                match existing {
+                    mlua::Value::Table(table) => table.raw_set("value", leaf.clone())?,
+                    _ => node.raw_set(key, leaf.clone())?,
+                }
+                break;
+            }
+            let path = parts[..=i].join(".");
+            node = match existing {
+                mlua::Value::Table(table) => table,
+                // A token that is a group too: its own value as `value`.
+                value => {
+                    let table = group(&path, &mut groups)?;
+                    if !value.is_nil() {
+                        table.raw_set("value", value)?;
+                    }
+                    node.raw_set(key, &table)?;
+                    table
+                }
+            };
+        }
+    }
+    for table in groups {
+        table.set_readonly(true);
+    }
+    root.set_readonly(true);
+    Ok(root)
+}
+
 /// Installs `ui.theme`.
-pub(crate) fn install(lua: &Lua, ui: &Table, dir: Option<PathBuf>) -> mlua::Result<()> {
+pub(crate) fn install(
+    lua: &Lua,
+    ui: &Table,
+    dir: Option<PathBuf>,
+    packages: Vec<(String, PathBuf)>,
+) -> mlua::Result<()> {
     let theme = lua.create_table()?;
     theme.set(
         "set",
@@ -150,7 +291,7 @@ pub(crate) fn install(lua: &Lua, ui: &Table, dir: Option<PathBuf>) -> mlua::Resu
     theme.set(
         "load",
         lua.create_function(move |lua, path: String| {
-            let path = file(&dir, &path)?;
+            let path = file(&dir, &packages, &path)?;
             let themes = themes(lua)?;
             off_clock(lua, || themes.load(&path)).map_err(fail)
         })?,
@@ -294,6 +435,7 @@ pub(crate) fn install(lua: &Lua, ui: &Table, dir: Option<PathBuf>) -> mlua::Resu
     )?;
     theme.set_readonly(true);
     ui.set("theme", theme)?;
+    install_tokens(lua, ui)?;
     // `ui.prefers`: the system's display settings as CSS's media queries
     // read them, each state that follows the system (`:get()` tracked).
     let prefers = lua.create_table()?;

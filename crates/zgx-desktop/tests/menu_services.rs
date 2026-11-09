@@ -4,7 +4,8 @@
 //!   system's services, when the menu bar is installed and when it is
 //!   replaced (the app's menus changed);
 //! - a shortcut pressed before the menu bar is made (it comes after the
-//!   first frame) still runs its item.
+//!   first frame) still runs its item;
+//! - each of the app's menus shows once.
 fn main() {
     #[cfg(target_os = "macos")]
     {
@@ -12,7 +13,7 @@ fn main() {
         use zgx::input::Key;
         use zgx_desktop::app_menu::{
             AppMenu, AppMenuEntry, MenuAccelerator, debug_key_before_menu_bar,
-            debug_menu_bar_services_filled,
+            debug_menu_bar_services_filled, debug_menu_bar_titles, debug_menu_change,
         };
         for install in ["installed", "replaced"] {
             assert!(
@@ -25,7 +26,7 @@ fn main() {
         // Window and Help menus, and the full screen item, are made too.
         let own = [
             AppMenu::new(
-                AppMenu::APPLICATION,
+                zgx_desktop::APPLICATION_MENU,
                 [
                     AppMenuEntry::item("About", "about"),
                     AppMenuEntry::Separator,
@@ -67,5 +68,139 @@ fn main() {
             "a key no item has was taken"
         );
         println!("menu_services: a shortcut before the menu bar is made runs its item");
+
+        // Each of the app's menus shows once, with the items zgx adds to an
+        // Edit menu (Find) and a View menu (zoom).
+        let menus = [
+            AppMenu::new(
+                "Edit",
+                [AppMenuEntry::Standard(
+                    zgx_desktop::app_menu::StandardItem::Copy,
+                )],
+            ),
+            AppMenu::new("View", [AppMenuEntry::item("Sidebar", "sidebar")]),
+        ];
+        assert_eq!(
+            debug_menu_bar_titles(&menus).unwrap(),
+            ["Application", "Edit", "View", "Window"]
+        );
+        println!("menu_services: each of the app's menus shows once");
+
+        // The app's own application-menu items lead the application menu,
+        // over Services, and no menu of their own shows in the bar; a title
+        // or state change among them is shown in place.
+        let own = |updates: &str, enabled: bool| {
+            [
+                AppMenu::new(
+                    zgx_desktop::APPLICATION_MENU,
+                    [
+                        AppMenuEntry::item(updates, "updates").enabled(enabled),
+                        AppMenuEntry::Separator,
+                        AppMenuEntry::item("Settings…", "settings")
+                            .accelerator(MenuAccelerator::primary(Key::Character(",".into()))),
+                    ],
+                ),
+                AppMenu::new("View", [AppMenuEntry::item("Sidebar", "sidebar")]),
+            ]
+        };
+        assert_eq!(
+            debug_menu_bar_titles(&own("Check for Updates…", true)).unwrap(),
+            ["Application", "View", "Window"]
+        );
+        let zgx_desktop::app_menu::MenuChange {
+            in_place, items, ..
+        } = debug_menu_change(
+            &own("Check for Updates…", true),
+            &own("Checking for Updates…", false),
+        )
+        .unwrap();
+        assert!(
+            in_place,
+            "the application menu's items weren't changed in place"
+        );
+        let titles: Vec<&str> = items.iter().map(|(t, ..)| t.as_str()).collect();
+        assert_eq!(&titles[..2], ["Checking for Updates…", ""], "{titles:?}");
+        assert_eq!(titles[2], "Settings…", "{titles:?}");
+        assert!(
+            titles[3..].contains(&"Services") && !items[0].1,
+            "{items:?}"
+        );
+        println!("menu_services: the app's own items lead the application menu");
+
+        // The app's menus changing only their items' titles and states are
+        // shown in place: AppKit keeps the bar it shows (a new main menu is
+        // drawn again, a flash across the bar), its items as asked. Any other
+        // change makes a new one.
+        let view = |back: &str, enabled: bool, sidebar: bool| {
+            [AppMenu::new(
+                "View",
+                [
+                    AppMenuEntry::item(back, "back").enabled(enabled),
+                    AppMenuEntry::item("Sidebar", "sidebar").checked(sidebar),
+                ],
+            )]
+        };
+        let zgx_desktop::app_menu::MenuChange {
+            in_place,
+            kept,
+            items,
+            ..
+        } = debug_menu_change(&view("Back", false, false), &view("Go Back", true, true)).unwrap();
+        assert!(in_place && kept, "in place {in_place}, bar kept {kept}");
+        assert!(
+            items.contains(&("Go Back".into(), true, false))
+                && items.contains(&("Sidebar".into(), true, true)),
+            "{items:?}"
+        );
+        let mut more = view("Back", true, true);
+        more[0].entries.push(AppMenuEntry::item("Reload", "reload"));
+        let zgx_desktop::app_menu::MenuChange {
+            in_place,
+            kept,
+            items,
+            ..
+        } = debug_menu_change(&view("Back", true, true), &more).unwrap();
+        assert!(!in_place && !kept, "in place {in_place}, bar kept {kept}");
+        assert!(
+            items.iter().any(|(title, ..)| title == "Reload"),
+            "{items:?}"
+        );
+        println!("menu_services: menus changing only their items' titles and states keep the bar");
+
+        // A bar AppKit can't make (here two items on one key, as
+        // `set_menus` never passes on) is said, and the last good bar
+        // stays: no exit, no empty bar.
+        let key = |key: &str| {
+            MenuAccelerator::new(
+                Key::Character(key.into()),
+                zgx::input::Modifiers {
+                    meta: true,
+                    ..Default::default()
+                },
+            )
+        };
+        let broken = [AppMenu::new(
+            "View",
+            [
+                AppMenuEntry::item("Back", "back").accelerator(key("j")),
+                AppMenuEntry::item("Forward", "forward").accelerator(key("j")),
+            ],
+        )];
+        let zgx_desktop::app_menu::MenuChange {
+            kept,
+            failed,
+            items,
+            ..
+        } = debug_menu_change(&view("Back", true, false), &broken).unwrap();
+        assert!(
+            failed.is_some() && kept,
+            "failed {failed:?}, bar kept {kept}"
+        );
+        assert!(
+            items.iter().any(|(title, ..)| title == "Sidebar")
+                && !items.iter().any(|(title, ..)| title == "Forward"),
+            "{items:?}"
+        );
+        println!("menu_services: a bar AppKit can't make keeps the last good one");
     }
 }

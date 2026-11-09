@@ -158,7 +158,15 @@ impl Window {
     }
 
     #[inline]
-    pub fn pre_present_notify(&self) {}
+    pub fn pre_present_notify(&self) {
+        // zgx patch: a window drawing is the one worth checking (`occlusion`).
+        if self.window_state_lock().occlusion.due(std::time::Instant::now()) {
+            let hidden = super::occlusion::hidden(self.hwnd());
+            if self.window_state_lock().occlusion.checked(hidden) {
+                super::occlusion::settle_soon(self.hwnd());
+            }
+        }
+    }
 
     #[inline]
     pub fn outer_position(&self) -> Result<PhysicalPosition<i32>, NotSupportedError> {
@@ -960,7 +968,13 @@ impl Window {
 
     #[inline]
     pub fn set_theme(&self, theme: Option<Theme>) {
-        try_theme(self.window, theme);
+        // zgx patch: `theme()` answers what was asked, and a system change
+        // leaves a window that asked for its own (WM_SETTINGCHANGE reads
+        // `preferred_theme`), as a window made with one is.
+        let current_theme = try_theme(self.window, theme);
+        let mut window_state = self.window_state_lock();
+        window_state.preferred_theme = theme;
+        window_state.current_theme = current_theme;
     }
 
     #[inline]

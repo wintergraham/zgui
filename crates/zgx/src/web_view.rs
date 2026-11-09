@@ -18,9 +18,10 @@
 //! Windows, with `zgx-desktop`'s `webview2` feature), laid out, clipped,
 //! moved and faded as the node is; zgx content painted after it (menus,
 //! popovers, a composer) draws above it, and glass over it blurs the page on
-//! macOS (see [`crate::native_view`]). Without a platform backend (headless,
-//! the software renderer, other platforms for now) the node renders a
-//! labelled placeholder box.
+//! macOS (see [`crate::native_view`]). On Linux (`zgx-desktop`'s `webkitgtk`
+//! feature) the host draws the page itself, as an image ([`PageViews`]).
+//! Without a platform backend (headless, the software renderer) the node
+//! renders a labelled placeholder box.
 //!
 //! The controller outlives the node: unmounting hides the page and keeps it
 //! loaded; mounting it again (in any window) shows it where it is placed.
@@ -121,6 +122,89 @@ impl Drop for SchemeResponder {
 impl std::fmt::Debug for SchemeResponder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("SchemeResponder")
+    }
+}
+
+/// A download a page started (a `download` link, an attachment, a file the
+/// page can't show), for the app to save or not
+/// ([`WebView::set_download_handler`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DownloadRequest {
+    /// Where it comes from.
+    pub url: String,
+    /// The file's name, as the page or its server suggests it.
+    pub name: String,
+    /// Its MIME type, empty if the server didn't say.
+    pub mime: String,
+}
+impl DownloadRequest {
+    /// A download of `url`, suggested as `name`, of type `mime` (for hosts).
+    pub fn new(url: impl Into<String>, name: impl Into<String>, mime: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            name: name.into(),
+            mime: mime.into(),
+        }
+    }
+}
+/// How a download the app saves goes ([`DownloadResponder::save_to`]).
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum DownloadStatus {
+    /// `received` bytes so far, of `total` where the server said.
+    Progress {
+        /// Bytes so far.
+        received: u64,
+        /// All of them, where known.
+        total: Option<u64>,
+    },
+    /// Saved, whole, where the app said.
+    Finished,
+    /// It stopped before the end: why.
+    Failed(String),
+}
+/// What hears a saved download's [`DownloadStatus`].
+pub type DownloadStatusFn = Box<dyn FnMut(DownloadStatus)>;
+/// Answers one [`DownloadRequest`], once, on the UI thread, now or later
+/// (after asking where to save it). Dropping it unanswered cancels the
+/// download: nothing is saved.
+pub struct DownloadResponder(Option<DeliverDownload>);
+/// Where a [`DownloadResponder`]'s answer goes: a path and what hears the
+/// download, or `None` to cancel.
+type DeliverDownload = Box<dyn FnOnce(Option<(std::path::PathBuf, DownloadStatusFn)>)>;
+impl DownloadResponder {
+    /// `deliver` gets where to save it and what hears how it goes, or `None`
+    /// to cancel (for hosts).
+    pub fn new(
+        deliver: impl FnOnce(Option<(std::path::PathBuf, DownloadStatusFn)>) + 'static,
+    ) -> Self {
+        Self(Some(Box::new(deliver)))
+    }
+    /// Save the download at `path` (a file the person chose, as through
+    /// the app's save dialog), `status` hearing how it goes.
+    pub fn save_to(
+        mut self,
+        path: impl Into<std::path::PathBuf>,
+        status: impl FnMut(DownloadStatus) + 'static,
+    ) {
+        if let Some(deliver) = self.0.take() {
+            deliver(Some((path.into(), Box::new(status))));
+        }
+    }
+    /// Save nothing.
+    pub fn cancel(self) {}
+}
+impl Drop for DownloadResponder {
+    fn drop(&mut self) {
+        if let Some(deliver) = self.0.take() {
+            deliver(None);
+        }
+    }
+}
+impl std::fmt::Debug for DownloadResponder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DownloadResponder")
     }
 }
 
@@ -242,6 +326,16 @@ pub struct WebViewOptions {
     /// Schemes the app serves itself. On macOS each page served this way is
     /// its own origin and, like `https`, a secure context.
     pub schemes: Vec<SchemeHandler>,
+    /// Render the page with WebKit's compositor (its GPU path), as browsers
+    /// do. Linux only: macOS and Windows ignore it. There WebKitGTK reports
+    /// the whole page changed on each frame it composites, so a page that
+    /// animates anything is painted, copied and uploaded whole. `false`
+    /// paints the page on the CPU and uploads only what each frame changed:
+    /// for a 40 × 40 spinner on a 1076 × 700 page, about 3,300 pixels a frame
+    /// instead of 753,200, and 3–9% of a core in WebKit's web process instead
+    /// of 40–52%. Pages then draw no `backdrop-filter`, and flatten 3D transforms
+    /// (no perspective). See docs/native-surfaces.md.
+    pub accelerated: bool,
 }
 impl Default for WebViewOptions {
     fn default() -> Self {
@@ -254,6 +348,7 @@ impl Default for WebViewOptions {
             new_windows: true,
             scripts: Vec::new(),
             schemes: Vec::new(),
+            accelerated: true,
         }
     }
 }
@@ -291,6 +386,12 @@ pub struct WebViewState {
     pub focused: bool,
     /// The last navigation's failure, until the next starts.
     pub error: Option<String>,
+    /// An element of the page is full screen (the page's
+    /// `requestFullscreen`), until it exits ([`WebView::exit_full_screen`]
+    /// or the page's own). On macOS WebKit shows it in a window of its own
+    /// over the screen; on Windows and Linux it fills the page's box, which
+    /// an app grows (or makes its window full screen) to show it so.
+    pub full_screen: bool,
 }
 
 /// What happened in a page, as the platform reports it (see
@@ -413,16 +514,60 @@ impl std::fmt::Debug for WebViewCommand {
     }
 }
 
+/// How [`WebView::find`] searches. Matches wrap past the page's end.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FindOptions {
+    /// Toward the page's start, from the current match.
+    pub backwards: bool,
+    /// Letters' case must match.
+    pub case_sensitive: bool,
+}
+impl FindOptions {
+    /// Search toward the page's start.
+    pub fn backwards(mut self, backwards: bool) -> Self {
+        self.backwards = backwards;
+        self
+    }
+    /// Match letters' case.
+    pub fn case_sensitive(mut self, case_sensitive: bool) -> Self {
+        self.case_sensitive = case_sensitive;
+        self
+    }
+}
+/// What [`WebView::find`] found.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FindResult {
+    /// The page has a match, now selected and scrolled to.
+    pub found: bool,
+    /// How many matches the page has, where the platform counts them
+    /// (Linux and Windows; `None` on macOS).
+    pub matches: Option<u32>,
+}
+
 /// A platform's page (implemented by the desktop host).
 pub trait WebViewBackend {
     /// Carry out `command`.
     fn run(&self, command: WebViewCommand);
     /// The backend as `Any`, for the host to downcast.
     fn as_any(&self) -> &dyn Any;
+    /// Show the platform's print dialog for the page (see
+    /// [`WebView::print`]). One that can't prints nothing.
+    fn print(&self) {}
+    /// Find `text` in the page (see [`WebView::find`]), calling `reply`
+    /// once. One that can't finds nothing.
+    fn find(&self, text: &str, options: &FindOptions, reply: Box<dyn FnOnce(FindResult)>) {
+        let _ = (text, options);
+        reply(FindResult::default());
+    }
+    /// Stop finding: no match stays selected (see [`WebView::clear_find`]).
+    fn clear_find(&self) {}
 }
 
 type Listener = Rc<RefCell<dyn FnMut(&WebViewEvent)>>;
 type Policy = Rc<dyn Fn(&NavigationRequest) -> bool>;
+type DownloadHandler = Rc<dyn Fn(DownloadRequest, DownloadResponder)>;
 struct Inner {
     id: u64,
     options: WebViewOptions,
@@ -439,6 +584,33 @@ struct Inner {
     /// The last `set_src`, so an unchanged reactive source navigates once.
     src: RefCell<Option<String>>,
     policy: RefCell<Option<Policy>>,
+    /// What answers the page's file inputs: the latest node showing it.
+    chooser: RefCell<Option<Chooser>>,
+    downloads: RefCell<Option<DownloadHandler>>,
+}
+/// The window's file dialogs and the component that waits on them, from
+/// the node showing a page (`WebView::choose_files`).
+struct Chooser {
+    platform: Rc<crate::platform::PlatformService>,
+    tasks: crate::compose::Tasks,
+}
+/// A reply that's given once: `None` if dropped unanswered (the node went
+/// first), as a page's file input must hear back.
+struct Reply(Option<ReplyFn>);
+type ReplyFn = Box<dyn FnOnce(Option<Vec<std::path::PathBuf>>)>;
+impl Reply {
+    fn give(mut self, files: Option<Vec<std::path::PathBuf>>) {
+        if let Some(reply) = self.0.take() {
+            reply(files);
+        }
+    }
+}
+impl Drop for Reply {
+    fn drop(&mut self) {
+        if let Some(reply) = self.0.take() {
+            reply(None);
+        }
+    }
 }
 /// A web page's controller; clones share it.
 #[derive(Clone)]
@@ -505,7 +677,59 @@ impl WebView {
             next_listener: Cell::new(0),
             src: RefCell::new(None),
             policy: RefCell::new(None),
+            chooser: RefCell::new(None),
+            downloads: RefCell::new(None),
         }))
+    }
+    /// Files for the page's file input (`<input type=file>`), chosen in the
+    /// window's own file dialog (a sheet on macOS, the desktop portal's on
+    /// Linux): `reply` gets them, or `None` if the person cancelled or no
+    /// window shows the page. `multiple` lets several be chosen, `folder`
+    /// asks for a folder instead. For desktop hosts.
+    pub fn choose_files(
+        &self,
+        multiple: bool,
+        folder: bool,
+        reply: impl FnOnce(Option<Vec<std::path::PathBuf>>) + 'static,
+    ) {
+        use crate::platform::FilePicker;
+        let reply = Reply(Some(Box::new(reply)));
+        let chooser = self.0.chooser.borrow();
+        let Some(Chooser { platform, tasks }) = &*chooser else {
+            return reply.give(None);
+        };
+        let picker = FilePicker {
+            title: if folder {
+                "Choose a Folder"
+            } else if multiple {
+                "Choose Files"
+            } else {
+                "Choose a File"
+            }
+            .into(),
+            multiple,
+            ..FilePicker::default()
+        };
+        let platform = platform.clone();
+        tasks.spawn(async move {
+            let files = if folder {
+                platform
+                    .0
+                    .open_folder(picker)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|folder| vec![folder])
+            } else {
+                platform
+                    .0
+                    .open_files(picker)
+                    .await
+                    .ok()
+                    .filter(|files| !files.is_empty())
+            };
+            reply.give(files);
+        });
     }
     /// Unique per controller in this thread.
     pub fn id(&self) -> u64 {
@@ -682,6 +906,59 @@ impl WebView {
     /// Take keyboard focus back from the page (to the window's zgx content).
     pub fn blur(&self) {
         self.run(WebViewCommand::Focus(false));
+    }
+    /// End the page's full screen (see [`WebViewState::full_screen`]), as
+    /// Escape does in a browser.
+    pub fn exit_full_screen(&self) {
+        self.run_js("document.fullscreenElement && document.exitFullscreen()");
+    }
+    /// Print the page: the platform's print dialog for it, as the page's
+    /// own `window.print()` shows (a sheet on the window on macOS, WebView2's
+    /// print preview on Windows, GTK's print dialog on Linux). A page not
+    /// showing yet prints nothing.
+    pub fn print(&self) {
+        if let Some(backend) = self.backend() {
+            backend.print();
+        }
+    }
+    /// Find `text` in the page, as a browser's find bar does: the next
+    /// match from the current one (the previous with
+    /// [`FindOptions::backwards`]), wrapping past the end, is selected and
+    /// scrolled into view. `reply` gets whether there is one and, where the
+    /// platform counts them, how many. Asking again with the same text steps
+    /// to the next match. A page not showing yet finds nothing.
+    pub fn find(&self, text: &str, options: FindOptions, reply: impl FnOnce(FindResult) + 'static) {
+        match self.backend() {
+            Some(backend) if !text.is_empty() => backend.find(text, &options, Box::new(reply)),
+            _ => reply(FindResult::default()),
+        }
+    }
+    /// Stop finding: the match goes unselected and the platform's
+    /// highlights of the others go.
+    pub fn clear_find(&self) {
+        if let Some(backend) = self.backend() {
+            backend.clear_find();
+        }
+    }
+    /// Decide each download the page starts: `handler` gets what it is and a
+    /// responder to save it ([`DownloadResponder::save_to`], at a file the
+    /// person chose, as in the app's save dialog) or not. Without a handler,
+    /// or with a responder dropped, the download is cancelled: a page never
+    /// saves a file into the person's folders without the app deciding.
+    pub fn set_download_handler(
+        &self,
+        handler: impl Fn(DownloadRequest, DownloadResponder) + 'static,
+    ) {
+        *self.0.downloads.borrow_mut() = Some(Rc::new(handler));
+    }
+    /// A download the page started, for the app's handler (for hosts):
+    /// cancelled at once without one.
+    pub fn download(&self, request: DownloadRequest, responder: DownloadResponder) {
+        let handler = self.0.downloads.borrow().clone();
+        match handler {
+            Some(handler) => handler(request, responder),
+            None => responder.cancel(),
+        }
     }
     /// Open Web Inspector, when [`WebViewOptions::inspectable`].
     pub fn open_devtools(&self) {
@@ -887,6 +1164,7 @@ impl Focusable {
             NativeContent::Web(web) => Some(Self::Web(web.clone())),
             NativeContent::Terminal(term) => Some(Self::Terminal(term.clone())),
             NativeContent::Platform(_) => Some(Self::Platform),
+            NativeContent::Glass(_) => None,
         }
     }
     fn focused(&self) -> bool {
@@ -906,12 +1184,34 @@ impl Focusable {
         }
     }
 }
+/// Makes the boxes showing pages where the host draws pages into the window
+/// itself, as images it is given, rather than as native views (Linux's
+/// WebKitGTK pages): provided by the desktop host, asked before a native
+/// view is mounted. `None` (no engine on this system): a native view, or
+/// its placeholder.
+#[derive(Clone)]
+pub struct PageViews(Rc<MakePage>);
+type MakePage = dyn Fn(&WebView) -> Option<View>;
+impl PageViews {
+    /// Boxes for pages, made by `make`.
+    pub fn new(make: impl Fn(&WebView) -> Option<View> + 'static) -> Self {
+        Self(Rc::new(make))
+    }
+}
 fn native(
     content: NativeContent,
     web: Option<WebView>,
     src: Option<Box<dyn FnMut() -> String>>,
 ) -> View {
     component(move |cx| {
+        // The page's file inputs open this window's dialogs.
+        if let Some(web) = &web
+            && let Some(platform) = cx.try_service::<crate::platform::PlatformService>()
+            && cx.try_service::<crate::compose::TaskRunner>().is_some()
+        {
+            let tasks = cx.tasks();
+            *web.0.chooser.borrow_mut() = Some(Chooser { platform, tasks });
+        }
         let natives = cx.try_service::<NativeViews>();
         let supported = natives.as_ref().is_some_and(|natives| natives.supported());
         if let (Some(web), Some(mut src)) = (web.clone(), src) {
@@ -920,6 +1220,11 @@ fn native(
                 web.set_src(&url);
             });
             cx.retain(effect);
+        }
+        if let (Some(web), Some(pages)) = (&web, cx.try_service::<PageViews>())
+            && let Some(view) = (pages.0)(web)
+        {
+            return view;
         }
         let focus = Focusable::of(&content);
         let mut root = div().focusable(focus.is_some()).on_event(move |event| {
@@ -975,7 +1280,7 @@ fn placeholder(content: NativeContent) -> View {
                 }
             })
         }
-        NativeContent::Platform(_) => text(content.label()),
+        NativeContent::Platform(_) | NativeContent::Glass(_) => text(content.label()),
     };
     placeholder_box(label)
 }

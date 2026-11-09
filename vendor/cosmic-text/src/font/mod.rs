@@ -57,6 +57,9 @@ pub struct Font {
     pub(crate) italic_or_oblique: bool,
     /// zgx: whether it has an optical size axis (`opsz`).
     optical: bool,
+    /// zgx: whether its glyphs' shapes are only in a table swash can't draw
+    /// (Apple's `hvgl`), for the platform's rasterizer.
+    platform_outlines: bool,
 }
 
 impl fmt::Debug for Font {
@@ -100,6 +103,28 @@ impl Font {
     /// and advances follow the size.
     pub fn has_optical(&self) -> bool {
         self.optical
+    }
+
+    /// zgx: whether its glyphs' shapes are only where swash can't draw them
+    /// (Apple's `hvgl`, macOS 26's PingFang): zgx-gpu draws them through Core
+    /// Text. Only on macOS; elsewhere such a face gives no font.
+    pub fn needs_platform_outlines(&self) -> bool {
+        self.platform_outlines
+    }
+
+    /// zgx: whether it has color glyphs (`COLR`, `CBDT` or `sbix`), as an
+    /// emoji font does. Looked up when asked, which only text asking for
+    /// emoji presentation does.
+    pub fn is_color(&self) -> bool {
+        #[cfg(feature = "swash")]
+        {
+            let font = self.as_swash();
+            [b"COLR", b"CBDT", b"sbix"]
+                .iter()
+                .any(|tag| swash::TableProvider::table_by_tag(&font, swash::tag_from_bytes(tag)).is_some())
+        }
+        #[cfg(not(feature = "swash"))]
+        false
     }
 
     pub(crate) fn shaper_instance(&self) -> &harfrust::ShaperInstance {
@@ -169,6 +194,27 @@ impl Font {
                 .location([(Tag::new(b"wght"), weight.0 as f32)])
         };
         let metrics = font_ref.metrics(Size::unscaled(), &location);
+        // zgx patch: a face without units per em (a bitmap-only font such
+        // as macOS's GB18030Bitmap, which has no `head` table) lays every
+        // glyph out infinitely wide: it can't be shaped, so it is no font
+        // (fallback passes it by).
+        if metrics.units_per_em == 0 {
+            return None;
+        }
+        // zgx patch: a face with no outlines swash can draw (macOS 26's
+        // PingFangUI, whose shapes are only in Apple's `hvgl` table) shapes,
+        // and draws every glyph blank: it is no font either, and fallback
+        // takes the next face that covers the text (Heiti, Hiragino). On
+        // macOS an `hvgl` face is one: zgx-gpu draws its glyphs through Core
+        // Text (`platform_outlines`). Asked once a face, as it loads.
+        let drawable = has_drawable_outlines(&font_ref);
+        let platform_outlines = !drawable
+            && cfg!(target_os = "macos")
+            && font_ref.table_data(Tag::new(b"hvgl")).is_some();
+        if !drawable && !platform_outlines {
+            log::debug!("{}: no outlines to draw", info.post_script_name);
+            return None;
+        }
 
         let monospace_fallback = if cfg!(feature = "monospace_fallback") {
             (|| {
@@ -234,6 +280,7 @@ impl Font {
         Some(Self {
             id: info.id,
             optical: has_optical,
+            platform_outlines,
             monospace_fallback,
             #[cfg(feature = "swash")]
             swash: {
@@ -266,6 +313,17 @@ impl Font {
             italic_or_oblique: info.style == Style::Italic || info.style == Style::Oblique,
         })
     }
+}
+
+/// zgx patch: the tables a glyph's image can come from, for swash: outlines
+/// (TrueType, CFF, CFF2), bitmaps (sbix, CBDT, EBDT) or color layers (COLR).
+const DRAWABLE: [&[u8; 4]; 7] = [b"glyf", b"CFF ", b"CFF2", b"sbix", b"CBDT", b"EBDT", b"COLR"];
+
+/// zgx patch: whether `font` has any of `DRAWABLE`.
+fn has_drawable_outlines(font: &FontRef<'_>) -> bool {
+    DRAWABLE
+        .iter()
+        .any(|tag| font.table_data(Tag::new(tag)).is_some())
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-use crate::{Attrs, Font, FontMatchAttrs, HashMap, ShapeBuffer};
+use crate::{Attrs, Family, FamilyOwned, Font, FontMatchAttrs, HashMap, ShapeBuffer};
 use alloc::boxed::Box;
 use alloc::collections::BTreeSet;
 use alloc::string::String;
@@ -27,7 +27,16 @@ pub struct FontMatchKey {
     pub(crate) font_stretch: u16,
     pub(crate) id: fontdb::ID,
     pub(crate) variable_weight_match: bool,
+    /// zgx patch: the face fontdb's query picks for the family asked for
+    /// (CSS font matching), put first (`get_font_matches`): a family without
+    /// the weight asked for draws in it (`default_font_match_key`). In the
+    /// key's padding: keys are as large as they were.
+    pub(crate) query: bool,
 }
+
+// zgx patch: `query` sits in the key's padding (a fallback looks at keys by
+// the thousand).
+const _: () = assert!(core::mem::size_of::<FontMatchKey>() == 20);
 
 impl FontMatchKey {
     fn new(
@@ -73,6 +82,7 @@ impl FontMatchKey {
             font_stretch,
             id,
             variable_weight_match,
+            query: false,
         }
     }
 }
@@ -146,10 +156,32 @@ impl FontCachedCodepointSupportInfo {
     }
 }
 
+/// zgx: whether any text has asked for hyphenation (`FontFeatures::HYPHENS`), set by
+/// the caller the first time one does (`note_hyphens`): until then, shaping a
+/// line looks for nothing.
+static HYPHENS_IN_USE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// zgx: some text hyphenates: lines shaped from now on look for their points.
+pub fn note_hyphens() {
+    HYPHENS_IN_USE.store(true, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// zgx: a word's hyphenation points, as byte offsets inside it, given the
+/// word and a locale (`FontSystem::set_hyphenator`).
+pub type Hyphenator = std::sync::Arc<dyn Fn(&str, &str) -> Vec<usize> + Send + Sync>;
+
 /// Access to the system fonts.
 pub struct FontSystem {
     /// The locale of the system.
     locale: String,
+
+    /// zgx: whether `locale` is the language an app's text is in
+    /// (`set_language`), not the system's.
+    language_set: bool,
+
+    /// zgx: whether that language is Chinese, Japanese or Korean, which
+    /// then says what language Han characters are in (`han_by_language`).
+    han_by_language: bool,
 
     /// The underlying font database.
     db: fontdb::Database,
@@ -175,6 +207,16 @@ pub struct FontSystem {
     /// zgx patch: the matches and first font of the last attributes runs
     /// shaped with, newest last (`FontSystem::first_font`).
     first_font: Vec<FirstFont>,
+
+    /// zgx patch: and of families with no face of their own, newest last
+    /// (`FontSystem::first_fallback`).
+    first_fallback: Vec<FirstFallback>,
+
+    /// zgx patch: the faces `query_face` found, by family, weight and style.
+    face_queries: Vec<(FamilyOwned, fontdb::Weight, fontdb::Style, Option<fontdb::ID>)>,
+
+    /// zgx: where a word may break with a hyphen (`FontFeatures::HYPHENS`).
+    hyphenator: Option<Hyphenator>,
 
     /// zgx patch: each face's `wght` axis range (`None`: not variable in
     /// weight), read from its file the first time a match needs it.
@@ -218,6 +260,21 @@ struct FirstFont {
     optical: u16,
     fonts: Arc<Vec<FontMatchKey>>,
     font: Arc<Font>,
+}
+
+/// zgx patch: where a family with no face of its own went in its search: the
+/// fallback it found for runs of `scripts`, and where it stopped
+/// (`FontSystem::first_fallback`).
+#[derive(Debug)]
+struct FirstFallback {
+    attrs: FontMatchAttrs,
+    optical: u16,
+    font: Arc<Font>,
+    scripts: Vec<unicode_script::Script>,
+    /// What Han characters' language was (`ShapeBuffer::han`), with Han among
+    /// `scripts`.
+    han: u32,
+    place: crate::font::fallback::SearchPlace,
 }
 
 impl FontSystem {
@@ -320,16 +377,21 @@ impl FontSystem {
             .map(|(k, v)| (k, Vec::from_iter(v)))
             .collect();
 
-        let fallbacks = Fallbacks::new(&impl_fallback, &[], &locale);
+        let fallbacks = Fallbacks::new(&impl_fallback, &[], han_locale(&locale));
 
         Self {
             locale,
+            language_set: false,
+            han_by_language: false,
             db,
             monospace_font_ids,
             per_script_monospace_font_ids,
             font_cache: HashMap::default(),
             font_matches_cache: HashMap::default(),
             first_font: Vec::new(),
+            first_fallback: Vec::new(),
+            face_queries: Vec::new(),
+            hyphenator: None,
             weight_axes: HashMap::default(),
             font_codepoint_support_info_cache: HashMap::default(),
             monospace_fallbacks_buffer: BTreeSet::default(),
@@ -351,6 +413,54 @@ impl FontSystem {
         &self.locale
     }
 
+    /// zgx: the language text is in, as an app says it (its i18n locale, as
+    /// CSS's `lang` on a document's root), or `None` for the system's again.
+    /// Han characters take its fallback fonts (`ja` a Japanese one, `zh-TW`
+    /// a traditional Chinese one), and where it is Chinese, Japanese or
+    /// Korean a line's own kana or hangul no longer say otherwise
+    /// (`ShapeLine::build`). The fallback lists and the runs shaped with the
+    /// old ones start again; text shaped before is to be shaped again.
+    pub fn set_language(&mut self, language: Option<&str>) {
+        let locale = language.map_or_else(Self::get_locale, str::to_owned);
+        if locale == self.locale && language.is_some() == self.language_set {
+            return;
+        }
+        self.locale = locale;
+        self.language_set = language.is_some();
+        self.han_by_language = self.language_set
+            && ["zh", "ja", "ko"].iter().any(|l| is_language(&self.locale, l));
+        self.fallbacks = Fallbacks::new(&*self.dyn_fallback, &[], han_locale(&self.locale));
+        // zgx patch: what a search found went by the lists it replaces.
+        self.first_font.clear();
+        self.first_fallback.clear();
+        #[cfg(feature = "shape-run-cache")]
+        self.shape_run_cache.clear();
+    }
+
+    /// zgx: whether an app set a Chinese, Japanese or Korean language
+    /// (`set_language`), which Han characters then take over a line's hint.
+    pub(crate) fn han_by_language(&self) -> bool {
+        self.han_by_language
+    }
+
+    /// zgx: where words with `FontFeatures::HYPHENS` may break, a hyphen drawn at
+    /// the end of the line: given a word and the system's locale, the byte
+    /// offsets inside it. `None`, the default: none do, but at soft hyphens.
+    pub fn set_hyphenator(&mut self, hyphenator: Option<Hyphenator>) {
+        self.hyphenator = hyphenator;
+    }
+
+    /// zgx: whether words may be hyphenated (a hyphenator is set).
+    pub(crate) fn hyphenates(&self) -> bool {
+        HYPHENS_IN_USE.load(core::sync::atomic::Ordering::Relaxed) && self.hyphenator.is_some()
+    }
+
+    /// zgx: the hyphenation points of `word`, if words are hyphenated.
+    pub(crate) fn hyphenate(&self, word: &str) -> Option<Vec<usize>> {
+        let hyphenator = self.hyphenator.as_ref()?;
+        Some(hyphenator(word, &self.locale))
+    }
+
     /// Get the database.
     pub const fn db(&self) -> &fontdb::Database {
         &self.db
@@ -360,7 +470,42 @@ impl FontSystem {
     pub fn db_mut(&mut self) -> &mut fontdb::Database {
         self.font_matches_cache.clear();
         self.first_font.clear();
+        self.first_fallback.clear();
+        self.face_queries.clear();
         &mut self.db
+    }
+
+    /// zgx patch: the face `db().query` gives for one family at a weight
+    /// and style, found once: a query reads every installed face's names
+    /// (hundreds on macOS, more on Windows), and a text with fallback
+    /// families asks for each family's face whenever it is laid out anew.
+    /// Forgotten when the database can change (`db_mut`).
+    pub fn query_face(
+        &mut self,
+        family: Family<'_>,
+        weight: fontdb::Weight,
+        style: fontdb::Style,
+    ) -> Option<fontdb::ID> {
+        if let Some((.., id)) = self
+            .face_queries
+            .iter()
+            .find(|(f, w, s, _)| *w == weight && *s == style && f.as_family() == family)
+        {
+            return *id;
+        }
+        let id = self.db.query(&fontdb::Query {
+            families: &[family],
+            weight,
+            style,
+            ..Default::default()
+        });
+        // An app's few text styles; more are asked for again.
+        if self.face_queries.len() == 64 {
+            self.face_queries.clear();
+        }
+        self.face_queries
+            .push((FamilyOwned::new(family), weight, style, id));
+        id
     }
 
     /// Consume this [`FontSystem`] and return the locale and database.
@@ -477,12 +622,62 @@ impl FontSystem {
         });
     }
 
+    /// zgx patch: for a family with no face of its own, the fallback its
+    /// search found for a run of `scripts`, and where it stopped. That search
+    /// looks at no word's characters, so what it finds goes by these alone.
+    /// Apart from `first_font`, whose hits don't pay for it.
+    pub(crate) fn first_fallback(
+        &self,
+        attrs: &Attrs<'_>,
+        scripts: &[unicode_script::Script],
+    ) -> Option<(Arc<Font>, crate::font::fallback::SearchPlace)> {
+        let han = self.shape_buffer.han;
+        self.first_fallback
+            .iter()
+            .rev()
+            .find(|first| {
+                first.attrs.matches(attrs)
+                    && (first.optical == attrs.optical || !first.font.has_optical())
+                    && first.scripts == scripts
+                    && (first.han == han || !scripts.contains(&unicode_script::Script::Han))
+            })
+            .map(|first| (first.font.clone(), first.place))
+    }
+
+    /// zgx patch: keep what `first_fallback` gives.
+    pub(crate) fn keep_first_fallback(
+        &mut self,
+        attrs: &Attrs<'_>,
+        scripts: &[unicode_script::Script],
+        font: &Arc<Font>,
+        place: crate::font::fallback::SearchPlace,
+    ) {
+        if self.first_fallback.len() == FIRST_FONTS {
+            self.first_fallback.remove(0);
+        }
+        self.first_fallback.push(FirstFallback {
+            attrs: attrs.into(),
+            optical: attrs.optical,
+            font: font.clone(),
+            scripts: scripts.to_vec(),
+            han: self.shape_buffer.han,
+            place,
+        });
+    }
+
+    /// How many runs' first fonts are kept, for tests.
+    #[doc(hidden)]
+    pub fn first_fonts_kept(&self) -> usize {
+        self.first_font.len() + self.first_fallback.len()
+    }
+
     pub fn get_font_matches(&mut self, attrs: &Attrs<'_>) -> Arc<Vec<FontMatchKey>> {
         // Clear the cache first if it reached the size limit
         if self.font_matches_cache.len() >= Self::FONT_MATCHES_CACHE_SIZE_LIMIT {
             log::trace!("clear font mache cache");
             self.font_matches_cache.clear();
             self.first_font.clear();
+            self.first_fallback.clear();
         }
 
         self.font_matches_cache
@@ -517,12 +712,14 @@ impl FontSystem {
                         .map(|(i, _)| i)
                     {
                         // if exists move to front
-                        let match_key = font_match_keys.remove(i);
+                        let mut match_key = font_match_keys.remove(i);
+                        match_key.query = true;
                         font_match_keys.insert(0, match_key);
                     } else if let Some(face) = self.db.face(id) {
                         // else insert in front
-                        let match_key =
+                        let mut match_key =
                             FontMatchKey::new(attrs, face, &self.db, &mut self.weight_axes);
+                        match_key.query = true;
                         font_match_keys.insert(0, match_key);
                     } else {
                         log::error!("Could not get face from db, that should've been there.");
@@ -559,6 +756,8 @@ impl FontSystem {
         let now = std::time::Instant::now();
 
         db.load_system_fonts();
+        #[cfg(target_os = "macos")]
+        load_pingfang(db);
 
         for source in fonts {
             db.load_font_source(source);
@@ -598,5 +797,80 @@ impl<T> Deref for BorrowedWithFontSystem<'_, T> {
 impl<T> DerefMut for BorrowedWithFontSystem<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.inner
+    }
+}
+
+/// zgx: PingFang, macOS's Chinese face (simplified, traditional and Hong
+/// Kong's), where `load_system_fonts` didn't find it: macOS 26 keeps it in
+/// a private framework, where Core Text finds it, outside the font
+/// directories fontdb reads. Without it the fallback lists' PingFang named
+/// nothing, and Chinese text took Arial Unicode MS.
+#[cfg(all(feature = "std", target_os = "macos"))]
+fn load_pingfang(db: &mut fontdb::Database) {
+    const PINGFANG: &str =
+        "/System/Library/PrivateFrameworks/FontServices.framework/Resources/Reserved/PingFangUI.ttc";
+    let found = db
+        .faces()
+        .any(|face| face.families.iter().any(|(name, _)| name == "PingFang SC"));
+    if !found {
+        // Not there (another macOS): the lists' next face stands in.
+        let _ = db.load_font_file(PINGFANG);
+    }
+}
+
+/// zgx: whether `locale`'s language subtag is `language` (`ja` of
+/// `ja-JP`), in any case. Without allocating: a font system's locale is
+/// read as it is made.
+fn is_language(locale: &str, language: &str) -> bool {
+    locale
+        .split(['-', '_'])
+        .next()
+        .is_some_and(|subtag| subtag.eq_ignore_ascii_case(language))
+}
+
+/// zgx: `locale` as the platform fallback lists name Han's languages
+/// (`han_unification`): `ja`, `ko`, `zh-HK`, `zh-TW`, or `zh-CN` for any
+/// other (simplified Chinese, the lists' default for every locale they
+/// don't name). A system's locale is `ja-JP`, say, which they never
+/// matched: upstream gave a Japanese system Chinese Han.
+fn han_locale(locale: &str) -> &'static str {
+    let mut subtags = locale.split(['-', '_']);
+    let language = subtags.next().unwrap_or_default();
+    if language.eq_ignore_ascii_case("ja") {
+        "ja"
+    } else if language.eq_ignore_ascii_case("ko") {
+        "ko"
+    } else if !language.eq_ignore_ascii_case("zh") {
+        "zh-CN"
+    } else if subtags.clone().any(|s| s.eq_ignore_ascii_case("hk") || s.eq_ignore_ascii_case("mo")) {
+        "zh-HK"
+    } else if subtags.any(|s| s.eq_ignore_ascii_case("tw") || s.eq_ignore_ascii_case("hant")) {
+        "zh-TW"
+    } else {
+        "zh-CN"
+    }
+}
+
+#[cfg(test)]
+mod han_locale_tests {
+    use super::han_locale;
+
+    #[test]
+    fn a_locale_names_han_as_the_fallback_lists_do() {
+        for (locale, han) in [
+            ("ja-JP", "ja"),
+            ("ja", "ja"),
+            ("ko_KR", "ko"),
+            ("zh-TW", "zh-TW"),
+            ("zh-Hant", "zh-TW"),
+            ("zh-Hant-HK", "zh-HK"),
+            ("zh-HK", "zh-HK"),
+            ("zh-CN", "zh-CN"),
+            ("zh-Hans-SG", "zh-CN"),
+            ("en-US", "zh-CN"),
+            ("", "zh-CN"),
+        ] {
+            assert_eq!(han_locale(locale), han, "{locale}");
+        }
     }
 }

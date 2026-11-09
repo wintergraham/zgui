@@ -8,6 +8,12 @@ use crate::{
     theme::{ThemeScope, Themed, tok},
     widgets::Ui,
 };
+use std::num::NonZeroU32;
+
+/// How much of a draggable a clickable inside it covers for a press on it to
+/// be the draggable's still: a row with its padding is, a tab's close button
+/// isn't (`EventContext::keeps_press_from_drag`).
+const FILLS_DRAG: f32 = 0.75;
 
 /// What text inherits. A colour, size or family that comes from a theme
 /// token stays the token: each text node resolves it from its own theme
@@ -157,8 +163,8 @@ fn token_of(styles: &Styles, field: crate::theme::Field) -> Option<crate::theme:
         .0
         .iter()
         .rev()
-        .find(|(bound, _, _)| *bound == field)
-        .and_then(|(_, token, mix)| mix.is_none().then_some(*token))
+        .find(|(bound, _, _, _)| *bound == field)
+        .and_then(|(_, token, mix, _)| mix.is_none().then_some(*token))
 }
 /// A resolved text colour as typography carries it: the token if one set it.
 fn themed_color(styles: &Styles) -> Option<Themed<Color>> {
@@ -190,8 +196,13 @@ pub(crate) struct Variants {
 /// active, focus and disabled styles when they changed since its last call,
 /// or `None` to keep them.
 pub(crate) type InteractionStyles = Box<dyn FnMut() -> Option<[Option<Styles>; 4]>>;
-#[derive(Clone, Copy, PartialEq)]
+/// The key holding a node pressed. Not an `Option`: with every field of
+/// `Interaction` a plain byte, comparing two (every style run does) is one
+/// load and compare instead of a branch per field.
+#[derive(Clone, Copy, Default, PartialEq)]
 enum ActivationKey {
+    #[default]
+    None,
     Space,
     Enter,
 }
@@ -202,7 +213,7 @@ struct Interaction {
     /// Pressed, but the pointer left it with the button held: it looks
     /// unpressed until the pointer comes back (as a native button does).
     pressed_outside: bool,
-    key_active: Option<ActivationKey>,
+    key_active: ActivationKey,
     focus: bool,
     /// The focus shows (CSS's `:focus-visible`): it came from the keyboard,
     /// the node edits text, or a key went to it since.
@@ -236,6 +247,7 @@ pub(crate) fn mount_style(
         None,
         None,
         None,
+        false,
     )
 }
 
@@ -278,6 +290,7 @@ impl Paint {
     };
     /// Take `styles`' paint properties out, leaving them unset. None set
     /// (`Styles::set_bits`): none to take.
+    #[inline(never)]
     fn take(styles: &mut Styles) -> Self {
         let set = styles.set_bits();
         if set & Self::BITS == 0 {
@@ -312,6 +325,7 @@ impl Paint {
             text_color: taken!(text_color, TEXT_COLOR),
         }
     }
+    #[cfg(test)]
     fn put(self, styles: &mut Styles) {
         // Nothing to write over nothing.
         if styles.set_bits() & Self::BITS == 0 && self == Self::default() {
@@ -334,6 +348,7 @@ impl Paint {
     }
     /// Out of line: inline, it kept `put` from being inlined into the
     /// style effect (style +1.1%), nearly always unset as it is.
+    #[cfg(test)]
     #[inline(never)]
     fn put_overflow(&self, styles: &mut crate::style::StylesFields) {
         styles.write_overflow_paint(crate::style::OverflowPaint {
@@ -377,32 +392,69 @@ impl Paint {
         ];
         (set, self.local.set)
     }
-    /// `self` with what `over` sets laid over it, as `Styles::merge` does.
-    /// What `over` sets laid over `self`, as `Styles::merge` does. In
-    /// place: by value, each of the 150-byte paints was copied in and the
-    /// result out again, every run of an animated style.
-    fn lay(&mut self, over: &Self) {
+    /// The presence proof read in place, without copying out the paint.
+    fn set_of(styles: &Styles) -> ([bool; 11], u8) {
+        let o = styles.overflow();
+        let set = [
+            o.brightness.is_some(),
+            o.contrast.is_some(),
+            o.saturate.is_some(),
+            o.clip_inset.is_some(),
+            styles.opacity.is_some(),
+            o.blur.is_some(),
+            o.edge_fade.is_some(),
+            o.filter_blur.is_some(),
+            o.mask_offset.is_some(),
+            styles.transform.is_some(),
+            styles.text_color.is_some(),
+        ];
+        (set, styles.local_transform.set)
+    }
+    /// What `source` sets laid over `styles`, as `Styles::merge` does: on the
+    /// paint a style effect resolved last time, whose other fields still
+    /// hold while which paint is set and the variants are the same.
+    fn lay_from(source: &Styles, styles: &mut Styles) {
+        use crate::style::bit;
         macro_rules! lay {
-            ($($field:ident),*) => {$(
-                if over.$field.is_some() {
-                    self.$field = over.$field;
+            ($($field:ident $bit:ident),*) => {$(
+                if source.$field.is_some() {
+                    styles.fields_mut(bit::$bit).$field = source.$field;
+                }
+            )*};
+        }
+        lay!(opacity OPACITY, transform TRANSFORM, text_color TEXT_COLOR);
+        // The full application allocated it if any source set a rare paint
+        // property, and which are set is the same here.
+        debug_assert!(styles.overflow.is_allocated() || Self::of(source).overflow_unset());
+        if styles.overflow.is_allocated() {
+            Self::lay_overflow_from(source, styles);
+        }
+        if source.local_transform.set != 0 {
+            let local = styles.local_transform.over(source.local_transform);
+            styles.fields_mut(bit::LOCAL_TRANSFORM).local_transform = local;
+        }
+    }
+    #[inline(never)]
+    fn lay_overflow_from(source: &Styles, styles: &mut Styles) {
+        use crate::style::bit;
+        let source = source.overflow();
+        macro_rules! lay {
+            ($($field:ident $bit:ident),*) => {$(
+                if source.$field.is_some() {
+                    styles.fields_mut(bit::$bit).overflow_mut().$field = source.$field;
                 }
             )*};
         }
         lay!(
-            opacity,
-            blur,
-            edge_fade,
-            filter_blur,
-            brightness,
-            contrast,
-            saturate,
-            mask_offset,
-            clip_inset,
-            transform,
-            text_color
+            blur BLUR,
+            edge_fade EDGE_FADE,
+            filter_blur FILTER_BLUR,
+            brightness BRIGHTNESS,
+            contrast CONTRAST,
+            saturate SATURATE,
+            mask_offset MASK_OFFSET,
+            clip_inset CLIP_INSET
         );
-        self.local = self.local.over(over.local);
     }
     fn of(styles: &Styles) -> Self {
         if styles.set_bits() & Self::BITS == 0 {
@@ -465,16 +517,50 @@ fn show_moved_and_faded(
     scene: &mut crate::scene::Scene,
     node: NodeId,
     transform: crate::scene::Transform,
-    effects: crate::scene::Effects,
     applied: &Styles,
     originals: &Originals,
     inset_kept: bool,
 ) {
-    scene.set_transform_and_effects(node, transform, effects);
+    let effects = finite_style_effects(applied, originals.effects);
+    scene.set_transform_and_finite_effects(node, transform, effects);
     apply_mask(scene, node, applied, originals.mask());
     if !inset_kept {
         scene.set_clip_inset(node, applied.overflow().clip_inset.or(originals.inset()));
     }
+}
+/// The node's original effects are normalized already. Only fields supplied
+/// by a style need normalizing when they replace those original components.
+/// Computed where they are written: the style effect then holds no effects
+/// across the rest of its run.
+#[inline(never)]
+fn finite_style_effects(
+    resolved: &Styles,
+    mut effects: crate::scene::Effects,
+) -> crate::scene::Effects {
+    use crate::scene::{finite_factor, finite_opacity, finite_radius};
+    if let Some(value) = resolved.opacity.get() {
+        effects.opacity = finite_opacity(value);
+    }
+    let overflow = resolved.overflow();
+    if let Some(value) = overflow.blur.get() {
+        effects.blur_radius = finite_radius(value);
+    }
+    if let Some(value) = overflow.edge_fade.get() {
+        effects.edge_fade = finite_radius(value);
+    }
+    if let Some(value) = overflow.filter_blur.get() {
+        effects.filter_blur = finite_radius(value);
+    }
+    if let Some(value) = overflow.brightness.get() {
+        effects.brightness = finite_factor(value);
+    }
+    if let Some(value) = overflow.contrast.get() {
+        effects.contrast = finite_factor(value);
+    }
+    if let Some(value) = overflow.saturate.get() {
+        effects.saturate = finite_factor(value);
+    }
+    effects
 }
 /// The inputs of the last full application besides paint: the dynamic
 /// styles without their paint properties, the interaction and disabled
@@ -495,9 +581,73 @@ struct Settled {
     parent_version: u64,
     intrinsic: Option<(f32, f32)>,
     content: Option<NodeId>,
-    /// A text node's size and family as inherited (tokens, maybe): a
-    /// paint-only run resolves them again, to follow their tokens.
-    text: Option<(Themed<f32>, Option<crate::theme::TokenId>)>,
+    /// A text node's size, family and colour as inherited (tokens, maybe):
+    /// a paint-only run resolves them again, to follow their tokens (a
+    /// theme switched, its parent's typography holding the same token).
+    text: Option<(Themed<f32>, Option<crate::theme::TokenId>, Themed<Color>)>,
+}
+/// A dynamic style setting box sizes alone (a bar growing): its shape, so
+/// that a run in the same shape compares its five size fields directly.
+/// Made from a run that compared everything (no paint, the same fields
+/// and margin sides as last time, no interaction style setting a box);
+/// any run in another shape compares in full again.
+#[derive(Clone, Copy)]
+struct BoxPlan(
+    /// The shape (`key`): the dynamic style's set fields, which of the five
+    /// size fields hold a value and its margin sides, in four bytes so the
+    /// memo keeps its size.
+    NonZeroU32,
+);
+impl BoxPlan {
+    /// The fields a plan may cover: box sizes and margin sides alone, and
+    /// layout options marked but unset (a margin builder marks them while
+    /// clearing their margins, which a style without them doesn't have).
+    const BITS: u64 = {
+        use crate::style::bit;
+        bit::LAYOUT_OPTIONS
+            | bit::WIDTH
+            | bit::WIDTH_PERCENT
+            | bit::HEIGHT
+            | bit::HEIGHT_PERCENT
+            | bit::MARGIN
+            | bit::MARGIN_SIDES
+    };
+    /// The shape of a style setting `BITS` alone: their set bits (the low
+    /// byte, and margin sides' bit 30 moved to bit 8), which size fields
+    /// hold a value (bits 9 to 13) and the margin sides (bits 16 to 23).
+    #[inline(always)]
+    fn key(styles: &Styles) -> NonZeroU32 {
+        const _: () = assert!(BoxPlan::BITS & !0xff == crate::style::bit::MARGIN_SIDES);
+        const _: () = assert!(crate::style::bit::MARGIN_SIDES == 1 << 30);
+        const MARK: NonZeroU32 = NonZeroU32::new(1 << 31).unwrap();
+        let set = styles.set_bits();
+        let present = u32::from(styles.width.is_some())
+            | u32::from(styles.width_percent.is_some()) << 1
+            | u32::from(styles.height.is_some()) << 2
+            | u32::from(styles.height_percent.is_some()) << 3
+            | u32::from(styles.margin.is_some()) << 4;
+        MARK | u32::from(set as u8)
+            | (set >> 22) as u32 & 0x100
+            | present << 9
+            | u32::from(styles.margin_sides) << 16
+    }
+    /// The plan of a resized run (`now` over `then`, compared in full):
+    /// none unless both set box fields alone and no paint was set.
+    fn of(now: &Styles, then: &Styles, paint: Option<([bool; 11], u8)>) -> Option<Self> {
+        ((now.set_bits() | then.set_bits()) & !Self::BITS == 0
+            && now.layout_options.is_none()
+            && then.layout_options.is_none()
+            && paint == Some(([false; 11], 0))
+            && now.margin_sides == then.margin_sides)
+            .then(|| Self(Self::key(now)))
+    }
+    /// Whether `now` has the plan's shape.
+    #[inline(always)]
+    fn fits(&self, now: &Styles) -> bool {
+        now.set_bits() & !Self::BITS == 0
+            && now.layout_options.is_none()
+            && Self::key(now) == self.0
+    }
 }
 /// What a re-run compares against: the inputs last applied to the scene
 /// (unchanged results skip rebuilding and rewriting the node) and, for
@@ -508,16 +658,21 @@ struct Memo {
     /// The layout style the last full application gave the node: a run that
     /// changes only box sizes and margins patches it (see `boxes`).
     shown: Option<crate::scene::Style>,
-    /// Whether the last run wrote a size change with no dynamic paint
-    /// (false after any other application). Another such run writes no
-    /// paint: a bar growing every frame re-wrote its unchanged effects,
-    /// transform and clip, which also undid what else had set them since.
-    /// (Only for size changes: checking every run cost animated paint more
-    /// than it saved.)
+    /// Whether the dynamic style sets no paint and the scene holds the paint
+    /// the memo's inputs give: set by a full application (which wrote it)
+    /// and a resize after it, cleared by a paint-only run. A run that keeps
+    /// the inputs then writes no paint: a bar growing every frame, or a box
+    /// whose colour a moved selection reads but did not change, re-wrote
+    /// its unchanged effects, transform and clip, which also undid what
+    /// else had set them since.
     painted: bool,
     /// What `Scene::set_box` left from patching `shown`'s box: `None` once
     /// `shown` is made or written another way.
     boxed: Option<u32>,
+    /// A dynamic style that changes only box sizes, found so once compared
+    /// in full (`BoxPlan`): `None` again with every full application. In the
+    /// memo's padding, where `Settled` has no room.
+    box_plan: Option<BoxPlan>,
 }
 /// Which box fields `styles` sets (width, height, margins), whatever their
 /// values: a run that sets the same ones, with other values, changes only
@@ -585,25 +740,29 @@ pub(crate) fn mount_style_with_intrinsic(
     interactive: bool,
     intrinsic: Option<Signal<(f32, f32)>>,
     layout_target: Option<Signal<Option<NodeId>>>,
-    object_fit: Option<Signal<crate::style::ObjectFit>>,
+    object_fit: Option<Signal<crate::style::ImagePlacement>>,
     theme: Option<std::rc::Rc<crate::theme::ThemeScope>>,
+    leaf: bool,
 ) -> Signal<Typography> {
     let mut base = base;
     let mut reactive = variants.reactive;
     // A node setting no typography (nor through a variant or a dynamic
     // style) shows its parent's: it passes that signal on, not a copy.
     // Interaction styles that change might set it.
-    let own = dynamic.is_some()
-        || reactive.is_some()
-        || base.sets_typography()
-        || [
-            &variants.hover,
-            &variants.active,
-            &variants.focus,
-            &variants.disabled,
-        ]
-        .into_iter()
-        .any(|variant| variant.as_deref().is_some_and(Styles::sets_typography));
+    // Nor does one with nothing below it to read a copy: a text's own size
+    // and colour go to it directly.
+    let own = !leaf
+        && (dynamic.is_some()
+            || reactive.is_some()
+            || base.sets_typography()
+            || [
+                &variants.hover,
+                &variants.active,
+                &variants.focus,
+                &variants.disabled,
+            ]
+            .into_iter()
+            .any(|variant| variant.as_deref().is_some_and(Styles::sets_typography)));
     let defaults = variants.defaults;
     debug_assert!(
         defaults
@@ -673,7 +832,21 @@ pub(crate) fn mount_style_with_intrinsic(
                     state.pointer_active = true;
                     state.pressed_outside = false;
                     if event.target == node && presses {
-                        event.capture_pointer();
+                        // Around what covers most of it, nothing much else
+                        // is there to press.
+                        let fills = owner.upgrade().map_or_else(Vec::new, |ui| {
+                            let scene = ui.scene.borrow();
+                            let own = scene.bounds(node);
+                            let area = own.width * own.height;
+                            scene
+                                .ancestors(node)
+                                .take_while(|id| {
+                                    let around = scene.bounds(*id);
+                                    area >= around.width * around.height * FILLS_DRAG
+                                })
+                                .collect()
+                        });
+                        event.capture_filling(fills);
                     }
                 }
                 InputEvent::PointerUp {
@@ -693,7 +866,7 @@ pub(crate) fn mount_style_with_intrinsic(
                     state.focus = false;
                     state.focus_visible = false;
                     state.pointer_active = false;
-                    state.key_active = None;
+                    state.key_active = ActivationKey::None;
                 }
                 // Pressed while the key that activates it is down.
                 InputEvent::KeyDown {
@@ -701,7 +874,7 @@ pub(crate) fn mount_style_with_intrinsic(
                     repeat: false,
                     ..
                 } if event.target == node && input.activates(node, &Key::Space) => {
-                    state.key_active = Some(ActivationKey::Space);
+                    state.key_active = ActivationKey::Space;
                     state.focus_visible = true;
                 }
                 InputEvent::KeyDown {
@@ -709,27 +882,29 @@ pub(crate) fn mount_style_with_intrinsic(
                     repeat: false,
                     ..
                 } if event.target == node && input.activates(node, &Key::Enter) => {
-                    state.key_active = Some(ActivationKey::Enter);
+                    state.key_active = ActivationKey::Enter;
                     state.focus_visible = true;
                 }
-                // A key to it (not a shortcut) shows its focus.
-                InputEvent::KeyDown { modifiers, .. }
-                    if event.target == node
-                        && !modifiers.meta
-                        && !modifiers.control
-                        && !modifiers.alt =>
+                // A key to it (not a shortcut, nor Escape) shows its focus.
+                InputEvent::KeyDown {
+                    ref key, modifiers, ..
+                } if event.target == node
+                    && !modifiers.meta
+                    && !modifiers.control
+                    && !modifiers.alt
+                    && !matches!(key, Key::Escape) =>
                 {
                     state.focus_visible = true;
                 }
                 InputEvent::KeyUp {
                     key: Key::Space, ..
-                } if event.target == node && state.key_active == Some(ActivationKey::Space) => {
-                    state.key_active = None
+                } if event.target == node && state.key_active == ActivationKey::Space => {
+                    state.key_active = ActivationKey::None
                 }
                 InputEvent::KeyUp {
                     key: Key::Enter, ..
-                } if event.target == node && state.key_active == Some(ActivationKey::Enter) => {
-                    state.key_active = None
+                } if event.target == node && state.key_active == ActivationKey::Enter => {
+                    state.key_active = ActivationKey::None
                 }
                 _ => {}
             });
@@ -794,7 +969,9 @@ pub(crate) fn mount_style_with_intrinsic(
     // Whether the effect subscribed to the inherited typography for good: a
     // node restyled every frame then compares its version without tracking.
     let mut parent_subscribed = false;
-    ui.bind(node, move || {
+    // Static: it reads no layout, so a mount need not draw its inputs first.
+    let mount_pure = dynamic.is_none() && reactive.is_none() && disabled.is_none();
+    ui.bind_marked(node, mount_pure, move || {
         let _span = crate::profile::nested(crate::profile::Phase::Style);
         // A `Ui` only for a full application: a run that changes paint or a
         // box alone needs just the scene and themes.
@@ -811,6 +988,7 @@ pub(crate) fn mount_style_with_intrinsic(
                 shown: None,
                 painted: false,
                 boxed: None,
+                box_plan: None,
             }));
         }
         // Interaction styles that changed take their slots, their tokens
@@ -837,7 +1015,8 @@ pub(crate) fn mount_style_with_intrinsic(
         let in_effect = [
             !is_disabled && state.hover,
             !is_disabled
-                && ((state.pointer_active && !state.pressed_outside) || state.key_active.is_some()),
+                && ((state.pointer_active && !state.pressed_outside)
+                    || state.key_active != ActivationKey::None),
             !is_disabled && state.focus && state.focus_visible,
             is_disabled,
         ];
@@ -877,20 +1056,37 @@ pub(crate) fn mount_style_with_intrinsic(
             shown,
             painted,
             boxed,
+            box_plan,
         }) = memo.as_deref_mut()
             && last.state == state
             && last.disabled == is_disabled
             && !themed
             && !swapped
         {
-            let paint = produced.as_mut().map(Paint::take);
+            // A box in its plan's shape (`BoxPlan`): its sizes compared
+            // directly, with no paint and nothing else set.
+            let planned =
+                box_plan.is_some_and(|plan| produced.as_ref().is_some_and(|now| plan.fits(now)));
+            let paint = if planned {
+                last.paint
+            } else {
+                produced.as_ref().map(Paint::set_of)
+            };
             // Unchanged, or a box that changes only its size or margins (a
             // bar growing): the same fields set, other values, no interaction
             // style over them, and the rest compared once.
             let (same, resized) = match (&produced, &last.dynamic) {
-                // Paint alone (taken out above): nothing else to compare.
-                (Some(now), Some(then)) if now.set_bits() | then.set_bits() == 0 => (true, false),
-                (Some(now), Some(then)) => match now.eq_then_sizes(then) {
+                (Some(now), Some(then)) if planned => {
+                    let same = sizes(now) == sizes(then);
+                    (same, !same && shown.is_some())
+                }
+                // Paint alone: nothing else to compare.
+                (Some(now), Some(then))
+                    if (now.set_bits() | then.set_bits()) & !Paint::BITS == 0 =>
+                {
+                    (true, false)
+                }
+                (Some(now), Some(then)) => match now.eq_then_sizes(then, Paint::BITS) {
                     None => (false, false),
                     Some(sizes) => (
                         sizes,
@@ -910,14 +1106,15 @@ pub(crate) fn mount_style_with_intrinsic(
             };
             let unchanged = glass.is_none_or(|opaque| {
                 opaque == storage.themes.system_preferences().reduced_transparency
-            }) && paint.map(|p| p.set()) == last.paint
+            }) && paint == last.paint
                 && (same || resized)
                 && (!last.parent || inherited.version() == last.parent_version)
                 && intrinsic.as_ref().map(|size| size.get()) == last.intrinsic
                 && layout_target.as_ref().and_then(|target| target.get()) == last.content
-                && last.text.as_ref().is_none_or(|(size, family)| {
+                && last.text.as_ref().is_none_or(|(size, family, color)| {
                     let scope = scope.as_deref();
-                    resolve_size(*size, scope) == Typography::size_value(applied.1.size)
+                    matches!(applied.1.color, Themed::Value(shown) if shown == resolve_color(*color, scope))
+                        && resolve_size(*size, scope) == Typography::size_value(applied.1.size)
                         && family.is_none_or(|token| {
                             family_is(token, scope, &applied.1.font.family, &mut body_subscribed)
                         })
@@ -954,51 +1151,55 @@ pub(crate) fn mount_style_with_intrinsic(
                             mask,
                         );
                     }
+                    if box_plan.is_none() {
+                        *box_plan = BoxPlan::of(now, then, paint);
+                    }
                     set_sizes(then, sizes(now));
                     patch_sizes(style, next);
                     storage.scene.borrow_mut().set_box(node, style, boxed);
                 }
-                // The paint written last time, from the same inputs.
-                // Resized with no dynamic paint, as last time: nothing to write.
-                let none = resized && paint.is_none_or(|paint| paint.set() == ([false; 11], 0));
-                if std::mem::replace(painted, none) && none {
+                // No dynamic paint, and the paint these inputs give written
+                // (`Memo::painted`): nothing to write. Animated paint takes
+                // this path every frame and only reads the flag.
+                if *painted {
                     return;
                 }
-                let mut resolved = Paint::of(&base);
-                if let Some(paint) = &paint {
-                    resolved.lay(paint);
+                // After a paint-only run (which wrote from the resolved
+                // styles): a resize with no dynamic paint writes it once more.
+                if resized && paint.is_none_or(|paint| paint == ([false; 11], 0)) {
+                    *painted = true;
+                }
+                // The paint resolved last time, with this run's laid over it:
+                // the base and the variants on are the same, and so is which
+                // paint the style sets.
+                if let Some(produced) = &produced {
+                    Paint::lay_from(produced, &mut applied.0);
                 }
                 for (enabled, variant) in active_variants {
                     if enabled && let Some(variant) = variant {
-                        resolved.lay(&Paint::of(variant));
+                        Paint::lay_from(variant, &mut applied.0);
                     }
                 }
+                // Frosted glass painted opaque (`opaque_glass`) stays so,
+                // whatever blur was laid over it.
+                if glass == Some(true)
+                    && applied
+                        .0
+                        .overflow()
+                        .blur
+                        .get()
+                        .is_some_and(|sigma| sigma > 0.)
+                {
+                    applied
+                        .0
+                        .fields_mut(crate::style::bit::BLUR)
+                        .overflow_mut()
+                        .blur = Some(0.).into();
+                }
+                let resolved = &applied.0;
                 let paint_color = resolved.text_color;
                 let bound = theme.as_ref().is_some_and(|theme| theme.themed())
                     || produced.as_ref().is_some_and(Styles::has_tokens);
-                resolved.put(&mut applied.0);
-                let mut effects = originals.effects;
-                if let Some(value) = resolved.opacity.get() {
-                    effects.opacity = value;
-                }
-                if let Some(value) = resolved.blur.get() {
-                    effects.blur_radius = value;
-                }
-                if let Some(value) = resolved.edge_fade.get() {
-                    effects.edge_fade = value;
-                }
-                if let Some(value) = resolved.filter_blur.get() {
-                    effects.filter_blur = value;
-                }
-                if let Some(value) = resolved.brightness.get() {
-                    effects.brightness = value;
-                }
-                if let Some(value) = resolved.contrast.get() {
-                    effects.contrast = value;
-                }
-                if let Some(value) = resolved.saturate.get() {
-                    effects.saturate = value;
-                }
                 // The text colour matters to text, and to what inherits it:
                 // the last patch that sets it decides it, a token if it
                 // bound one (only patches with tokens need looking at).
@@ -1011,7 +1212,7 @@ pub(crate) fn mount_style_with_intrinsic(
                         Some(value) => {
                             let mut color = themed_color(&base);
                             if let (Some(value), Some(produced)) =
-                                (paint.and_then(|p| p.text_color), &produced)
+                                (produced.as_ref().and_then(|p| p.text_color), &produced)
                             {
                                 color = Some(
                                     match token_of(produced, crate::theme::Field::TextColor) {
@@ -1048,15 +1249,18 @@ pub(crate) fn mount_style_with_intrinsic(
                 let mut scene = storage.scene.borrow_mut();
                 let transform = resolved.transform.unwrap_or(originals.transform);
                 let inset = applied.0.overflow().clip_inset.or(originals.inset());
-                let local = resolved.local.resolve(originals.local);
+                let local = resolved.local_transform.resolve_finite(originals.local);
                 let (inset_kept, transform_kept, local_kept) =
                     scene.paint_kept(node, inset, transform, local);
                 if last.moves_and_fades {
                     show_moved_and_faded(
-                        &mut scene, node, transform, effects, &applied.0, &originals, inset_kept,
+                        &mut scene, node, transform, &applied.0, &originals, inset_kept,
                     );
                 } else {
-                    scene.set_effects(node, effects);
+                    scene.set_finite_effects(
+                        node,
+                        finite_style_effects(&applied.0, originals.effects),
+                    );
                     apply_mask(&mut scene, node, &applied.0, originals.mask());
                     if !inset_kept {
                         scene.set_clip_inset(node, inset);
@@ -1085,9 +1289,6 @@ pub(crate) fn mount_style_with_intrinsic(
                 }
                 return;
             }
-            if let (Some(produced), Some(paint)) = (&mut produced, paint) {
-                paint.put(produced);
-            }
         }
         let mut ui = Ui::from_storage(storage);
         let mut resolved = base.clone();
@@ -1106,7 +1307,12 @@ pub(crate) fn mount_style_with_intrinsic(
                 .untracked(|| ui.set_disabled(node, is_disabled));
         }
         if let Some(output) = &object_fit {
-            output.set(resolved.overflow().object_fit.unwrap_or_default());
+            output.set(crate::style::ImagePlacement {
+                fit: resolved.overflow().object_fit.unwrap_or_default(),
+                position: (resolved.rare().cold.as_ref())
+                    .and_then(|cold| cold.object_position)
+                    .unwrap_or((0.5, 0.5)),
+            });
         }
         // Only observe inherited typography when a field is actually inherited
         // (and from then on: a later run setting every field is rare).
@@ -1215,6 +1421,9 @@ pub(crate) fn mount_style_with_intrinsic(
             let moves_and_fades =
                 paint.is_some_and(|p| p.transform.is_some() && p.opacity.is_some());
             let paint = paint.map(|p| p.set());
+            // A full application writes the paint these inputs give: with no
+            // dynamic paint, a run that keeps them has nothing to write.
+            memo.painted = paint.is_none_or(|paint| paint == ([false; 11], 0));
             memo.settled = Some(Settled {
                 dynamic: dynamic_rest,
                 paint,
@@ -1225,8 +1434,9 @@ pub(crate) fn mount_style_with_intrinsic(
                 parent_version,
                 intrinsic: intrinsic_size,
                 content: content_layout,
-                text: is_text.then_some((current.size, current.family)),
+                text: is_text.then_some((current.size, current.family, current.color)),
             });
+            memo.box_plan = None;
         }
         // Text shows its colour, size and family resolved in its scope (a
         // token's change re-runs it); other nodes do not show typography.
@@ -1388,7 +1598,6 @@ pub(crate) fn mount_style_with_intrinsic(
         );
         if let Some(memo) = &mut memo {
             memo.shown = Some(style);
-            memo.painted = false;
             memo.boxed = None;
         }
     });
@@ -1605,8 +1814,16 @@ fn apply_resolved(
     }
     let mut scene = ui.scene.borrow_mut();
     scene.set_style(node, style.clone());
-    if let Some(direction) = resolved.rare().direction {
-        scene.set_direction(node, Some(direction));
+    // Most styles have nothing rare: one test for them, not one a field.
+    if resolved.rare_set().is_some() || scene.has_special_nodes() {
+        // On what lays the children out: a scroll view's content.
+        apply_rare(
+            ui,
+            &mut scene,
+            node,
+            content_layout.unwrap_or(node),
+            resolved.rare(),
+        );
     }
     if let Some(content) = content_layout {
         let mut content_style = scene.style(content);
@@ -1667,6 +1884,7 @@ fn apply_resolved(
             {
                 outline.offset = offset;
             }
+
             if quad.decoration.is_some()
                 || resolved.paint_background.is_some()
                 || resolved.corners.is_some()
@@ -1728,23 +1946,116 @@ fn apply_resolved(
         },
         _ => scene.kind(node).clone(),
     };
+    // A text's font and kind in one call: one never laid out takes them as
+    // it was appended (`Scene::set_text_kind`).
     if matches!(kind, NodeKind::Text { .. }) {
-        scene.set_font(node, current.font.clone());
+        std::hint::cold_path();
+        scene.set_text_kind(node, current.font.clone(), kind);
+    } else {
+        scene.set_kind(node, kind);
     }
-    scene.set_kind(node, kind);
-    if let Some(uniforms) = resolved.rare().shader_uniforms {
-        scene.set_shader_uniforms(node, uniforms);
-    }
-    if let Some(shader) = &resolved.rare().layer_shader {
-        scene.set_layer_shader(node, shader.clone());
-    }
-    if let Some(uniforms) = resolved.rare().layer_uniforms {
-        scene.set_layer_uniforms(node, uniforms);
-    }
-    if let Some(mode) = resolved.rare().blend {
-        scene.set_blend(node, mode);
+    // Read again past a barrier, not kept from the test above: the
+    // compiler would merge the two reads, and a value live across all of a
+    // style's application spilled others on x86 at every node (#1276).
+    if let Some(rare) = std::hint::black_box(resolved).rare_set() {
+        let cold = rare.cold.as_deref();
+        if let Some(uniforms) = cold.and_then(|cold| cold.shader_uniforms.as_ref()) {
+            scene.set_shader_uniforms(node, *uniforms);
+        }
+        if let Some(shader) = &rare.layer_shader {
+            scene.set_layer_shader(node, shader.clone());
+        }
+        if let Some(uniforms) = cold.and_then(|cold| cold.layer_uniforms.as_ref()) {
+            scene.set_layer_uniforms(node, *uniforms);
+        }
+        if let Some((bleed, reach)) = cold.and_then(|cold| cold.layer_extent) {
+            scene.set_layer_extent(node, bleed, reach);
+        }
+        if let Some(tag) = cold.and_then(|cold| cold.geometry_tag) {
+            scene.set_geometry_tag(node, tag);
+        }
+        if let Some(mode) = rare.blend {
+            scene.set_blend(node, mode);
+        }
     }
     style
+}
+/// What a style with rare properties sets as it's applied, or clears from
+/// `node` having lost them.
+#[inline(never)]
+fn apply_rare(
+    ui: &Ui,
+    scene: &mut crate::scene::Scene,
+    node: NodeId,
+    target: NodeId,
+    rare: &crate::style::RareStyles,
+) {
+    // Nothing rare, on a node that had nothing rare to lose (a scene's
+    // other nodes are special): nothing to do. Here rather than at the
+    // call, in mount_style's hot closure.
+    if crate::style::is_no_rare(rare) && !scene.is_special(node) {
+        return;
+    }
+    let cold = rare.cold.as_deref();
+    if cold.is_some() || scene.has_cold_styles(target) || scene.has_cold_styles(node) {
+        let template = cold.and_then(|cold| cold.grid_template.as_ref());
+        scene.set_grid_template(target, template);
+        scene.set_grid_place(node, cold.and_then(|cold| cold.grid_place.as_ref()));
+        scene.set_z(node, cold.and_then(|cold| cold.z).unwrap_or(0));
+        scene.set_display_contents(node, cold.is_some_and(|cold| cold.display_contents));
+        scene.set_sticky(node, cold.and_then(|cold| cold.sticky_top));
+        scene.set_size_calcs(node, cold.and_then(|cold| cold.size_calcs.as_ref()));
+        if scene.set_text_balance(node, cold.and_then(|cold| cold.text_balance)) {
+            // Lines moved in boxes that did not: what follows their geometry
+            // (links, icons) looks again.
+            ui.text_geometry_moved();
+        }
+        scene.set_text_shadows(node, cold.and_then(|cold| cold.text_shadows.clone()));
+        scene.set_drop_shadow(node, cold.and_then(|cold| cold.drop_shadow()));
+        scene.set_image_slice(
+            node,
+            cold.and_then(|cold| cold.image_slice.as_deref().copied()),
+        );
+        scene.set_image_rendering(
+            node,
+            cold.and_then(|cold| cold.image_rendering)
+                .unwrap_or_default(),
+        );
+        scene.set_outline_style(
+            node,
+            cold.and_then(|cold| cold.outline_style).unwrap_or_default(),
+        );
+        // Inner rings are rare (Windows' focus): nothing to do unless this
+        // style sets one or the scene holds one to take away.
+        let inner = cold.and_then(|cold| cold.outline_inner).flatten();
+        if inner.is_some() || scene.has_outline_inners() {
+            scene.set_outline_inner(node, inner);
+        }
+        scene.set_mask_gradient(node, cold.and_then(|cold| cold.mask_gradient().cloned()));
+        let gradient = cold.and_then(|cold| cold.text_gradient().cloned());
+        if gradient.is_some() || scene.has_text_gradients() {
+            // On a box (a decorated text's, `mount_element`), held for its
+            // text, which takes it at the flush (`Scene::set_text_gradient`).
+            scene.set_text_gradient(node, gradient);
+        }
+        // What assistive technology reads its text in, and what the text it
+        // holds takes (`Scene::set_language`): looked at once a node has said.
+        let language = cold.and_then(|cold| cold.lang.clone());
+        if language.is_some() || scene.language_revision() != 0 {
+            scene.set_language(node, language);
+        }
+    }
+    if let Some(direction) = rare.direction {
+        scene.set_direction(node, Some(direction));
+    }
+    match rare.zoom {
+        Some(crate::style::ZoomStyle::By(zoom)) => {
+            scene.set_zoom(node, zoom);
+            crate::zoom::refresh_fixed(ui, scene);
+        }
+        Some(crate::style::ZoomStyle::Fixed) => crate::zoom::set_fixed(ui, scene, node, true),
+        None => {}
+    }
 }
 
 #[cfg(test)]
@@ -1752,6 +2063,164 @@ mod tests {
     use super::*;
     use crate::scene::{Layout, Style};
     use crate::style::Styled;
+
+    /// Resolving a partial effect patch preserves the public setter's
+    /// normalization, including special values and untouched originals.
+    #[test]
+    fn supplied_effect_fields_normalize_as_the_public_setter_does() {
+        use crate::scene::{Effects, Scene, finite_factor, finite_opacity, finite_radius};
+        let bits = |effects: Effects| {
+            [
+                effects.opacity,
+                effects.blur_radius,
+                effects.edge_fade,
+                effects.filter_blur,
+                effects.brightness,
+                effects.contrast,
+                effects.saturate,
+            ]
+            .map(f32::to_bits)
+        };
+        let originals = [
+            Effects::default(),
+            Effects {
+                opacity: 0.25,
+                blur_radius: 2.,
+                edge_fade: 3.,
+                filter_blur: 4.,
+                brightness: 1.25,
+                contrast: 0.75,
+                saturate: 0.5,
+            },
+            Effects {
+                opacity: -0.,
+                blur_radius: f32::from_bits(1),
+                edge_fade: -0.,
+                filter_blur: f32::NEG_INFINITY,
+                brightness: -0.,
+                contrast: f32::NAN,
+                saturate: f32::INFINITY,
+            },
+        ];
+        let values = [
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            -2.,
+            -0.,
+            0.,
+            f32::from_bits(1),
+            -f32::from_bits(1),
+            0.4,
+            1.,
+            2.,
+        ];
+        // The combined setter's fallback can apply the normalized value
+        // directly: another normalization would preserve every bit.
+        for normalize in [finite_opacity, finite_radius, finite_factor] {
+            for value in values {
+                let once = normalize(value);
+                assert_eq!(normalize(once).to_bits(), once.to_bits());
+            }
+        }
+        for original in originals {
+            let mut scene = Scene::new(100., 100.);
+            let node = scene.root();
+            scene.set_effects(node, original);
+            let original = scene.effects(node);
+            for mask in 0..128 {
+                for value in values {
+                    let mut styles = Styles::new();
+                    if mask & 1 != 0 {
+                        styles = styles.opacity(value);
+                    }
+                    if mask & 2 != 0 {
+                        styles = styles.blur(value);
+                    }
+                    if mask & 4 != 0 {
+                        styles = styles.edge_fade(value);
+                    }
+                    if mask & 8 != 0 {
+                        styles = styles.filter_blur(value);
+                    }
+                    if mask & 16 != 0 {
+                        styles = styles.brightness(value);
+                    }
+                    if mask & 32 != 0 {
+                        styles = styles.contrast(value);
+                    }
+                    if mask & 64 != 0 {
+                        styles = styles.saturate(value);
+                    }
+                    let overflow = styles.overflow();
+                    let raw = Effects {
+                        opacity: styles.opacity.get().unwrap_or(original.opacity),
+                        blur_radius: overflow.blur.get().unwrap_or(original.blur_radius),
+                        edge_fade: overflow.edge_fade.get().unwrap_or(original.edge_fade),
+                        filter_blur: overflow.filter_blur.get().unwrap_or(original.filter_blur),
+                        brightness: overflow.brightness.get().unwrap_or(original.brightness),
+                        contrast: overflow.contrast.get().unwrap_or(original.contrast),
+                        saturate: overflow.saturate.get().unwrap_or(original.saturate),
+                    };
+                    // Force the public setter to store its normalized value,
+                    // even when only the sign of a zero differs.
+                    scene.set_effects(
+                        node,
+                        Effects {
+                            opacity: 0.125,
+                            blur_radius: 17.,
+                            edge_fade: 19.,
+                            filter_blur: 23.,
+                            brightness: 2.25,
+                            contrast: 3.25,
+                            saturate: 4.25,
+                        },
+                    );
+                    scene.set_effects(node, raw);
+                    assert_eq!(
+                        bits(finite_style_effects(&styles, original)),
+                        bits(scene.effects(node)),
+                        "mask {mask}, value {value:?}, original {original:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A text passes no copy of its typography on, as nothing below it can
+    /// read one, and shows its own all the same, in place of its parent's and
+    /// leaving its siblings' alone.
+    #[test]
+    fn a_text_shows_its_own_typography_and_its_siblings_their_parents() {
+        use crate::compose::prelude::*;
+        let mut ui = Ui::new(400., 300.);
+        let _handle = ui.mount(
+            column()
+                .text_size(30.)
+                .child(text("own").text_size(20.))
+                .child(text("inherits")),
+        );
+        ui.prepare_frame();
+        let scene = ui.scene.borrow();
+        let size_of = |wanted: &str| {
+            let mut found = None;
+            let mut stack = vec![scene.root()];
+            while let Some(id) = stack.pop() {
+                if let NodeKind::Text {
+                    text, font_size, ..
+                } = scene.kind(id)
+                    && &**text == wanted
+                {
+                    found = Some(*font_size);
+                }
+                stack.extend(scene.children(id).iter().copied());
+            }
+            found
+        };
+        assert_eq!(size_of("own"), Some(20.));
+        assert_eq!(size_of("inherits"), Some(30.));
+    }
+
     fn color(value: u8) -> Styles {
         Styles::from(crate::style::StylesFields {
             background: Some(Color(value, 0, 0, 255)),
@@ -2274,7 +2743,7 @@ mod tests {
         }));
         ui.scene.borrow_mut().flush();
         // Each frame after the first takes the style effect's fast path,
-        // putting the paint back with `Paint::put`.
+        // laying the new paint over the resolved style.
         for v in [0.6, 0.7, 0.8, 0.9] {
             t.set(v);
             ui.scene.borrow_mut().flush();
@@ -2417,5 +2886,334 @@ mod tests {
         assert!(ui.scene.borrow_mut().flush().layout_nodes > 0);
         bold.set(true);
         assert!(ui.scene.borrow_mut().flush().is_idle());
+    }
+    /// Frosted glass painted opaque (reduced transparency) stays opaque on
+    /// the style's later paint-only runs, as on its first: the blur its
+    /// base sets was put back from the base once a run was memoised.
+    #[test]
+    fn opaque_glass_keeps_no_blur_on_paint_only_runs() {
+        let mut ui = Ui::new(100., 100.);
+        ui.theme()
+            .set_system_preferences(crate::theme::SystemPreferences {
+                reduced_transparency: true,
+                ..Default::default()
+            });
+        let node = ui.container(ui.root(), Layout::Column, Style::default());
+        let value = ui.signal(0.8);
+        let read = value.clone();
+        let inherited = inherited(&ui);
+        mount_style(
+            &mut ui,
+            node,
+            color(1).blur(6.),
+            inherited,
+            Some(Box::new(move || Styles::new().opacity(read.get()))),
+            Variants::default(),
+            None,
+            false,
+        );
+        // The second run makes the memo; the third and later reuse it.
+        for opacity in [0.8, 0.4, 0.6, 0.2] {
+            value.set(opacity);
+            let effects = ui.scene.borrow().effects(node);
+            assert_eq!((effects.opacity, effects.blur_radius), (opacity, 0.));
+        }
+    }
+
+    /// A re-run to the same background, with no dynamic paint, writes no
+    /// paint once the run before it wrote the same: what else set the
+    /// node's effects, transform and clip since stays, as with a resize.
+    #[test]
+    fn an_unchanged_background_leaves_external_paint() {
+        use crate::scene::{ClipInset, Effects, LocalTransform, Transform};
+        let mut ui = Ui::new(200., 200.);
+        let node = ui.container(ui.root(), Layout::Column, Style::default());
+        let effects = Effects {
+            opacity: 0.75,
+            ..Effects::default()
+        };
+        let transform = Transform { x: 5., y: 6. };
+        let local = LocalTransform {
+            rotate: 0.2,
+            ..LocalTransform::IDENTITY
+        };
+        let inset = Some(ClipInset::px(1., 2., 3., 4.));
+        {
+            let mut scene = ui.scene.borrow_mut();
+            scene.set_effects(node, effects);
+            scene.set_transform(node, transform);
+            scene.set_local_transform(node, local);
+            scene.set_clip_inset(node, inset);
+        }
+        let tick = ui.signal(0);
+        let inherited = inherited(&ui);
+        let read = tick.clone();
+        mount_style(
+            &mut ui,
+            node,
+            color(7),
+            inherited,
+            Some(Box::new(move || {
+                read.get();
+                color(7)
+            })),
+            Variants::default(),
+            None,
+            false,
+        );
+        tick.set(1);
+        tick.set(2);
+        {
+            // The runs so far wrote the node's own paint.
+            let scene = ui.scene.borrow();
+            assert_eq!(scene.effects(node), effects);
+            assert_eq!(scene.transform(node), transform);
+            assert_eq!(scene.local_transform(node), local);
+            assert_eq!(scene.clip_inset(node), inset);
+        }
+        for value in 3..6 {
+            let elsewhere = (
+                Effects {
+                    opacity: 0.4 - value as f32 * 0.05,
+                    ..effects
+                },
+                Transform {
+                    x: 50. + value as f32,
+                    y: 60.,
+                },
+                LocalTransform {
+                    rotate: 0.8,
+                    ..local
+                },
+            );
+            {
+                let mut scene = ui.scene.borrow_mut();
+                scene.set_effects(node, elsewhere.0);
+                scene.set_transform(node, elsewhere.1);
+                scene.set_local_transform(node, elsewhere.2);
+                scene.set_clip_inset(node, None);
+            }
+            tick.set(value);
+            let scene = ui.scene.borrow();
+            assert_eq!(scene.effects(node), elsewhere.0);
+            assert_eq!(scene.transform(node), elsewhere.1);
+            assert_eq!(scene.local_transform(node), elsewhere.2);
+            assert_eq!(scene.clip_inset(node), None);
+        }
+    }
+
+    /// A bar growing through a box plan (`BoxPlan`) lays out as a full
+    /// application of the same styles would, step by step, through every
+    /// change of shape the plan must notice: pixels to percent, top margin
+    /// to bottom, a NaN, signed zeros and equal sizes between resizes.
+    #[test]
+    fn a_box_plan_lays_out_as_a_full_application() {
+        let steps: Vec<fn() -> Styles> = vec![
+            || Styles::new().h(10.).mt(1.),
+            || Styles::new().h(11.).mt(1.),
+            || Styles::new().h(12.).mt(1.),
+            || Styles::new().h(12.).mt(1.),
+            || Styles::new().h(13.).mt(1.),
+            || Styles::new().h_percent(50.).mt(1.),
+            || Styles::new().h_percent(60.).mt(1.),
+            || Styles::new().h(14.).mb(2.),
+            || Styles::new().h(15.).mb(2.),
+            || Styles::new().h(f32::NAN).mb(2.),
+            || Styles::new().h(f32::NAN).mb(2.),
+            || Styles::new().h(0.).mb(2.),
+            || Styles::new().h(-0.).mb(2.),
+            || Styles::new().w(5.).h(16.).mb(2.),
+            || Styles::new().w(6.).h(17.).mb(2.),
+        ];
+        let mut ui = Ui::new(200., 200.);
+        let node = ui.container(ui.root(), Layout::Column, Style::default());
+        let step = ui.signal(0_usize);
+        let read = step.clone();
+        let made = steps.clone();
+        let parent = inherited(&ui);
+        mount_style(
+            &mut ui,
+            node,
+            color(7),
+            parent,
+            Some(Box::new(move || made[read.get()]())),
+            Variants::default(),
+            None,
+            false,
+        );
+        // As styles compare (`eq_field`): signed zeros are equal, so a
+        // change of sign alone writes nothing, plan or no plan.
+        let bits = |value: f32| if value == 0. { 0 } else { value.to_bits() };
+        let box_of = |style: &Style| {
+            (
+                style.width.map(bits),
+                style.width_percent.map(bits),
+                style.height.map(bits),
+                style.height_percent.map(bits),
+                style.margin,
+            )
+        };
+        for (at, make) in steps.iter().enumerate() {
+            step.set(at);
+            // The same styles applied in full, on a node of their own.
+            let reference = ui.container(ui.root(), Layout::Column, Style::default());
+            let parent = inherited(&ui);
+            let mut full = color(7);
+            full.merge(&make());
+            mount_style(
+                &mut ui,
+                reference,
+                full,
+                parent,
+                None,
+                Variants::default(),
+                None,
+                false,
+            );
+            let scene = ui.scene.borrow();
+            assert_eq!(
+                box_of(&scene.style(node)),
+                box_of(&scene.style(reference)),
+                "step {at}"
+            );
+        }
+    }
+
+    #[test]
+    fn consecutive_resizes_keep_external_paint() {
+        let mut ui = Ui::new(200., 200.);
+        let node = ui.container(ui.root(), Layout::Column, Style::default());
+        let width = ui.signal(0_f32);
+        let read = width.clone();
+        let inherited = inherited(&ui);
+        mount_style(
+            &mut ui,
+            node,
+            color(7),
+            inherited,
+            Some(Box::new(move || Styles::new().w(read.get()))),
+            Variants::default(),
+            None,
+            false,
+        );
+        width.set(1.);
+        width.set(2.);
+        let external = crate::scene::Transform { x: 50., y: 60. };
+        ui.scene.borrow_mut().set_transform(node, external);
+        width.set(3.);
+        assert_eq!(ui.scene.borrow().transform(node), external);
+    }
+    /// Ignoring paint in a comparison matches taking it out first, including
+    /// overflow and partial transforms, without hiding non-paint differences.
+    #[test]
+    fn comparing_without_paint_matches_taking_it_out() {
+        let styles = [
+            Styles::new(),
+            Styles::new().opacity(0.5).translate(4., 5.),
+            Styles::new().blur(3.).brightness(0.8),
+            Styles::new().rotate_x(0.2).rotate_y(0.3).perspective(400.),
+            Styles::new().opacity(f32::NAN).rotate(f32::NAN),
+            color(7),
+            color(9).opacity(0.2),
+            Styles::new().w(30.).mt(4.).opacity(0.7),
+            Styles::new().w(40.).mt(3.).blur(5.),
+        ];
+        for a in &styles {
+            for b in &styles {
+                let mut stripped_a = a.clone();
+                let mut stripped_b = b.clone();
+                Paint::take(&mut stripped_a);
+                Paint::take(&mut stripped_b);
+                assert_eq!(
+                    a.eq_then_sizes(b, Paint::BITS),
+                    stripped_a.eq_then_sizes(&stripped_b, 0)
+                );
+            }
+        }
+    }
+
+    /// Reading the presence proof in place matches copying the paint out,
+    /// including fields whose may-set bits remain after their values clear.
+    #[test]
+    fn paint_presence_in_place_matches_the_copied_paint() {
+        let cases = [
+            Styles::new(),
+            Styles::new().w(10.),
+            Styles::new().opacity(0.5),
+            Styles::new().opacity(f32::NAN),
+            Styles::new().blur(3.),
+            Styles::new().edge_fade(2.),
+            Styles::new().filter_blur(2.),
+            Styles::new().brightness(0.8),
+            Styles::new().contrast(0.8),
+            Styles::new().saturate(0.8),
+            Styles::new().mask_offset(2., 3.),
+            Styles::new().clip_inset(1., 2., 3., 4.),
+            Styles::new().translate(2., 3.),
+            Styles::new().text_color(Color(1, 2, 3, 4)),
+            Styles::new()
+                .rotate(f32::NAN)
+                .rotate_x(0.2)
+                .perspective(400.),
+        ];
+        for mut styles in cases {
+            assert_eq!(Paint::set_of(&styles), Paint::of(&styles).set());
+            styles.fields_mut(Paint::BITS);
+            assert_eq!(Paint::set_of(&styles), Paint::of(&styles).set());
+            Paint::take(&mut styles);
+            assert_eq!(Paint::set_of(&styles), ([false; 11], 0));
+        }
+    }
+
+    /// Reusing paint follows the same component precedence as rebuilding
+    /// it from the base, including variants that cover only part of a transform.
+    #[test]
+    fn retained_paint_overlays_match_rebuilding_each_time() {
+        let bases = [
+            Styles::new(),
+            Styles::new()
+                .opacity(0.8)
+                .scale(2.)
+                .rotate(0.2)
+                .rotate_x(0.3)
+                .perspective(600.),
+            Styles::new()
+                .blur(4.)
+                .brightness(0.7)
+                .text_color(Color(1, 2, 3, 255)),
+        ];
+        let variants = [
+            Styles::new(),
+            Styles::new().opacity(0.6).rotate(0.5),
+            Styles::new().blur(2.).contrast(1.2).scale(3.).rotate_y(0.6),
+        ];
+        for base in bases {
+            for variant in &variants {
+                for mode in 0..4 {
+                    let dynamic = |v: f32| match mode {
+                        0 => Styles::new(),
+                        1 => Styles::new().opacity(v).translate(v, -v).scale(v + 1.),
+                        2 => Styles::new().rotate_x(v).rotate_y(-v).perspective(400. + v),
+                        _ => Styles::new()
+                            .blur(v)
+                            .brightness(v)
+                            .text_color(Color(v as u8, 2, 3, 255)),
+                    };
+                    let mut kept = base.clone();
+                    kept.merge(&dynamic(0.));
+                    kept.merge(variant);
+                    for v in [0.25, 0.5, 0.1, 0.75] {
+                        let next = dynamic(v);
+                        assert_eq!(Paint::set_of(&next), Paint::of(&next).set());
+                        Paint::lay_from(&next, &mut kept);
+                        Paint::lay_from(variant, &mut kept);
+                        let mut rebuilt = base.clone();
+                        rebuilt.merge(&next);
+                        rebuilt.merge(variant);
+                        assert!(Paint::of(&kept) == Paint::of(&rebuilt));
+                    }
+                }
+            }
+        }
     }
 }

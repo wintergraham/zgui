@@ -1,3 +1,243 @@
+# 0.1.8 (2026-11-02): the release gate, the suite still 0.1.7's
+
+0.1.8 is a fix release (Chinese drawing blank on macOS, a 0.1.7 regression), so the suite was not run again: the site's suite is still [`suite-macos-2026-10-31-afa2960`](suite-macos-2026-10-31-afa2960/), 0.1.7's, and says so. [`gate-0.1.7-0.1.8`](gate-0.1.7-0.1.8/) holds the release gate's exact counts: v0.1.7 (`b03245c4`) against the freeze (`12a539a7`) on arm64 (`gate.md`, the speed-of-light lane's run), and against the tag `50fefc92`, which adds only version numbers, on x86 (`gate-x86.md`, CI's perf job on probe PR #1346). `python scripts/build_site.py docs/results/suite-macos-2026-10-31-afa2960 --startup docs/results/startup-macos-2026-10-26-03a9d89/startup.json --gate docs/results/gate-0.1.7-0.1.8/gate.json --field docs/results/field-macos-2026-10-27-238ef98` publishes it.
+
+- **Falls:** on arm64, every cell but two: the micro cells −17 to −37%, the lab's scroll −26%, heavy's scroll −17%, heavy −2.7%, animate −4.1%, the apps −0.1 to −3.8%, 3d-mixed −2.2%. x86 reads the same picture, with every cell lower.
+- **script-update:** −3.98% on arm64 and −4.02% on x86, like for like. v0.1.8's bench (its own data uncounted, #1321) is overlaid on v0.1.7, and both sides count without fastbins (#1333). Against v0.1.7's own bench the gate printed −27.4%, which was the change of definition.
+- **lab-stream:** +0.37% on arm64 and −0.63% on x86. The font cache's file check (#1307) runs on a thread of its own, and once a process has had a second thread, glibc takes a lock for every allocation for the rest of its life. The check moves to the host's idle tick after 0.1.8.
+- **spans-follow:** +0.02% on arm64, flagged as layout; −0.09% on x86.
+
+# macOS suite (2026-10-31): 0.1.7, every scene on `afa2960`
+
+[`suite-macos-2026-10-31-afa2960`](suite-macos-2026-10-31-afa2960/): heavy, lab, animate and vlist on the 0.1.7 freeze `afa2960e`, in quiet window 44, on an M5 Max (Mac17,6) with macOS 26.4 (25E246) and two 120 Hz Studio Display XDRs. The tag `b03245c4` adds API-shape fixes off every measured path. It's the suite's protocol with six rounds a cell, each read against its round's desktop, and the still-desktop check (#1092) passed: WindowServer at 0.6% of a core with Zeron hidden, and the desktop alone at 0.4 to 0.6% in nearly every round. Every scene was accepted, and no app exited abnormally. The rivals were built again from suite sources unchanged since 0.1.6. `python scripts/build_site.py docs/results/suite-macos-2026-10-31-afa2960 --startup docs/results/startup-macos-2026-10-26-03a9d89/startup.json --gate docs/results/gate-0.1.6-0.1.7/gate.json --previous docs/results/suite-macos-2026-10-30-e077e95 --field docs/results/field-macos-2026-10-27-238ef98 --rebuilt "…"` publishes it to `site/`.
+
+Medians, zgx / GPUI Fast / MyGo / Rune (vlist: zgx / zgx in Luau / GPUI Fast / MyGo / Rune). WindowServer is over its round's desktop:
+
+| Scene, mode | CPU (% of a core) | WindowServer CPU (%) | GPU power (mW) | Memory (MB) | Frame time p99 (ms) |
+| --- | --- | --- | --- | --- | --- |
+| heavy idle | 0.00 / 0.36 / 0.00 / 0.00 | 0.00 / -0.00 / 0.05 / 0.00 | 0 / 0 / 0 / 0 | 53 / 75 / 66 / 75 | - |
+| heavy stream | 5.0 / 11.4 / 13.4 / 16.1 | 9.49 / 9.15 / 10.31 / 9.21 | 125 / 181 / 232 / 495 | 264 / 283 / 309 / 477 | 17.9 / 25.5 / 25.6 / 33.4 |
+| heavy scroll | 2.5 / 6.5 / 10.9 / 16.6 | 9.44 / 9.01 / 10.07 / 9.15 | 85 / 171 / 118 / 497 | 260 / 278 / 298 / 630 | 18.0 / 25.2 / 25.7 / 33.6 |
+| heavy both | 5.8 / 12.2 / 13.8 / 19.4 | 9.58 / 9.11 / 10.05 / 9.13 | 147 / 183 / 231 / 500 | 265 / 276 / 308 / 631 | 22.6 / 25.4 / 23.6 / 33.7 |
+| lab stream | 2.3 / 4.6 / 6.7 / 5.8 | 9.27 / 8.87 / 10.11 / 9.05 | 59 / 109 / 66 / 313 | 244 / 248 / 273 / 426 | 17.9 / 18.4 / 18.0 / 32.9 |
+| lab scroll | 2.2 / 3.7 / 5.5 / 5.4 | 9.36 / 9.02 / 9.98 / 8.80 | 64 / 107 / 100 / 311 | 241 / 247 / 263 / 419 | 18.0 / 24.7 / 18.4 / 25.7 |
+| lab both | 2.6 / 4.8 / 6.7 / 6.0 | 9.33 / 8.80 / 9.89 / 8.90 | 68 / 109 / 105 / 315 | 244 / 248 / 273 / 427 | 17.7 / 18.3 / 19.0 / 32.2 |
+| animate animate | 3.3 / 5.1 / 6.5 / 6.2 | 17.45 / 20.36 / 21.72 / 19.16 | 121 / 142 / 115 / 293 | 241 / 256 / 264 / 425 | 14.6 / 13.2 / 13.4 / 13.3 |
+| vlist scroll | 2.3 / 2.3 / 4.2 / 7.9 / 6.4 | 9.29 / 9.47 / 8.89 / 10.48 / 8.94 | 60 / 60 / 89 / 94 / 245 | 244 / 247 / 284 / 264 / 450 | 18.0 / 18.4 / 18.3 / 18.3 / 34.3 |
+| vlist fling | 2.5 / 2.5 / 4.4 / 8.0 / 7.2 | 9.16 / 9.35 / 8.83 / 10.43 / 9.07 | 61 / 62 / 90 / 95 / 245 | 245 / 247 / 290 / 265 / 452 | 18.2 / 18.4 / 18.2 / 25.0 / 41.4 |
+| vlist jump | 2.4 / 2.5 / 4.5 / 8.7 / 8.6 | 9.35 / 9.36 / 8.74 / 10.29 / 8.76 | 60 / 61 / 89 / 96 / 245 | 246 / 248 / 290 / 269 / 455 | 18.3 / 17.9 / 18.9 / 18.0 / 41.1 |
+
+**CPU, GPU and memory.** In every test zgx uses the least CPU, and the least GPU power except in animate. There its 121 mW median sits within MyGo's 115 mW spread: zgx's seven runs read 115 to 123 mW and MyGo's 110 to 141. The site's verdict says so rather than counting it a win or a loss; at 0.1.6 the same pair read 117 against 118. zgx has the least memory in every cell. Against 0.1.6, zgx's CPU is lower in every cell (heavy by 3 to 10%), and its GPU power (within 4 mW) and memory are level.
+
+**Long frames.** zgx's median of frames over 25 ms is 0.2% in heavy stream and both, one interval in 480, where 0.1.6's median was 0. Its captures had one such interval at 0.1.6 as well, and every one here is at the edge (25.2 to 27.5 ms). One heavy-both capture had five, with its p99 at 25.2 ms, which looks like the drawable phase lottery. The rivals reach 15%.
+
+**WindowServer CPU.** zgx is 0.34 to 0.61 points over the lowest rival in 9 of 10 tests, and 1.70 under every rival in animate. The cause is the one at 60 Hz: one commit per frame, delivered to each of the menu bar's contexts. On the same binary at 120 Hz, removing the menu (`ZGX_MENU_INSTALL=none`) took 0.28 ± 0.12 points and accessory activation 0.39 ± 0.09, out of heavy both's 0.47. That's the same as at 60 Hz (0.36 to 0.42), so the cost follows the contexts, not the frame rate. No other lever is left in that gap.
+
+**In the same window:**
+- **Baked loops (#1058), the gallery's sidebar at 120 Hz:** app plus WindowServer CPU fell 7.77 → 6.02 points (paired −1.82 ± 0.13), WindowServer −0.52 ± 0.14, footprint 323 → 142 MiB, GPU −2.9 mW. That matches window 42.
+- **Startup and idle:** level across #1056 and #1070. A warm first frame went 686.1 → 686.4 M instructions, and an 8 s idle run 1,041.6 → 1,039.7 M. The freeze measured 680.5 M and 1,039.8 M.
+- **The font cache:** the system font cache sits at one path for every version, `~/Library/Caches/zgx/system-fonts`, and 0.1.7 bumped its format. So alternating releases rebuild it for each other, about 300 M a launch. Measure startup with each binary in a block of its own.
+
+[`gate-0.1.6-0.1.7`](gate-0.1.6-0.1.7/) holds the release gate's exact counts: v0.1.6 (`e077e952`) against the 0.1.7 freeze (`fbf1d5e2`) on arm64 (`gate.md`), and against the tag `b03245c4`, which adds only version numbers, on x86 (`gate-x86.md`, from CI's perf job on probe PR #1297):
+- **Script updates:** 8.0% fewer instructions, counted without update_bench's own data as the gate does from 0.1.8 (6.4% counted the old way); the lab's scroll 4.7%, and the other core cells −0.01 to −0.48%.
+- **Textured 3D:** a frame is 63% fewer instructions, on a bench overlaid on both sides.
+- **The example apps:** 0.06 to 0.40% more, followed up in #1276.
+- **x86:** the same picture. Script updates are 8.3% fewer counted the new way (6.7% the old way) and the lab's scroll 4.9%. `style` reads +0.22% from inlining that arm64 doesn't show, and `animate` and `anime` read +0.12% and +0.08%.
+
+# macOS suite (2026-10-30): 0.1.6, every scene on `e077e95`
+
+[`suite-macos-2026-10-30-e077e95`](suite-macos-2026-10-30-e077e95/): heavy, lab, animate and vlist on the v0.1.6 tag, in quiet window 39, on an M5 Max (Mac17,6) with macOS 26.4 (25E246) and a 120 Hz Studio Display XDR. It's the suite's protocol, with heavy idle in six rounds against each round's desktop, and powermetrics recording package, CPU and GPU power. Every scene was accepted, and no app exited abnormally. The rivals were built again from suite sources unchanged since 0.1.5. `python scripts/build_site.py docs/results/suite-macos-2026-10-30-e077e95 --startup docs/results/startup-macos-2026-10-26-03a9d89/startup.json --gate docs/results/gate-0.1.5-0.1.6/gate.json --previous docs/results/suite-macos-2026-10-28-d493d20 --field docs/results/field-macos-2026-10-27-238ef98 --rebuilt "…"` publishes it to `site/`.
+
+Medians, zgx / GPUI Fast / MyGo / Rune (vlist: zgx / zgx in Luau / GPUI Fast / MyGo / Rune):
+
+| Scene, mode | CPU (% of a core) | WindowServer CPU (%) | GPU power (mW) | Memory (MB) | Frame time p99 (ms) |
+| --- | --- | --- | --- | --- | --- |
+| heavy idle | 0.00 / 0.39 / 0.00 / 0.00 | -0.32 / -0.16 / -0.42 / -0.27 (over the desktop) | 0 / 0 / 0 / 0 | 53 / 74 / 65 / 75 | - |
+| heavy stream | 5.6 / 12.8 / 14.0 / 17.6 | 10.9 / 10.1 / 11.0 / 10.0 | 125 / 167 / 226 / 491 | 264 / 268 / 308 / 477 | 17.9 / 25.6 / 24.8 / 33.9 |
+| heavy scroll | 2.6 / 7.0 / 11.6 / 17.4 | 10.3 / 10.1 / 10.8 / 11.0 | 82 / 167 / 116 / 492 | 260 / 266 / 298 / 629 | 17.9 / 25.0 / 25.2 / 24.1 |
+| heavy both | 6.2 / 13.0 / 13.9 / 20.1 | 11.2 / 10.1 / 11.3 / 10.1 | 145 / 166 / 228 / 490 | 266 / 269 / 308 / 633 | 17.9 / 25.4 / 17.8 / 21.2 |
+| lab stream | 2.4 / 4.7 / 7.0 / 5.7 | 9.9 / 9.7 / 10.5 / 10.4 | 59 / 108 / 67 / 316 | 243 / 248 / 272 / 433 | 18.2 / 18.4 / 25.3 / 34.4 |
+| lab scroll | 2.2 / 3.8 / 5.5 / 5.2 | 10.1 / 9.6 / 10.8 / 9.8 | 63 / 106 / 100 / 308 | 242 / 246 / 263 / 430 | 17.8 / 18.0 / 17.9 / 41.2 |
+| lab both | 2.7 / 4.6 / 6.8 / 6.4 | 10.1 / 9.5 / 10.5 / 10.0 | 68 / 109 / 105 / 319 | 244 / 248 / 272 / 433 | 18.0 / 18.2 / 25.5 / 32.8 |
+| animate animate | 3.5 / 5.6 / 6.8 / 6.7 | 18.5 / 20.0 / 22.0 / 16.9 | 117 / 142 / 118 / 296 | 242 / 256 / 263 / 416 | 13.9 / 13.8 / 17.4 / 17.3 |
+| vlist scroll | 2.4 / 2.6 / 4.5 / 8.5 / 6.8 | 10.0 / 10.1 / 9.5 / 11.1 / 9.8 | 62 / 62 / 90 / 95 / 248 | 245 / 247 / 284 / 265 / 450 | 17.8 / 18.1 / 18.9 / 18.5 / 38.9 |
+| vlist fling | 2.5 / 2.6 / 4.7 / 8.6 / 8.0 | 10.1 / 10.1 / 9.4 / 11.1 / 9.7 | 62 / 62 / 90 / 96 / 248 | 245 / 247 / 287 / 265 / 452 | 18.0 / 18.4 / 18.4 / 18.5 / 41.1 |
+| vlist jump | 2.5 / 2.6 / 4.6 / 9.1 / 9.0 | 10.0 / 10.2 / 9.7 / 11.2 / 9.7 | 62 / 62 / 90 / 96 / 247 | 246 / 247 / 285 / 269 / 455 | 18.5 / 18.3 / 18.2 / 18.4 / 39.1 |
+
+In every test zgx uses the least CPU and the least GPU power, and none of its frames run long. It also has the least memory in every cell.
+
+**WindowServer CPU.** The site's verdict computes that WindowServer spends up to 1.6 points of a core more on zgx's window than on the lowest rival's, in 10 of 10 tests. At 0.1.5 it was 0.8 points, in 9 of 10. Much of that is this run's WindowServer CPU falling into per-launch levels:
+- **Animate:** read about 17 or about 20 per launch for several frameworks. Rune read 16.9, 16.9 and 20.2, GPUI Fast 17.7 to 20.6, and zgx 17.8 to 19.1. Rune's two low launches set the 1.6 points.
+- **Heavy:** zgx read 10.8 to 12.0 in both and 10.4 to 11.0 in stream (0.1.5: 10.4 to 10.9 and 10.0 to 10.5). In the same window, an hour earlier, a tiles build 27 commits before 0.1.6 read 10.47 in both and 10.51 in stream over six launches each. No renderer change between the two looks likely to affect WindowServer.
+
+Three launches can't separate these levels. A paired comparison in quiet window 40 found no regression. It used the suites' own heavy binaries, six launches each in rotated order, each launch less its round's desktop alone: heavy both moved −0.06 ± 0.04 points from 0.1.5 to 0.1.6, and heavy stream +0.06 ± 0.05. The suite now takes six launches of every active cell, each round with its desktop, and the site shows WindowServer less the desktop from the next run on.
+
+**Why zgx trails on WindowServer CPU at 60 Hz.** The remaining gap of about 0.4 points in the 60 Hz scenes is structural:
+- zgx shows each frame by flipping a tile layer: one Core Animation commit per frame.
+- With a main menu, AppKit gives every app 8 extra menu-bar contexts (11 in all on two displays), and a commit is delivered to every context in the process.
+- That's about 0.045 points per context at 60 commits a second, so about 0.35 to 0.4 points in all. Removing the menu measured 0.36 to 0.42 (window 39, cell A, in the flush lane's notes).
+- GPUI and Rune have the same 11 contexts, but commit nothing of their own per frame: they present Metal drawables.
+- zgx's tile path keeps its lead in app CPU, GPU power and memory.
+
+[`gate-0.1.5-0.1.6`](gate-0.1.5-0.1.6/) holds the release gate's exact counts: v0.1.5 (`d493d20a`) against the 0.1.6 freeze (`02319c0e`; the release commit bumps only versions), on arm64 (`gate.md`, sol's run in zgx-linux) and x86 (`gate-x86.md`, CI's perf job on probe PR #986). Every scene runs fewer instructions or is level:
+- **Luau:** the scenes run 2 to 3.6% fewer, mount 1.95% and the apps 1.5 to 3.1%. One VM now sets up in 1.53 M instructions, against 3.83 M at 0.1.5.
+- **Rust:** the scenes are level, −0.04 to +0.00%.
+
+# macOS suite (2026-10-28): 0.1.5, every scene on `d493d20`
+
+[`suite-macos-2026-10-28-d493d20`](suite-macos-2026-10-28-d493d20/): heavy, lab, animate and vlist on the v0.1.5 tag, measured right after it was published (quiet window 36), on an M5 Max (Mac17,6) with macOS 26.4 (25E246) and a 120 Hz Studio Display XDR. The protocol is the suite's, now with heavy idle in six rounds, each beside its desktop alone (#817). Every scene was accepted, and no app exited abnormally. The rivals were built again from suite sources unchanged since `1134537`. `python scripts/build_site.py docs/results/suite-macos-2026-10-28-d493d20 --startup docs/results/startup-macos-2026-10-26-03a9d89/startup.json --gate docs/results/gate-0.1.4-0.1.5/gate.json --previous docs/results/suite-macos-2026-10-27-1134537 --field docs/results/field-macos-2026-10-27-238ef98 --rebuilt "…"` publishes it to `site/`.
+
+Medians, zgx / GPUI Fast / MyGo / Rune (vlist: zgx / zgx in Luau / GPUI Fast / MyGo / Rune):
+
+| Scene, mode | CPU (% of a core) | WindowServer CPU (%) | GPU power (mW) | Memory (MB) | Frame time p99 (ms) |
+| --- | --- | --- | --- | --- | --- |
+| heavy idle | 0.00 / 0.40 / 0.00 / 0.00 | 0.00 / 0.00 / 0.00 / 0.00 (over the desktop) | 0 / 0 / 0 / 0 | 53 / 74 / 66 / 75 | - |
+| heavy stream | 5.6 / 12.4 / 14.9 / 17.8 | 10.2 / 10.1 / 11.0 / 10.0 | 121 / 165 / 226 / 491 | 264 / 267 / 307 / 477 | 17.9 / 25.4 / 25.5 / 25.8 |
+| heavy scroll | 2.7 / 7.2 / 11.4 / 18.1 | 10.4 / 10.2 / 10.9 / 9.9 | 84 / 167 / 116 / 494 | 260 / 266 / 298 / 630 | 18.2 / 24.9 / 23.9 / 33.6 |
+| heavy both | 6.7 / 13.3 / 15.6 / 21.3 | 10.7 / 9.9 / 11.0 / 10.2 | 146 / 168 / 229 / 491 | 265 / 277 / 308 / 630 | 17.8 / 25.4 / 25.3 / 25.4 |
+| lab stream | 2.6 / 4.9 / 7.7 / 6.4 | 9.9 / 9.8 / 10.8 / 10.7 | 59 / 108 / 65 / 311 | 243 / 248 / 272 / 432 | 18.1 / 18.7 / 19.8 / 34.2 |
+| lab scroll | 2.4 / 4.0 / 6.1 / 5.8 | 10.4 / 9.7 / 10.6 / 9.8 | 63 / 105 / 98 / 306 | 241 / 246 / 263 / 430 | 18.2 / 18.2 / 18.5 / 34.6 |
+| lab both | 3.0 / 5.4 / 7.7 / 7.1 | 10.0 / 9.7 / 10.5 / 10.2 | 67 / 109 / 106 / 318 | 243 / 248 / 272 / 433 | 18.5 / 23.3 / 19.1 / 33.6 |
+| animate animate | 3.7 / 5.9 / 7.3 / 7.0 | 18.0 / 20.0 / 22.1 / 20.8 | 113 / 136 / 113 / 291 | 241 / 256 / 263 / 426 | 14.3 / 17.6 / 17.4 / 17.5 |
+| vlist scroll | 2.6 / 2.5 / 4.7 / 8.9 / 7.2 | 10.2 / 10.1 / 9.4 / 11.4 / 10.4 | 61 / 61 / 89 / 94 / 247 | 244 / 246 / 284 / 264 / 449 | 18.3 / 18.6 / 18.0 / 25.3 / 33.9 |
+| vlist fling | 2.7 / 2.9 / 5.0 / 9.6 / 8.1 | 10.1 / 10.1 / 9.4 / 11.3 / 9.7 | 61 / 61 / 90 / 95 / 246 | 245 / 247 / 287 / 265 / 450 | 18.3 / 18.3 / 23.8 / 18.2 / 34.9 |
+| vlist jump | 2.6 / 2.8 / 5.2 / 10.1 / 9.7 | 10.0 / 10.1 / 9.5 / 11.1 / 9.5 | 61 / 61 / 90 / 95 / 246 | 245 / 248 / 285 / 268 / 455 | 19.2 / 18.8 / 25.1 / 25.3 / 33.6 |
+
+In every test zgx uses the least CPU and the least GPU power, and none of its frames run long. It also has the least memory in every cell. Against `1134537`, animate's GPU power came level with MyGo's and then below it (both round to 113 mW), and vlist jump's long frames are gone. Idle WindowServer is within noise: no app's median sits above its round's desktop alone, which itself read 0.21–0.32%.
+
+Where zgx isn't the lowest: WindowServer CPU in the 60 Hz scenes, by 0.1–0.8 points against GPUI Fast or Rune (heavy both 10.7 against GPUI Fast's 9.9). Animate's WindowServer CPU is the lowest of all.
+
+[`gate-0.1.4-0.1.5`](gate-0.1.4-0.1.5/) holds the release gate's exact counts, v0.1.4 (`c1ae154a`) against 0.1.5's head (`32657f6f`; the release commit bumps only versions). They were taken with a screen reader on for both sides, as 0.1.4's ran (`gate.md`, sol's run). Two scenes run more:
+- **style, +0.10%:** two approved trades, #835 and #807; the other changes since 0.1.4 make it 0.4% faster.
+- **app-code, +1.31%, and app-code-search, +1.38%:** these now free the document 0.1.4 leaked when its editor closed (#843), a one-time cost of about 1.2 M instructions.
+
+# macOS suite (2026-10-27): every scene on `1134537`, GPUI Fast with zgx's menu bar
+
+[`suite-macos-2026-10-27-1134537`](suite-macos-2026-10-27-1134537/): heavy, lab, animate and vlist on `1134537`, on an M5 Max (Mac17,6) with macOS 26.4 (25E246) and a 120 Hz Studio Display XDR. The protocol is the one the site's earlier runs used: 15 s trials sampled 5–15 s after the window is frontmost and uncovered, in rotating order, with pacing captured apart. Every scene was accepted, and no app exited abnormally. Every rival was built again. GPUI Fast now builds the same menu bar as zgx (#767: Services, Hide and Quit, and the Window menu). macOS gives every app's menu bar its own contexts in WindowServer, and each Core Animation commit reaches all of them, so the earlier runs' WindowServer figures favoured GPUI Fast. MyGo and Rune gained the blink and field apps, and their suite apps' sources are unchanged. `python scripts/build_site.py docs/results/suite-macos-2026-10-27-1134537 --startup docs/results/startup-macos-2026-10-26-03a9d89/startup.json --gate docs/results/gate-0.1.2-0.1.3/gate.json --previous docs/results/suite-macos-2026-10-27-d919995 --field docs/results/field-macos-2026-10-27-238ef98 --rebuilt "…"` publishes it to `site/`.
+
+Medians, zgx / GPUI Fast / MyGo / Rune (vlist: zgx / zgx in Luau / GPUI Fast / MyGo / Rune):
+
+| Scene, mode | CPU (% of a core) | WindowServer CPU (%) | GPU power (mW) | Memory (MB) | Frame time p99 (ms) |
+| --- | --- | --- | --- | --- | --- |
+| heavy idle | 0.00 / 0.38 / 0.00 / 0.00 | 0.6 / 0.6 / 0.2 / 0.2 | 0 / 0 / 0 / 0 | 53 / 75 / 65 / 75 | - |
+| heavy stream | 5.2 / 11.8 / 13.5 / 17.3 | 10.3 / 9.9 / 11.0 / 9.8 | 122 / 167 / 227 / 490 | 264 / 269 / 308 / 477 | 17.9 / 25.3 / 24.2 / 24.6 |
+| heavy scroll | 2.5 / 6.6 / 11.6 / 17.3 | 10.3 / 9.9 / 10.8 / 10.0 | 82 / 166 / 114 / 488 | 260 / 269 / 298 / 629 | 17.7 / 25.1 / 25.3 / 24.9 |
+| heavy both | 6.1 / 12.6 / 14.2 / 19.7 | 10.5 / 9.7 / 10.8 / 9.8 | 144 / 166 / 227 / 481 | 265 / 268 / 308 / 630 | 18.0 / 25.3 / 25.3 / 25.6 |
+| lab stream | 2.3 / 4.6 / 7.0 / 5.9 | 10.0 / 9.4 / 10.5 / 9.8 | 59 / 109 / 68 / 319 | 243 / 248 / 272 / 432 | 18.0 / 17.9 / 19.3 / 33.4 |
+| lab scroll | 2.2 / 3.7 / 5.8 / 5.4 | 10.0 / 9.5 / 10.6 / 9.7 | 64 / 106 / 100 / 311 | 241 / 246 / 262 / 418 | 19.6 / 18.3 / 25.3 / 25.6 |
+| lab both | 2.8 / 4.7 / 7.1 / 6.3 | 10.0 / 9.5 / 10.4 / 9.6 | 68 / 109 / 106 / 320 | 243 / 248 / 272 / 421 | 18.1 / 18.6 / 18.6 / 30.3 |
+| animate animate | 3.4 / 5.4 / 6.7 / 6.5 | 17.8 / 20.1 / 22.1 / 18.3 | 117 / 127 / 113 / 291 | 240 / 256 / 263 / 426 | 14.4 / 17.5 / 16.3 / 17.1 |
+| vlist scroll | 2.4 / 2.5 / 4.4 / 8.0 / 6.7 | 10.1 / 10.1 / 9.5 / 11.0 / 9.4 | 61 / 61 / 90 / 94 / 244 | 244 / 246 / 284 / 264 / 450 | 18.3 / 18.0 / 23.6 / 18.5 / 34.7 |
+| vlist fling | 2.5 / 2.6 / 4.6 / 8.7 / 7.5 | 10.3 / 10.1 / 9.5 / 11.1 / 9.5 | 61 / 61 / 90 / 96 / 245 | 244 / 247 / 287 / 264 / 451 | 21.8 / 18.4 / 24.2 / 25.3 / 34.1 |
+| vlist jump | 2.5 / 2.6 / 4.7 / 9.0 / 9.1 | 10.0 / 10.2 / 9.7 / 11.2 / 9.5 | 61 / 61 / 90 / 95 / 246 | 245 / 247 / 285 / 268 / 454 | 18.3 / 18.1 / 18.7 / 25.4 / 33.6 |
+
+zgx uses the least CPU in 10 of 10 active tests and the least GPU power in 9, and the least memory in every cell. Where it isn't the lowest:
+- **GPU power:** animate, 117 against MyGo's 113 mW.
+- **WindowServer CPU:** every 60 Hz scene, by 0.5–0.8 points against GPUI Fast or Rune. Heavy idle reads 0.6 against MyGo's and Rune's 0.2 (GPUI Fast 0.6). Both are being looked into.
+- **Long frames:** vlist jump, 0.2% of zgx's frames over 25 ms (median of three captures; 0–1.0%).
+
+Animate's WindowServer CPU is the lowest of all (17.8 against 18.3–22.1).
+
+**Vlist ticks.** An earlier attempt at this run's vlist had Rune's jump cells at 57.3–57.8 workload ticks per second, short of the scene's 60. Its per-tick costs there would not have been comparable, so the ruling was to accept the scene and mark Rune's cell, as an exception to the audit's rule. In this run every vlist cell held 59.8–59.9 ticks a second, Rune's jump included (59.83–59.89). The rule was met, and no exception or mark was needed.
+
+### The field on an M1 Max
+
+These are references for the field cells the site shows (`field-macos-2026-10-27-238ef98`, on the M5 Max), from the M1 runner's run [`field-reference-footprint-20261027T184008Z`](field-m1-2026-10-27/field-reference-footprint-20261027T184008Z/) (source `4ea3e16f`): an M1 Max (MacBookPro18,2, 10 CPU and 32 GPU cores, built-in 120 Hz ProMotion display), macOS 26.0.1 (25A362), each framework's own focused field left alone. The model comes from the runner's session record; the runs themselves record only macOS and the display.
+
+| | Memory (MiB) | App CPU (%) | WindowServer CPU (%) |
+| --- | --- | --- | --- |
+| zgx | 29.8 | 0.26 | 2.95 |
+| GPUI Fast (a blinking bar) | 52 | 1.6 | 2.4 |
+| MyGo | 68 | 1.09 | 2.7 |
+| Rune (its caret doesn't blink) | 41 | 0.07 | 1.5 |
+| AppKit's NSTextField | 23.9 | 0.25 | 5.7 |
+
+- **The caret's cost to WindowServer.** Focused against held still, the native caret costs WindowServer 4.6 points on the M1, and zgx's costs 1.5. So what a blinking caret costs there is the platform's (ProMotion after a change), and zgx's caret costs about a third of AppKit's own.
+- **No driver hold on the M1.** The M5 Max keeps about 176 MB of Metal driver memory for a command queue while frames come every few seconds. The M1 kept none: its graphics footprint stayed at 2.4–7.1 MiB in every cell of the caret cohort ([`caret-footprint-20261027T164945Z`](field-m1-2026-10-27/caret-footprint-20261027T164945Z/), the older CA-blink build `63cfc5dc`). That hold depends on the machine and the macOS version (26.0.1 there, 26.4 on the M5).
+
+Both runs are in [`field-m1-2026-10-27`](field-m1-2026-10-27/) as the runner recorded them, with two changes: home paths read `~` and the temporary directory `$TMPDIR`, and each launch's recorded environment drops `HOME`, `PATH`, `TMPDIR` and `USER` (the `ZGX_*` variables and `LANG` stay). Each run's `vmmap`-style region dumps (`*.verbose.log`, 31 MB) are packed in its `verbose-logs.tar.gz`. The runner's archive before these changes had sha256 `ef034f34babb93cd5ee017a618467c8eb6d3bda80b82de77af25ca352ed17568`; the binaries' and helpers' hashes in each record are unchanged.
+
+# Direct3D 11 against Direct3D 12 on Windows (2026-10-27)
+
+[`d3d11-proof-windows-2026-10-27`](d3d11-proof-windows-2026-10-27/): zgx-gpu's experimental Direct3D 11 path (`d3d11` feature, `ZGX_D3D11=1`) against the default, wgpu on Direct3D 12, in the Windows suite and at rest, one binary. On an RTX 4090: private memory about halved (lab 126 → 62 MiB), 15–36% fewer CPU cycles animating and 47% fewer at rest, first text at 227 ms against 280; pacing, DWM and board power level; about 10 µs more GPU a frame, which a bare Direct3D 11 swap chain pays too (`d3d_frame_floor`). Frames byte-identical, with Direct3D 12's shaders through FXC as Direct3D 11's are (docs/windows.md). NVIDIA only.
+
+# Windows suite (2026-10-27): DWM's CPU in cycles, on `ffbae9d`
+
+[`suite-windows-2026-10-27-ffbae9d`](suite-windows-2026-10-27-ffbae9d/): the same protocol, machine and display as the runs below, on `ffbae9d`: main at `faffcb48`, plus this change to the scripts. DWM's CPU is now `dwm.exe`'s cycles (`dwm_mcycles_per_second`), read from the system's process list (`docs/benchmarking.md`, On Windows); its tick-counted CPU time stays in the raw data. Every scene was accepted, and no app exited abnormally. GPUI Fast was rebuilt (the shared workload crate gained the blink scene's constants). MyGo's and Rune's lab, heavy, animate and list sources are unchanged, and so are their binaries. `python scripts/build_site.py docs/results/suite-windows-2026-10-27-ffbae9d --platform windows --startup docs/results/suite-windows-2026-10-27-ffbae9d/startup/startup.json` publishes it to `site/windows/`.
+
+Medians, zgx / GPUI Fast / MyGo / Rune (vlist: zgx / zgx in Luau / GPUI Fast / MyGo / Rune):
+
+| Scene, mode | CPU (M cycles/s) | DWM CPU (M cycles/s) | App GPU (ms/s) | Private memory (MB) | Frame time p99 (ms) |
+| --- | --- | --- | --- | --- | --- |
+| heavy idle | 1.6 / 12 / 1.5 / 5.0 | 68 / 68 / 84 / 81 | 0 / 0 / 0 / 0 | 154 / 106 / 132 / 380 | - |
+| heavy stream | 267 / 545 / 816 / 1120 | 148 / 159 / 175 / 222 | 11.0 / 12.6 / 18.7 / 10.2 | 160 / 112 / 152 / 391 | 17.5 / 33.6 / 17.2 / 17.3 |
+| heavy scroll | 105 / 259 / 647 / 1259 | 136 / 148 / 155 / 197 | 2.1 / 12.7 / 17.0 / 10.3 | 157 / 109 / 143 / 396 | 17.3 / 33.8 / 17.3 / 17.3 |
+| heavy both | 292 / 586 / 810 / 1412 | 140 / 166 / 169 / 204 | 13.2 / 12.6 / 19.1 / 10.2 | 161 / 113 / 152 / 396 | 17.2 / 33.6 / 17.3 / 17.3 |
+| lab stream | 98 / 154 / 398 / 261 | 132 / 130 / 148 / 158 | 3.2 / 6.5 / 6.4 / 7.3 | 135 / 95 / 135 / 377 | 17.2 / 33.6 / 17.4 / 17.4 |
+| lab scroll | 82 / 118 / 299 / 206 | 127 / 143 / 149 / 151 | 1.8 / 4.8 / 8.8 / 7.0 | 133 / 91 / 126 / 375 | 17.2 / 33.5 / 17.4 / 17.4 |
+| lab both | 106 / 181 / 398 / 247 | 134 / 155 / 151 / 154 | 3.4 / 6.4 / 11.5 / 7.2 | 134 / 94 / 136 / 382 | 17.2 / 17.4 / 17.4 / 17.4 |
+| animate | 94 / 97 / 262 / 134 | 132 / 147 / 139 / 144 | 2.0 / 3.4 / 3.4 / 5.3 | 132 / 91 / 121 / 372 | 17.2 / 17.2 / 17.3 / 17.3 |
+| vlist scroll | 88 / 88 / 135 / 402 / 278 | 143 / 138 / 145 / 148 / 150 | 2.6 / 2.6 / 7.4 / 12.4 / 6.5 | 146 / 148 / 109 / 143 / 392 | 17.3 / 17.3 / 33.5 / 17.4 / 17.5 |
+| vlist fling | 93 / 102 / 141 / 445 / 349 | 141 / 146 / 144 / 143 / 151 | 2.8 / 2.8 / 7.5 / 12.5 / 6.7 | 147 / 149 / 109 / 144 / 392 | 33.3 / 33.2 / 33.7 / 33.8 / 17.5 |
+| vlist jump | 93 / 92 / 143 / 452 / 412 | 144 / 133 / 143 / 140 / 141 | 2.9 / 2.9 / 7.8 / 12.9 / 6.7 | 141 / 144 / 110 / 148 / 396 | 33.5 / 17.3 / 33.7 / 33.4 / 17.6 |
+
+DWM, read in cycles, spends the fewest on zgx's window in heavy (every mode), lab scroll, lab both and animate. Elsewhere it is level: its worst ratio is 1.03× MyGo's, in vlist jump (144 against 140, with overlapping ranges). The tick-counted figure had put DWM at 1.29× (`a065781`) and 1.63× (`9562c78`), ratios that moved with the rivals' tick noise. The desktop alone reads 52–77 M cycles/s; the run's first baseline read 4.3.
+
+Startup (lab, medians of 10 launches): first content at 282 / 287 / 249 / 629 ms, 822 / 895 / 735 / 1963 M cycles by then.
+
+Startup was taken again (`manifest.json`, `startup_retaken`). In the run, every zgx launch took about 1,000 M cycles to first content (961–1,105, 362 ms median), while the rivals held within 2% of their usual. The same binaries were then measured four ways:
+- alone, against `a0657815`'s, 12 alternating launches: 846 against 853 M;
+- in the suite's rotation and power plan: 834 against 837 M;
+- from the build path and from a copy: 846 and 845 M;
+- this step re-run on its own (`--scenes startup`): 822 M.
+
+None reproduced the run's 1,000 M. The first-frame probe passed on every launch, and zgx's startup marks showed no phase grown. The extra cost (+47 ms of CPU, +82 ms to first content) matches compiling the shaders on every launch, but the shader cache's hits are not recorded, so it could not be confirmed. The run's own measurement is kept as `startup/startup.in-run.json`, and the re-run's is `startup/startup.json`.
+
+zgx uses the fewest CPU cycles in all 10 active tests and the least app GPU time in 8. Where it is not best, its worst ratio against the best rival per metric:
+- **Idle CPU:** 1.07× MyGo's (1.6 against 1.5 M cycles/s).
+- **App GPU time:** 1.30× Rune's, in heavy both.
+- **Memory:** 1.47× GPUI Fast's (Direct3D 12 against Direct3D 11; the floors are in `docs/windows.md`).
+- **Frame time:** p99 and long frames worst against Rune in vlist fling (zgx's whole-pixel tail, below).
+- **Startup to first content:** 1.13× MyGo's.
+
+zgx's vlist jump reads p99 33.5 ms here (17.3–17.4 in the runs below). Its three captures held 0, 19 and 10 long intervals against 0, 7 and 10 merged compositions. So one capture held up to 12 refreshes zgx may have missed, and the others none. zgx through Luau, on the same engine, held 2–3 long intervals in each, all but one merged. It is being looked into.
+
+# Windows suite (2026-10-27): every scene on `a065781`
+
+[`suite-windows-2026-10-27-a065781`](suite-windows-2026-10-27-a065781/): the same protocol, machine and display as the run below, on `a065781`, after Windows opened its GPU device beside the first window (#714) and presented timed frames clear of the compositor's latch (#734). Every scene accepted, no app exiting abnormally. GPUI Fast was rebuilt (its comparison app now sets the lab's menu bar, `03a9d895`); MyGo's and Rune's sources are unchanged, and their binaries too. `python scripts/build_site.py docs/results/suite-windows-2026-10-27-a065781 --platform windows --startup docs/results/suite-windows-2026-10-27-a065781/startup/startup.json` publishes it to `site/windows/`.
+
+Medians, zgx / GPUI Fast / MyGo / Rune (vlist: zgx / zgx in Luau / GPUI Fast / MyGo / Rune):
+
+| Scene, mode | CPU (M cycles/s) | App GPU (ms/s) | Private memory (MB) | Frame time p99 (ms) |
+| --- | --- | --- | --- | --- |
+| heavy idle | 1.3 / 10 / 0.8 / 4.1 | 0 / 0 / 0 / 0 | 153 / 106 / 132 / 378 | - |
+| heavy stream | 255 / 548 / 798 / 1051 | 11.1 / 12.6 / 19.0 / 10.3 | 159 / 112 / 153 / 391 | 17.2 / 33.6 / 17.4 / 17.4 |
+| heavy scroll | 107 / 256 / 629 / 1161 | 2.3 / 12.7 / 17.0 / 10.2 | 155 / 109 / 143 / 394 | 17.3 / 33.5 / 17.3 / 17.4 |
+| heavy both | 299 / 563 / 775 / 1327 | 13.3 / 12.6 / 18.7 / 10.3 | 160 / 112 / 152 / 396 | 17.4 / 33.6 / 17.3 / 17.4 |
+| lab stream | 125 / 177 / 414 / 242 | 3.4 / 6.3 / 6.4 / 7.1 | 133 / 94 / 135 / 378 | 17.2 / 33.6 / 17.3 / 17.5 |
+| lab scroll | 90 / 127 / 317 / 213 | 1.9 / 4.8 / 8.9 / 6.9 | 132 / 91 / 127 / 375 | 17.4 / 33.5 / 17.6 / 17.4 |
+| lab both | 107 / 177 / 404 / 247 | 3.5 / 6.6 / 11.6 / 7.2 | 133 / 95 / 135 / 379 | 33.2 / 33.6 / 17.3 / 17.4 |
+| animate | 98 / 102 / 268 / 149 | 2.0 / 3.3 / 3.4 / 5.2 | 131 / 91 / 121 / 370 | 17.3 / 17.3 / 17.4 / 17.5 |
+| vlist scroll | 94 / 99 / 140 / 409 / 274 | 2.6 / 2.8 / 7.3 / 12.6 / 6.5 | 146 / 147 / 109 / 142 / 392 | 17.3 / 17.3 / 33.5 / 33.6 / 17.5 |
+| vlist fling | 97 / 104 / 151 / 449 / 364 | 2.8 / 2.8 / 7.5 / 12.3 / 6.6 | 146 / 148 / 110 / 144 / 395 | 33.2 / 33.4 / 33.7 / 33.6 / 17.4 |
+| vlist jump | 102 / 112 / 154 / 427 / 438 | 2.9 / 2.9 / 7.7 / 13.3 / 6.7 | 141 / 144 / 110 / 150 / 396 | 17.3 / 17.3 / 33.5 / 33.4 / 17.4 |
+
+Startup (lab, medians of 10 launches): first content at 290 / 312 / 261 / 625 ms, 818 / 918 / 768 / 1937 M cycles by then. zgx's went from 323 ms and 947 M cycles: its GPU device now opens beside the first window (#714). It shows its window with its first frame (249 ms); MyGo and Rune show theirs at 45–51 ms and draw into it later.
+
+zgx uses the fewest CPU cycles in all 10 active tests and the least app GPU time in 8. Where it is not best, its worst ratio against the best rival per metric:
+- **Idle CPU:** 1.58× MyGo's (1.3 against 0.8 M cycles/s; NVIDIA's Direct3D 12 driver thread, below).
+- **Frame time p99:** 1.92× MyGo's in lab both (33.2 against 17.3 ms), and long frames 7.1× there (1.5 against 0.2%). These are the capture's misses, not zgx's: two of the three captures merged compositions (8 and 6 merged frames), and their long intervals (8 and 7) all but match them, so at most one was a refresh zgx missed. Merged frames come up for every framework, 6–23 in each scene's captures.
+- **Memory:** 1.44× GPUI Fast's (Direct3D 12 against Direct3D 11, below).
+- **App GPU time:** 1.29× Rune's in heavy both.
+- **DWM:** CPU 1.29× and GPU 1.04×.
+- **Startup to first content:** 1.11× MyGo's.
+
+Against `9562c78`, for zgx:
+- The heavy scene takes 7–9% fewer cycles (stream 279 → 255, both 322 → 299).
+- Long frames: lab stream 0.6 → 0%, lab scroll 3.5 → 0.2%. The latch (#734) ended the runs of missed refreshes.
+- DWM's CPU while zgx runs did not move with #734 (animate 2.79 → 2.80%). Its worst ratio fell from 1.63× because the rivals' tick-counted readings moved.
+- Lab stream's median reads 125 M cycles/s against 101, but that is between launches, not builds. Its repeats here were 100, 123, 128 and 132. Alternating `9562c78`'s binary with this one, six rounds each, read 110 and 108 (all twelve within 102–113).
+
 # Windows suite (2026-10-26): every scene on `9562c78`
 
 [`suite-windows-2026-10-26-9562c78`](suite-windows-2026-10-26-9562c78/): the macOS suite's scenes, frameworks and protocol on Windows (`scripts/run_windows_suite.py`, `docs/benchmarking.md`, On Windows), every scene accepted, no app exiting abnormally. An i7-12700KF with an RTX 4090 (driver 617.42), Windows 11 build 26200, a 60 Hz 1920×1080 display at 100%, the High performance plan held; a remote display host (Apollo) streamed the desktop throughout. `python scripts/build_site.py --platform windows` publishes it to `site/windows/`.

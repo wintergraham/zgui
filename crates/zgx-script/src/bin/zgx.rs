@@ -1,5 +1,11 @@
 //! `zgx`: developer tools for zgx-script.
 //!
+//! `zgx new <name> [--template T] [--i18n]` writes a Luau app that runs at
+//! once, with its tests and a CI workflow (`zgx_script::scaffold`).
+//!
+//! `zgx run [--inspect] <app> [args…]` runs the app by zgx-run (beside this
+//! binary, or on PATH), as `zgx audit` audits it.
+//!
 //! `zgx check [--nonstrict] <file-or-dir>...` type checks Luau scripts
 //! with luau-lsp and the bundled `ui`/`anime` definitions, printing
 //! `file:line:col` findings; it exits 1 when there are errors.
@@ -8,16 +14,41 @@
 //! they look or do not do what they look like (`zgx_script::lint`); it
 //! exits 1 when it finds any.
 //!
+//! `zgx types <dir>…` writes each app's own theme tokens as Luau types
+//! (`<dir>/.zgx/types.d.luau`, `zgx_script::app_types`), for editors to
+//! complete `"$app.…"`.
+//!
+//! `zgx test [<app-dir>] [<filter>]` runs the app's Luau tests
+//! (`*.test.luau`) against it mounted headless (`zgx_script::test_runner`).
+//!
+//! `zgx video <command>…` renders and previews videos by zgx-video (beside this
+//! binary, or on PATH): `zgx video help`.
+//!
 //! `zgx inspect <command>…` asks a running app serving devtools (`zgx-run
 //! --inspect`): its tree, nodes, states and errors, and clicks, typing and
 //! keys (`zgx_script::inspect`; `docs/agents/inspect.md`).
 use std::{path::PathBuf, process::ExitCode};
 use zgx_script::check::{CheckError, Options, Report, check};
 
-const USAGE: &str = "usage: zgx check [--nonstrict] <file-or-dir>...
+const USAGE: &str = "usage: zgx new <name> [--template basic|router|list|form|plugins] [--i18n]
+       zgx run [--inspect] <app.luau-or-dir> [args...]
+       zgx check [--nonstrict] <file-or-dir>...
        zgx lint [--format text|json] <file-or-dir>...
        zgx lint --rules
+       zgx types <dir>...
+       zgx test [<app-dir>] [<name filter>]
        zgx inspect [--app PID] [--json] <command> [args]   (zgx inspect help)
+       zgx audit [--human] <app.luau-or-dir>
+       zgx video render|still|list|studio <dir> …   (zgx video help)
+
+new: writes a Luau app into the directory <name> (empty or new): app.luau,
+components/, a theme, tests/, zgx.json, a README and a CI workflow running
+the checks below. `zgx run <name>` runs it, and check, lint, audit and test
+are clean. --i18n writes its text as ui.t messages with locales/en.json.
+
+run: opens the app in a window and reloads it as its files change
+(zgx-run, beside zgx or on PATH; `zgx-run --help` says what zgx.json sets).
+--inspect serves devtools (`zgx inspect help`).
 
 check: type checks zgx Luau scripts with luau-lsp, the bundled ui/anime
 types, the standard platform and the new type solver. Strict mode applies
@@ -26,14 +57,262 @@ unless a .luaurc (languageMode) or a --!nonstrict comment says otherwise.
 lint: zgx's best-practice rules (no luau-lsp needed). A finding names the
 cheaper way to write it; `-- zgx-lint: allow(rule)` on its line or the
 line above accepts a deliberate exception. It exits 1 when it finds any;
-`--format json` prints them as one JSON object for tools.";
+`--format json` prints them as one JSON object for tools.
+
+types: writes each app's own theme tokens (`ui.theme.tokens`) as Luau
+types to <dir>/.zgx/types.d.luau, for editors to complete \"$app.…\" (list
+it in luau-lsp's definition files). `zgx check` writes it too.
+
+audit: what assistive technology gets of an app, headless (zgx-run
+--audit): its first screen, then each command, each of its buttons
+pressed and each route, from a fresh start. One line of JSON (each finding's
+rule, target, role, name, detail, source line and state), or a table with
+--human. It exits 1 when it finds any (docs/accessibility-audit.md).
+
+test: runs the app's tests (files named *.test.luau under <app-dir>, `.` if
+not given), each against the app mounted headless: `test(name, body)`,
+`mount()` and `expect(v)` (docs/scripting.md, Testing an app). A filter runs the
+tests whose names hold it. It exits 1 when any fails.";
+
+/// `zgx types <dir>...`
+fn types(args: Vec<String>) -> ExitCode {
+    if args.is_empty() || args.iter().any(|a| a.starts_with('-')) {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
+    }
+    for dir in args.iter().map(PathBuf::from) {
+        if !dir.is_dir() {
+            eprintln!("zgx types: {} is not an app's directory", dir.display());
+            return ExitCode::from(2);
+        }
+        match zgx_script::app_types::write_lent_aliases(&dir) {
+            Ok(added) if !added.is_empty() => {
+                let names: Vec<String> = added.iter().map(|n| format!("@{n}")).collect();
+                println!(
+                    "added {} to {} (lent to this plugin by the app's zgx.json)",
+                    names.join(", "),
+                    dir.join(".luaurc").display()
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("zgx types: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+        match zgx_script::app_types::write_types(&dir) {
+            Ok(changed) => {
+                let file = zgx_script::app_types::types_file(&dir);
+                println!(
+                    "{} {}\n  (editors: add it to luau-lsp.types.definitionFiles)",
+                    if changed { "wrote" } else { "unchanged:" },
+                    file.display()
+                );
+            }
+            Err(error) => {
+                eprintln!("zgx types: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// `zgx audit [--human] <app.luau-or-dir>`: the app's accessibility audit,
+/// run headless by `zgx-run --audit` (beside this binary, or on PATH), which
+/// has the desktop's accessibility projection this tool doesn't link.
+fn audit(args: Vec<String>) -> ExitCode {
+    if args.iter().filter(|a| !a.starts_with('-')).count() != 1
+        || args.iter().any(|a| a.starts_with('-') && a != "--human")
+    {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
+    }
+    let run = zgx_run();
+    match std::process::Command::new(&run)
+        .arg("--audit")
+        .args(&args)
+        .status()
+    {
+        Ok(status) => ExitCode::from(status.code().unwrap_or(2).clamp(0, 255) as u8),
+        Err(error) => {
+            eprintln!(
+                "zgx audit: couldn't run {} ({error}); install zgx-run beside zgx or on PATH",
+                run.display()
+            );
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// `zgx new <name> [--template T] [--i18n]`
+fn new(args: Vec<String>) -> ExitCode {
+    let mut dir: Option<PathBuf> = None;
+    let mut template = zgx_script::scaffold::TEMPLATES[0].0.to_string();
+    let mut i18n = false;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--template" | "-t" => match args.next() {
+                Some(name) => template = name,
+                None => {
+                    eprintln!("zgx new: --template takes a name\n");
+                    for (name, about) in zgx_script::scaffold::TEMPLATES {
+                        eprintln!("  {name:8} {about}");
+                    }
+                    return ExitCode::from(2);
+                }
+            },
+            "--i18n" => i18n = true,
+            "-h" | "--help" => {
+                println!("{USAGE}\n\ntemplates:");
+                for (name, about) in zgx_script::scaffold::TEMPLATES {
+                    println!("  {name:8} {about}");
+                }
+                return ExitCode::SUCCESS;
+            }
+            flag if flag.starts_with('-') => {
+                eprintln!("zgx new: unknown option {flag}\n\n{USAGE}");
+                return ExitCode::from(2);
+            }
+            _ if dir.is_some() => {
+                eprintln!("{USAGE}");
+                return ExitCode::from(2);
+            }
+            path => dir = Some(PathBuf::from(path)),
+        }
+    }
+    let Some(dir) = dir else {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
+    };
+    match zgx_script::scaffold::create(&dir, &template, i18n) {
+        Ok(files) => {
+            for file in &files {
+                println!("  {}", file.strip_prefix(&dir).unwrap_or(file).display());
+            }
+            println!(
+                "\nMade {}. Next:\n  cd {}\n  zgx run .\n  zgx test",
+                dir.display(),
+                dir.display()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("zgx new: {error}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// `zgx test [<app-dir>] [<name filter>]`
+fn test(args: Vec<String>) -> ExitCode {
+    if args.len() > 2 || args.iter().any(|a| a.starts_with('-')) {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
+    }
+    let dir = PathBuf::from(args.first().map_or(".", String::as_str));
+    let filter = args.get(1).map(String::as_str);
+    let report = zgx_script::test_runner::run(&dir, filter, |outcome| {
+        let millis = outcome.duration.as_secs_f64() * 1e3;
+        match &outcome.failure {
+            None => println!("ok   {} ({millis:.0} ms)", outcome.name),
+            Some(failure) => {
+                println!("FAIL {} ({})", outcome.name, outcome.file.display());
+                for line in failure.lines() {
+                    println!("     {line}");
+                }
+            }
+        }
+    });
+    match report {
+        Ok(report) => {
+            let failed = report.failed();
+            eprintln!("{} passed, {failed} failed", report.outcomes.len() - failed);
+            if failed > 0 {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
+        Err(error) => {
+            eprintln!("zgx test: {error}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// The zgx-run beside this binary, else the one on PATH: what `zgx run`
+/// and `zgx audit` hand an app to (it links the desktop, which this tool
+/// doesn't).
+fn zgx_run() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .map(|exe| exe.with_file_name(format!("zgx-run{}", std::env::consts::EXE_SUFFIX)))
+        .filter(|run| run.is_file())
+        .unwrap_or_else(|| PathBuf::from("zgx-run"))
+}
+
+/// `zgx run [--inspect] <app.luau-or-dir> [args…]`: the app in a window,
+/// reloading as it changes, by zgx-run. On Unix zgx-run takes this
+/// process's place, so signals and the exit status are its own.
+fn run(args: Vec<String>) -> ExitCode {
+    if args.is_empty() {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
+    }
+    let run = zgx_run();
+    let mut command = std::process::Command::new(&run);
+    command.args(&args);
+    #[cfg(unix)]
+    let error = std::os::unix::process::CommandExt::exec(&mut command);
+    #[cfg(not(unix))]
+    let error = match command.status() {
+        Ok(status) => return ExitCode::from(status.code().unwrap_or(2).clamp(0, 255) as u8),
+        Err(error) => error,
+    };
+    eprintln!(
+        "zgx run: couldn't run {} ({error}); install zgx-run beside zgx or on PATH \
+         (cargo install zgx-run)",
+        run.display()
+    );
+    ExitCode::from(2)
+}
+
+/// `zgx video …`: handed to zgx-video (beside this binary, or on PATH), which
+/// links the renderer this tool doesn't.
+fn video(args: Vec<String>) -> ExitCode {
+    let name = format!("zgx-video{}", std::env::consts::EXE_SUFFIX);
+    let video = std::env::current_exe()
+        .ok()
+        .map(|exe| exe.with_file_name(&name))
+        .filter(|video| video.is_file())
+        .unwrap_or_else(|| PathBuf::from(&name));
+    match std::process::Command::new(&video).args(&args).status() {
+        Ok(status) => ExitCode::from(status.code().unwrap_or(2).clamp(0, 255) as u8),
+        Err(error) => {
+            eprintln!(
+                "zgx video: couldn't run {} ({error}); install zgx-video beside zgx or on PATH \
+                 (cargo install zgx-video)",
+                video.display()
+            );
+            ExitCode::from(2)
+        }
+    }
+}
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("check") => {}
+        Some("test") => return test(args.collect()),
+        Some("new") => return new(args.collect()),
         Some("lint") => return lint(args.collect()),
+        Some("types") => return types(args.collect()),
         Some("inspect") => return inspect(args.collect()),
+        Some("audit") => return audit(args.collect()),
+        Some("run") => return run(args.collect()),
+        Some("video") => return video(args.collect()),
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
             return ExitCode::SUCCESS;
@@ -173,19 +452,25 @@ fn lint(args: Vec<String>) -> ExitCode {
     }
 }
 
-const INSPECT_USAGE: &str = "usage: zgx inspect [--app PID] [--json] <command> [args]
+const INSPECT_USAGE: &str = "usage: zgx inspect [--app PID] [--window W] [--json] <command> [args]
 
 Asks a running app serving devtools (`zgx-run --inspect`, or
-ZGX_INSPECT_SOCKET=1): with one running, --app is not needed.
+ZGX_INSPECT_SOCKET=1): with one running, --app is not needed. --window asks
+another of its windows (an id from `windows`, or an item's key in ui.windows).
 
   list                                   apps serving devtools
+  windows                                the app's windows, sizes and popups open
   tree [target] [--depth N] [--budget N] [--all]
   node <target>        find <target>
   state [name] [--full]                  set <name> <json>
   click <target>       type <target> <text>      key <keys>
+  hover <target|x,y>   right-click <target|x,y>  drag <from> <to|x,y>
   scroll <target> <dy> command <id>
   errors               lint
-  frames [n] [--runs N] [--all] [--since MARK|FRAME] [--keep N]
+  contributions        each plugin's targets: where, live matches, error (JSON)
+  elements             named elements by the context they read, for plugins (JSON)
+  frames [n] [--runs N] [--all] [--since MARK|FRAME] [--until MARK|FRAME] [--summary] [--keep N]
+  reloads              each hot reload's path, partial or full, and why
   mark [name]          switch [name] [on|off]
   wait <target> [--text T] [--gone] [--timeout MS]
   snapshot <target> [--width PX] [--out file.png]
@@ -195,18 +480,22 @@ ZGX_INSPECT_SOCKET=1): with one running, --app is not needed.
   search [query] [--next] [--prev] [--all] [--close]
                        find in page: count, current, the first matches
   zoom [in|out|reset|150%]               the window's zoom and its viewport
+  memory [--human]                       what the app holds, a line each, as JSON
   sleep <ms>           raw <json>
   help                 what the app answers
   mcp                  serve these as MCP tools on stdio, for agents
                        (claude mcp add zgx -- zgx inspect mcp)
 
-Targets: #id, \"label or text\", role:button, @12, row 3, [2], a >> b.
+Targets: #id, .class, \"label or text\", role:button, @12, row 3, [2], a >> b.
 Text by default, compact; --json prints the answer as JSON.";
 
 fn inspect(args: Vec<String>) -> ExitCode {
     use zgx_script::{Value, inspect_client};
     let mut app: Option<u32> = None;
+    // Which of the app's windows answers (`windows` lists them).
+    let mut window: Option<String> = None;
     let mut json = false;
+    let mut human = false;
     let mut words: Vec<String> = Vec::new();
     let mut flags: Vec<(String, Option<String>)> = Vec::new();
     // Where `snapshot` copies its picture, or `record stop` writes its tape.
@@ -221,12 +510,20 @@ fn inspect(args: Vec<String>) -> ExitCode {
                     return ExitCode::from(2);
                 }
             },
+            "--window" => match args.next() {
+                Some(name) => window = Some(name),
+                None => {
+                    eprintln!("zgx inspect: --window takes a window's id or an item's key");
+                    return ExitCode::from(2);
+                }
+            },
             "--json" => json = true,
+            "--human" => human = true,
             "-h" | "--help" => {
                 println!("{INSPECT_USAGE}");
                 return ExitCode::SUCCESS;
             }
-            "--all" | "--full" | "--gone" | "--next" | "--prev" | "--close" => {
+            "--all" | "--full" | "--gone" | "--next" | "--prev" | "--close" | "--summary" => {
                 flags.push((arg[2..].to_string(), None))
             }
             "--out" => match args.next() {
@@ -237,7 +534,7 @@ fn inspect(args: Vec<String>) -> ExitCode {
                 }
             },
             "--depth" | "--budget" | "--text" | "--timeout" | "--width" | "--runs" | "--since"
-            | "--keep" | "--repeat" | "--every" => {
+            | "--until" | "--keep" | "--repeat" | "--every" => {
                 flags.push((arg[2..].to_string(), args.next()));
             }
             _ => words.push(arg),
@@ -246,6 +543,30 @@ fn inspect(args: Vec<String>) -> ExitCode {
     let Some(cmd) = words.first().cloned() else {
         eprintln!("{INSPECT_USAGE}");
         return ExitCode::from(2);
+    };
+    // The command's own fields (its MCP tool's arguments): a `key=value`
+    // word naming one is that field, as `--key value` is (`frames n=300`,
+    // `mark name=drag`); any other word stays where it is.
+    let declared: Vec<Arg> = TOOLS
+        .iter()
+        .filter(|tool| tool.1 == cmd)
+        .flat_map(|tool| tool.2.iter().copied())
+        .collect();
+    let words: Vec<String> = {
+        let mut kept = Vec::new();
+        for word in words {
+            match word.split_once('=') {
+                Some((key, value))
+                    if declared
+                        .iter()
+                        .any(|arg| arg.0 == key || (key == "timeout" && arg.0 == "timeout_ms")) =>
+                {
+                    flags.push((key.to_string(), Some(value.to_string())));
+                }
+                _ => kept.push(word),
+            }
+        }
+        kept
     };
     if cmd == "mcp" {
         return mcp();
@@ -262,13 +583,18 @@ fn inspect(args: Vec<String>) -> ExitCode {
     }
     let arg = |i: usize| words.get(i).cloned();
     let mut fields: Vec<(String, Value)> = vec![("cmd".into(), Value::from(cmd.as_str()))];
+    if let Some(window) = &window {
+        fields.push(("window".into(), Value::from(window.as_str())));
+    }
     let mut put = |k: &str, v: Option<String>| {
         if let Some(v) = v {
             fields.push((k.into(), Value::from(v.as_str())));
         }
     };
     match cmd.as_str() {
-        "tree" | "node" | "find" | "click" | "wait" | "snapshot" => put("target", arg(1)),
+        "tree" | "node" | "find" | "click" | "hover" | "right-click" | "wait" | "snapshot" => {
+            put("target", arg(1))
+        }
         "record" => {
             if arg(1).as_deref() == Some("stop") {
                 fields.push(("stop".into(), Value::Bool(true)));
@@ -293,6 +619,10 @@ fn inspect(args: Vec<String>) -> ExitCode {
         "type" => {
             put("target", arg(1));
             put("text", arg(2));
+        }
+        "drag" => {
+            put("target", arg(1));
+            put("to", arg(2));
         }
         "scroll" => {
             put("target", arg(1));
@@ -328,8 +658,12 @@ fn inspect(args: Vec<String>) -> ExitCode {
         } else {
             name
         };
+        let boolean = declared
+            .iter()
+            .any(|arg| arg.0 == key && arg.1 == "boolean");
         let value = match value {
             None => Value::Bool(true),
+            Some(v) if boolean && (v == "true" || v == "false") => Value::Bool(v == "true"),
             Some(v) => v
                 .parse::<f64>()
                 .map(Value::Num)
@@ -347,6 +681,16 @@ fn inspect(args: Vec<String>) -> ExitCode {
             _ => (k, v),
         })
         .collect();
+    // A field the command takes as a number, given as something else, is a
+    // mistake to say, not a default to fall back on.
+    for (key, value) in &fields {
+        if let Value::Str(text) = value
+            && declared.iter().any(|arg| arg.0 == key && arg.1 == "number")
+        {
+            eprintln!("zgx inspect: {cmd}: `{key}` takes a number, not `{text}`");
+            return ExitCode::from(2);
+        }
+    }
     let request = if cmd == "raw" {
         match arg(1).and_then(|r| Value::from_json(&r)) {
             Some(r) => r,
@@ -391,7 +735,10 @@ fn inspect(args: Vec<String>) -> ExitCode {
             eprintln!("zgx inspect: {out}: {error}");
             return ExitCode::FAILURE;
         }
-        if !json {
+        if cmd == "memory" && !json && !human {
+            // For agents first: its lines, as JSON. `--human` for the table.
+            println!("{}", data.cloned().unwrap_or_default().to_json());
+        } else if !json {
             let text = parsed
                 .field("text")
                 .map(Value::to_string)
@@ -423,6 +770,12 @@ const TOOLS: &[Tool] = &[
         "list",
         &[],
         "The running zgx apps serving devtools: pid and script.",
+    ),
+    (
+        "zgx_windows",
+        "windows",
+        &[],
+        "The app's windows: the main one and those it declares (ui.window, ui.windows), each with its id, size, title and popups open. Any tool's `window` argument then targets one.",
     ),
     (
         "zgx_tree",
@@ -461,6 +814,12 @@ const TOOLS: &[Tool] = &[
         "Find in page, as Cmd/Ctrl+F: case and accents ignored, all text including fields and virtual lists' unmounted rows. Answers the count, the current match and the first n (5; all with all): where each is (@node, or a list's row), its range, the text around it, its box if shown. next/prev step the current match in the window.",
     ),
     (
+        "zgx_memory",
+        "memory",
+        &[],
+        "What the app holds, by what holds it, one line each: the process's footprint and its allocator, each Luau VM's heap, decoded pictures shown and cached, text caches, the glyph atlas, GPU textures, layers and buffers, scene nodes and the frame log. Compare two answers to see which line grew.",
+    ),
+    (
         "zgx_zoom",
         "zoom",
         &[("to", "string", false)],
@@ -483,6 +842,24 @@ const TOOLS: &[Tool] = &[
         "click",
         &[("target", "string", true)],
         "Click a node.",
+    ),
+    (
+        "zgx_hover",
+        "hover",
+        &[("target", "string", true)],
+        "Move the pointer to a node's middle or to \"x,y\" in window points, for what shows on hover: a tooltip, a row's actions.",
+    ),
+    (
+        "zgx_right_click",
+        "right-click",
+        &[("target", "string", true)],
+        "Click the context button on a node or at \"x,y\": its context menu opens, and its items are nodes to click.",
+    ),
+    (
+        "zgx_drag",
+        "drag",
+        &[("target", "string", true), ("to", "string", true)],
+        "Drag with the primary button from a node (its middle) or \"x,y\" to a node or \"x,y\", in steps as a hand moves.",
     ),
     (
         "zgx_type",
@@ -515,6 +892,18 @@ const TOOLS: &[Tool] = &[
         "The script error, type errors, lint findings and layout warnings, or none.",
     ),
     (
+        "zgx_elements",
+        "elements",
+        &[],
+        "Where a plugin can put something and what it can read there: the app's ids, classes and hooks grouped by each element that provides context (`provide`), outermost the root, each group with a selector that reaches it and the context names it provides and inherits. Repeated rows are one entry with a count; private elements list nothing inside; names the source declares that aren't showing are `mounted: false`. A summary, then the same as JSON.",
+    ),
+    (
+        "zgx_contributions",
+        "contributions",
+        &[],
+        "Each plugin contribution at the app's elements (ui.contribute, ui.filter): plugin, target, place (before, after, replace, filter), how many elements it applies at now (0: its target matches nothing shown), and its latest error. A line each, then the same as JSON.",
+    ),
+    (
         "zgx_lint",
         "lint",
         &[],
@@ -528,9 +917,17 @@ const TOOLS: &[Tool] = &[
             ("runs", "number", false),
             ("all", "boolean", false),
             ("since", "string", false),
+            ("until", "string", false),
+            ("summary", "boolean", false),
             ("keep", "number", false),
         ],
-        "The last frames that did anything: each phase's time (update, layout, text, paint, present…), the GPU's own time, the states written, the runs they caused and their costs (the costliest `runs`, default 5, or `all`), and the engine's notes on why (a scroll repainted rather than copied, a wait for a later refresh). `since` a mark (zgx_mark) or a frame number reads what followed; `keep` sets how many frames are kept (default 480). Warns first when the window isn't presenting.",
+        "The last frames that did anything: each phase's time (update, layout, text, paint, present…), the GPU's own time, the states written, the runs they caused and their costs (the costliest `runs`, default 5, or `all`), and the engine's notes on why (a scroll repainted rather than copied, a wait for a later refresh). `since` a mark (zgx_mark) or a frame number reads what followed, `until` another stops there (an interaction between two marks); `summary` answers what those frames cost together instead: their count and pacing, the work's median, p90, p95, p99 and most, the input events they took and the work per event (a drag's moves), and each phase's spread. Each frame says its input events. `keep` sets how many frames are kept (default 480). Warns first when the window isn't presenting.",
+    ),
+    (
+        "zgx_reloads",
+        "reloads",
+        &[],
+        "Each hot reload since the app began watching its files: the files that changed, then `partial` (the app's VM kept: the modules that ran again, what changed and what requires it, and how many were kept) or `full` (everything loaded again) and why; a partial reload is taken only with ZGX_RELOAD=partial in the app's environment, else it's what the reload would have done (a plugin, a global set or a task started at a module's top level, a command or on_mount a kept module declares, a file that isn't a module, a template swapped whole, a failed reload). A line each, then the same as JSON.",
     ),
     (
         "zgx_mark",
@@ -576,7 +973,7 @@ const TOOLS: &[Tool] = &[
             ("repeat", "number", false),
             ("every", "number", false),
         ],
-        "Play a recorded wheel tape (a file) back at a node, through the window's own input path: answers the frames' pacing and work. `repeat` plays it several times and gives the spread; `every` (ms) spreads its motion over events that far apart, for a tape recorded while the window fell behind. Refused while the window isn't presenting (hidden or covered).",
+        "Play a tape (a file: recorded wheel input, or written pointer moves for a drag, a frame apart) back at a node, through the window's own input path: answers the frames' pacing, the work's percentiles, the input events and the work per event. `repeat` plays it several times and gives the spread; `every` (ms) spreads its motion over events that far apart, for a tape recorded while the window fell behind. Refused while the window isn't presenting (hidden or covered).",
     ),
     (
         "zgx_sleep",
@@ -605,7 +1002,7 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
-const TARGETS: &str = "Targets: #id, \"label or text\" (in quotes), role:button, @12 (a tree number), #list row 3, \"Copy\"[2], #a >> \"b\" (inside).";
+const TARGETS: &str = "Targets: #id, .class, \"label or text\" (in quotes), role:button, @12 (a tree number), #list row 3, \"Copy\"[2], #a >> \"b\" (inside).";
 
 /// `zgx inspect mcp`: devtools as MCP tools, JSON-RPC on stdin and stdout.
 fn mcp() -> ExitCode {
@@ -659,6 +1056,7 @@ fn mcp() -> ExitCode {
                                 })
                                 .collect();
                             properties.push(("app", Value::record([("type", Value::from("number")), ("description", Value::from("the app's pid, when several run"))])));
+                            properties.push(("window", Value::record([("type", Value::from("string")), ("description", Value::from("which of the app's windows answers: an id from zgx_windows, or an item's key in ui.windows (the main window if not given)"))])));
                             let required: Vec<Value> = args.iter().filter(|a| a.2).map(|a| Value::from(a.0)).collect();
                             Value::record([
                                 ("name", Value::from(*name)),
@@ -684,6 +1082,9 @@ fn mcp() -> ExitCode {
                     Some((_, "list", _, _)) => Ok(inspect_client::apps().iter().map(|a| format!("{} {}", a.pid, a.app)).collect::<Vec<_>>().join("\n")),
                     Some((_, cmd, params, _)) => {
                         let mut fields: Vec<(String, Value)> = vec![("cmd".into(), Value::from(*cmd))];
+                        if let Some(window) = args.field("window") {
+                            fields.push(("window".into(), window.clone()));
+                        }
                         let mut read: Result<(), String> = Ok(());
                         for (arg, _, _) in params.iter() {
                             match (*arg, args.field(arg)) {
@@ -708,7 +1109,11 @@ fn mcp() -> ExitCode {
                                     if let (Some(out), Some(tape)) = (&out, answer.field("data").and_then(|d| d.field("tape")).map(Value::to_string)) {
                                         std::fs::write(out, tape).map_err(|e| format!("{out}: {e}"))?;
                                     }
-                                    let text = answer.field("text").map(Value::to_string).unwrap_or_default();
+                                    let mut text = answer.field("text").map(Value::to_string).unwrap_or_default();
+                                    // What agents read as data, after its summary.
+                                    if matches!(*cmd, "contributions" | "elements") && let Some(data) = answer.field("data") {
+                                        text = format!("{text}\n{}", data.to_json());
+                                    }
                                     // A snapshot's picture, beside its text.
                                     if let Some(path) = answer.field("data").and_then(|d| d.field("path")).map(Value::to_string) {
                                         let png = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;

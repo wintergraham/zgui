@@ -41,7 +41,7 @@ def main():
         env.pop("WAYLAND_DISPLAY", None)
         xvfb = launch("xvfb", ["Xvfb", "-r", "-noreset", "-displayfd", "1", "-screen", "0", "%dx%dx24" % SCREEN, "-ac"], env,
                       stdout=subprocess.PIPE, text=True)
-        if not select.select([xvfb.stdout], [], [], 10)[0]:
+        if not select.select([xvfb.stdout], [], [], 30)[0]:
             raise RuntimeError("Xvfb startup timed out")
         env["DISPLAY"] = ":" + xvfb.stdout.readline().strip()
         launch("openbox", ["openbox"], env)
@@ -83,7 +83,7 @@ def main():
             lines = log.read_text().splitlines()
             return (sum(" render " in line for line in lines), sum(" popup draw " in line for line in lines))
 
-        main_window = until("the window", lambda: run("xdotool", "search", "--name", "^zgx typed drag$").split())[0]
+        main_window = until("the window", lambda: run("xdotool", "search", "--onlyvisible", "--name", "^zgx typed drag$").split())[0]
         run("xdotool", "windowactivate", "--sync", main_window)
         time.sleep(.5)
         x, y, w, h = geometry(main_window)

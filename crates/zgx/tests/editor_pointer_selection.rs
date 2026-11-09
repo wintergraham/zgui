@@ -134,6 +134,11 @@ fn triple_click_selects_the_paragraph_and_drags_by_paragraphs() {
         "abcdefghijklmnopqrst",
         "every wrapped row of it"
     );
+    // Presses past the third keep it, as Chrome's do: no caret again.
+    for _ in 0..2 {
+        click(&mut ui, 22., 40., false);
+        assert_eq!(editor.copy(), "abcdefghijklmnopqrst");
+    }
     let (mut ui, editor) = fixture("first\nsecond\nthird", 200., false);
     click(&mut ui, 22., 40., false);
     click(&mut ui, 22., 40., false);
@@ -234,4 +239,71 @@ fn single_line_triple_click_selects_all_and_cancel_stops_unit_drag() {
     assert!(ui.input.captured().is_none());
     move_to(&mut ui, 10., 20.);
     assert_eq!(editor.copy(), "one two three");
+}
+
+/// Inside a zoomed node (or a scaled one), a press and a drag land on the
+/// characters that show under the pointer: the same as at 100%, the
+/// pointer's window point mapped back through the zoom.
+#[test]
+fn a_press_and_a_drag_in_a_zoomed_editor_land_where_they_show() {
+    let editor_in = |zoom: f32| {
+        let mut ui = Ui::new(800., 600.);
+        let view = ui.mount(
+            column().zoom(zoom).child(
+                text_area("Document", ui.signal("abcdefghijklmnop".to_owned()))
+                    .id("ed")
+                    .size(200., 160.)
+                    .p(10.)
+                    .text_size(10.)
+                    .line_height(20.),
+            ),
+        );
+        ui.prepare_frame();
+        let node = view.find("ed").unwrap();
+        ui.input.focus(&ui.scene, Some(node));
+        let editor = ui.focused_editor().unwrap();
+        editor.editor.borrow_mut().set_selection(0, 0);
+        editor.refresh();
+        ui.prepare_frame();
+        (ui, editor)
+    };
+    for (x, to) in [(22., 52.), (33., 71.)] {
+        let (mut ui, editor) = editor_in(1.);
+        down(&mut ui, x, 20., false);
+        move_to(&mut ui, to, 20.);
+        up(&mut ui, to, 20.);
+        let plain = editor.copy();
+        let (mut ui, editor) = editor_in(2.);
+        down(&mut ui, x * 2., 40., false);
+        move_to(&mut ui, to * 2., 40.);
+        up(&mut ui, to * 2., 40.);
+        assert_eq!(
+            editor.copy(),
+            plain,
+            "dragged from {x} to {to}, shown twice as large"
+        );
+        assert!(!plain.is_empty());
+    }
+}
+
+/// A double click selects a word of Chinese, Japanese or Thai, which put no
+/// spaces between words, by dictionary (`cjk-thai-words`, on by default);
+/// without it, by Unicode's word boundaries: a character at a time.
+#[test]
+fn a_double_click_selects_a_chinese_japanese_or_thai_word() {
+    let on = cfg!(feature = "cjk-thai-words");
+    for (text, at, word, fallback) in [
+        // We / at / Beijing / university / study.
+        ("我们在北京大学学习。", 4, "北京", "京"),
+        // Tokyo / to / go.
+        ("東京に行きます", 1, "東京", "京"),
+        // Hello / (polite), by grapheme: ส วั ส ดี ค รั บ.
+        ("สวัสดีครับ", 3, "สวัสดี", "ดี"),
+    ] {
+        let (mut ui, editor) = fixture(text, 200., false);
+        let x = 13. + 6. * at as f32;
+        click(&mut ui, x, 20., false);
+        click(&mut ui, x, 20., false);
+        assert_eq!(editor.copy(), if on { word } else { fallback }, "{text}");
+    }
 }

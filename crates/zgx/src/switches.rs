@@ -45,10 +45,12 @@ pub static SCROLL_COPY: Switch = Switch::new(
     "scrolls copy what is drawn and paint the strip scrolled in; off, they repaint the view",
 );
 /// Steady frames hand over at a set point before a refresh (macOS's refresh
-/// grid and its latch); off, at once, as the display link's own frames do.
+/// grid and its latch), and on Windows clear of the compositor's latch
+/// (`frame_source::latch_wait`); off, at once, as the display link's own
+/// frames do.
 pub static REFRESH_GRID: Switch = Switch::new(
     "refresh_grid",
-    "steady frames present at a set point before a refresh (macOS); off, as soon as drawn",
+    "steady frames present at a set point before a refresh (macOS), or clear of the compositor's latch (Windows); off, as soon as drawn",
 );
 /// A frame paints only what changed (its damage); off, the whole window.
 pub static PARTIAL_REPAINT: Switch = Switch::new(
@@ -56,8 +58,15 @@ pub static PARTIAL_REPAINT: Switch = Switch::new(
     "frames paint only what changed; off, the whole window every frame",
 );
 
+/// A declared loop plays from frames drawn once (macOS's `zgx-gpu` loops.rs);
+/// off, it draws a frame each tick.
+pub static BAKED_LOOPS: Switch = Switch::new(
+    "baked_loops",
+    "small declared loops play from frames drawn once (macOS); off, they draw each tick",
+);
+
 /// Every switch.
-pub static ALL: [&Switch; 3] = [&SCROLL_COPY, &REFRESH_GRID, &PARTIAL_REPAINT];
+pub static ALL: [&Switch; 4] = [&SCROLL_COPY, &REFRESH_GRID, &PARTIAL_REPAINT, &BAKED_LOOPS];
 
 /// The switch named `name`.
 pub fn find(name: &str) -> Option<&'static Switch> {

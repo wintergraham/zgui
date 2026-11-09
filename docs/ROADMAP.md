@@ -13,6 +13,14 @@ Primary platforms: **Linux and macOS**, per user preference. Windows remains a p
 - [x] Keyed child reconciliation, dynamic conditional/list views and reusable components.
 - [x] Event dispatch, focus navigation, pointer capture and keyboard activation.
 - [x] Unicode text editing, selection, clipboard, IME composition, bounded undo/redo.
+- [ ] Known issue, for 0.1.6: a fixed-size row or column item held at its automatic minimum while its parent shrinks it (an 80-wide shrinkable column whose 80-wide child keeps it from narrowing, in a row too small for it and an 80-wide sibling) keeps its width when its content's least size drops (the child made narrower, clipped or absolute). A fresh layout makes it narrower, and the boxes after it move up. The item is a layout boundary (`is_layout_boundary`), so the change is laid out at the item alone, under its old room. Parked: every form found so far fixes it but costs on hot layout paths, against fixes' no-loss rule. The best is on branch `layout-boundary-min` (draft #904, tests in `crates/zgx/tests/layout_history.rs`, which fail on main). Forms measured (x86 CI, worst cells):
+  - recording rows that shrink and laying out from them (`layout/boundary-minimum`): 0.1% to 0.5% in app scenes;
+  - a bit set where the flex loop floors an item, read by `is_layout_boundary`: app-dashboard-sort +0.15%, micro-state +0.11% (parent relayouts that change nothing);
+  - held items in a map, checked when laid out alone: micro-state +0.23% (`automatic_minimum` outlined by its second caller), then +0.14% and +0.12% with the map write out of line and leaves skipped;
+  - only a check when laid out alone, from the siblings' sizes: wrong (rows full by `grow` read as shrunk: widgets +228%);
+  - a bit on a row or column that shrank its children (one comparison per flex loop) plus that check: script-update +0.16%, vscroll-fixed +0.14%, widgets +0.12% (arm64 gate at most +0.06%; the form on the branch).
+
+  Any instruction per measure or per boundary laid out alone shows as +0.03% to +0.15%, and a test in the invalidation walk changes `set_box`'s inlining (+1.4 to 3.4 M on heavy). Taffy's cache can't hold the answer: zgx lays out rows and columns itself (Taffy only takes `layout_options` containers).
 
 ## Rendering and platform
 
@@ -36,10 +44,13 @@ Primary platforms: **Linux and macOS**, per user preference. Windows remains a p
 
 ## Luau app ergonomics, against React
 
-[The team example](../crates/zgx-script/examples/team) (a list loaded from an API, a form checked as it is typed in a modal, a removal confirmed) was written to find what building a real app in Luau lacks. Fixed with it: `ui.resource` (data with loading, error and status states, loads keyed by the state they read, a stale answer dropped), a modal's or popover's `build` (its content new each time it opens, as React's conditionally rendered dialog), `ui.on_mount` outside components, `TestApp::shown`, `Value::record` (a map in any order; `Value::Map` must be sorted), option lists typed as plain lists, and `ui.form` with controls' `field` (checks as typed, Enter submitting, the first wrong field focused, errors heard by assistive technology as `aria-invalid`). Still awkward:
+[The team example](../crates/zgx-script/examples/team) (a list loaded from an API, a form checked as it is typed in a modal, a removal confirmed) was written to find what building a real app in Luau lacks. Fixed with it: `ui.resource` (data with loading, error and status states, loads keyed by the state they read, a stale answer dropped), a modal's or popover's `build` (its content new each time it opens, as React's conditionally rendered dialog), `ui.on_mount` outside components, `TestApp::shown`, `Value::record` (a map in any order; `Value::Map` must be sorted), option lists typed as plain lists, a fetcher in `zgx-run` (a networked Luau app needs no Rust host for its transport), and `ui.form` with controls' `field` (checks as typed, Enter submitting, the first wrong field focused, errors heard by assistive technology as `aria-invalid`).
 
-- `zgx-run` gives scripts no fetcher, so an app it runs cannot reach the network (`ui.fetch` errors): a networked Luau app needs a Rust host for its transport. A default one there means an HTTP dependency in `zgx-run`.
-- A save is a `ui.task`; `ui.try` gives its error typed as text (Luau types `pcall`'s as the function's result). Tasks cancel (`ui.task` returns a handle; resources and forms cancel their own), and a cancelled fetch stops its request (an action's host work goes on, its answer dropped).
+[The channels example](../crates/zgx-script/examples/channels) (a real-time team chat) was written the same way, against React with useWebSocket, react-virtuoso, tiptap's mentions and react-dropzone. Fixed with it, each a primitive: `ui.socket` and zgx-run's WebSocket connector, `ui.sleep`, a popover at an editor's caret and an editor's active descendant, files dropped from the system with their size and type, file and multipart uploads with progress, a list's `on_start` and `at_end` and its place kept as rows come in above, the window's active and shown states, system notifications with their clicks, and the app icon's badge. The mentions, emoji picker, presence and optimistic sends are the example's own Luau.
+
+[The settings example](../crates/zgx-script/examples/settings) (a profile loaded from an API, a form saved with an Undo toast, a switch saving at once and going back if refused) was written the way a React developer would, to find what still costs more. Fixed with it: `ui.form { values }` (a form filled from what is loaded and following it, an edited field keeping what was typed), `dirty` on a form and its fields, the form handed to `submit` and `on_success` (no forward declaration typed `Form?`), controlled checkboxes, sliders, steppers, segmented controls and selects (`value = function` with `on_change`), `reset` and `response.json` typed so a record fits without a cast, `TestApp::fill`, handlers that await (`ui.async`, cancelled with their owner), optimistic writes (`ui.optimistic`, safe when calls overlap), and errors a script branches on, as JavaScript's `catch` gets the error object (`ui.try`'s `UiError`: its `kind`, an HTTP failure's `status` and `body`, a raised value kept, still text where text goes). Tasks cancel (`ui.task` returns a handle; resources, forms and `ui.async` cancel their own), and a cancelled fetch stops its request (an action's host work goes on, its answer dropped).
+
+[The inbox example](../crates/zgx-script/examples/inbox) (a list searched as it is typed and loaded page by page, a thread view, settings as a modal route, folders dragged into order, routing with back, forward and deep links, the signed-in user and theme as context) was the second, bigger app written that way. Fixed with it: `ui.router` (named routes, history, the platform's back and forward input, deep links), overlays controlled by a function with `on_close` (a modal route), `ui.paged` and a list's `on_end` (pages loaded as the list's end comes in reach), `ui.debounced`, `ui.each`'s `reorder` (by drag and Alt+arrows, heard by a reader), and `TestApp::drag` and `scroll`. A node at opacity 0 takes no pointer, unlike CSS, which is documented rather than changed. Its routing, paging and reordering went from about 340 lines to 240.
 
 ## Quality and performance
 
@@ -54,6 +65,63 @@ Primary platforms: **Linux and macOS**, per user preference. Windows remains a p
 
 Platform-specific behavior is not considered validated merely because it compiles. Native Mac process CPU/RSS/physical-footprint smoke measurements now exist; matched hardware-GPU comparisons, presentation cadence and energy measurements remain unverified. The plan is updated as implementation and evidence arrive.
 
+## Breaking changes for 0.2
+
+0.1.x stays additive (cargo-semver-checks clean). Changes that need a break wait
+here, to land together:
+
+- [ ] `Brush` and `Background` `#[non_exhaustive]`, with radial, conic and
+  repeating gradients as brushes: a canvas can't fill with `radial` until then,
+  and it holds three stops as a shader's uniforms.
+- [ ] `Background::Image` with a position and a repeat (CSS's
+  `background-position` and `-repeat`): it is public and exhaustive, so a box's
+  `bg_image` stays centred and whole until then.
+- [ ] Hyphenation as a `FontStyle` field (`hyphens`), with `Styled::hyphens`
+  and Luau's `hyphens = "auto"`, rather than `FontFeatures::HYPHENS` (#1167):
+  `FontStyle` is exhaustive, so 0.1 carries it as a private feature tag that
+  replaces with the rest when a text sets features of its own. Resolve it in
+  the cold style path, so a node without it pays nothing.
+- [ ] Deprecate `Styled::blur`: it is the backdrop blur, where Luau's `blur` is
+  the content blur. `backdrop_blur` and `filter_blur` say which.
+- [ ] Named keys outside `Key`'s vocabulary. The desktop host drops every
+  winit `NamedKey` outside Tab, Enter, Space, Escape, the editing and
+  navigation keys, Insert, ContextMenu and F1–F35: media (play/pause, next,
+  previous, stop, volume up, down and mute), input-method keys (Kana, Eisu,
+  Convert/Henkan, NonConvert/Muhenkan, Hiragana, Katakana, Zenkaku/Hankaku,
+  Hangul, Hanja), PrintScreen, ScrollLock, Pause, NumLock, CapsLock, Help,
+  Clear, the Select, Find, Undo, Copy and Paste keys, Browser and Launch keys,
+  brightness and power. They reach no handler or binding. `Key` and
+  `InputEvent` are exhaustive, so a variant for them is a major change.
+  Design: `Key::Named(NamedKey)`, with `NamedKey` a `#[non_exhaustive]` enum of
+  those keys (and the keypad's identities, `NumpadEnter` and the others).
+  `Key` and `InputEvent` become `#[non_exhaustive]`, so later keys and events
+  are additive. Every backend maps them: winit's `NamedKey` on macOS, Windows
+  and Linux, and the Wayland and X11 paths' own. Keymaps,
+  `ui.command { keys = }` and the Luau key names take their names (`MediaPlayPause`,
+  `Kana`), and so do the docs and lint. Each backend has a mapping test. Until
+  then, a key's physical code binds it where the layout gives it a `Key`
+  (`KeyBinding::code`, added in 0.1.6).
+- [ ] `zgx::switches::ALL` becomes a slice (`&[&Switch]`). An array's length is
+  part of its type, so each new switch is a change of type: 0.1.7's
+  `BAKED_LOOPS` took it from `[&Switch; 3]` to `[&Switch; 4]`.
+- [ ] zgx-3d's `Material` and `Object` become `#[non_exhaustive]`, made by
+  builders (`Material::rgb(..).with(..)`, `Object::mesh(..).at(..)` already
+  are), so later fields are additive. They're public structs of public fields
+  today (`Material` is `Copy`), so a field is a major change. Then a mesh's
+  texture moves onto its `Material`: in 0.1.x textures come in as the
+  world's, per object, so nothing breaks.
+
+- [ ] An editor's tab width (`tab_width`, CSS's `tab-size`). Text is shaped
+  from `(text, size, width, &FontStyle)` alone (`FontTextShaper::shape`), and
+  every cosmic-text `Buffer` zgx-gpu builds (layout, raster, rich text, an
+  editor's lines) keeps cosmic-text's 8. `FontStyle` is a struct of public
+  fields made by literals outside zgx, so a field is a major change; carried
+  beside it instead, the width would thread through every shaping call and
+  its cache. Design: `FontStyle` becomes `#[non_exhaustive]` (made with
+  `..FontStyle::default()` or builders) and gains `tab_width`, inherited as
+  `tab-size` is; `View::tab_width` and Luau's `tab_width` set it, and each
+  `Buffer` takes it (`Buffer::set_tab_width`).
+
 ## Remaining validation and refinement
 
 Completed checkboxes describe implemented, tested capabilities, not complete platform coverage or a stable API release. The following work remains explicit:
@@ -62,7 +130,7 @@ Completed checkboxes describe implemented, tested capabilities, not complete pla
 - Surface acquisition recovery and desktop retry/focus policies have deterministic regression tests. Live X11 and Wayland DPI transitions now pass; real driver surface recreation remains unverified. Winit 0.30.13 emits formal suspension callbacks on Android/iOS/Web, not Linux/macOS; callback teardown/recreation is defensive portability coverage. Machine sleep/wake is a separate desktop scenario and remains unverified.
 - Real macOS 26.4 / Apple M5 Max execution now passes the complete Metal suite, including imported CoreVideo BGRA/NV12 pixels, reuse and teardown, plus component/multiwindow probes. Native AX tree/actions/selection, Unicode clipboard exchange with TextEdit, AppKit dialogs and substantial menu/layout/painting behavior were observed. See [the Mac continuation packet](platform-validation/macos-continuation/README.md) for source-specific checks and preserved failures.
 - Native Canadian dead-key composition now records marked `´` followed by exactly one `é` commit. A focus-transfer defect initially delivered stale `é` to the second editor; discarding AppKit's input-context state now yields plain `e`, followed by successful fresh `é` composition. Escape under this source commits a literal accent, so it does not validate candidate-based cancellation. Complete Pinyin commit/cancel/focus/candidate placement after explicit input-source permission is resolved.
-- Independently verify cursor shape, Insert delivery, held drag/Escape, Finder multi-file drop and custom-titlebar movement. Native two-file dialog selection/cancel now passes. Direct NSMenuItem reads verify checked/unchecked and enabled/disabled transitions, alongside native menu actions/replacement; checkmark pixels were not captured. Direct AppKit queries verify minimized/restored/hidden/shown visibility and key-window state; AX recovers after show. Native reopen and OS URL launch/delivery pass with a registered test receiver bundle. No unavailable check is counted as passed.
+- Cursor shape, Insert delivery, held drag/Escape, a Finder-style two-file drop and a custom title bar's drag request now pass ([native checks probe](validation.md#macos-cursors-insert-held-drags-file-drops-and-title-bars)); its first run found file drops going to the pointer's last place, fixed. The window server's move after a title-bar press follows the real pointer and is not probed. Native two-file dialog selection/cancel now passes. Direct NSMenuItem reads verify checked/unchecked and enabled/disabled transitions, alongside native menu actions/replacement; checkmark pixels were not captured. Direct AppKit queries verify minimized/restored/hidden/shown visibility and key-window state; AX recovers after show. Native reopen and OS URL launch/delivery pass with a registered test receiver bundle. No unavailable check is counted as passed.
 - GPU-default matched measurements, raw logs, renderer configuration and source archive are recorded in `docs/results`. The [Mac packet](platform-validation/macos-continuation/README.md) adds native release process CPU, RSS and physical-footprint smoke measurements. Repeat matched workloads on real target GPUs with longer trials and independent presentation/latency/energy evidence; no matched Mac ranking or measured presentation/energy result is claimed.
 - Run the matched GPUI/QuickGUI/zgx comparison on the final stabilized source. The historical post-parity Linux series remains valid, but later shared RGBA iteration changes, although equivalent, have not received a final-source matched measurement. Native decoded-GIF playback/pause integration now has current-source evidence; complex disposal/loop-limit decoder tests remain separate from that simple native GIF observation.
 - Historical pre-parity integrated checks passed: 600 workspace tests, 31 doctests, strict Clippy, formatting, macOS ARM64 all-target checking, native effects and host recreation. Source and binary evidence is frozen in `docs/platform-validation/retained-blur-batching`.
@@ -140,8 +208,9 @@ Keyboard/pointer opening, Left/Escape restoration, sibling replacement, disabled
 ownership, parent pointer handoff and outside-chain dismissal are implemented.
 Child-menu semantic ownership follows logical parentage through portals, with
 cycle/stale-reference protection. GPU readback, native AccessKit consumers and
-12 native X11 stages validate the public API. Hover opening is not automatic;
-submenus currently open explicitly by click or keyboard.
+12 native X11 stages validate the public API. Hovering a submenu's trigger row
+opens it and hovering another item of its menu closes it, as AppKit's menus do;
+a click or the keyboard opens it too.
 
 Owned component event hooks now compose through views, providers and slots, with
 explicit focusability and user listeners before built-in defaults. Native key
@@ -150,7 +219,9 @@ editor cleanup remains independent of cancellation. Native Wayland seat testing
 also exposed and fixed the X11-only clipboard backend. Standard Wayland data-device
 copy/paste now passes alongside pointer, keyboard, disabled controls and resize;
 native IBus/X11 IME now passes. Paced Wayland composition/cancellation is now
-validated below; burst-input reliability and native macOS interaction remain open.
+validated below; burst-input reliability remains open. On macOS, editing,
+Unicode clipboard exchange with TextEdit, Tab focus and resize are observed in the
+[Mac continuation packet](platform-validation/macos-continuation/README.md).
 
 Multiline editors now support inherited/reactive `.text_wrap(true)` using the
 allocated content width for rendering, hit testing, selections, caret and IME
@@ -159,7 +230,9 @@ the preferred column through short lines. Resizing, wheel scrolling, model edits
 and font changes preserve ownership and bounded invalidation. Trailing newline
 geometry includes its empty final row. Core, shaped Unicode/bidi, GPU differential
 and native X11 checks cover the public path. IBus/libpinyin X11 composition is
-now validated separately; Wayland/macOS input-method services remain open.
+now validated separately, and Wayland text-input-v3 composition passes a paced
+Sway/Fcitx5 smoke (below). macOS dead-key composition passes; macOS candidate
+(Pinyin) input remains open.
 
 Native Linux platform validation now includes live Wayland 1×/2×/1× scaling,
 X11 XSETTINGS DPI changes with stationary pointer input (normal and maximized
@@ -193,15 +266,18 @@ Percentage width/height now compose with fluent sparse styles, padding, flex,
 min/max constraints and absolute panels. Parent resize updates retained editors,
 images and viewport geometry. Indefinite normal-flow axes use intrinsic sizing
 instead of cyclic percentage solving. Component, core-layout and GPU damage tests
-cover the behavior; percentage min/max, margins and padding are not exposed.
+cover the behavior. Percentage min/max sizes, margins and padding are exposed too
+(`min_w_percent`, `m_percent`, `p_percent` and their per-edge forms), covered in
+`tests/advanced_layout.rs`.
 
 
 Inherited letter spacing now flows through component typography, font-aware
 measurement, editors, GPU text and the software renderer. Normalized style keys
 preserve equal-write suppression; native logical-pixel tracking converts to
 shaper em units. Tests cover Unicode geometry, signed tracking, bounded extreme
-values, selections, cache invalidation and bitmap reuse. The core-only fallback
-remains approximate, and rich-text runs are not yet exposed.
+values, selections, cache invalidation and bitmap reuse. A scene whose shaper
+takes no font spaces its advances exactly as the native shaper does (sizes and
+carets, wrapped or not); only a scene with no shaper at all estimates cells. Rich-text spans take it too (`TextSpan::letter_spacing`).
 
 
 A lifecycle audit added regression coverage for repeated keyed/provider/slot
@@ -269,7 +345,10 @@ and retained handles. Selection, navigation, copying and external model writes
 remain available; user mutation paths are blocked. Native IME permission follows
 editability without changing logical focus, including reset guards for rapid
 toggles during composition. AccessKit projection and real X11 clipboard/IBus
-checks cover the integrated behavior; native macOS validation remains open.
+checks cover the integrated behavior, and on macOS a probe of its own
+window (`scripts/macos_read_only_probe.py`) checks typing, Backspace, Return
+and input-method text change nothing while focus, selection and navigation
+work.
 
 Public mount initialization now carries temporary ownership through deferred
 first bindings, including initial keyed/conditional children. Failure removes

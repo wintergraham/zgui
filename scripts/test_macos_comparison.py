@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import plistlib
 import subprocess
 import tempfile
 import unittest
@@ -7,6 +8,40 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import run_macos_comparison as comparison
+
+
+class PowermetricsTests(unittest.TestCase):
+    def test_samples_end_with_nul_and_each_is_read(self):
+        # powermetrics -f plist ends each sample's plist with "\n\0".
+        sample = lambda cpu, gpu: plistlib.dumps({'processor': {
+            'cpu_power': cpu, 'gpu_power': gpu, 'combined_power': cpu + gpu}}) + b'\0'
+        process = Mock()
+        process.communicate.return_value = (sample(100., 2.) + sample(300., 4.), None)
+        self.assertEqual(comparison.power_of(process), {'package_mw': 203., 'cpu_mw': 200., 'gpu_mw': 3.})
+
+    def test_meter_waits_as_long_as_the_sampler(self):
+        with patch.object(comparison.subprocess, 'Popen') as spawn:
+            comparison.powermetrics(comparison.IDLE_SETTLE)
+        command = spawn.call_args.args[0][2]
+        self.assertTrue(command.startswith(f'sleep {comparison.IDLE_SETTLE};'))
+        self.assertIn(f'-n {comparison.SAMPLED}', command)
+
+
+class StillDesktopTests(unittest.TestCase):
+    def server(self, percent):
+        before = {7: ('WindowServer', 100.), 8: ('other', 1.)}
+        after = {7: ('WindowServer', 100. + percent / 20), 8: ('other', 9.)}
+        return patch.object(comparison.preflight, 'cpu_times', side_effect=[before, after])
+
+    def test_an_idle_window_server_passes(self):
+        with self.server(0.3), patch.object(comparison.preflight.time, 'sleep'):
+            self.assertEqual(comparison.preflight.desktop_still(), 0.3)
+
+    def test_a_desktop_that_draws_stops_the_run(self):
+        with self.server(14.5), patch.object(comparison.preflight.time, 'sleep'), \
+                patch.object(comparison.preflight.subprocess, 'run', return_value=SimpleNamespace(returncode=0)):
+            with self.assertRaisesRegex(SystemExit, r'14\.5%.*Wallspace'):
+                comparison.preflight.desktop_still()
 
 
 class ReadinessTests(unittest.TestCase):

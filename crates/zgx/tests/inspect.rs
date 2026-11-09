@@ -85,6 +85,27 @@ fn kinds(warnings: &[zgx::inspect::Warning], node: NodeId) -> Vec<WarningKind> {
         .collect()
 }
 
+/// A horizontal scroll with no height of its own, in a row as tall as its
+/// content (a tab strip): its viewport and content take that height as the
+/// engine means them to, which is no mistake to warn of.
+#[test]
+fn a_scroll_across_fitted_to_its_content_warns_of_nothing() {
+    let (ui, handle) = mounted(|ui| {
+        column().w_full().h_full().child(
+            row().items_center().child(
+                scroll_x(ui.signal(0.))
+                    .id("strip")
+                    .grow()
+                    .min_w(0.)
+                    .child(row().gap(2.).child(text("Alpha")).child(text("Beta"))),
+            ),
+        )
+    });
+    let warnings = layout_warnings(&ui);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+    assert!(handle.find("strip").is_some());
+}
+
 #[test]
 fn warnings_find_collapsed_overflowing_and_unresolved_boxes() {
     let (ui, handle) = mounted(suspicious);
@@ -118,6 +139,69 @@ fn warnings_find_collapsed_overflowing_and_unresolved_boxes() {
         .find(|w| w.kind == WarningKind::Overflow)
         .unwrap();
     assert!(overflow.message.contains("vertically by 80"), "{overflow}");
+}
+
+#[test]
+fn a_box_zero_on_purpose_and_what_holds_it_are_not_squeezed() {
+    let (ui, _handle) = mounted(|_| {
+        column()
+            .w(400.)
+            .h(300.)
+            // An anchor for what overflows it: zero by its own say, a column
+            // and text inside.
+            .child(div().w(0.).h(0.).child(column().child(text("anchored"))))
+            // A panel slid shut, in a wrapper sized by its content.
+            .child(
+                row().w(200.).h(20.).child(
+                    column()
+                        .id("wrap")
+                        .child(column().w(0.).child(text("inside"))),
+                ),
+            )
+    });
+    let warnings = layout_warnings(&ui);
+    let zero: Vec<_> = warnings
+        .iter()
+        .filter(|w| w.kind == WarningKind::ZeroSize)
+        .collect();
+    assert!(zero.is_empty(), "{zero:#?}");
+}
+
+#[test]
+fn overflow_faded_at_its_edge_is_deliberate() {
+    // A strip of tabs fading out at its right edge, and the same strip
+    // fading only at the edge nothing runs past; then a column fading at
+    // its bottom.
+    let strip = |id: &'static str, left: f32, right: f32| {
+        row()
+            .id(id)
+            .w(80.)
+            .h(20.)
+            .overflow_hidden()
+            .fade_edges_x(left, right)
+            .child(div().w(160.).h(20.).shrink_0())
+    };
+    let (ui, handle) = mounted(|_| {
+        column()
+            .child(strip("faded", 0., 12.))
+            .child(strip("wrong edge", 12., 0.))
+            .child(
+                column()
+                    .id("faded column")
+                    .w(80.)
+                    .h(40.)
+                    .overflow_hidden()
+                    .fade_edges(0., 12.)
+                    .fade_overflow(true)
+                    .child(div().w(80.).h(120.).shrink_0()),
+            )
+    });
+    let warnings = layout_warnings(&ui);
+    let overflows =
+        |id| kinds(&warnings, handle.find(id).unwrap()).contains(&WarningKind::Overflow);
+    assert!(!overflows("faded"));
+    assert!(overflows("wrong edge"));
+    assert!(!overflows("faded column"));
 }
 
 #[test]

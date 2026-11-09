@@ -132,6 +132,10 @@ kept for reuse. A popup's window is mapped off screen, takes its first
 frame there (an unmapped window's swapchain never completes a present), then
 moves into place; closed, it moves off and is unmapped. On Wayland a popup is
 an `xdg_popup` instead ([Popups on Wayland](#popups-on-wayland)).
+A popup's `backdrop_blur` blurs what its window last drew under it, on X11 and
+Wayland as on Windows ([Popups](windows.md#popups)); `popup_glass_smoke.py`
+checks it, over the window and past its edge.
+
 `popup_windows_smoke.py` checks a menu past its window's edge, at a scale of
 1 and of 2 (its window in the screen's pixels, where the scene put it, drawn
 to its far corner and chosen from).
@@ -212,6 +216,18 @@ container), text shapes to nothing and everything else draws; the first text
 says once on stderr why it does not show. Before, shaping panicked every
 frame and the window drew nothing. `no_fonts_smoke.py` runs the gallery
 with a fontconfig that lists only an empty directory.
+
+An app reads the system's fonts from a cache (`$XDG_CACHE_HOME/zgx/`, else
+`~/.cache/zgx/`). Otherwise fontdb parses fontconfig's configuration and opens
+every installed font at each launch: about 11.7 M instructions with 113
+fonts, against 0.46 M from the cache. The cache is used while these are
+unchanged:
+- the configuration files fontconfig read (and their directories);
+- the font directories they name;
+- the environment fontdb reads (`HOME`, `XDG_CONFIG_HOME`, `FONTCONFIG_FILE`).
+It also keeps the generic families fontconfig's aliases chose. A font file
+changed in place drops it for the next launch. Removing the file is always
+safe.
 On an X screen of 16 bits (some VNC servers, older setups) or 30 (deep
 colour), a window takes a TrueColor visual of 24 bits, or of 32 (the one
 compositing adds), rather than the screen's own (`x11_visual`): Mesa's Vulkan
@@ -415,50 +431,143 @@ Not yet: the grab (`xdg_popup.grab`, which moves the keyboard to the popup,
 so keys must come through a `wl_keyboard` of zgx's own with winit's
 keymap).
 
+## Terminals
+
+Terminals are drawn by zgx (the desktop host's `terminal` feature, which
+zgx-run turns on): a pseudoterminal from openpty, the shell started in a
+session of its own (`setsid`), its screen kept by `alacritty_terminal` and
+drawn in the window's own text, on X11 and Wayland alike. Input methods
+(XIM, IBus or Fcitx over Wayland's text input) compose at the cursor. See
+[native surfaces](native-surfaces.md#terminals) for what they show and
+what they can't do yet. `scripts/terminal_smoke.py` checks one on X11:
+typed keys and the app's input reach the shell, Ctrl+C interrupts, a
+curly and a double underline draw in the colours a program gives them, the
+grid follows the window's size, and an idle, focused terminal spends no
+CPU.
+
 ## Web views
 
-`zgx::web_view` has no Linux implementation: a web view shows its labelled
-placeholder and its controller still answers, as headless. This is a
-deliberate gap, not an oversight. Here is why, and what an implementation
-would take.
+`zgx::web_view` pages are WebKitGTK's (`webkit2gtk-4.1`), with the
+`webkitgtk` feature of `zgx-desktop` (off by default; `zgx-run` turns it on).
+The library is opened as the first page shows, not linked: a build with the
+feature needs nothing to build, and on a system without WebKitGTK 4.1
+(`libwebkit2gtk-4.1-0` on Debian and Ubuntu, `webkit2gtk4.1` on Fedora) pages
+render their placeholders and say so once on stderr. Without the feature
+nothing of this is compiled.
 
-On macOS and Windows a page is a surface of the window's own compositor tree:
-zgx renders a base plane under it and an overlay plane over it (a popover, a
-composer), and the frame's presents and the page's geometry commit in one
-transaction (Core Animation, DirectComposition), so the page moves with zgx
-content. Linux needs the page as a surface zgx's own window controls, and
-WebKitGTK cannot be one:
+```sh
+cargo run -p zgx-desktop --features webkitgtk --example web_view
+```
 
-- WebKitGTK (`webkit2gtk-4.1` on GTK 3, `webkitgtk-6.0` on GTK 4) is a GTK
-  widget. GTK draws it through its own display connection into a toplevel GTK
-  owns. Wayland has no cross-client embedding (a subsurface belongs to the
-  client that made its parent), and GTK cannot draw into a surface another
-  connection made. So a WebKitGTK page cannot sit inside a winit window on
-  Wayland, which is the default session on GNOME and KDE.
-- On X11, GTK 3 can embed by reparenting a GTK window into the zgx window
-  (XEmbed). GTK 4 removed `GtkSocket` and `GtkPlug`. wry's child web views do
-  this, and are X11-only for this reason. It would make web views X11-only in
-  zgx too, so an app would have to run under XWayland on Wayland desktops.
-  zgx paint over a page would have to be a separate child window, which X
-  cannot commit together with the page, so it would trail the page by a frame
-  while scrolling. GTK's main loop would also need to run alongside winit's.
+A page is drawn offscreen and shown as an image, the same on X11 and Wayland.
+Wayland cannot embed another client's surface (a subsurface belongs to the
+client that made its parent, and GTK draws through a connection of its own),
+and an X11 child window can't be faded, rounded but by a one-bit shape, or
+covered by translucent zgx content; WPE WebKit, made for hosts like this, is
+not packaged on Ubuntu 24.04. So each page is a `WebKitWebView` in a window
+drawn offscreen (below), on a thread of GTK's own running its main loop (winit's
+never runs GLib's; an idle page costs that thread's wait). What it draws is
+copied into a frame shared with the window, and the page's box is a GPU view
+(`zgx::gpu_view`) whose painter uploads the damaged part into a texture. So
+the page is clipped, rounded, faded, transformed and blurred under glass as
+any image is, and zgx content over it is ordinary paint: no planes, no
+second surface.
 
-The route that works on both is WPE WebKit, WebKit's port for hosts without a
-toolkit. Its fdo backend hands the host each rendered frame as a dmabuf:
-- On Wayland, zgx would attach those frames to a subsurface of its window,
-  between a base and an overlay subsurface, and commit the three together, as
-  macOS and Windows commit theirs.
-- On X11, the renderer would import them as textures.
+Input reaches the page's box as any node's does and goes to the page as GDK
+events. The page has keys before zgx does, but for those the app reserves
+(`KeyBinding::reserved`); those it leaves alone (WebKit sends them back to
+its window) come back to the app's shortcuts, as on macOS. An input method
+composes into the page through an input method context of zgx's, fed by the
+window's (IBus or Fcitx5, XIM or text-input-v3): the candidates follow the
+page's caret. A `<select>`'s popup is a zgx menu under the element; WebKit's
+own context menu and full screen are off. The cursor is the one WebKit sets,
+as it sets it: CSS's named cursors are the theme's, and an image cursor
+(`cursor: url(…)`) is the window's while the pointer is over the page, made of
+its image on Wayland and, on X11, the very cursor GDK made on the server. On X11 the page uses the system
+clipboard itself; on Wayland, where GTK's connection never has the keyboard
+and so can't set or read the selection, a paste key gives the page zgx's
+clipboard text first, and what the page copies goes to zgx's clipboard as
+text. Navigation, its state and events, history lists, script evaluation,
+messages (`window.zgx.postMessage`, with the sending document's origin and
+frame), user scripts, app schemes (each its own origin and a secure context),
+the navigation policy, new-window requests, profiles (named ones under
+`$XDG_DATA_HOME/<program>/web-profiles/<name>`), zoom, transparency and Web
+Inspector (a window of its own, as WebView2's is: WebKit, docking it in a
+page large enough, is told to detach it at once) work as on macOS.
 
-The costs:
-- zgx on Linux renders a single surface today, so the plane split would come
-  first. It would serve any native view, terminals included.
-- The host would forward pointer, keyboard, IME and touch input into the page,
-  as WebView2's visual hosting does on Windows.
-- The host would draw what the page asks for: cursors, `<select>` popups and
-  dialogs.
-- The page's accessibility tree would need its own bridge to AT-SPI.
-- WPE is a separate library from WebKitGTK, so apps would depend on it.
+Video and audio play through WebKit's GStreamer: `libwebkit2gtk-4.1-0`
+depends on `gstreamer1.0-plugins-base` and `-good`, which play WebM (VP8,
+VP9, Opus, Vorbis) and Ogg; H.264 and AAC need `gstreamer1.0-libav` (or
+`-plugins-bad` and `-ugly`), which an app shipping such media should ask
+its users for. WebKitGTK takes a page in a `GtkOffscreenWindow` for one in
+no window, and a page in no window starts no media (a `<video>` never asked
+for its source; an `AudioContext` stayed suspended). So a page's window is
+zgx's own `ZgxOffscreenWindow`: `GtkWindow`'s class with the methods
+`GtkOffscreenWindow`'s replaces (show, hide, realize, size requests and
+allocation, resizing), drawn offscreen as that one is, and embedded in the
+root window so that WebKit, asking which monitor it's on, gets one. Where
+GTK's classes differ from 3.24's otherwise, zgx says so once on stderr and
+pages show in a `GtkOffscreenWindow`, without media.
 
-That is a project of the size of the WebView2 host plus the Wayland plane
-split. It is not started.
+The page's accessible tree, which WebKit serves from its web process, is
+the window's too: the page's box is an internal frame (as a browser's iframe
+is) whose child is the page's document, and the document's parent is the
+box, so a screen reader following focus into the page finds the window
+above it. Orca reads the page's focused field, and in browse mode its
+headings by its heading keys. GTK's own window for the page is no window
+to a reader: it takes the role of a filler and announces no activation,
+and GTK in this process names WebKitGTK as its toolkit, so Orca keeps to
+its web script for the page's objects (named GTK, the page's root switched
+Orca to its GTK script at the page's focus, losing a mode switch or the
+next focus). Tab (or Shift+Tab) into a page's box focuses the page's first
+(or last) focusable element, as tabbing into a browser's frame does, and
+Orca names it with its role.
+
+A click on a page's plain content (no field, link or other focusable
+element) focuses nothing in it, in zgx as in a GTK window of WebKit's own:
+WebKit reports focus only for an element taking it, and never the
+document's. Orca reads where such a click moves the caret only when AT-SPI's
+registry has given it the click's button. On X11 the registry finds a
+button by polling the pointer, so a press and release closer together than
+its polls reach no one: `web-view-orca` holds each click's button until
+the registry reports the press, heard by an AT-SPI listener of its own.
+zgx can't report the document's focus for WebKit: the document is the web
+process's object, its events sent from that process's own connection, and
+WebKitGTK has no call to post one; focusing the document from a script
+needs a `tabindex` on it, which the page would see (its focus events,
+`document.activeElement`, `:focus` styles).
+
+Unlike macOS:
+
+- Each frame the page draws is copied on the CPU: WebKit paints it into
+  zgx's surface, and zgx copies and uploads its damaged parts
+  ([measured](native-surfaces.md#what-a-linux-page-frame-costs)). Video and
+  WebGL pages cost more than on macOS. While WebKit composites (the
+  default), a frame is the whole page, whatever moved;
+  `WebViewOptions::accelerated` off paints the page on the CPU and copies
+  only what changed, without `backdrop-filter` or 3D perspective.
+- The page renders at the window's scale through its zoom, so
+  `devicePixelRatio` is 1 at any scale.
+- A message posted to `window.webkit.messageHandlers.zgx` directly, rather
+  than through `window.zgx`, has no origin (empty) and `main_frame` false.
+- On Wayland the clipboard bridge carries what the page copies to other
+  apps: a selection as plain text and HTML, an image (the clipboard API, a
+  canvas's PNG) as `image/png`. The primary selection is the page's own,
+  and an image another app copied doesn't paste into a page (WebKitGTK
+  gives a page's paste no image, on X11 too).
+- A drag out of the page is zgx's: its link, image or selected text drops
+  on zgx's targets (as `DraggedText`, the selection or the address) and,
+  out of the window, on other apps (the address, the text, and an image's
+  bytes as WebKit has them, so a page behind a login drags its images too).
+  A selection goes as plain text. The page's own drag is cancelled once its
+  `dragstart` listeners ran (WebKit's GTK drag can't begin while zgx's
+  window holds the pointer), and the dragged element hears `dragend` as
+  zgx's drag ends.
+- A drag over the page is the page's, as a browser's is: its own drag
+  (back over it, or within it), zgx's text dragged onto it, and files from
+  another app reach it as `dragenter`, `dragover`, `dragleave` and `drop`
+  where the pointer is. The page's own drag carries the data its
+  `dragstart` set (`text/x-card` and the like, not only text); files come
+  as `File`s with their names, types and bytes (up to 64 MB in all; past
+  that, a file arrives empty). The events are made in the page (an
+  isolated script world gives them), so `event.isTrusted` is false.

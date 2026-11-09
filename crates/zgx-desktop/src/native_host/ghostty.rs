@@ -11,6 +11,12 @@
 //!
 //! App-level shortcuts (new tab, splits, close, tab and pane navigation) are
 //! unbound in Ghostty so they fall through to the app's menus.
+//!
+//! A surface's colours follow the theme where its node shows (the
+//! `terminal.*` tokens): each change loads its config again with them over
+//! the user's (`load_config`) and hands it to that surface, which repaints
+//! what it shows, scrollback included. A token the theme leaves unset keeps
+//! the user's colour.
 use objc2::{
     AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class,
     msg_send,
@@ -32,9 +38,11 @@ use std::{
     collections::HashMap,
     ffi::{CStr, CString, c_char, c_void},
     rc::Rc,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
-use zgx::terminal::{Terminal, TerminalBackend, TerminalCommand, TerminalEvent, WeakTerminal};
+use zgx::terminal::{
+    Terminal, TerminalBackend, TerminalColors, TerminalCommand, TerminalEvent, WeakTerminal,
+};
 use zgx_ghostty_sys as g;
 
 /// Overrides on top of the user's Ghostty configuration.
@@ -173,14 +181,57 @@ fn app() -> Option<g::ghostty_app_t> {
     APP.with(|cell| cell.get_or_init(App::new).as_ref().map(|app| app.app))
 }
 
+/// Ghostty's configuration: the user's files (`user`: their default and
+/// recursive files, or this one file), then this host's overrides and
+/// `colors` (Ghostty config lines) over them, finalized. Null if Ghostty
+/// could not make one; the caller frees it.
+///
+/// # Safety
+///
+/// `ghostty_init` has run, on this thread.
+unsafe fn load_config(user: Option<&std::path::Path>, colors: &str) -> g::ghostty_config_t {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    // SAFETY: Ghostty is initialized (the contract). `config` is checked
+    // non-null before use, and every path passed is a NUL-terminated
+    // `CString` alive for its call.
+    unsafe {
+        let config = g::ghostty_config_new();
+        if config.is_null() {
+            return config;
+        }
+        let load = |path: &std::path::Path| {
+            if let Ok(path) = CString::new(path.to_string_lossy().as_bytes()) {
+                g::ghostty_config_load_file(config, path.as_ptr());
+            }
+        };
+        match user {
+            Some(path) => load(path),
+            None => {
+                g::ghostty_config_load_default_files(config);
+                g::ghostty_config_load_recursive_files(config);
+            }
+        }
+        let path = std::env::temp_dir().join(format!(
+            "zgx-ghostty-{}-{}.conf",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        if std::fs::write(&path, format!("{CONFIG}{colors}")).is_ok() {
+            load(&path);
+        }
+        let _ = std::fs::remove_file(&path);
+        g::ghostty_config_finalize(config);
+        config
+    }
+}
+
 impl App {
     fn new() -> Option<Self> {
         // SAFETY: on the main thread, as Ghostty's app must be (`app()`'s
         // callers are the main-queue tick and `MacTerminal::new`, which has
         // a `MainThreadMarker`), once (`APP`'s cell). `ghostty_init` gets no
-        // arguments (argc 0).
-        // `config` is checked non-null before use and every string passed
-        // is a NUL-terminated `CString` alive for its call; the diagnostics'
+        // arguments (argc 0), and runs before `load_config`.
+        // `config` is checked non-null before use; the diagnostics'
         // messages are NUL-terminated strings the config owns, copied before
         // it goes. The callbacks match `ghostty_runtime_config_s`'s types and
         // never dereference their userdata. `ghostty_app_new` copies the
@@ -190,22 +241,11 @@ impl App {
                 eprintln!("zgx: ghostty_init failed");
                 return None;
             }
-            let config = g::ghostty_config_new();
+            let config = load_config(None, "");
             if config.is_null() {
                 eprintln!("zgx: ghostty_config_new failed");
                 return None;
             }
-            g::ghostty_config_load_default_files(config);
-            g::ghostty_config_load_recursive_files(config);
-            let path =
-                std::env::temp_dir().join(format!("zgx-ghostty-{}.conf", std::process::id()));
-            if std::fs::write(&path, CONFIG).is_ok()
-                && let Ok(path_c) = CString::new(path.to_string_lossy().as_bytes())
-            {
-                g::ghostty_config_load_file(config, path_c.as_ptr());
-            }
-            let _ = std::fs::remove_file(&path);
-            g::ghostty_config_finalize(config);
             for index in 0..g::ghostty_config_diagnostics_count(config) {
                 let diagnostic = g::ghostty_config_get_diagnostic(config, index);
                 if !diagnostic.message.is_null() {
@@ -510,17 +550,56 @@ extern "C" fn confirm_read_clipboard(
         if view.ivars().surface.get().is_null() {
             return;
         }
-        let (title, detail) = match request {
-            g::GHOSTTY_CLIPBOARD_REQUEST_PASTE => (
+        let paste = request == g::GHOSTTY_CLIPBOARD_REQUEST_PASTE;
+        let preview: String = text.chars().take(400).collect();
+        // Completes the request (once): the text, or an empty answer.
+        let answered = view.clone();
+        let answer = move |allowed: bool| {
+            let reply =
+                CString::new(if allowed { text } else { String::new() }).unwrap_or_default();
+            // Read now: a dialog's modal loop runs the main queue, where the
+            // terminal may have closed and freed its surface meanwhile.
+            let surface = answered.ivars().surface.get();
+            if surface.is_null() {
+                return;
+            }
+            // SAFETY: the view's surface is non-null, so not yet freed
+            // (`free` nulls it first); main thread (the request, holding
+            // this, is the main thread's). `state` is the request Ghostty
+            // kept for confirmation, completed only here, once (the request
+            // answers once); `reply` is NUL-terminated and outlives the call.
+            unsafe {
+                g::ghostty_surface_complete_clipboard_request(
+                    surface,
+                    reply.as_ptr(),
+                    state as *mut c_void,
+                    true,
+                )
+            };
+        };
+        // A program reading the clipboard (OSC 52): the app's to answer when
+        // it says it does (`Terminal::on_clipboard_read`), else the dialog's.
+        let request = if paste {
+            Some(zgx::terminal::ClipboardRead::new(answer))
+        } else {
+            match view.ivars().term.upgrade() {
+                Some(term) => {
+                    term.request_clipboard_read(zgx::terminal::ClipboardRead::new(answer))
+                }
+                None => Some(zgx::terminal::ClipboardRead::new(answer)),
+            }
+        };
+        let Some(request) = request else { return };
+        let (title, detail) = match paste {
+            true => (
                 "Paste this text?",
                 "It may run commands as soon as it is pasted.",
             ),
-            _ => (
+            false => (
                 "Let the program read your clipboard?",
                 "A program in this terminal asked to read it.",
             ),
         };
-        let preview: String = text.chars().take(400).collect();
         let allowed = rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Warning)
             .set_title(title)
@@ -531,25 +610,11 @@ extern "C" fn confirm_read_clipboard(
             ))
             .show()
             == rfd::MessageDialogResult::Custom("Allow".into());
-        let reply = CString::new(if allowed { text } else { String::new() }).unwrap_or_default();
-        // Read after the dialog: its modal loop runs the main queue, where
-        // the terminal may have closed and freed its surface meanwhile.
-        let surface = view.ivars().surface.get();
-        if surface.is_null() {
-            return;
+        if allowed {
+            request.allow();
+        } else {
+            request.deny();
         }
-        // SAFETY: the view's surface is non-null, so not yet freed (`free`
-        // nulls it first); main thread. `state` is the request Ghostty
-        // kept for confirmation, completed only here, once; `reply` is
-        // NUL-terminated and outlives the call.
-        unsafe {
-            g::ghostty_surface_complete_clipboard_request(
-                surface,
-                reply.as_ptr(),
-                state as *mut c_void,
-                true,
-            )
-        };
     });
 }
 
@@ -1134,6 +1199,21 @@ define_class!(
         // Keyboard.
         #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
+            // A shortcut no menu took (AppKit offers them first) that is a
+            // key binding of the app's: the app's, before the program's, up
+            // the responder chain to zgx's view, which hears it as one.
+            if event
+                .modifierFlags()
+                .intersects(NSEventModifierFlags::Command | NSEventModifierFlags::Control)
+                && super::macos::app_binds_key(self, event)
+            {
+                // SAFETY: AppKit's own responder chain, on the main thread;
+                // the next responder is a live view or the window.
+                if let Some(next) = unsafe { self.nextResponder() } {
+                    next.keyDown(event);
+                }
+                return;
+            }
             self.handle_key_down(event);
         }
         #[unsafe(method(keyUp:))]
@@ -1870,6 +1950,10 @@ impl TerminalView {
         if surface.is_null() {
             return false;
         }
+        // A shortcut the app keeps: the app's, before Ghostty's own binding.
+        if super::macos::take_reserved_key(self, event) {
+            return true;
+        }
         // A Ghostty binding (copy, paste, font size, ...): Ghostty's.
         let mut key = key_event(event, g::GHOSTTY_ACTION_PRESS, None);
         let chars = event
@@ -2178,6 +2262,25 @@ impl TerminalBackend for MacTerminal {
             _ => {}
         }
     }
+    fn set_colors(&self, colors: &TerminalColors) {
+        let surface = self.view.ivars().surface.get();
+        if surface.is_null() {
+            return;
+        }
+        let colors = super::ghostty_colors::config(colors);
+        // SAFETY: main thread, Ghostty initialized (the surface exists);
+        // the surface is non-null so live (`free` nulls it first). It copies
+        // what it keeps of the config (Surface.zig `updateConfig` derives its
+        // own), so the config is freed after.
+        unsafe {
+            let config = load_config(None, &colors);
+            if config.is_null() {
+                return;
+            }
+            g::ghostty_surface_update_config(surface, config);
+            g::ghostty_config_free(config);
+        }
+    }
     fn needs_confirm_close(&self) -> bool {
         let surface = self.view.ivars().surface.get();
         if surface.is_null() {
@@ -2221,7 +2324,103 @@ pub(crate) fn backend(term: &Terminal, mtm: MainThreadMarker) -> Option<Rc<dyn T
 
 #[cfg(test)]
 mod tests {
-    use super::shell_escape;
+    use super::{g, load_config, shell_escape};
+    use std::ffi::c_void;
+    use zgx::{
+        reactive::Runtime,
+        terminal::TerminalColors,
+        theme::{DARK, Theme, Themes},
+    };
+
+    /// The colour `key` holds in `config`.
+    fn color(config: g::ghostty_config_t, key: &str) -> (u8, u8, u8) {
+        let mut out = g::ghostty_config_color_s { r: 0, g: 0, b: 0 };
+        // SAFETY: a live config; `out` is the C type Ghostty writes a
+        // colour key's value as; `key` is read for `len` bytes.
+        let found = unsafe {
+            g::ghostty_config_get(
+                config,
+                (&raw mut out).cast::<c_void>(),
+                key.as_ptr().cast(),
+                key.len(),
+            )
+        };
+        assert!(found, "{key}");
+        (out.r, out.g, out.b)
+    }
+    /// The palette `config` holds.
+    fn palette(config: g::ghostty_config_t) -> Vec<(u8, u8, u8)> {
+        // SAFETY: zeroed is a valid palette (plain bytes).
+        let mut out: g::ghostty_config_palette_s = unsafe { std::mem::zeroed() };
+        let key = "palette";
+        // SAFETY: as in `color`, with the palette's C type.
+        let found = unsafe {
+            g::ghostty_config_get(
+                config,
+                (&raw mut out).cast::<c_void>(),
+                key.as_ptr().cast(),
+                key.len(),
+            )
+        };
+        assert!(found);
+        out.colors[..16].iter().map(|c| (c.r, c.g, c.b)).collect()
+    }
+
+    #[test]
+    fn the_themes_colours_go_over_the_users_and_an_unset_one_keeps_theirs() {
+        // SAFETY: no arguments; then configs made, read and freed here.
+        assert_eq!(
+            unsafe { g::ghostty_init(0, std::ptr::null_mut()) },
+            g::GHOSTTY_SUCCESS as i32
+        );
+        let dir = std::env::temp_dir().join(format!("zgx-ghostty-user-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let user = dir.join("config");
+        std::fs::write(
+            &user,
+            "foreground = #dddddd\nbackground = #111111\npalette = 1=#ff5555\npalette = 2=#50fa7b\n",
+        )
+        .unwrap();
+        let runtime = Runtime::new();
+        let themes = Themes::of(&runtime);
+        themes.register(
+            Theme::from_json(
+                r##"{ "name": "test-paper", "type": "light", "tokens": {
+                    "terminal.foreground": "#202124", "terminal.ansi.1": "#b00020" } }"##,
+            )
+            .unwrap(),
+        );
+        let effective = || {
+            let colors = super::super::ghostty_colors::config(&TerminalColors::of(themes.root()));
+            // SAFETY: initialized above; the config is freed after reading.
+            unsafe {
+                let config = load_config(Some(&user), &colors);
+                assert!(!config.is_null());
+                let out = (
+                    color(config, "foreground"),
+                    color(config, "background"),
+                    palette(config),
+                );
+                g::ghostty_config_free(config);
+                out
+            }
+        };
+        for _ in 0..3 {
+            themes.set("test-paper").unwrap();
+            let (foreground, background, palette) = effective();
+            assert_eq!(foreground, (0x20, 0x21, 0x24));
+            assert_eq!(palette[1], (0xb0, 0x00, 0x20));
+            // Unset in the theme: the user's.
+            assert_eq!(background, (0x11, 0x11, 0x11));
+            assert_eq!(palette[2], (0x50, 0xfa, 0x7b));
+            themes.set(DARK).unwrap();
+            let (foreground, background, palette) = effective();
+            assert_eq!(foreground, (0xdd, 0xdd, 0xdd));
+            assert_eq!(background, (0x11, 0x11, 0x11));
+            assert_eq!(palette[1], (0xff, 0x55, 0x55));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn dropped_paths_are_escaped_for_the_shell() {

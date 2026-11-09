@@ -293,6 +293,51 @@ fn glass_over_a_native_view_gets_a_platform_backdrop_shaped_to_the_node() {
 }
 
 #[test]
+fn glass_scaled_over_a_native_view_keeps_its_platform_backdrop() {
+    // A transform makes the glass a layer of its own, whose contents the
+    // split walks with the root's effects taken off; its blur is still
+    // over the page, as a selector's pill is while it scales to a width.
+    let mut ui = Ui::new(1000., 600.);
+    let natives = supported();
+    let web = WebView::new(&ui.runtime, WebViewOptions::default());
+    let view = ui.mount(provide(
+        natives.clone(),
+        overlay()
+            .w(1000.)
+            .h(600.)
+            .child(web_view(&web).id("page").w_full().h_full())
+            .child(
+                div()
+                    .id("pill")
+                    .absolute()
+                    .left(100.)
+                    .top(100.)
+                    .w(100.)
+                    .h(40.)
+                    .rounded(20.)
+                    .blur(12.)
+                    .bg(rgba(0xffffff30))
+                    .transform_origin(0., 0.)
+                    .scale_xy(2., 1.),
+            ),
+    ));
+    ui.prepare_frame();
+    let (split, _) = split(&ui, &natives, &PlaneSplit::default());
+    let pill = view.find("pill").unwrap();
+    let backdrops = split.backdrops();
+    assert_eq!(backdrops.len(), 1, "the scaled glass keeps its backdrop");
+    let glass = &backdrops[0];
+    assert_eq!(glass.node, pill);
+    assert_eq!(glass.rect, Rect::new(100., 100., 200., 40.));
+    assert_eq!(glass.radii, [20.; 4], "corners scale by the lesser axis");
+    assert_eq!(glass.sigma, 12. * 2f32.sqrt());
+    assert!(split.in_overlay(pill));
+    let (again, damage) = PlaneSplit::compute(&ui.scene.borrow(), &natives.nodes(), &split);
+    assert_eq!(again.backdrops(), split.backdrops());
+    assert!(damage.is_empty(), "a still pill adds no damage");
+}
+
+#[test]
 fn without_native_views_everything_is_base_and_nothing_is_computed() {
     let mut ui = Ui::new(400., 300.);
     let natives = supported();
@@ -457,6 +502,44 @@ fn unmounting_unregisters_and_unsupported_windows_show_a_placeholder() {
     assert!(natives.is_empty());
     // The controller (and its queued navigation) lives on.
     assert_eq!(web.url(), "https://example.com/");
+}
+
+/// Where the host draws pages itself (`PageViews`, Linux's), a page's box is
+/// what it makes: no native view registered, nothing platform painted, the
+/// page's styles on it; where it makes none, the native view as before.
+#[test]
+fn a_host_drawing_pages_makes_their_boxes() {
+    let mut ui = Ui::new(400., 300.);
+    let natives = supported();
+    let drawn = WebView::new(&ui.runtime, WebViewOptions::default());
+    let native = WebView::new(&ui.runtime, WebViewOptions::default());
+    let asked = Rc::new(RefCell::new(Vec::new()));
+    let pages = {
+        let (drawn, asked) = (drawn.clone(), asked.clone());
+        zgx::web_view::PageViews::new(move |web| {
+            asked.borrow_mut().push(web.id());
+            (*web == drawn).then(|| div().child(div().id("drawn page").w_full().h_full()))
+        })
+    };
+    let view = ui.mount(provide(
+        natives.clone(),
+        provide(
+            pages,
+            column()
+                .child(web_view(&drawn).id("first").w(200.).h(100.).rounded(8.))
+                .child(web_view(&native).id("second").w(200.).h(100.)),
+        ),
+    ));
+    ui.prepare_frame();
+    assert_eq!(*asked.borrow(), vec![drawn.id(), native.id()]);
+    let (first, second) = (view.find("first").unwrap(), view.find("second").unwrap());
+    assert!(view.find("drawn page").is_some());
+    assert_eq!(natives.nodes(), vec![second]);
+    let scene = ui.scene.borrow();
+    assert!(!scene.is_platform_painted(first));
+    assert!(scene.is_platform_painted(second));
+    assert_eq!(scene.bounds(first).width, 200.);
+    assert_eq!(scene.bounds(first).height, 100.);
 }
 
 struct Recorder(RefCell<Vec<String>>);
@@ -661,9 +744,52 @@ fn a_host_view_takes_the_pointer_through_pass_through_paint_and_focus() {
 }
 
 #[test]
+fn a_layer_away_from_the_page_stays_on_the_base_plane() {
+    // A button pressed in the sidebar scales: its subtree becomes a layer the
+    // split's walk never reaches (it only looks near the page). The base
+    // plane must still draw it.
+    let mut ui = Ui::new(1000., 600.);
+    let natives = supported();
+    let web = WebView::new(&ui.runtime, WebViewOptions::default());
+    let pressed = ui.signal(1.0_f32);
+    let scale = pressed.clone();
+    let root = row()
+        .w(1000.)
+        .h(600.)
+        .child(
+            column().w(200.).h_full().child(
+                div()
+                    .id("button")
+                    .w(80.)
+                    .h(26.)
+                    .bg(rgb(0x343430))
+                    .reactive_style(move || Styles::default().scale(scale.get()))
+                    .child(text("Work")),
+            ),
+        )
+        .child(web_view(&web).id("page").w(800.).h(600.));
+    let view = ui.mount(provide(natives.clone(), root));
+    ui.prepare_frame();
+    let (first, _) = split(&ui, &natives, &PlaneSplit::default());
+    pressed.set(0.94);
+    ui.prepare_frame();
+    let (split, _) = split(&ui, &natives, &first);
+    let button = view.find("button").unwrap();
+    let scene = ui.scene.borrow();
+    assert!(scene.is_layer(button));
+    let items = scene.layer_items(None);
+    let mut base = items.clone();
+    split.filter(&mut base, Plane::Base);
+    assert!(
+        base.iter().any(|item| item.id == button),
+        "the pressed button's layer left the base plane"
+    );
+}
+
+#[test]
 fn a_hollow_box_over_a_page_takes_the_pointer_only_while_it_shows_something() {
     use zgx::native_view::NativeContent;
-    // A full-size box holding a page kept mounted (an app's Settings) over
+    // A full-size box holding a page kept mounted (an app's settings) over
     // a web page: while what it holds is hidden or invisible, the web page
     // takes the pointer; shown, it does (it has no listeners of its own).
     let mut ui = Ui::new(800., 600.);
@@ -718,45 +844,200 @@ fn a_hollow_box_over_a_page_takes_the_pointer_only_while_it_shows_something() {
     }
 }
 
+/// What a page's file inputs ask of the window: the pickers shown, and the
+/// files the next one returns (`None`: the person cancelled).
+#[derive(Default)]
+struct Files {
+    asked: RefCell<Vec<zgx::platform::FilePicker>>,
+    answer: RefCell<Option<Vec<std::path::PathBuf>>>,
+}
+impl zgx::platform::Platform for Files {
+    fn clipboard_text(&self) -> Option<String> {
+        None
+    }
+    fn set_clipboard_text(&self, _: String) -> bool {
+        false
+    }
+    fn open_files(
+        &self,
+        picker: zgx::platform::FilePicker,
+    ) -> zgx::platform::Pending<Result<Vec<std::path::PathBuf>, String>> {
+        self.asked.borrow_mut().push(picker);
+        let answer = self.answer.borrow().clone().unwrap_or_default();
+        Box::pin(async move { Ok(answer) })
+    }
+    fn save_file(
+        &self,
+        _: zgx::platform::FilePicker,
+    ) -> zgx::platform::Pending<Result<Option<std::path::PathBuf>, String>> {
+        Box::pin(async { Ok(None) })
+    }
+    fn open_folder(
+        &self,
+        picker: zgx::platform::FilePicker,
+    ) -> zgx::platform::Pending<Result<Option<std::path::PathBuf>, String>> {
+        self.asked.borrow_mut().push(picker);
+        let answer = self
+            .answer
+            .borrow()
+            .clone()
+            .and_then(|files| files.into_iter().next());
+        Box::pin(async move { Ok(answer) })
+    }
+}
+
 #[test]
-fn a_layer_away_from_the_page_stays_on_the_base_plane() {
-    // A button pressed in the sidebar scales: its subtree becomes a layer the
-    // split's walk never reaches (it only looks near the page). The base
-    // plane must still draw it.
-    let mut ui = Ui::new(1000., 600.);
-    let natives = supported();
+fn a_pages_file_input_asks_the_windows_file_dialog_and_always_hears_back() {
+    use std::path::PathBuf;
+    use zgx::{compose::TaskRunner, task::LocalExecutor};
+    let files = Rc::new(Files::default());
+    let executor = Rc::new(RefCell::new(LocalExecutor::new()));
+    let mut ui = Ui::new(400., 300.);
     let web = WebView::new(&ui.runtime, WebViewOptions::default());
-    let pressed = ui.signal(1.0_f32);
-    let scale = pressed.clone();
-    let root = row()
-        .w(1000.)
-        .h(600.)
-        .child(
-            column().w(200.).h_full().child(
-                div()
-                    .id("button")
-                    .w(80.)
-                    .h(26.)
-                    .bg(rgb(0x343430))
-                    .reactive_style(move || Styles::default().scale(scale.get()))
-                    .child(text("Work")),
-            ),
-        )
-        .child(web_view(&web).id("page").w(800.).h(600.));
-    let view = ui.mount(provide(natives.clone(), root));
+    let replies: Rc<RefCell<Vec<Option<Vec<PathBuf>>>>> = Rc::default();
+    let ask = |multiple: bool, folder: bool| {
+        let replies = replies.clone();
+        web.choose_files(multiple, folder, move |files| {
+            replies.borrow_mut().push(files)
+        });
+    };
+    // No node shows the page: no dialog, and the page hears it cancelled.
+    ask(false, false);
+    assert_eq!(*replies.borrow(), [None]);
+    let handle = ui.mount(provide(
+        TaskRunner::from_executor(executor.clone()),
+        provide(
+            zgx::platform::PlatformService(files.clone()),
+            web_view(&web).w(300.).h(200.),
+        ),
+    ));
     ui.prepare_frame();
-    let (first, _) = split(&ui, &natives, &PlaneSplit::default());
-    pressed.set(0.94);
-    ui.prepare_frame();
-    let (split, _) = split(&ui, &natives, &first);
-    let button = view.find("button").unwrap();
-    let scene = ui.scene.borrow();
-    assert!(scene.is_layer(button));
-    let items = scene.layer_items(None);
-    let mut base = items.clone();
-    split.filter(&mut base, Plane::Base);
-    assert!(
-        base.iter().any(|item| item.id == button),
-        "the pressed button's layer left the base plane"
+    // Several files, chosen.
+    let chosen = vec![PathBuf::from("/tmp/a.txt"), PathBuf::from("/tmp/b.txt")];
+    *files.answer.borrow_mut() = Some(chosen.clone());
+    ask(true, false);
+    executor.borrow_mut().tick();
+    assert_eq!(replies.borrow()[1], Some(chosen.clone()));
+    // One file; cancelled (nothing chosen) is `None`, not an empty list.
+    *files.answer.borrow_mut() = None;
+    ask(false, false);
+    executor.borrow_mut().tick();
+    assert_eq!(replies.borrow()[2], None);
+    // A folder input (`webkitdirectory`) asks for a folder.
+    *files.answer.borrow_mut() = Some(vec![PathBuf::from("/tmp")]);
+    ask(false, true);
+    executor.borrow_mut().tick();
+    assert_eq!(replies.borrow()[3], Some(vec![PathBuf::from("/tmp")]));
+    let asked: Vec<_> = files
+        .asked
+        .borrow()
+        .iter()
+        .map(|p| (p.title.clone(), p.multiple))
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            ("Choose Files".to_owned(), true),
+            ("Choose a File".to_owned(), false),
+            ("Choose a Folder".to_owned(), false),
+        ]
+    );
+    // The node goes while a dialog is open: the page still hears back.
+    *files.answer.borrow_mut() = Some(chosen);
+    ask(false, false);
+    handle.unmount();
+    executor.borrow_mut().tick();
+    assert_eq!(replies.borrow().len(), 5);
+    assert_eq!(replies.borrow()[4], None);
+}
+
+/// A page's find goes to its platform page, which answers it; with none
+/// yet, or for no text, it finds nothing at once.
+#[test]
+fn find_asks_the_platforms_page_and_always_answers() {
+    use std::cell::Cell;
+    use zgx::web_view::{FindOptions, FindResult};
+    struct Finder(RefCell<Vec<(String, bool, bool)>>, Cell<u32>);
+    impl WebViewBackend for Finder {
+        fn run(&self, _: WebViewCommand) {}
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn find(&self, text: &str, options: &FindOptions, reply: Box<dyn FnOnce(FindResult)>) {
+            self.0
+                .borrow_mut()
+                .push((text.to_owned(), options.backwards, options.case_sensitive));
+            let mut found = FindResult::default();
+            found.found = true;
+            found.matches = Some(3);
+            reply(found);
+        }
+        fn clear_find(&self) {
+            self.1.set(self.1.get() + 1);
+        }
+    }
+    let ui = Ui::new(100., 100.);
+    let web = WebView::new(&ui.runtime, WebViewOptions::default());
+    let answers: Rc<RefCell<Vec<FindResult>>> = Rc::default();
+    let ask = |text: &str, options: FindOptions| {
+        let answers = answers.clone();
+        web.find(text, options, move |found| answers.borrow_mut().push(found));
+    };
+    // No platform page yet: nothing found, at once.
+    ask("word", FindOptions::default());
+    assert_eq!(*answers.borrow(), [FindResult::default()]);
+    let finder = Rc::new(Finder(RefCell::default(), Cell::new(0)));
+    web.attach(finder.clone());
+    ask(
+        "word",
+        FindOptions::default().backwards(true).case_sensitive(true),
+    );
+    // No text: nothing to find, the page not asked.
+    ask("", FindOptions::default());
+    assert_eq!(*finder.0.borrow(), [("word".to_owned(), true, true)]);
+    assert_eq!(answers.borrow().len(), 3);
+    assert!(answers.borrow()[1].found && answers.borrow()[1].matches == Some(3));
+    assert!(!answers.borrow()[2].found);
+    web.clear_find();
+    assert_eq!(finder.1.get(), 1);
+}
+
+/// A page's download is the app's handler's: without one, or with the
+/// responder dropped, it's cancelled; `save_to` gives where.
+#[test]
+fn downloads_go_to_the_apps_handler_and_are_cancelled_without_one() {
+    use std::path::PathBuf;
+    use zgx::web_view::{DownloadRequest, DownloadResponder};
+    let ui = Ui::new(100., 100.);
+    let web = WebView::new(&ui.runtime, WebViewOptions::default());
+    let answers: Rc<RefCell<Vec<Option<PathBuf>>>> = Rc::default();
+    let start = |name: &str| {
+        let answers = answers.clone();
+        web.download(
+            DownloadRequest::new("https://page.test/f", name, "text/plain"),
+            DownloadResponder::new(move |answer| {
+                answers.borrow_mut().push(answer.map(|(path, _)| path))
+            }),
+        );
+    };
+    start("none.txt");
+    assert_eq!(*answers.borrow(), [None], "no handler: cancelled");
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    {
+        let heard = heard.clone();
+        web.set_download_handler(move |request, responder| {
+            heard.borrow_mut().push(request.name.clone());
+            if request.name == "keep.txt" {
+                responder.save_to("/picked/keep.txt", |_| {});
+            }
+        });
+    }
+    start("keep.txt");
+    start("drop.txt");
+    assert_eq!(*heard.borrow(), ["keep.txt", "drop.txt"]);
+    assert_eq!(
+        *answers.borrow(),
+        [None, Some(PathBuf::from("/picked/keep.txt")), None],
+        "saved where it says; a dropped responder cancels"
     );
 }

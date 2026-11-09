@@ -1,6 +1,7 @@
 //! Native accessibility tree translation. Stable IDs survive incremental updates.
+pub mod audit;
 use accesskit::{Action, Node, NodeId as AccessibleId, Tree, TreeId, TreeUpdate};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use unicode_segmentation::UnicodeSegmentation;
 use zgx::{
     scene::{NodeId, Scene},
@@ -16,17 +17,25 @@ use zgx::{
 pub(crate) const GEOMETRY_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Whether a change goes to assistive technology at once rather than paced
-/// (`GeometryPacer`): focus moving always; names, values and selection
-/// changing while a screen reader runs (`screen_reader`, asked only then),
-/// as it speaks them. Other clients (the touch keyboard's host, voice
-/// access) read names as they need them.
-pub(crate) fn urgent(focused: bool, semantics: bool, screen_reader: impl FnOnce() -> bool) -> bool {
-    focused || (semantics && screen_reader())
+/// (`GeometryPacer`): focus moving always, and a node a reader asked to
+/// scroll in (`revealed`: its new place, before the reader reads it);
+/// names, values and selection changing while a screen reader runs
+/// (`screen_reader`, asked only then), as it speaks them. Other clients
+/// (the touch keyboard's host, voice access) read names as they need them.
+pub(crate) fn urgent(
+    focused: bool,
+    revealed: bool,
+    semantics: bool,
+    screen_reader: impl FnOnce() -> bool,
+) -> bool {
+    focused || revealed || (semantics && screen_reader())
 }
 
 /// Whether a screen reader runs (Narrator, NVDA, JAWS set the system's flag,
-/// `SPI_GETSCREENREADER`): what it speaks goes out at once. Elsewhere,
-/// where no such flag is read, as if one always ran.
+/// `SPI_GETSCREENREADER`; on macOS VoiceOver or Switch Control, which
+/// `NSWorkspace` says live): what it speaks goes out at once. A launcher or
+/// window manager reading the tree isn't one. Elsewhere, where no such flag
+/// is read, as if one always ran.
 pub(crate) fn screen_reader() -> bool {
     #[cfg(windows)]
     {
@@ -48,7 +57,12 @@ pub(crate) fn screen_reader() -> bool {
         };
         read.is_err() || on.as_bool()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+        workspace.isVoiceOverEnabled() || workspace.isSwitchControlEnabled()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         true
     }
@@ -63,24 +77,55 @@ pub(crate) struct GeometryPacer {
     last: Option<std::time::Instant>,
     held: Option<std::time::Instant>,
 }
+/// What an update of the tree at a given moment does (`GeometryPacer`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TreeUpdateKind {
+    /// Everything that changed, geometry included.
+    Full,
+    /// Only what a reader hears changed (names, values, focus), while a
+    /// geometry change waits its turn: nodes that only moved keep what was
+    /// sent (`AccessibilityTree::update_names`).
+    Names,
+}
 impl GeometryPacer {
-    /// Whether to update the tree at `now`.
+    /// Whether to update the tree at `now` (`update_kind`, either kind).
+    #[cfg(test)]
     pub(crate) fn update_now(
         &mut self,
         now: std::time::Instant,
         changed: bool,
         geometry: bool,
     ) -> bool {
+        self.update_kind(now, changed, geometry).is_some()
+    }
+    /// How to update the tree at `now`, if at all: a change a reader hears
+    /// goes at once, but while geometry isn't due it goes alone (`Names`),
+    /// so a name changing every frame (a timer, a status) doesn't send
+    /// every frame's geometry too, nor put geometry off.
+    pub(crate) fn update_kind(
+        &mut self,
+        now: std::time::Instant,
+        changed: bool,
+        geometry: bool,
+    ) -> Option<TreeUpdateKind> {
         let due = self.last.is_none_or(|last| now >= last + GEOMETRY_EVERY);
-        if changed || ((geometry || self.held.is_some()) && due) {
+        let pending = geometry || self.held.is_some();
+        if (changed && !pending) || (pending && due) {
             self.last = Some(now);
             self.held = None;
-            return true;
+            return Some(TreeUpdateKind::Full);
         }
         if geometry && let Some(last) = self.last {
             self.held.get_or_insert(last + GEOMETRY_EVERY);
         }
-        false
+        changed.then_some(TreeUpdateKind::Names)
+    }
+    /// A full update at `now`, whatever is held (a reveal, which moves what
+    /// it shows).
+    pub(crate) fn full(&mut self, now: std::time::Instant) -> TreeUpdateKind {
+        self.last = Some(now);
+        self.held = None;
+        TreeUpdateKind::Full
     }
     /// When a held geometry change goes out, if one is held.
     pub(crate) fn deadline(&self) -> Option<std::time::Instant> {
@@ -106,6 +151,9 @@ pub struct AccessibilityTree {
     /// Where the text node showing a node's runs was when they were placed
     /// (`Scene::text_lines`): moved (scrolled in its field), they are again.
     run_boxes: HashMap<NodeId, zgx::scene::Rect>,
+    /// The scene's `language_revision` at the last update: changed, every
+    /// node is projected again, its language perhaps an ancestor's.
+    language_revision: u64,
 }
 /// A line of a long field, as text runs: kept while its text is, so an edit
 /// sends the runs of the lines it changed, and a scroll those it shows.
@@ -183,7 +231,7 @@ impl AccessibilityTree {
         nodes: &mut Vec<(AccessibleId, Node)>,
     ) {
         let mut was = self.long_runs.remove(&owner).unwrap_or_default();
-        let mut kept = HashMap::with_capacity(lines.len());
+        let mut kept = HashMap::with_capacity_and_hasher(lines.len(), Default::default());
         let mut ids = Vec::new();
         let count = text.line_count();
         for line in lines.start.min(count)..lines.end.min(count) {
@@ -259,6 +307,51 @@ impl AccessibilityTree {
         let ids = self.text_runs.get(&owner)?;
         Some(run_position(ids, &self.text_positions, byte))
     }
+    /// Label `id`'s text runs as AccessKit's `TextRun` nodes, given ids
+    /// kept across updates, into `nodes`.
+    fn push_runs(
+        &mut self,
+        id: NodeId,
+        runs: Vec<TextRunData>,
+        nodes: &mut Vec<(AccessibleId, Node)>,
+    ) {
+        let ids = self.text_runs.entry(id).or_default();
+        ids.truncate(runs.len());
+        while ids.len() < runs.len() {
+            self.next += 1;
+            ids.push(AccessibleId(self.next));
+        }
+        // Whether each run's line goes on into the next.
+        let joined: Vec<bool> = runs
+            .iter()
+            .map(|run| !run.wraps && !run.value.ends_with(['\n', '\r']))
+            .collect();
+        let count = runs.len();
+        for (index, run) in runs.into_iter().enumerate() {
+            let mut text = Node::new(accesskit::Role::TextRun);
+            text.set_value(run.value);
+            text.set_character_lengths(run.lengths);
+            text.set_word_starts(run.words);
+            if let Some(geometry) = run.geometry {
+                text.set_bounds(geometry.bounds);
+                text.set_character_positions(geometry.positions);
+                text.set_character_widths(geometry.widths);
+                text.set_text_direction(if geometry.rtl {
+                    accesskit::TextDirection::RightToLeft
+                } else {
+                    accesskit::TextDirection::LeftToRight
+                });
+            }
+            if index > 0 && joined[index - 1] {
+                text.set_previous_on_line(ids[index - 1]);
+            }
+            if index + 1 < count && joined[index] {
+                text.set_next_on_line(ids[index + 1]);
+            }
+            self.text_positions.insert(ids[index], (id, run.offsets));
+            nodes.push((ids[index], text));
+        }
+    }
     /// What changed in the accessible tree since the last update: nodes whose
     /// semantics changed, and the focus. `title` names the window and `scale`
     /// converts its logical bounds to physical pixels.
@@ -270,8 +363,37 @@ impl AccessibilityTree {
         title: &str,
         scale: f64,
     ) -> TreeUpdate {
+        self.project(scene, semantics, focused, title, scale, true)
+    }
+    /// `update` for what a reader hears alone (names, values, focus, nodes
+    /// added and gone), while geometry waits its turn: a node whose
+    /// semantics are as sent, its children and state too, keeps what was
+    /// sent though it moved, its box and runs coming with the next `update`.
+    pub fn update_names(
+        &mut self,
+        scene: &Scene,
+        semantics: &Semantics,
+        focused: Option<NodeId>,
+        title: &str,
+        scale: f64,
+    ) -> TreeUpdate {
+        self.project(scene, semantics, focused, title, scale, false)
+    }
+    fn project(
+        &mut self,
+        scene: &Scene,
+        semantics: &Semantics,
+        focused: Option<NodeId>,
+        title: &str,
+        scale: f64,
+        geometry: bool,
+    ) -> TreeUpdate {
         let root = self.id(scene.root());
-        let mut children: HashMap<NodeId, Vec<AccessibleId>> = HashMap::new();
+        if scene.language_revision() != self.language_revision {
+            self.language_revision = scene.language_revision();
+            self.projection_revisions.clear();
+        }
+        let mut children: HashMap<NodeId, Vec<AccessibleId>> = HashMap::default();
         // Scene order, not hash-map iteration order, determines accessible traversal.
         let mut ordered: Vec<_> = scene
             .paint_items()
@@ -284,14 +406,32 @@ impl AccessibilityTree {
             })
             .collect();
         // What is hidden from assistive technology (`aria-hidden`) goes with
-        // its subtree; only a tree that hides something looks.
-        let hidden: Vec<_> = ordered
-            .iter()
-            .filter(|(_, s)| s.hidden)
-            .map(|(id, _)| *id)
-            .collect();
+        // its subtree, and a control's unnamed images are its own (ARIA's
+        // presentational children: its name says what it is, and a reader
+        // hears no bare "image" inside a button). Only a tree with either
+        // looks.
+        let mut hidden = Vec::new();
+        let mut bare_image = false;
+        for (id, s) in &ordered {
+            if s.hidden {
+                hidden.push(*id);
+            }
+            bare_image |= s.role == Role::Image && s.label.is_empty();
+        }
         if !hidden.is_empty() {
             ordered.retain(|(id, _)| !hidden.iter().any(|h| scene.is_within(*id, *h)));
+        }
+        // Inert content (a row playing its exit, gone from its data) is not
+        // there to act on: a reader doesn't offer it.
+        if scene.has_inert() {
+            ordered.retain(|(id, _)| scene.inert_around(*id).is_none());
+        }
+        if bare_image {
+            ordered.retain(|(id, s)| {
+                !(s.role == Role::Image
+                    && s.label.is_empty()
+                    && within_control(scene, semantics, *id))
+            });
         }
         let visible: HashSet<_> = ordered
             .iter()
@@ -301,7 +441,7 @@ impl AccessibilityTree {
         self.ids.retain(|id, _| visible.contains(id));
         self.projection_revisions
             .retain(|id, _| visible.contains(id));
-        let mut parents = HashMap::new();
+        let mut parents = HashMap::default();
         for (id, _) in &ordered {
             if *id == scene.root() {
                 continue;
@@ -349,7 +489,31 @@ impl AccessibilityTree {
             let child = self.id(*id);
             children.entry(parents[id]).or_default().push(child);
         }
+        // Where each list's items are in it ("3 of 5", as a browser's
+        // `<li>` reads), for items the app doesn't say it of: only a tree
+        // with a list counts.
+        let mut list_items: HashMap<NodeId, (usize, usize)> = HashMap::default();
+        if ordered.iter().any(|(_, s)| s.role == Role::List) {
+            let mut counts: HashMap<NodeId, usize> = HashMap::default();
+            let mut lists: Vec<(NodeId, NodeId, usize)> = Vec::new();
+            for (id, semantic) in &ordered {
+                let Some(&list) = parents.get(id) else {
+                    continue;
+                };
+                if semantic.role == Role::ListItem
+                    && semantics.get(list).is_some_and(|s| s.role == Role::List)
+                {
+                    let count = counts.entry(list).or_default();
+                    *count += 1;
+                    lists.push((*id, list, *count));
+                }
+            }
+            for (item, list, position) in lists {
+                list_items.insert(item, (position, counts[&list]));
+            }
+        }
         self.text_runs.retain(|owner, _| visible.contains(owner));
+        self.run_boxes.retain(|owner, _| visible.contains(owner));
         self.blocks.retain(|owner| visible.contains(owner));
         self.long_runs.retain(|owner, _| visible.contains(owner));
         // Fields saying what is wrong with them, and the text that shows it
@@ -358,7 +522,7 @@ impl AccessibilityTree {
         let error_shown = if any_errors {
             error_texts(scene, semantics, &ordered)
         } else {
-            HashMap::new()
+            HashMap::default()
         };
         let mut nodes = Vec::with_capacity(ordered.len() + 1);
         // Selectable regions projected now, and their selections: set once
@@ -375,6 +539,12 @@ impl AccessibilityTree {
             bounds.height as f64 * scale,
         ));
         nodes.push((root, window));
+        let window_box = accesskit::Rect::new(
+            0.,
+            0.,
+            bounds.width as f64 * scale,
+            bounds.height as f64 * scale,
+        );
         for (id, semantic) in ordered {
             if id == scene.root() {
                 continue;
@@ -384,11 +554,32 @@ impl AccessibilityTree {
                 || scene
                     .ancestors(id)
                     .any(|ancestor| semantics.get(ancestor).is_some_and(|s| s.disabled));
-            // Assistive bounds: the box around where it shows.
-            let r = scene.transformed_bounds(id);
             let revision = semantics
                 .node_revision(id)
                 .expect("projected semantic node");
+            // Names alone: a node as sent keeps what was sent, before its
+            // geometry or text is looked at (moved, it goes with the next
+            // full update, as geometry does for any client).
+            if !geometry
+                && focused != Some(id)
+                && self.projection_revisions.get(&id) == Some(&revision)
+                && self.cache.get(&native).is_some_and(|cached| {
+                    let runs = self.text_runs.get(&id).map_or(&[][..], Vec::as_slice);
+                    cached.is_disabled() == disabled
+                        && cached.children().iter().eq(children
+                            .get(&id)
+                            .into_iter()
+                            .flatten()
+                            .chain(runs))
+                })
+            {
+                children.remove(&id);
+                continue;
+            }
+            // Assistive bounds: the box around where it shows, or where an
+            // animation is taking it with `hit = "target"` (as Core
+            // Animation's model layer): a reader's highlight goes ahead.
+            let r = scene.hit_bounds(id);
             let bounds = accesskit::Rect::new(
                 r.x as f64 * scale,
                 r.y as f64 * scale,
@@ -412,17 +603,35 @@ impl AccessibilityTree {
             // Reuse the existing cached node's geometry/children instead of
             // retaining another copy in the revision cache. Text runs must still
             // have live cached nodes/positions before omitting this projection.
-            let runs_at = semantics
-                .text_node(id)
+            let runs_at = first_line(semantics, id)
+                .or_else(|| semantics.text_node(id))
                 .or(text.then_some(id))
                 .filter(|node| scene.contains(*node))
-                .map(|node| scene.bounds(node));
+                // Where it shows: a zoom or transform moves its runs too.
+                .map(|node| scene.transformed_bounds(node));
+            // More than a window away, and on the side of it it was last
+            // sent on: its box as sent stays (a reflow sends no node a
+            // screen away, as it shapes none), and comes up to date as it
+            // comes near. Above stays above, below below: a reader's order
+            // and the way it scrolls to it are the same as the box's.
+            let far = focused != Some(id)
+                && far_side(bounds, window_box).is_some_and(|now| {
+                    self.cache
+                        .get(&native)
+                        .and_then(Node::bounds)
+                        .and_then(|was| far_side(was, window_box))
+                        == Some(now)
+                });
             if self.projection_revisions.get(&id) == Some(&revision)
-                && self.run_boxes.get(&id).copied() == runs_at.filter(|_| !runs.is_empty())
+                && (far || self.run_boxes.get(&id).copied() == runs_at.filter(|_| !runs.is_empty()))
                 && self.blocks.contains(&id) == block
                 && self.cache.get(&native).is_some_and(|cached| {
-                    cached.bounds() == Some(bounds)
+                    let counted = list_items.get(&id);
+                    (far || cached.bounds() == Some(bounds))
                         && cached.is_disabled() == disabled
+                        && cached.position_in_set()
+                            == semantic.position_in_set.or(counted.map(|c| c.0))
+                        && cached.size_of_set() == semantic.size_of_set.or(counted.map(|c| c.1))
                         && cached
                             .children()
                             .iter()
@@ -435,6 +644,18 @@ impl AccessibilityTree {
                 continue;
             }
             let mut n = Node::new(semantic_role(semantic));
+            // A page drawn as an image embeds its own accessible tree
+            // (another process's) as its last child: a frame holding a
+            // document, as a browser's iframe is.
+            // From the first projection: a role changed later stays as a
+            // reader first cached it.
+            #[cfg(all(target_os = "linux", feature = "webkitgtk"))]
+            if let Some(embedding) = crate::native_host::webkitgtk::embedding(id) {
+                n.set_role(accesskit::Role::Iframe);
+                if let Some(embedding) = embedding {
+                    n.set_author_id(embedding);
+                }
+            }
             // AccessKit Label content belongs in value; AT-SPI derives its
             // accessible name from value, rather than the control-label field.
             // A long field has none: its text is its runs, a page of it.
@@ -450,7 +671,15 @@ impl AccessibilityTree {
                 n.set_label(semantic.label.clone());
                 None
             } else {
-                n.set_label(semantic.label.clone());
+                // Named by another node (an unnamed popover by its trigger):
+                // no label of its own, which would hide the other's.
+                match semantics
+                    .labelled_by(id)
+                    .filter(|by| semantic.label.is_empty() && visible.contains(by))
+                {
+                    Some(by) => n.push_labelled_by(self.id(by)),
+                    None => n.set_label(semantic.label.clone()),
+                }
                 value
             };
             if let Some(active) = semantic.active_descendant.filter(|a| visible.contains(a)) {
@@ -477,11 +706,14 @@ impl AccessibilityTree {
             if let Some(selected) = semantic.selected {
                 n.set_selected(selected);
             }
-            // A status is politely live unless it says otherwise, as ARIA's is.
-            match semantic
-                .live
-                .or((semantic.role == Role::Status).then_some(Live::Polite))
-            {
+            // A status is politely live unless it says otherwise, and an
+            // alert assertively, as ARIA's are.
+            let implicit = match semantic.role {
+                Role::Status => Some(Live::Polite),
+                Role::Alert => Some(Live::Assertive),
+                _ => None,
+            };
+            match semantic.live.or(implicit) {
                 Some(Live::Polite) => n.set_live(accesskit::Live::Polite),
                 Some(Live::Assertive) => n.set_live(accesskit::Live::Assertive),
                 None => {}
@@ -538,6 +770,11 @@ impl AccessibilityTree {
             if disabled {
                 n.set_disabled();
             }
+            // The language its text is in (`lang`), its own or what holds
+            // it says: AccessKit gives what it holds the same.
+            if let Some(language) = scene.language(id) {
+                n.set_language(language.to_string());
+            }
             if semantic.read_only {
                 n.set_read_only();
             }
@@ -549,6 +786,11 @@ impl AccessibilityTree {
             }
             if let Some(v) = semantic.max {
                 n.set_max_numeric_value(v);
+            }
+            // What it moves by: UIA's RangeValue SmallChange, AT-SPI's
+            // minimum increment.
+            if let Some(step) = scene.numeric_step(id) {
+                n.set_numeric_value_step(step);
             }
             if matches!(
                 semantic.role,
@@ -606,10 +848,11 @@ impl AccessibilityTree {
             ) {
                 n.add_action(Action::Focus);
             }
-            if let Some(position) = semantic.position_in_set {
+            let counted = list_items.get(&id);
+            if let Some(position) = semantic.position_in_set.or(counted.map(|c| c.0)) {
                 n.set_position_in_set(position);
             }
-            if let Some(size) = semantic.size_of_set {
+            if let Some(size) = semantic.size_of_set.or(counted.map(|c| c.1)) {
                 n.set_size_of_set(size);
             }
             if let Some(table) = &semantic.table {
@@ -666,24 +909,35 @@ impl AccessibilityTree {
                     ScrollAxis::Vertical => accesskit::Orientation::Vertical,
                 });
             }
+            // In a scroll view: a reader moving to it scrolls it in
+            // (`AXScrollToVisible`, UIA's and AT-SPI's scroll-into-view).
+            if scene.ancestors(id).any(|a| scene.is_scroll_content(a)) {
+                n.add_action(Action::ScrollIntoView);
+            }
             n.set_bounds(bounds);
             if text || matches!(semantic.role, Role::TextInput | Role::MultilineTextInput) {
                 // The node its text shows in, while it shows that text (a
                 // field composing shows other): its lines' geometry.
-                let shown_in = semantics
-                    .text_node(id)
-                    .or(text.then_some(id))
-                    .filter(|node| {
-                        scene.contains(*node)
-                            && match scene.kind(*node) {
-                                zgx::scene::NodeKind::Text { text, .. } => {
-                                    Some(&**text) == text_value
+                // A text shown a line at a time: where its first shown line
+                // is (its lines' geometry, `field_lines`).
+                let apart = semantics.text_lines(id).filter(|_| text_value.is_some());
+                let shown_in = match apart {
+                    Some(_) => first_line(semantics, id).filter(|node| scene.contains(*node)),
+                    None => semantics
+                        .text_node(id)
+                        .or(text.then_some(id))
+                        .filter(|node| {
+                            scene.contains(*node)
+                                && match scene.kind(*node) {
+                                    zgx::scene::NodeKind::Text { text, .. } => {
+                                        Some(&**text) == text_value
+                                    }
+                                    zgx::scene::NodeKind::RichText { .. } => text,
+                                    _ => false,
                                 }
-                                zgx::scene::NodeKind::RichText { .. } => text,
-                                _ => false,
-                            }
-                    });
-                let shown_box = shown_in.map(|node| scene.bounds(node));
+                        }),
+                };
+                let shown_box = shown_in.map(|node| scene.transformed_bounds(node));
                 let was = self.run_boxes.get(&id).copied();
                 let moved = was != shown_box;
                 let unchanged = self
@@ -708,6 +962,7 @@ impl AccessibilityTree {
                         if moved
                             && unchanged
                             && long.is_none()
+                            && apart.is_none()
                             && was.width == now.width
                             && was.height == now.height
                             && self.text_runs.contains_key(&id) =>
@@ -720,7 +975,54 @@ impl AccessibilityTree {
                     }
                     _ => None,
                 };
-                if let Some((dx, dy, now)) = shifted {
+                // Out of reach of the window (beyond a screen of it either
+                // way), and not where the reader is: its runs keep the text,
+                // shaped again once it comes near. A reader still gets every
+                // character of it (`AXStringForRange`); only where they show
+                // waits, as off-screen text isn't shown. Shaping every label
+                // of a long list cost a reflow ~30 ms of a frame.
+                let off_screen = shown_box.is_some_and(|shown| {
+                    let window = scene.bounds(scene.root());
+                    let (top, bottom) = (-window.height, window.height * 2.);
+                    let (left, right) = (-window.width, window.width * 2.);
+                    shown.y + shown.height < top
+                        || shown.y > bottom
+                        || shown.x + shown.width < left
+                        || shown.x > right
+                }) && focused != Some(id)
+                    && text
+                    && apart.is_none()
+                    && long.is_none();
+                if shifted.is_none()
+                    && !reusable
+                    && off_screen
+                    && unchanged
+                    && self.text_runs.contains_key(&id)
+                {
+                    // Kept as they are: their text is the label's.
+                } else if shifted.is_none()
+                    && !reusable
+                    && off_screen
+                    && self.text_runs.get(&id).is_none_or(Vec::is_empty)
+                {
+                    // First seen off-screen, or its text changed there: its
+                    // text as runs, unshaped (no positions), and its box
+                    // forgotten so that coming near shapes it.
+                    self.run_boxes.remove(&id);
+                    if block {
+                        self.blocks.insert(id);
+                    } else {
+                        self.blocks.remove(&id);
+                    }
+                    // Approximate places, unshaped: its box, its graphemes
+                    // spread across it, so a range's bounds come out near
+                    // where it is (`AXBoundsForRange`) until it is shaped.
+                    let value = text_value.unwrap_or("");
+                    let lines = shown_box.map(|rect| vec![estimated_line(value, rect)]);
+                    if let Some(runs) = text_run_data_on(value, block, lines.as_deref(), scale) {
+                        self.push_runs(id, runs, &mut nodes);
+                    }
+                } else if let Some((dx, dy, now)) = shifted {
                     self.run_boxes.insert(id, now);
                     for run in &self.text_runs[&id] {
                         let Some(cached) = self.cache.get(run) else {
@@ -752,46 +1054,14 @@ impl AccessibilityTree {
                     };
                     #[cfg(test)]
                     SHAPED.with(|shaped| shaped.set(shaped.get() + 1));
-                    let lines = shown_in.and_then(|node| scene.text_lines(node));
+                    let lines = match apart {
+                        Some(apart) => field_lines(scene, apart, text_value.unwrap_or("")),
+                        None => shown_in.and_then(|node| scene.text_lines(node)),
+                    };
                     if let Some(runs) =
                         text_run_data_on(text_value.unwrap_or(""), block, lines.as_deref(), scale)
                     {
-                        let ids = self.text_runs.entry(id).or_default();
-                        ids.truncate(runs.len());
-                        while ids.len() < runs.len() {
-                            self.next += 1;
-                            ids.push(AccessibleId(self.next));
-                        }
-                        // Whether each run's line goes on into the next.
-                        let joined: Vec<bool> = runs
-                            .iter()
-                            .map(|run| !run.wraps && !run.value.ends_with(['\n', '\r']))
-                            .collect();
-                        let count = runs.len();
-                        for (index, run) in runs.into_iter().enumerate() {
-                            let mut text = Node::new(accesskit::Role::TextRun);
-                            text.set_value(run.value);
-                            text.set_character_lengths(run.lengths);
-                            text.set_word_starts(run.words);
-                            if let Some(geometry) = run.geometry {
-                                text.set_bounds(geometry.bounds);
-                                text.set_character_positions(geometry.positions);
-                                text.set_character_widths(geometry.widths);
-                                text.set_text_direction(if geometry.rtl {
-                                    accesskit::TextDirection::RightToLeft
-                                } else {
-                                    accesskit::TextDirection::LeftToRight
-                                });
-                            }
-                            if index > 0 && joined[index - 1] {
-                                text.set_previous_on_line(ids[index - 1]);
-                            }
-                            if index + 1 < count && joined[index] {
-                                text.set_next_on_line(ids[index + 1]);
-                            }
-                            self.text_positions.insert(ids[index], (id, run.offsets));
-                            nodes.push((ids[index], text));
-                        }
+                        self.push_runs(id, runs, &mut nodes);
                     } else {
                         self.text_runs.remove(&id);
                     }
@@ -919,6 +1189,34 @@ fn text_run_data(value: &str, block: bool) -> Option<Vec<TextRunData>> {
 /// `Scene::text_lines`) wrap, each run given its box and its characters'
 /// places at `scale`: what lets a screen reader's cursor and a magnifier
 /// follow the caret and the selection.
+/// The first node a field's text shows a line at a time in, if it does
+/// (`Semantics::text_lines`).
+fn first_line(semantics: &Semantics, id: NodeId) -> Option<NodeId> {
+    semantics.text_lines(id)?.first().map(|(_, node)| *node)
+}
+/// The lines of a field's text shown a line at a time, `apart`: each shown
+/// line node's, at its place in the text. None, if one no longer shows
+/// what the text holds there (it is drawn again before it is read).
+fn field_lines(
+    scene: &Scene,
+    apart: &[(usize, NodeId)],
+    value: &str,
+) -> Option<Vec<zgx::scene::TextLine>> {
+    let mut lines = Vec::new();
+    for (start, node) in apart {
+        let zgx::scene::NodeKind::Text { text, .. } = scene.kind(*node) else {
+            return None;
+        };
+        if !scene.contains(*node) || value.get(*start..start + text.len())? != &**text {
+            return None;
+        }
+        for mut line in scene.text_lines(*node)? {
+            line.range = line.range.start + start..line.range.end + start;
+            lines.push(line);
+        }
+    }
+    Some(lines)
+}
 fn text_run_data_on(
     value: &str,
     block: bool,
@@ -957,7 +1255,8 @@ fn text_run_data_on(
     let mut runs = Vec::new();
     let mut run = fresh(0);
     let mut chars: Vec<Option<Edge>> = Vec::new();
-    for (offset, grapheme) in value.grapheme_indices(true) {
+    for range in zgx::text_layout::grapheme_ranges(value) {
+        let (offset, grapheme) = (range.start, &value[range]);
         let length = u8::try_from(grapheme.len()).ok()?;
         let (edge, wrap_start) = match &mut walk {
             Some(walk) => walk.edge(value, offset)?,
@@ -1010,6 +1309,43 @@ fn text_run_data_on(
 }
 /// A grapheme's line and its left and right edges.
 type Edge = (usize, f32, f32);
+/// Which way a box more than a window away from `window` is from it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FarSide {
+    Above,
+    Below,
+    Left,
+    Right,
+}
+/// The side of `window` `rect` is on, when it is more than a window's height
+/// (or width) away; `None` near it.
+fn far_side(rect: accesskit::Rect, window: accesskit::Rect) -> Option<FarSide> {
+    let (width, height) = (window.width(), window.height());
+    if rect.y1 < window.y0 - height {
+        Some(FarSide::Above)
+    } else if rect.y0 > window.y1 + height {
+        Some(FarSide::Below)
+    } else if rect.x1 < window.x0 - width {
+        Some(FarSide::Left)
+    } else if rect.x0 > window.x1 + width {
+        Some(FarSide::Right)
+    } else {
+        None
+    }
+}
+/// `value` as one line across `rect`, its graphemes spread evenly: where
+/// text far from the window is, near enough, without shaping it.
+fn estimated_line(value: &str, rect: zgx::scene::Rect) -> zgx::scene::TextLine {
+    let text = value.trim_end_matches(['\n', '\r']);
+    let count = zgx::text_layout::grapheme_ranges(text).count().max(1);
+    let step = rect.width / count as f32;
+    zgx::scene::TextLine {
+        range: 0..text.len(),
+        rect,
+        carets: (0..=count).map(|i| rect.x + step * i as f32).collect(),
+        rtl: false,
+    }
+}
 /// Where `text_run_data_on`'s walk is in a text's lines.
 struct LineWalk<'a> {
     lines: &'a [zgx::scene::TextLine],
@@ -1091,6 +1427,30 @@ fn place(
     })
 }
 
+/// Whether `id` is inside a control whose children are presentational.
+fn within_control(scene: &Scene, semantics: &Semantics, id: NodeId) -> bool {
+    let mut parent = scene.parent(id);
+    while let Some(p) = parent {
+        if semantics.get(p).is_some_and(|s| {
+            matches!(
+                s.role,
+                Role::Button
+                    | Role::CheckBox
+                    | Role::Switch
+                    | Role::RadioButton
+                    | Role::Tab
+                    | Role::MenuItem
+                    | Role::ListBoxOption
+                    | Role::Slider
+                    | Role::Progress
+            )
+        }) {
+            return true;
+        }
+        parent = scene.parent(p);
+    }
+    false
+}
 fn semantic_role(semantic: &zgx::semantics::SemanticNode) -> accesskit::Role {
     if semantic.role == Role::MenuItem && semantic.checked.is_some() && semantic.radio {
         accesskit::Role::MenuItemRadio
@@ -1198,7 +1558,7 @@ fn error_texts(
     semantics: &Semantics,
     ordered: &[(NodeId, &SemanticNode)],
 ) -> HashMap<NodeId, NodeId> {
-    let mut out = HashMap::new();
+    let mut out = HashMap::default();
     for (i, (field, _)) in ordered.iter().enumerate() {
         let Some(error) = semantics.error(*field) else {
             continue;
@@ -1314,6 +1674,45 @@ mod editor_text_tests {
         }
     }
 
+    /// A zoomed field's runs are where it shows them: twice as large,
+    /// through its zoom, as a magnifier following the caret needs.
+    #[test]
+    fn a_zoomed_fields_text_runs_are_where_it_shows_them() {
+        let run = |zoom: f32| {
+            let mut ui = Ui::new(600., 400.);
+            let value = ui.signal("one two".to_owned());
+            let view = ui.mount(
+                column()
+                    .zoom(zoom)
+                    .child(text_area("Notes", value).size(200., 100.)),
+            );
+            ui.prepare_frame();
+            let mut adapter = AccessibilityTree::new();
+            let update = adapter.update(
+                &ui.scene.borrow(),
+                &ui.semantics.borrow(),
+                Some(view.node()),
+                "Test",
+                1.,
+            );
+            update
+                .nodes
+                .into_iter()
+                .find(|(_, node)| node.role() == accesskit::Role::TextRun)
+                .and_then(|(_, node)| node.bounds())
+                .expect("a run")
+        };
+        let (plain, zoomed) = (run(1.), run(2.));
+        assert!(
+            (zoomed.width() - plain.width() * 2.).abs() < 0.5,
+            "{plain:?} {zoomed:?}"
+        );
+        assert!(
+            (zoomed.height() - plain.height() * 2.).abs() < 0.5,
+            "{plain:?} {zoomed:?}"
+        );
+    }
+
     #[test]
     fn a_fields_text_runs_say_where_each_character_shows() {
         // What a screen reader's cursor and a magnifier follow: each run's
@@ -1354,8 +1753,9 @@ mod editor_text_tests {
         let focus = tree.state().focus().unwrap();
         let boxes = focus.text_selection().unwrap().bounding_boxes();
         assert_eq!(boxes.len(), 1, "{boxes:?}");
-        // Where "two" shows, at twice the points.
-        let text_node = ui.semantics.borrow().text_node(view.node()).unwrap();
+        // Where "two" shows, at twice the points (on the first line's node:
+        // a text area's lines show apart).
+        let text_node = ui.semantics.borrow().text_lines(view.node()).unwrap()[0].1;
         let lines = ui.scene.borrow().text_lines(text_node).unwrap();
         let (left, right) = (lines[0].carets[4] as f64, lines[0].carets[7] as f64);
         let shown = boxes[0];
@@ -1379,6 +1779,7 @@ mod editor_text_tests {
         ui.prepare_frame();
         ui.input.focus(&ui.scene, Some(view.node()));
         ui.prepare_frame();
+        eprintln!("rev {}", ui.scene.borrow().language_revision());
         let mut adapter = AccessibilityTree::new();
         let update = adapter.update(
             &ui.scene.borrow(),
@@ -1429,6 +1830,7 @@ mod editor_text_tests {
             .set_selection(1, value.get().len());
         editor.refresh();
         ui.prepare_frame();
+        eprintln!("rev {}", ui.scene.borrow().language_revision());
         let mut adapter = AccessibilityTree::new();
         let update = adapter.update(
             &ui.scene.borrow(),
@@ -1544,8 +1946,8 @@ mod editor_text_tests {
     ) -> Option<Vec<TextRunData>> {
         // Each shown grapheme's line and edges; a break (not in a line) sits
         // zero-wide at the end of the line before it.
-        let mut edges: HashMap<usize, (usize, f32, f32)> = HashMap::new();
-        let mut wrap_starts: HashSet<usize> = HashSet::new();
+        let mut edges: HashMap<usize, (usize, f32, f32)> = HashMap::default();
+        let mut wrap_starts: HashSet<usize> = HashSet::default();
         if let Some(lines) = lines {
             for (index, line) in lines.iter().enumerate() {
                 let shown = value.get(line.range.clone())?;
@@ -1796,6 +2198,7 @@ mod editor_text_tests {
         editor.editor.borrow_mut().set_selection(0, 0);
         editor.refresh();
         ui.prepare_frame();
+        eprintln!("rev {}", ui.scene.borrow().language_revision());
         let mut adapter = AccessibilityTree::new();
         let update = |adapter: &mut AccessibilityTree| {
             adapter.update(
@@ -1883,6 +2286,7 @@ mod editor_text_tests {
         let read = count.clone();
         let view = ui.mount(text_signal(move || format!("Count: {}", read.get())));
         ui.prepare_frame();
+        eprintln!("rev {}", ui.scene.borrow().language_revision());
         let mut adapter = AccessibilityTree::new();
         let update = adapter.update(
             &ui.scene.borrow(),
@@ -2001,6 +2405,7 @@ mod editor_text_tests {
         let one = ui.mount(text_area("One", ui.signal("one".to_owned())));
         let two = ui.mount(text_area("Two", ui.signal("two".to_owned())));
         ui.prepare_frame();
+        eprintln!("rev {}", ui.scene.borrow().language_revision());
         let mut adapter = AccessibilityTree::new();
         adapter.update(&ui.scene.borrow(), &ui.semantics.borrow(), None, "Test", 1.);
         let selection = accesskit::TextSelection {
@@ -2204,6 +2609,87 @@ mod projection_key_tests {
         );
     }
 
+    /// A row playing its exit (inert, gone from its data) is no control a
+    /// reader offers; the one staying is.
+    #[test]
+    fn inert_content_is_not_offered() {
+        let mut scene = Scene::new(400., 300.);
+        let list = scene.append(
+            scene.root(),
+            NodeKind::Container(Layout::Column),
+            fixed(300., 200.),
+        );
+        let [leaving, staying] = ["Remove 1", "Remove 2"]
+            .map(|_| scene.append(list, NodeKind::Rect(Color(0, 0, 0, 255)), fixed(100., 20.)));
+        scene.prepare_layout();
+        let mut semantics = Semantics::new();
+        semantics.set(
+            list,
+            zgx::semantics::SemanticNode::new(Role::Group, "Photos"),
+        );
+        semantics.set(
+            leaving,
+            zgx::semantics::SemanticNode::new(Role::Button, "Remove 1"),
+        );
+        semantics.set(
+            staying,
+            zgx::semantics::SemanticNode::new(Role::Button, "Remove 2"),
+        );
+        let mut adapter = AccessibilityTree::new();
+        adapter.update(&scene, &semantics, None, "Test", 1.);
+        let (list_id, staying_id) = (adapter.ids[&list], adapter.ids[&staying]);
+        scene.set_inert(leaving, true);
+        let update = adapter.update(&scene, &semantics, None, "Test", 1.);
+        let children = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == list_id)
+            .expect("the list changed")
+            .1
+            .children()
+            .to_vec();
+        assert_eq!(children, [staying_id]);
+    }
+
+    /// A group laid out in its parent's place (`set_display_contents`)
+    /// keeps its role and name, its children under it.
+    #[test]
+    fn a_group_laid_out_in_its_parents_place_keeps_its_children() {
+        let mut scene = Scene::new(400., 300.);
+        let grid = scene.append(
+            scene.root(),
+            NodeKind::Container(Layout::Row),
+            fixed(300., 200.),
+        );
+        let group = scene.append(grid, NodeKind::Container(Layout::Column), Style::default());
+        let buttons = ["One", "Two"]
+            .map(|_| scene.append(group, NodeKind::Rect(Color(0, 0, 0, 255)), fixed(100., 20.)));
+        scene.set_display_contents(group, true);
+        scene.prepare_layout();
+        let mut semantics = Semantics::new();
+        semantics.set(
+            group,
+            zgx::semantics::SemanticNode::new(Role::Group, "Photos"),
+        );
+        for (button, name) in buttons.iter().zip(["One", "Two"]) {
+            semantics.set(
+                *button,
+                zgx::semantics::SemanticNode::new(Role::Button, name),
+            );
+        }
+        let mut adapter = AccessibilityTree::new();
+        let update = adapter.update(&scene, &semantics, None, "Test", 1.);
+        let group_id = adapter.ids[&group];
+        let held = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == group_id)
+            .map(|(_, node)| node)
+            .expect("the group is there");
+        assert_eq!(held.label(), Some("Photos"));
+        assert_eq!(held.children(), &buttons.map(|button| adapter.ids[&button]));
+    }
+
     #[test]
     fn replacing_semantics_instance_cannot_reuse_coincident_node_revisions() {
         let mut scene = Scene::new(100., 100.);
@@ -2238,6 +2724,203 @@ mod document_selection_tests {
     use super::*;
     use zgx::{compose::prelude::*, selection::TextPoint, widgets::Ui};
 
+    /// A reflow of a long list shapes only the labels near the window (a
+    /// screen of it either way), and every label, near or not, keeps runs
+    /// holding its whole text, so a reader gets every character of it; one
+    /// scrolled near is shaped, its runs placed where it shows.
+    #[test]
+    fn a_reflow_shapes_only_the_text_near_the_window_and_every_label_keeps_its_text() {
+        let mut ui = Ui::new(400., 200.);
+        let offset = ui.signal(0_f32);
+        let lines: Vec<String> = (0..300)
+            .map(|i| format!("line {i}: a few words that wrap as the window narrows"))
+            .collect();
+        let view = ui.mount(
+            scroll(offset.clone()).w_full().h_full().child(
+                column()
+                    .w_full()
+                    .children(lines.iter().map(|line| text(line.as_str()).text_wrap(true))),
+            ),
+        );
+        ui.prepare_frame();
+        let mut adapter = AccessibilityTree::new();
+        let mut tree: HashMap<accesskit::NodeId, accesskit::Node> = HashMap::default();
+        let mut update = |adapter: &mut AccessibilityTree, ui: &Ui| {
+            let update = adapter.update(
+                &ui.scene.borrow(),
+                &ui.semantics.borrow(),
+                Some(view.node()),
+                "Test",
+                1.,
+            );
+            for (id, node) in update.nodes {
+                tree.insert(id, node);
+            }
+            // Each label's text, as its runs hold it, and whether they say
+            // where it shows.
+            let mut labels: Vec<(String, String, bool)> = tree
+                .values()
+                .filter(|node| node.role() == accesskit::Role::Label)
+                .map(|node| {
+                    let runs: Vec<&accesskit::Node> = node
+                        .children()
+                        .iter()
+                        .filter_map(|run| tree.get(run))
+                        .collect();
+                    (
+                        node.value().unwrap_or_default().to_string(),
+                        runs.iter()
+                            .filter_map(|run| run.value())
+                            .collect::<String>(),
+                        runs.iter().all(|run| run.character_positions().is_some()),
+                    )
+                })
+                .collect();
+            labels.sort();
+            labels
+        };
+        let before = SHAPED.with(|s| s.get());
+        let first = update(&mut adapter, &ui);
+        assert_eq!(first.len(), 300);
+        let shaped = SHAPED.with(|s| s.get()) - before;
+        assert!(
+            shaped < 40,
+            "only the text near the window shaped: {shaped}"
+        );
+        for (label, runs, _) in &first {
+            assert_eq!(label, runs, "every label's runs hold its text");
+        }
+        // Narrower: everything reflows; again only what is near is shaped.
+        ui.scene.borrow_mut().resize(250., 200.);
+        ui.prepare_frame();
+        let before = SHAPED.with(|s| s.get());
+        let narrowed = update(&mut adapter, &ui);
+        let shaped = SHAPED.with(|s| s.get()) - before;
+        assert!(
+            shaped < 40,
+            "a reflow shapes only the text near the window: {shaped}"
+        );
+        for (label, runs, _) in &narrowed {
+            assert_eq!(label, runs, "still every label's text");
+        }
+        // Scrolled to the end: the last lines are shaped, their runs placed.
+        offset.set(1.0e6);
+        ui.prepare_frame();
+        let scrolled = update(&mut adapter, &ui);
+        let last = scrolled
+            .iter()
+            .find(|(label, ..)| label.starts_with("line 299:"))
+            .unwrap();
+        assert!(last.2, "the text scrolled near says where it shows");
+    }
+
+    /// A reflow of a long list sends the nodes near the window, not those a
+    /// window away, whose boxes as sent stay on the side they are on (above
+    /// stays above, below below); one scrolled in, as a reader moving to it
+    /// asks, is sent where it now shows.
+    #[test]
+    fn a_reflow_sends_only_what_is_near_the_window_and_far_boxes_keep_their_side() {
+        let mut ui = Ui::new(400., 200.);
+        let offset = ui.signal(0_f32);
+        let lines: Vec<String> = (0..300)
+            .map(|i| format!("line {i}: a few words that wrap as the window narrows"))
+            .collect();
+        ui.mount(
+            scroll(offset.clone()).w_full().h_full().child(
+                column()
+                    .w_full()
+                    .children(lines.iter().map(|line| text(line.as_str()).text_wrap(true))),
+            ),
+        );
+        ui.prepare_frame();
+        let mut adapter = AccessibilityTree::new();
+        let mut tree: HashMap<accesskit::NodeId, accesskit::Node> = HashMap::default();
+        let mut update = |adapter: &mut AccessibilityTree, ui: &Ui| {
+            let update =
+                adapter.update(&ui.scene.borrow(), &ui.semantics.borrow(), None, "Test", 1.);
+            let sent = update.nodes.len();
+            for (id, node) in update.nodes {
+                tree.insert(id, node);
+            }
+            // Each label's box as sent, and where it is.
+            let scene = ui.scene.borrow();
+            let boxes: Vec<(NodeId, accesskit::Rect, accesskit::Rect)> = adapter
+                .ids
+                .iter()
+                .filter(|(node, _)| **node != scene.root())
+                .map(|(node, native)| {
+                    let r = scene.hit_bounds(*node);
+                    let now = accesskit::Rect::new(
+                        r.x as f64,
+                        r.y as f64,
+                        (r.x + r.width) as f64,
+                        (r.y + r.height) as f64,
+                    );
+                    (*node, tree[native].bounds().unwrap(), now)
+                })
+                .collect();
+            (sent, boxes)
+        };
+        let window = accesskit::Rect::new(0., 0., 250., 200.);
+        let (sent, _) = update(&mut adapter, &ui);
+        assert!(sent > 300, "the first tree has every label: {sent}");
+        // Scrolled to the middle, then narrower: everything reflows, and
+        // what is far stays as sent, on its side.
+        offset.set(4000.);
+        ui.prepare_frame();
+        update(&mut adapter, &ui);
+        ui.scene.borrow_mut().resize(250., 200.);
+        ui.prepare_frame();
+        let (sent, boxes) = update(&mut adapter, &ui);
+        assert!(sent < 100, "a reflow sends what is near the window: {sent}");
+        let mut stale = (0, 0);
+        for (_, as_sent, now) in &boxes {
+            if as_sent != now {
+                let side = far_side(*now, window);
+                assert!(side.is_some(), "only far boxes stay as sent: {now:?}");
+                assert_eq!(far_side(*as_sent, window), side, "on the side they are");
+                match side {
+                    Some(FarSide::Above) => stale.0 += 1,
+                    _ => stale.1 += 1,
+                }
+            }
+        }
+        assert!(
+            stale.0 > 0 && stale.1 > 0,
+            "far boxes above and below kept: {stale:?}"
+        );
+        // A reader moving to the last line, a window below: scrolled in,
+        // it is sent where it shows.
+        let last = {
+            let scene = ui.scene.borrow();
+            let semantics = ui.semantics.borrow();
+            *adapter
+                .ids
+                .keys()
+                .find(|node| {
+                    semantics
+                        .get(**node)
+                        .is_some_and(|s| s.label.starts_with("line 299:"))
+                })
+                .filter(|node| scene.contains(**node))
+                .unwrap()
+        };
+        let as_sent = |boxes: &[(NodeId, accesskit::Rect, accesskit::Rect)]| {
+            boxes.iter().find(|(node, ..)| *node == last).unwrap().1
+        };
+        assert_eq!(far_side(as_sent(&boxes), window), Some(FarSide::Below));
+        ui.scroll_into_view(last);
+        ui.prepare_frame();
+        let (_, boxes) = update(&mut adapter, &ui);
+        let shown = as_sent(&boxes);
+        assert!(
+            shown.y0 >= 0. && shown.y1 <= 200.,
+            "scrolled in, sent where it shows: {shown:?}"
+        );
+        let r = ui.scene.borrow().hit_bounds(last);
+        assert_eq!((shown.y0, shown.y1), (r.y as f64, (r.y + r.height) as f64));
+    }
+
     #[test]
     fn scrolled_text_moves_its_runs_without_shaping_them_again() {
         let mut ui = Ui::new(400., 200.);
@@ -2262,12 +2945,16 @@ mod document_selection_tests {
                 scale,
             )
         };
+        // The runs, where they show.
         let runs = |update: &accesskit::TreeUpdate| -> Vec<(accesskit::NodeId, accesskit::Rect)> {
             update
                 .nodes
                 .iter()
                 .filter(|(_, node)| node.role() == accesskit::Role::TextRun)
-                .map(|(id, node)| (*id, node.bounds().unwrap()))
+                // The paragraph's: "Second line" lies a screen below the
+                // window, its runs kept as they are (not shaped, not sent).
+                .filter(|(_, node)| node.value() != Some("Second line"))
+                .filter_map(|(id, node)| Some((*id, node.bounds()?)))
                 .collect()
         };
         let first = runs(&update(&mut adapter, &ui));
@@ -2531,6 +3218,7 @@ mod vocabulary_tests {
     /// Every projected node, after a frame.
     fn project(ui: &mut Ui) -> Vec<Node> {
         ui.prepare_frame();
+        eprintln!("rev {}", ui.scene.borrow().language_revision());
         let mut adapter = AccessibilityTree::new();
         adapter
             .update(&ui.scene.borrow(), &ui.semantics.borrow(), None, "Test", 1.)
@@ -2541,6 +3229,48 @@ mod vocabulary_tests {
     }
     fn find(nodes: &[Node], role: accesskit::Role) -> Vec<&Node> {
         nodes.iter().filter(|n| n.role() == role).collect()
+    }
+
+    /// A list's items say where they are in it ("2 of 3"), as a browser's
+    /// `<li>` does, where the app doesn't say so itself; and again when an
+    /// item joins. Markers hidden from assistive technology say nothing.
+    #[test]
+    fn list_items_say_where_they_are_in_their_list() {
+        let mut ui = Ui::new(400., 300.);
+        let count = ui.signal(3_usize);
+        let read = count.clone();
+        ui.mount(column().role(Role::List).child(keyed(
+            move || (0..read.get()).collect(),
+            |i: usize, _| {
+                row()
+                    .role(Role::ListItem)
+                    .child(text("•").accessible_hidden())
+                    .child(text(format!("Item {i}")))
+            },
+        )));
+        let mut adapter = AccessibilityTree::new();
+        let mut items = |ui: &mut Ui| {
+            ui.prepare_frame();
+            let nodes: Vec<Node> = adapter
+                .update(&ui.scene.borrow(), &ui.semantics.borrow(), None, "Test", 1.)
+                .nodes
+                .into_iter()
+                .map(|(_, node)| node)
+                .collect();
+            nodes
+                .iter()
+                .filter(|n| n.role() == accesskit::Role::ListItem)
+                .map(|n| (n.position_in_set(), n.size_of_set()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            items(&mut ui),
+            [(Some(1), Some(3)), (Some(2), Some(3)), (Some(3), Some(3))]
+        );
+        count.set(4);
+        let after = items(&mut ui);
+        assert!(after.contains(&(Some(1), Some(4))), "{after:?}");
+        assert!(after.contains(&(Some(4), Some(4))), "{after:?}");
     }
 
     #[test]
@@ -2666,6 +3396,155 @@ mod vocabulary_tests {
             .filter_map(|n| n.label())
             .collect();
         assert_eq!(names, ["Archive", "Unread"]);
+    }
+
+    #[test]
+    fn a_label_gone_from_the_scene_takes_its_runs_place_with_it() {
+        let mut ui = Ui::new(400., 300.);
+        ui.set_assistive_technology(true);
+        let count = ui.signal(2_usize);
+        let read = count.clone();
+        ui.mount(column().child(keyed(
+            move || (0..read.get()).collect(),
+            |i: usize, _| text(format!("Row {i}")),
+        )));
+        let mut tree = AccessibilityTree::new();
+        let project = |ui: &mut Ui, tree: &mut AccessibilityTree| {
+            ui.prepare_frame();
+            tree.update(&ui.scene.borrow(), &ui.semantics.borrow(), None, "Test", 1.);
+        };
+        project(&mut ui, &mut tree);
+        assert!(!tree.run_boxes.is_empty(), "their runs' place is kept");
+        count.set(0);
+        project(&mut ui, &mut tree);
+        assert!(tree.run_boxes.is_empty(), "and goes with it");
+    }
+
+    /// A names-only update (`update_names`) sends the node whose name
+    /// changed and leaves one that only moved as it was sent; the next full
+    /// update (`update`) sends where it went.
+    #[test]
+    fn a_names_only_update_sends_the_renamed_and_leaves_the_moved_for_later() {
+        let mut ui = Ui::new(400., 300.);
+        ui.set_assistive_technology(true);
+        let name = ui.signal("One".to_string());
+        let gap = ui.signal(0_f32);
+        let (read_name, read_gap) = (name.clone(), gap.clone());
+        ui.mount(
+            column()
+                .child(
+                    button()
+                        .accessible_label_when(move || read_name.get())
+                        .child(text("x")),
+                )
+                .child(div().reactive_style(move || Styles::new().h(read_gap.get())))
+                .child(button().accessible_label("Still").child(text("y"))),
+        );
+        let mut tree = AccessibilityTree::new();
+        let frame = |ui: &mut Ui| ui.prepare_frame();
+        frame(&mut ui);
+        let first = tree.update(&ui.scene.borrow(), &ui.semantics.borrow(), None, "Test", 1.);
+        let still_box = |nodes: &[(accesskit::NodeId, Node)]| {
+            nodes
+                .iter()
+                .find(|(_, n)| n.label() == Some("Still"))
+                .and_then(|(_, n)| n.bounds())
+        };
+        let was = still_box(&first.nodes).expect("sent first");
+        // The first renamed, the second moved down.
+        name.set("Two".to_string());
+        gap.set(40.);
+        frame(&mut ui);
+        let names = tree.update_names(&ui.scene.borrow(), &ui.semantics.borrow(), None, "Test", 1.);
+        assert!(
+            names.nodes.iter().any(|(_, n)| n.label() == Some("Two")),
+            "the new name goes"
+        );
+        assert_eq!(still_box(&names.nodes), None, "the moved node waits");
+        let full = tree.update(&ui.scene.borrow(), &ui.semantics.borrow(), None, "Test", 1.);
+        let now = still_box(&full.nodes).expect("then it goes");
+        assert!(now.y0 > was.y0, "where it went: {was:?} then {now:?}");
+    }
+
+    /// With a screen reader (`screen_reader()` true: VoiceOver or Switch
+    /// Control on macOS, Narrator, NVDA or JAWS on Windows), a name changing
+    /// frame after frame goes out on each frame it changes, never held for
+    /// the pacer: what it speaks is never late.
+    #[test]
+    fn a_screen_reader_hears_each_name_on_the_frame_it_changes() {
+        use super::{GEOMETRY_EVERY, GeometryPacer, urgent};
+        let mut ui = Ui::new(400., 300.);
+        ui.set_assistive_technology(true);
+        let name = ui.signal("Name 0".to_string());
+        let read = name.clone();
+        ui.mount(
+            column().child(
+                button()
+                    .accessible_label_when(move || read.get())
+                    .child(text("x")),
+            ),
+        );
+        let label = |nodes: &[Node]| {
+            find(nodes, accesskit::Role::Button)[0]
+                .label()
+                .map(str::to_owned)
+        };
+        let start = std::time::Instant::now();
+        let mut pacer = GeometryPacer::default();
+        assert!(pacer.update_now(start, true, true), "the first tree");
+        assert_eq!(label(&project(&mut ui)).as_deref(), Some("Name 0"));
+        // A frame apart, well inside the pacer's interval each time.
+        let frame = GEOMETRY_EVERY / 12;
+        for n in 1..=6 {
+            name.set(format!("Name {n}"));
+            let at = start + frame * n;
+            let now = urgent(false, false, true, || true);
+            assert!(now, "a name change is urgent to a screen reader");
+            assert!(pacer.update_now(at, now, true), "sent on frame {n}");
+            assert_eq!(
+                label(&project(&mut ui)).as_deref(),
+                Some(format!("Name {n}").as_str()),
+                "the tree on frame {n}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_client_that_is_no_screen_reader_hears_a_name_late_but_right() {
+        use super::{GEOMETRY_EVERY, GeometryPacer, urgent};
+        let mut ui = Ui::new(400., 300.);
+        ui.set_assistive_technology(true);
+        let name = ui.signal("One".to_string());
+        let read = name.clone();
+        ui.mount(
+            column().child(
+                button()
+                    .accessible_label_when(move || read.get())
+                    .child(text("x")),
+            ),
+        );
+        let label = |nodes: &[Node]| {
+            find(nodes, accesskit::Role::Button)[0]
+                .label()
+                .map(str::to_owned)
+        };
+        let start = std::time::Instant::now();
+        let mut pacer = GeometryPacer::default();
+        assert!(pacer.update_now(start, true, true), "the first tree");
+        assert_eq!(label(&project(&mut ui)).as_deref(), Some("One"));
+        // With no screen reader, the new name waits its turn; with one, it
+        // would go at once.
+        name.set("Two".to_string());
+        let soon = start + GEOMETRY_EVERY / 2;
+        assert!(urgent(false, false, true, || true));
+        let now = urgent(false, false, true, || false);
+        assert!(!pacer.update_now(soon, now, true));
+        let due = pacer.deadline().expect("held for its deadline");
+        assert!(due <= start + GEOMETRY_EVERY);
+        // Nothing more comes but the wake at the deadline, and it's the
+        // tree as it is then.
+        assert!(pacer.update_now(due, false, false));
+        assert_eq!(label(&project(&mut ui)).as_deref(), Some("Two"));
     }
 
     #[test]
@@ -3021,14 +3900,17 @@ mod pacing_tests {
     #[test]
     fn names_and_values_go_out_at_once_only_while_a_screen_reader_runs() {
         use super::urgent;
-        assert!(urgent(true, false, || false));
-        assert!(urgent(true, true, || false));
-        assert!(urgent(false, true, || true));
-        assert!(!urgent(false, true, || false));
-        assert!(!urgent(false, false, || true));
+        assert!(urgent(true, false, false, || false));
+        assert!(urgent(true, false, true, || false));
+        assert!(urgent(false, false, true, || true));
+        assert!(!urgent(false, false, true, || false));
+        assert!(!urgent(false, false, false, || true));
         // The system is asked only when names or values changed.
-        assert!(urgent(true, false, || unreachable!()));
-        assert!(!urgent(false, false, || unreachable!()));
+        assert!(urgent(true, false, false, || unreachable!()));
+        assert!(!urgent(false, false, false, || unreachable!()));
+        // A node a reader asked to scroll in: its new place at once, for
+        // any client.
+        assert!(urgent(false, true, false, || unreachable!()));
     }
 
     #[test]
@@ -3045,14 +3927,22 @@ mod pacing_tests {
         assert!(!pacer.update_now(at(96), false, true));
         assert!(pacer.update_now(at(112), false, true));
         assert_eq!(pacer.deadline(), None);
-        // A name changing mid-animation: at once.
-        assert!(pacer.update_now(at(128), true, true));
+        // A name changing mid-animation: at once, alone (the geometry not
+        // due yet keeps its own time, not put off by the name).
+        assert_eq!(
+            pacer.update_kind(at(128), true, true),
+            Some(super::TreeUpdateKind::Names)
+        );
         // The frames stop after one more move; nothing else comes but the
-        // wake at its deadline, which sends it.
+        // wake at its deadline, 100 ms after the last full update, which
+        // sends it.
         assert!(!pacer.update_now(at(144), false, true));
-        assert_eq!(pacer.deadline(), Some(at(228)));
+        assert_eq!(pacer.deadline(), Some(at(212)));
         assert!(!pacer.update_now(at(200), false, false));
-        assert!(pacer.update_now(at(228), false, false));
+        assert_eq!(
+            pacer.update_kind(at(212), false, false),
+            Some(super::TreeUpdateKind::Full)
+        );
         // Then quiet: nothing to send, nothing held.
         assert!(!pacer.update_now(at(400), false, false));
         assert_eq!(pacer.deadline(), None);
@@ -3060,5 +3950,111 @@ mod pacing_tests {
         assert!(pacer.update_now(at(500), false, true));
         // Focus moving goes out at once, even right after.
         assert!(pacer.update_now(at(501), true, false));
+    }
+}
+
+#[cfg(test)]
+mod slider_tests {
+    use super::*;
+    use zgx::{compose::prelude::*, widgets::Ui};
+
+    #[test]
+    fn a_custom_slider_reaches_assistive_technology_with_its_step_text_and_actions() {
+        let mut ui = Ui::new(400., 200.);
+        ui.set_assistive_technology(true);
+        let effort = ui.signal(3.0_f64);
+        let (read, write) = (effort.clone(), effort.clone());
+        let view = ui.mount(
+            column().children([
+                row()
+                    .size(200., 30.)
+                    .role(Role::Slider)
+                    .accessible_label("Effort")
+                    .numeric_when(1., 4., move || read.get())
+                    .value_when(|| "High".into())
+                    .adjustable(1., move |next| {
+                        write.set(next);
+                    })
+                    .id("effort"),
+                slider("Volume", ui.signal(20.), 0. ..=100.)
+                    .step(5.)
+                    .id("volume"),
+            ]),
+        );
+        ui.prepare_frame();
+        let mut adapter = AccessibilityTree::new();
+        let update = adapter.update(&ui.scene.borrow(), &ui.semantics.borrow(), None, "T", 1.);
+        let sent = |id: &str| {
+            let node = adapter.ids[&view.find(id).unwrap()];
+            update
+                .nodes
+                .iter()
+                .find(|(n, _)| *n == node)
+                .unwrap()
+                .1
+                .clone()
+        };
+        let effort = sent("effort");
+        assert_eq!(effort.role(), accesskit::Role::Slider);
+        assert_eq!(effort.label(), Some("Effort"));
+        assert_eq!(
+            (effort.min_numeric_value(), effort.max_numeric_value()),
+            (Some(1.), Some(4.))
+        );
+        assert_eq!(effort.numeric_value(), Some(3.));
+        assert_eq!(effort.numeric_value_step(), Some(1.));
+        assert_eq!(effort.value(), Some("High"));
+        for action in [Action::Increment, Action::Decrement, Action::SetValue] {
+            assert!(effort.supports_action(action), "{action:?}");
+        }
+        // A slider's own step, told as well.
+        let volume = sent("volume");
+        assert_eq!(volume.numeric_value_step(), Some(5.));
+        assert_eq!(volume.numeric_value(), Some(20.));
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+    use zgx::{compose::prelude::*, widgets::Ui};
+
+    #[test]
+    fn a_texts_language_reaches_assistive_technology_its_own_or_what_holds_its() {
+        let mut ui = Ui::new(400., 200.);
+        let language = ui.signal(String::from("zh-TW"));
+        let read = language.clone();
+        let view = ui.mount(
+            column().children([
+                column()
+                    .reactive_style(move || zgx::style::Styles::new().lang(read.get()))
+                    .children([
+                        text("中文").id("inherited"),
+                        text("日本語").lang("ja").id("own"),
+                    ]),
+                text("plain").id("plain"),
+            ]),
+        );
+        ui.prepare_frame();
+        let mut adapter = AccessibilityTree::new();
+        // The language each node is sent with; none for one not sent again.
+        let sent = |adapter: &mut AccessibilityTree, ui: &Ui| {
+            let update = adapter.update(&ui.scene.borrow(), &ui.semantics.borrow(), None, "T", 1.);
+            ["inherited", "own", "plain"].map(|id| {
+                let node = adapter.ids[&view.find(id).unwrap()];
+                let (_, sent) = update.nodes.iter().find(|(n, _)| *n == node)?;
+                Some(sent.language().map(str::to_owned))
+            })
+        };
+        let some = |language: &str| Some(Some(language.to_owned()));
+        assert_eq!(
+            sent(&mut adapter, &ui),
+            [some("zh-TW"), some("ja"), Some(None)]
+        );
+        // What holds it says another: its text is read in that one, and
+        // what says its own, or is outside, is as it was.
+        language.set("zh-HK".into());
+        ui.prepare_frame();
+        assert_eq!(sent(&mut adapter, &ui), [some("zh-HK"), None, None]);
     }
 }

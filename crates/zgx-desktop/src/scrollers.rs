@@ -1,6 +1,7 @@
 //! The system's scrolling settings: overlay scrollbars, hidden until a view
 //! scrolls (`Ui::set_overlay_scrollbars`), where the user has them, and on
-//! Windows how far a wheel notch scrolls.
+//! Windows how far a wheel notch scrolls, and (read with them) when
+//! tooltips show.
 
 #[cfg(windows)]
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -73,13 +74,17 @@ fn read_wheel() {
 }
 
 /// How far a wheel's step scrolls one way, in logical pixels, given the
-/// view's `page` that way: a browser's line, 40 (Chromium's and WebKit's
-/// line step, and Chromium's per Cocoa tick). Windows reports notches, not
+/// view's `page` that way: a line, an `NSScrollView`'s on macOS, elsewhere a
+/// browser's, 40 (Chromium's and WebKit's line step). Windows reports notches, not
 /// lines: a notch is the user's lines (3 by default) at a third of 100 each,
 /// as Chromium scrolls, and "one screen at a time" a page less an eighth,
 /// as Chromium pages.
 fn step(lines: Option<u32>, page: f32) -> f32 {
     match lines {
+        // A line of an `NSScrollView` (its `verticalLineScroll`, 10 unless a
+        // view sets its own), against which macOS reports a notch's lines:
+        // 3 lines, 30 points, measured, where a browser's 40 moved 120.
+        None if cfg!(target_os = "macos") => 10.,
         None => 40.,
         Some(u32::MAX) => page * 0.875,
         Some(lines) => lines as f32 * 100. / 3.,
@@ -114,7 +119,50 @@ pub(crate) fn sync(ui: &zgx::widgets::Ui) {
         ui.set_overlay_scrollbars(overlay);
     }
     #[cfg(windows)]
-    read_wheel();
+    {
+        read_wheel();
+        // Read with them: when tooltips show, from the mouse hover time.
+        zgx::compose::set_tooltip_timing(windows_tooltip_timing(hover_time()));
+    }
+}
+
+/// Windows' mouse hover time (`SPI_GETMOUSEHOVERTIME`; 400 ms, its
+/// default, if it can't be read).
+#[cfg(windows)]
+fn hover_time() -> std::time::Duration {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SPI_GETMOUSEHOVERTIME, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
+    };
+    let mut value = 0u32;
+    // SAFETY: fills one UINT.
+    let read = unsafe {
+        SystemParametersInfoW(
+            SPI_GETMOUSEHOVERTIME,
+            0,
+            Some(&mut value as *mut _ as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    };
+    let ms = if read.is_ok() && value > 0 {
+        value
+    } else {
+        400
+    };
+    std::time::Duration::from_millis(ms.into())
+}
+
+/// When tooltips show on Windows, as WinUI's `ToolTipService` times them
+/// for the mouse: after twice the hover time, and within 200 ms of another
+/// opening after the hover time (its one and a half times, in integers,
+/// truncates to one).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_tooltip_timing(hover: std::time::Duration) -> zgx::compose::TooltipTiming {
+    zgx::compose::TooltipTiming {
+        delay: hover * 2,
+        reshow_within: std::time::Duration::from_millis(200),
+        reshow_delay: hover,
+        reshow_from_open: true,
+    }
 }
 
 /// macOS's scroll bar style changed since the last call ("Show scroll bars",
@@ -159,12 +207,28 @@ mod tests {
 
     #[test]
     fn a_wheel_step_is_a_browsers_line_or_the_users_lines_or_a_page() {
-        assert_eq!(step(None, 600.), 40.);
+        // macOS: an `NSScrollView`'s line; elsewhere a browser's.
+        let line = if cfg!(target_os = "macos") { 10. } else { 40. };
+        assert_eq!(step(None, 600.), line);
         // Windows: three lines a notch, the default, scroll 100.
         assert_eq!(step(Some(3), 600.), 100.);
         assert_eq!(step(Some(6), 600.), 200.);
         assert_eq!(step(Some(0), 600.), 0.);
         // "One screen at a time" (WHEEL_PAGESCROLL).
         assert_eq!(step(Some(u32::MAX), 600.), 525.);
+    }
+}
+
+#[cfg(test)]
+mod tooltip_timing_tests {
+    use super::windows_tooltip_timing;
+    use std::time::Duration;
+    #[test]
+    fn windows_tooltips_wait_twice_the_hover_time_and_reshow_sooner() {
+        let timing = windows_tooltip_timing(Duration::from_millis(400));
+        assert_eq!(timing.delay, Duration::from_millis(800));
+        assert_eq!(timing.reshow_within, Duration::from_millis(200));
+        assert_eq!(timing.reshow_delay, Duration::from_millis(400));
+        assert!(timing.reshow_from_open);
     }
 }

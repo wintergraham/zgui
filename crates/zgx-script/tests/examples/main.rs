@@ -5,6 +5,8 @@
 #![allow(clippy::duplicate_mod)]
 #[path = "../catalog_example.rs"]
 mod catalog_example;
+#[path = "../channels_example.rs"]
+mod channels_example;
 #[path = "../chat_example.rs"]
 mod chat_example;
 #[path = "../code_editor_example.rs"]
@@ -19,6 +21,8 @@ mod example_scripts;
 mod examples;
 #[path = "../frame_profiler.rs"]
 mod frame_profiler;
+#[path = "../inbox_example.rs"]
+mod inbox_example;
 #[path = "../mail_example.rs"]
 mod mail_example;
 #[path = "../monitor_example.rs"]
@@ -29,6 +33,10 @@ mod navbar_lab;
 mod quick_ask;
 #[path = "../sidebar_pip.rs"]
 mod sidebar_pip;
+#[path = "../plugins_example.rs"]
+mod plugins_example;
+#[path = "../settings_example.rs"]
+mod settings_example;
 #[path = "../sketch_example.rs"]
 mod sketch_example;
 #[path = "../team_example.rs"]

@@ -36,8 +36,9 @@ use windows::{
     core::{HRESULT, HSTRING, Interface, PCWSTR, PWSTR},
 };
 use zgx::web_view::{
-    NavigationKind, NavigationRequest, SchemeRequest, SchemeResponder, SchemeResponse,
-    ScriptResult, WeakWebView, WebProfile, WebView, WebViewBackend, WebViewCommand, WebViewEvent,
+    FindOptions, FindResult, NavigationKind, NavigationRequest, SchemeRequest, SchemeResponder,
+    SchemeResponse, ScriptResult, WeakWebView, WebProfile, WebView, WebViewBackend, WebViewCommand,
+    WebViewEvent,
 };
 
 // The loader linked in (webview2-com-sys ships it): no DLL beside the app.
@@ -429,6 +430,15 @@ pub(crate) struct Page {
     /// Commits the tree of the window it shows in, for changes made outside
     /// that window's frames (the page becoming ready, or going).
     commit: RefCell<Option<Rc<dyn Fn()>>>,
+    /// The text and case last searched for (`WebView::find`), so the same
+    /// again steps to the next match.
+    finding: RefCell<Option<(String, bool)>>,
+    /// Keys WebView2 saw pressed in it, for the page's word that it left
+    /// them alone (`webview2_keys`).
+    pressed: RefCell<super::webview2_keys::Pressed>,
+    /// The keys whose presses the app took from it (reserved): their
+    /// releases are the app's too.
+    swallowed: RefCell<super::webview2_keys::Swallowed>,
 }
 
 /// The `WebViewBackend` of a page (its `as_any` finds the page).
@@ -444,6 +454,159 @@ impl WebViewBackend for Backend {
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+    fn print(&self) {
+        if let Some(ready) = self.0.ready.borrow().as_ref() {
+            // SAFETY: WebView2 on the UI thread. Its print preview, as the
+            // page's `window.print()` shows.
+            unsafe {
+                if let Ok(view) = ready.view.cast::<ICoreWebView2_16>() {
+                    let _ = view.ShowPrintUI(COREWEBVIEW2_PRINT_DIALOG_KIND_BROWSER);
+                }
+            }
+        }
+    }
+    fn find(&self, text: &str, options: &FindOptions, reply: Box<dyn FnOnce(FindResult)>) {
+        let page = &self.0;
+        let reply = Rc::new(Cell::new(Some(reply)));
+        let answer = {
+            let reply = reply.clone();
+            move |result: FindResult| {
+                if let Some(reply) = reply.take() {
+                    reply(result);
+                }
+            }
+        };
+        let ready = page.ready.borrow();
+        let Some(ready) = ready.as_ref().filter(|_| page.started.get()) else {
+            return answer(FindResult::default());
+        };
+        // SAFETY: WebView2 objects on the UI thread, where it calls the
+        // completion back.
+        let started = unsafe {
+            (|| -> windows::core::Result<()> {
+                let finder = ready.view.cast::<ICoreWebView2_28>()?.Find()?;
+                let search = (text.to_owned(), options.case_sensitive);
+                if page.finding.borrow().as_ref() == Some(&search) {
+                    if options.backwards {
+                        finder.FindPrevious()?;
+                    } else {
+                        finder.FindNext()?;
+                    }
+                    answer(found(&finder));
+                    return Ok(());
+                }
+                let find = ready
+                    .environment
+                    .cast::<ICoreWebView2Environment15>()?
+                    .CreateFindOptions()?;
+                find.SetFindTerm(&HSTRING::from(text))?;
+                find.SetIsCaseSensitive(options.case_sensitive)?;
+                find.SetShouldHighlightAllMatches(true)?;
+                // zgx's app shows what it found, not WebView2's own bar.
+                find.SetSuppressDefaultFindDialog(true)?;
+                *page.finding.borrow_mut() = Some(search);
+                let backwards = options.backwards;
+                let session = finder.clone();
+                let answer = answer.clone();
+                finder.Start(
+                    &find,
+                    &FindStartCompletedHandler::create(Box::new(move |_| {
+                        // Started at the first match: the last, backwards.
+                        if backwards {
+                            let _ = session.FindPrevious();
+                        }
+                        answer(found(&session));
+                        Ok(())
+                    })),
+                )
+            })()
+        };
+        if started.is_err() {
+            *page.finding.borrow_mut() = None;
+            answer(FindResult::default());
+        }
+    }
+    fn clear_find(&self) {
+        let page = &self.0;
+        *page.finding.borrow_mut() = None;
+        if let Some(ready) = page.ready.borrow().as_ref() {
+            // SAFETY: WebView2's find on the UI thread.
+            unsafe {
+                if let Ok(finder) = ready
+                    .view
+                    .cast::<ICoreWebView2_28>()
+                    .and_then(|view| view.Find())
+                {
+                    let _ = finder.Stop();
+                }
+            }
+        }
+    }
+}
+/// What a find session has found: its matches, as WebView2 counts them.
+///
+/// # Safety
+/// On the UI thread.
+unsafe fn found(finder: &ICoreWebView2Find) -> FindResult {
+    let mut count = -1;
+    // SAFETY: as the caller promises.
+    let _ = unsafe { finder.MatchCount(&mut count) };
+    let mut result = FindResult::default();
+    result.found = count > 0;
+    result.matches = u32::try_from(count).ok();
+    result
+}
+/// Tell `status` how a download the app saves goes: its bytes as they
+/// come, then its end.
+///
+/// # Safety
+/// On the UI thread.
+unsafe fn follow_download(
+    operation: &ICoreWebView2DownloadOperation,
+    status: zgx::web_view::DownloadStatusFn,
+) {
+    let status = Rc::new(RefCell::new(status));
+    let mut token = 0;
+    // SAFETY: as the caller promises; WebView2 calls the handlers there.
+    unsafe {
+        let hear = status.clone();
+        let _ = operation.add_BytesReceivedChanged(
+            &BytesReceivedChangedEventHandler::create(Box::new(move |sender, _| {
+                if let Some(operation) = sender {
+                    let (mut received, mut total) = (0_i64, 0_i64);
+                    let _ = operation.BytesReceived(&mut received);
+                    let _ = operation.TotalBytesToReceive(&mut total);
+                    (hear.borrow_mut())(zgx::web_view::DownloadStatus::Progress {
+                        received: received.max(0) as u64,
+                        total: (total > 0).then_some(total as u64),
+                    });
+                }
+                Ok(())
+            })),
+            &mut token,
+        );
+        let _ = operation.add_StateChanged(
+            &StateChangedEventHandler::create(Box::new(move |sender, _| {
+                let Some(operation) = sender else {
+                    return Ok(());
+                };
+                let mut state = COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS;
+                let _ = operation.State(&mut state);
+                if state == COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED {
+                    (status.borrow_mut())(zgx::web_view::DownloadStatus::Finished);
+                } else if state == COREWEBVIEW2_DOWNLOAD_STATE_INTERRUPTED {
+                    let mut reason = COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_NONE;
+                    let _ = operation.InterruptReason(&mut reason);
+                    (status.borrow_mut())(zgx::web_view::DownloadStatus::Failed(format!(
+                        "interrupted (WebView2 reason {})",
+                        reason.0
+                    )));
+                }
+                Ok(())
+            })),
+            &mut token,
+        );
     }
 }
 impl Drop for Backend {
@@ -503,6 +666,9 @@ pub(crate) fn backend(web: &WebView, parent: HWND, scale: f32) -> Option<Rc<Page
         files: RefCell::new(None),
         schemes: RefCell::new(Vec::new()),
         commit: RefCell::new(None),
+        pressed: RefCell::default(),
+        swallowed: RefCell::default(),
+        finding: RefCell::default(),
     });
     web.attach(Rc::new(Backend(page.clone())));
     let mut schemes: Vec<String> = Vec::new();
@@ -632,6 +798,18 @@ impl Page {
                 settings.SetAreDevToolsEnabled(options.inspectable)?;
                 // WebKit shows no link status bar.
                 settings.SetIsStatusBarEnabled(false)?;
+                // Find, print, reload, zoom, history and devtools keys are
+                // the app's, as on macOS and Linux: `WebView::find` finds.
+                if let Ok(settings) = settings.cast::<ICoreWebView2Settings3>() {
+                    settings.SetAreBrowserAcceleratorKeysEnabled(false)?;
+                    // `ZGX_WEB_SETTINGS=1`: the setting as WebView2 reads it
+                    // back, on stderr (`windows_webview_smoke.py
+                    // --no-foreground` checks it, sending no key).
+                    if std::env::var_os("ZGX_WEB_SETTINGS").is_some() {
+                        let on = flag(|v| settings.AreBrowserAcceleratorKeysEnabled(v));
+                        eprintln!("WEB_SETTINGS browser_keys={on}");
+                    }
+                }
                 if let Some(agent) = &options.user_agent
                     && let Ok(settings) = settings.cast::<ICoreWebView2Settings2>()
                 {
@@ -714,6 +892,8 @@ impl Page {
         if options.messages {
             scripts.push(CHANNEL_SCRIPT.into());
         }
+        // The keys the page leaves alone, for the app's shortcuts.
+        scripts.push(super::webview2_keys::SCRIPT.into());
         let view = ready.view.clone();
         *self.ready.borrow_mut() = Some(ready);
         self.apply_target();
@@ -843,24 +1023,103 @@ impl Page {
                 })),
                 &mut token,
             );
-            // As WebKit with no delegate for them: pages save no files and
-            // get no permission (camera, location, notifications, the
-            // clipboard) in the app's name.
+            // A page's full screen fills its node: the app hears, to grow it.
+            let page = on.clone();
+            let _ = view.add_ContainsFullScreenElementChanged(
+                &ContainsFullScreenElementChangedEventHandler::create(Box::new(
+                    move |sender, _| {
+                        let full =
+                            sender.is_some_and(|view| flag(|v| view.ContainsFullScreenElement(v)));
+                        page(&|page| {
+                            page.post(move |web| {
+                                web.update_state(|state| state.full_screen = full)
+                            });
+                        });
+                        Ok(())
+                    },
+                )),
+                &mut token,
+            );
+            // As WebKit with no delegate for them: pages get no permission
+            // (camera, location, notifications, the clipboard) in the app's
+            // name. All but a page's further downloads, should WebView2 ask
+            // to let a page start more on its own: each is the app's to save
+            // or cancel (`DownloadStarting` below). (WebView2 also holds a
+            // page's second download started without a gesture back until
+            // it navigates, asking nothing: that is its own.)
+            // `ZGX_WEB_SETTINGS=1` also tells each permission asked and each
+            // download started, on stderr (`windows_webview_smoke.py`).
+            let report = std::env::var_os("ZGX_WEB_SETTINGS").is_some();
             let _ = view.add_PermissionRequested(
-                &PermissionRequestedEventHandler::create(Box::new(|_, args| {
+                &PermissionRequestedEventHandler::create(Box::new(move |_, args| {
                     if let Some(args) = args {
-                        let _ = args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY);
+                        let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+                        let _ = args.PermissionKind(&mut kind);
+                        let allow =
+                            kind == COREWEBVIEW2_PERMISSION_KIND_MULTIPLE_AUTOMATIC_DOWNLOADS;
+                        if report {
+                            eprintln!("WEB_PERMISSION kind={} allowed={allow}", kind.0);
+                        }
+                        let _ = args.SetState(if allow {
+                            COREWEBVIEW2_PERMISSION_STATE_ALLOW
+                        } else {
+                            COREWEBVIEW2_PERMISSION_STATE_DENY
+                        });
                     }
                     Ok(())
                 })),
                 &mut token,
             );
+            // A download is the app's (`WebView::download`): saved where
+            // it says, or cancelled, as with no handler. WebView2's own
+            // download bar stays hidden.
             if let Ok(view) = view.cast::<ICoreWebView2_4>() {
+                let page = on.clone();
                 let _ = view.add_DownloadStarting(
-                    &DownloadStartingEventHandler::create(Box::new(|_, args| {
-                        if let Some(args) = args {
-                            let _ = args.SetCancel(true);
+                    &DownloadStartingEventHandler::create(Box::new(move |_, args| {
+                        let Some(args) = args else { return Ok(()) };
+                        let _ = args.SetHandled(true);
+                        let operation = args.DownloadOperation()?;
+                        let suggested = take(|v| args.ResultFilePath(v));
+                        if report {
+                            eprintln!("WEB_DOWNLOAD_STARTING {}", take(|v| operation.Uri(v)));
                         }
+                        let request = zgx::web_view::DownloadRequest::new(
+                            take(|v| operation.Uri(v)),
+                            std::path::Path::new(&suggested)
+                                .file_name()
+                                .map(|name| name.to_string_lossy().into_owned())
+                                .unwrap_or_default(),
+                            take(|v| operation.MimeType(v)),
+                        );
+                        let deferral = args.GetDeferral()?;
+                        page(&|page| {
+                            let (args, operation, deferral, request) = (
+                                args.clone(),
+                                operation.clone(),
+                                deferral.clone(),
+                                request.clone(),
+                            );
+                            page.post(move |web| {
+                                web.download(
+                                    request,
+                                    zgx::web_view::DownloadResponder::new(move |answer| {
+                                        match answer {
+                                            Some((path, status)) => {
+                                                let _ = args.SetResultFilePath(&HSTRING::from(
+                                                    path.as_os_str(),
+                                                ));
+                                                follow_download(&operation, status);
+                                            }
+                                            None => {
+                                                let _ = args.SetCancel(true);
+                                            }
+                                        }
+                                        let _ = deferral.Complete();
+                                    }),
+                                )
+                            });
+                        });
                         Ok(())
                     })),
                     &mut token,
@@ -886,8 +1145,9 @@ impl Page {
                 })),
                 &mut token,
             );
-            if options.messages {
+            {
                 let page = on.clone();
+                let messages = options.messages;
                 let _ = view.add_WebMessageReceived(
                     &WebMessageReceivedEventHandler::create(Box::new(move |_, args| {
                         let Some(args) = args else { return Ok(()) };
@@ -896,6 +1156,13 @@ impl Page {
                             Ok(()) if !text.is_null() => take_pwstr(text),
                             _ => take(|v| args.WebMessageAsJson(v)),
                         };
+                        if let Some(key) = super::webview2_keys::parse(&body) {
+                            page(&|page| page.left_alone(&key));
+                            return Ok(());
+                        }
+                        if !messages {
+                            return Ok(());
+                        }
                         let origin = origin_of(&take(|v| args.Source(v)));
                         page(&|page| {
                             let (body, origin) = (body.clone(), origin.clone());
@@ -949,6 +1216,49 @@ impl Page {
                 &mut token,
             );
             let page = on.clone();
+            let _ = ready.controller.add_AcceleratorKeyPressed(
+                &AcceleratorKeyPressedEventHandler::create(Box::new(move |_, args| {
+                    let Some(args) = args else { return Ok(()) };
+                    let mut kind = COREWEBVIEW2_KEY_EVENT_KIND::default();
+                    let mut vk = 0u32;
+                    let _ = args.KeyEventKind(&mut kind);
+                    let _ = args.VirtualKey(&mut vk);
+                    if kind == COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN
+                        || kind == COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN
+                    {
+                        let held = held_modifiers();
+                        let reserved = Cell::new(false);
+                        page(&|page| {
+                            if page.take_reserved(vk, held) {
+                                page.swallowed.borrow_mut().press(vk);
+                                reserved.set(true);
+                            } else {
+                                page.pressed.borrow_mut().record(
+                                    vk,
+                                    held,
+                                    std::time::Instant::now(),
+                                )
+                            }
+                        });
+                        // The app's: neither the page nor Edge has it.
+                        if reserved.get() {
+                            let _ = args.SetHandled(true);
+                        }
+                    } else if kind == COREWEBVIEW2_KEY_EVENT_KIND_KEY_UP
+                        || kind == COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_UP
+                    {
+                        // The release of a press the app took is the app's.
+                        let taken = Cell::new(false);
+                        page(&|page| taken.set(page.swallowed.borrow_mut().release(vk)));
+                        if taken.get() {
+                            let _ = args.SetHandled(true);
+                        }
+                    }
+                    Ok(())
+                })),
+                &mut token,
+            );
+            let page = on.clone();
             let _ = ready.controller.add_GotFocus(
                 &FocusChangedEventHandler::create(Box::new(move |_, _| {
                     page(&|page| page.focus_changed(true));
@@ -983,6 +1293,84 @@ impl Page {
                 &mut token,
             );
         }
+    }
+    /// The page's script says it left `key` alone: the app's shortcut, if
+    /// it was pressed in the page (`Pressed::take`), is not the browser's
+    /// own, and a key binding of the app's takes it (menus' included).
+    fn left_alone(&self, key: &super::webview2_keys::Forwarded) {
+        if !self
+            .pressed
+            .borrow_mut()
+            .take(key.vk, key.modifiers, std::time::Instant::now())
+            || super::webview2_keys::browsers(&key.key, key.modifiers)
+        {
+            return;
+        }
+        let Some(router) = super::dcomp::router_of(self.parent.get()) else {
+            return;
+        };
+        let (key, modifiers) = (key.key.clone(), key.modifiers);
+        zgx::native_view::post(move || {
+            let Some(scene) = router.scene.upgrade() else {
+                return;
+            };
+            if !router.input.binds_key(&scene.borrow(), &key, modifiers) {
+                return;
+            }
+            use zgx::input::InputEvent;
+            router.input.dispatch(
+                &scene,
+                InputEvent::KeyDown {
+                    key: key.clone(),
+                    modifiers,
+                    repeat: false,
+                },
+            );
+            router
+                .input
+                .dispatch(&scene, InputEvent::KeyUp { key, modifiers });
+        });
+    }
+    /// Virtual key `vk` with `modifiers`, pressed in the page: if it is a
+    /// shortcut the app keeps (`KeyBinding::reserved`), the app has it now,
+    /// before the page or Edge. Whether it did.
+    fn take_reserved(&self, vk: u32, modifiers: zgx::input::Modifiers) -> bool {
+        let Some(key) = super::webview2_keys::key_of_vk(vk) else {
+            return false;
+        };
+        let Some(router) = super::dcomp::router_of(self.parent.get()) else {
+            return false;
+        };
+        let Some(scene) = router.scene.upgrade() else {
+            return false;
+        };
+        // A letter bound in either case.
+        let upper = match &key {
+            zgx::input::Key::Character(c) => zgx::input::Key::Character(c.to_ascii_uppercase()),
+            key => key.clone(),
+        };
+        let Some(key) = [key, upper].into_iter().find(|key| {
+            scene
+                .try_borrow()
+                .is_ok_and(|scene| router.input.reserves_key(&scene, key, modifiers))
+        }) else {
+            return false;
+        };
+        zgx::native_view::post(move || {
+            use zgx::input::InputEvent;
+            router.input.dispatch(
+                &scene,
+                InputEvent::KeyDown {
+                    key: key.clone(),
+                    modifiers,
+                    repeat: false,
+                },
+            );
+            router
+                .input
+                .dispatch(&scene, InputEvent::KeyUp { key, modifiers });
+        });
+        true
     }
     fn focus_changed(&self, focused: bool) {
         self.focused.set(focused);
@@ -1779,4 +2167,21 @@ fn error_message(status: COREWEBVIEW2_WEB_ERROR_STATUS) -> String {
         _ => "The page could not be loaded.",
     };
     message.into()
+}
+
+/// The modifiers held now, as the thread's keyboard state has them.
+fn held_modifiers() -> zgx::input::Modifiers {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    };
+    // SAFETY: reads this thread's keyboard state.
+    let down = |key: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY| unsafe {
+        GetKeyState(i32::from(key.0)) < 0
+    };
+    zgx::input::Modifiers {
+        shift: down(VK_SHIFT),
+        control: down(VK_CONTROL),
+        alt: down(VK_MENU),
+        meta: down(VK_LWIN) || down(VK_RWIN),
+    }
 }

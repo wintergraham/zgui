@@ -4,7 +4,7 @@ use crate::{
     scene::{NodeId, Scene},
 };
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     rc::{Rc, Weak},
     time::{Duration, Instant},
 };
@@ -37,6 +37,28 @@ impl Modifiers {
         } else {
             self.control
         }
+    }
+}
+/// The modifier keys held now, a state the runtime's windows share: made
+/// the first time something asks ([`held_modifiers`]), and until then
+/// nothing is written to it.
+struct HeldModifiers(Signal<Modifiers>);
+/// The modifier keys held now, as a state (`Ui::modifiers`): it changes as
+/// one goes down or up, a modifier alone included (Command held for
+/// shortcut hints), and is cleared as the window loses focus, so one
+/// released in another app isn't left held.
+pub fn held_modifiers(runtime: &Runtime) -> Signal<Modifiers> {
+    runtime
+        .extension(|runtime| HeldModifiers(runtime.signal(Modifiers::default())))
+        .0
+        .clone()
+}
+/// The host's report of the modifier keys held now (all up as its window
+/// loses focus): written to [`held_modifiers`] only once something has
+/// asked for it.
+pub fn set_held_modifiers(runtime: &Runtime, held: Modifiers) {
+    if let Some(state) = runtime.existing_extension::<HeldModifiers>() {
+        state.0.set(held);
     }
 }
 /// A key, by what it means rather than where it is (see
@@ -117,6 +139,18 @@ pub enum ScrollGesture {
     /// Momentum scrolling ended.
     MomentumEnded,
 }
+/// A step back or forward through where an app has been, as a browser's
+/// Back and Forward go: a trackpad's swipe between pages (macOS) reaches
+/// the view under it as this action, in an [`InputEvent::Action`]
+/// ([`InputDispatcher::navigate`]); a view takes it with
+/// `View::on_navigate`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Navigation {
+    /// Back, to where it was.
+    Back,
+    /// Forward again, to where it went back from.
+    Forward,
+}
 /// An input event, routed to nodes by the [`InputDispatcher`]. Positions
 /// are in window points from the top left.
 #[derive(Clone, Debug, PartialEq)]
@@ -188,6 +222,22 @@ pub enum InputEvent {
         /// Down the window.
         y: f32,
     },
+    /// The mouse moved by `dx`, `dy` while the pointer is locked
+    /// (`InputDispatcher::lock_pointer`): the device's own motion as the
+    /// platform reports it raw (about a point a count; unaccelerated where
+    /// the platform gives it so), as the DOM's `movementX`. The pointer
+    /// itself stays where it locked. It goes to the locking node; with no
+    /// lock, nowhere.
+    PointerMotion {
+        /// Across, positive to the right.
+        dx: f32,
+        /// Down, positive downward.
+        dy: f32,
+    },
+    /// The node took the pointer's lock (`true`) or lost it (`false`): it
+    /// let it go, Escape was pressed, the window lost focus, it went from
+    /// the scene or another node locked it.
+    PointerLockChange(bool),
     /// The pointer left the node (or the window).
     PointerLeave,
     /// The platform took the pointer away mid-gesture: a press ends without
@@ -306,6 +356,8 @@ pub struct EventContext {
     /// A node to capture the pointer for once it moves, unless what it was
     /// pressed on starts a drag or takes it (`capture_pointer_on_move`).
     capture_on_move: Option<NodeId>,
+    /// The ancestors a press's capture covers most of (`capture_filling`).
+    capture_fills: Vec<NodeId>,
     pointer_modifiers: Modifiers,
     click_count: u8,
     drag_threshold: f32,
@@ -336,6 +388,7 @@ impl EventContext {
             focus: None,
             capture: None,
             capture_on_move: None,
+            capture_fills: Vec::new(),
             pointer_modifiers: Modifiers::default(),
             click_count: 0,
             drag_threshold: DRAG_THRESHOLD,
@@ -396,7 +449,9 @@ impl EventContext {
     pub fn pointer_modifiers(&self) -> Modifiers {
         self.pointer_modifiers
     }
-    /// Primary or other button press count (1–3); zero for non-press events.
+    /// Primary or other button press count: 1, 2 for a double click's
+    /// second, 3 for a triple's and on past it, as the web's `detail` counts;
+    /// zero for non-press events.
     pub fn click_count(&self) -> u8 {
         self.click_count
     }
@@ -456,6 +511,20 @@ impl EventContext {
     pub fn focus(&mut self) {
         self.focus = Some(self.current_target);
     }
+    /// `capture_pointer` for a press a node only shows or activates, naming
+    /// the ancestors it covers most of: a drag on one is still its to start
+    /// (`keeps_press_from_drag`), as nothing else of that ancestor is there to grab.
+    pub(crate) fn capture_filling(&mut self, fills: Vec<NodeId>) {
+        self.capture_pointer();
+        self.capture_fills = fills;
+    }
+    /// Whether what captured this press keeps it from a drag on the listener
+    /// running: a control inside it does, as a tab's close button keeps its
+    /// press from the tab; one covering most of it doesn't, as a row that's
+    /// all button is still dragged by that button.
+    pub(crate) fn keeps_press_from_drag(&self) -> bool {
+        self.capture.is_some() && !self.capture_fills.contains(&self.current_target)
+    }
     /// Whether a listener so far asked to capture or release the pointer.
     pub(crate) fn capture_requested(&self) -> bool {
         self.capture.is_some()
@@ -501,6 +570,18 @@ impl EventContext {
 /// last event: longer than the gaps between a gesture's and its momentum's
 /// events, shorter than a person's pause between gestures.
 const SCROLL_LATCH: Duration = Duration::from_millis(300);
+/// How long after a press, a release or a key a node may lock the pointer
+/// (`InputDispatcher::lock_pointer`), as a browser's transient activation:
+/// a page can't take the pointer from someone who did nothing.
+pub const POINTER_LOCK_ACTIVATION: Duration = Duration::from_secs(1);
+thread_local! {
+    /// The thread's dispatchers with a pointer lock engaged (held, or its
+    /// Escape still down): while none has, a dispatch takes the lock's
+    /// path for nothing but blur and the lock's own events, and checks so
+    /// with a load. (A count, not a dispatcher's own flag: one more field
+    /// in `InputDispatcher` cost every clone and drop of it.)
+    static LOCKS_ENGAGED: Cell<u32> = const { Cell::new(0) };
+}
 /// How a node takes input.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NodeInput {
@@ -525,19 +606,6 @@ pub struct NodeInput {
     /// (where `pass_through` stops at the first listener) and nothing in it
     /// takes focus: a closed panel left mounted to fade out.
     pub inert: bool,
-    /// A box laid out around content that may be put away: while nothing
-    /// it holds is displayed (`display: none` or invisible), the pointer
-    /// passes through it as through `pass_through` (a presence's box over a
-    /// page whose content is hidden).
-    pub hollow: bool,
-}
-impl NodeInput {
-    /// Whether the pointer passes through `id`, which takes input as these
-    /// options say, to what is under it: `pass_through`, or `hollow` with
-    /// nothing in it displayed.
-    pub fn passes(&self, scene: &Scene, id: NodeId) -> bool {
-        self.pass_through || (self.hollow && !scene.displays_content(id))
-    }
 }
 type Callback = Rc<RefCell<dyn FnMut(&mut EventContext)>>;
 /// Whether the pointer can target `node`: neither it nor an ancestor is inert.
@@ -550,6 +618,9 @@ fn receives_pointer(
         .chain(scene.ancestors(node))
         .any(|id| options.get(&id).is_some_and(|o| o.inert))
 }
+/// `set_tab_hook`'s: the focused node, whether backward, and where Tab
+/// would go; true if it takes the move.
+pub(crate) type TabHook = Rc<dyn Fn(NodeId, bool, Option<NodeId>) -> bool>;
 struct Entry {
     token: u64,
     callback: Callback,
@@ -580,6 +651,13 @@ struct FocusScope {
     previous: Option<NodeId>,
     /// What the scope below holds stays live too (a submenu over its menu).
     porous: bool,
+    /// What opened it (a popover's or menu's trigger): focus returns there
+    /// as it closes when what had focus is gone, if it opened from the
+    /// keyboard (`keyboard`).
+    trigger: Option<NodeId>,
+    /// It opened while the keyboard was in use (`focus_visible_now`), or
+    /// from a press on its trigger: focus may return to the trigger.
+    keyboard: bool,
 }
 #[derive(Clone, Copy)]
 struct Click {
@@ -638,7 +716,7 @@ impl ClickTracker {
                         .is_some_and(|elapsed| elapsed <= self.1)
                     && self.near(old.position, position)
             })
-            .map_or(1, |old| old.count % 3 + 1);
+            .map_or(1, |old| old.count.saturating_add(1));
         self.0 = Some(Click {
             target,
             button,
@@ -664,22 +742,50 @@ struct State {
     /// Views that take keys while nothing is focused (`take_unfocused_keys`),
     /// the last mounted first.
     unfocused_keys: Vec<NodeId>,
+    /// Views that take a step back or forward (`take_navigation`).
+    navigators: Vec<NodeId>,
     entries: crate::scene::NodeMap<Vec<Entry>>,
     options: crate::scene::NodeMap<NodeInput>,
+    /// Boxes the pointer passes through while nothing they hold is displayed
+    /// (`View::hollow`): a presence's box over a page kept mounted but hidden.
+    /// A few at most: a list, not a map (a map's instance shared with another
+    /// set's outlined that one's insert).
+    hollow: Vec<NodeId>,
+    /// Nodes that take every key while focus is in them (`set_capture_keys`):
+    /// a shortcut recorder. A few at most.
+    capturing: Vec<NodeId>,
     disabled_observers: crate::scene::NodeMap<Signal<bool>>,
     next: u64,
     focused: Option<NodeId>,
+    /// Asked before Tab moves focus (`set_tab_hook`): whether it takes the
+    /// move itself (a list building the row the move goes to).
+    tab_hook: Option<TabHook>,
+    /// Focus moving without scrolling into view (`focus_in_place`).
+    in_place: bool,
     captured: Option<NodeId>,
     /// `EventContext::capture_pointer_on_move`'s node, until the press moves.
     capture_on_move: Option<NodeId>,
     capture_button: Option<PointerButton>,
     /// The hovered node (the pointer's hit target) and its ancestors, up to
-    /// the active modal root: each has had its enter, none its leave yet.
+    /// the active modal root.
     hover: Vec<NodeId>,
+    /// The nodes told of hover, outermost first: each has had its enter,
+    /// none its leave yet. `set_hover` tells them until they are `hover`,
+    /// a step at a time, so a listener's own dispatch takes them on from
+    /// where they are.
+    hover_told: Vec<NodeId>,
     /// Where the pointer last was over the window (None: outside it).
     pointer: Option<(f32, f32)>,
-    file_hovered: Option<NodeId>,
+    /// What files dragged in from outside are over (the hit target), then
+    /// its ancestors as they were: their leave goes to the first of them
+    /// still in the scene, so a zone round a node made again meanwhile
+    /// still hears it.
+    file_hovered: Vec<NodeId>,
     pressed: Option<NodeId>,
+    /// What the last press landed on, as its listeners run and after: a
+    /// popup opening from a press on its trigger counts it as focused, as a
+    /// browser's press focuses a button first.
+    last_press: Option<NodeId>,
     key_pressed: Option<(NodeId, Key)>,
     /// The window's semantics: a control's role says which keys activate it
     /// (`activates`).
@@ -690,6 +796,12 @@ struct State {
     /// Non-modal layers (toasts): what they hold stays live under any modal
     /// scope (`set_layer`).
     layers: Vec<NodeId>,
+    /// Scope roots and their triggers, which stay live to the pointer while
+    /// the scope is active (`set_scope_trigger`).
+    triggers: Vec<(NodeId, NodeId)>,
+    /// The press being dispatched dismissed a popover on blank space
+    /// (`keep_focus_for_press`): it leaves focus where dismissing put it.
+    keep_focus: bool,
     clicks: ClickTracker,
     /// The system's drag threshold, once the host gives it.
     drag_threshold: Option<f32>,
@@ -720,6 +832,57 @@ struct State {
     /// The last interaction was the pointer (a press), not the keyboard:
     /// what it focuses shows no focus ring (`focus_visible_now`).
     pointer_modality: bool,
+    /// The node the pointer is locked to (`lock_pointer`): every pointer
+    /// event goes to it, the mouse's own motion as `PointerMotion`.
+    pointer_lock: Option<NodeId>,
+    /// When a person last pressed, released or typed, as the host last
+    /// settled it (`settle_gestures`): the pointer locks only just after
+    /// (`POINTER_LOCK_ACTIVATION`).
+    activation: Option<Instant>,
+    /// Presses, releases and keys counted as they're dispatched, and how
+    /// many of them `activation` has the time of: one newer is happening
+    /// now (in its handlers, or this turn of the host's loop).
+    gestures: u64,
+    settled: u64,
+    /// Escape ended the lock: its release goes nowhere either.
+    escape_ended_lock: bool,
+    /// This state's lock counted in `LOCKS_ENGAGED`.
+    engaged_counted: bool,
+}
+impl Drop for State {
+    fn drop(&mut self) {
+        // Gone with a lock engaged (a window closed while locked).
+        if self.engaged_counted {
+            let _ = LOCKS_ENGAGED.try_with(|count| count.set(count.get().saturating_sub(1)));
+        }
+    }
+}
+impl State {
+    /// A lock is held, or the Escape that ended one is still down: every
+    /// event goes by `dispatch_pointer_lock`.
+    fn lock_engaged(&self) -> bool {
+        self.pointer_lock.is_some() || self.escape_ended_lock
+    }
+    /// `LOCKS_ENGAGED` in step with this state's lock.
+    fn count_engaged(&mut self) {
+        let engaged = self.lock_engaged();
+        if engaged != self.engaged_counted {
+            self.engaged_counted = engaged;
+            LOCKS_ENGAGED.with(|count| {
+                count.set(if engaged {
+                    count.get() + 1
+                } else {
+                    count.get().saturating_sub(1)
+                })
+            });
+        }
+    }
+    /// The gestures so far may lock nothing (Escape ended a lock, the
+    /// window lost focus or couldn't hold one): only a later one may.
+    fn spend_gestures(&mut self) {
+        self.settled = self.gestures;
+        self.activation = None;
+    }
 }
 /// Routes input events to the nodes listening for them, and holds focus,
 /// pointer capture, modal scopes and key bindings. Clones share one
@@ -754,7 +917,10 @@ impl Drop for InputBinding {
             let mut disabled_observer = None;
             if s.entries.get(&self.node).is_some_and(Vec::is_empty) {
                 s.entries.remove(&self.node);
-                s.options.remove(&self.node);
+                // A hollow node has options: only one removed can be.
+                if s.options.remove(&self.node).is_some() && !s.hollow.is_empty() {
+                    s.hollow.retain(|node| *node != self.node);
+                }
                 disabled_observer = s.disabled_observers.get(&self.node).cloned();
                 if s.focused == Some(self.node) {
                     s.focused = None;
@@ -802,6 +968,52 @@ impl InputDispatcher {
         state.unfocused_keys.retain(|n| *n != node);
         state.unfocused_keys.push(node);
     }
+    /// `node` takes a step back or forward ([`Navigation`]) from what is
+    /// under it: a trackpad's swipe over it navigates rather than scrolls
+    /// where nothing between scrolls that way (`Ui::set_navigation_swipes`).
+    /// It hears the action with its listeners (`View::on_navigate`).
+    pub fn take_navigation(&self, node: NodeId, scene: &Scene) {
+        let mut state = self.state.borrow_mut();
+        state
+            .navigators
+            .retain(|n| *n != node && scene.contains(*n));
+        state.navigators.push(node);
+    }
+    /// Whether `target` or a view around it takes navigation
+    /// (`take_navigation`). Reads only.
+    pub(crate) fn navigates(&self, scene: &Scene, target: NodeId) -> bool {
+        let state = self.state.borrow();
+        !state.navigators.is_empty()
+            && std::iter::once(target)
+                .chain(scene.ancestors(target))
+                .any(|node| state.navigators.contains(&node))
+    }
+    /// Step back or forward from what is under `x`, `y`, as a swipe there
+    /// does: the view under it hears `navigation`, and the views around it
+    /// as it bubbles. Whether one took it.
+    pub fn navigate(
+        &self,
+        scene: &Rc<RefCell<Scene>>,
+        x: f32,
+        y: f32,
+        navigation: Navigation,
+    ) -> bool {
+        let Some(target) = self.hit_target(&scene.borrow(), x, y) else {
+            return false;
+        };
+        self.dispatch_to(
+            scene,
+            target,
+            InputEvent::Action(crate::actions::Action::new(navigation)),
+        )
+        .default_prevented
+    }
+    /// The next press starts a count of its own, as one after the
+    /// double-click time has passed would: separate clicks a test makes in
+    /// a row, which a person's hand could not make that fast.
+    pub fn forget_clicks(&self) {
+        self.state.borrow_mut().clicks.0 = None;
+    }
     /// How soon after a press another on the same spot counts as a double
     /// (then triple) click: the system's double-click time, which the
     /// desktop host gives (macOS's and Windows' setting, GNOME's and KDE's);
@@ -809,6 +1021,11 @@ impl InputDispatcher {
     pub fn set_double_click_time(&self, interval: Duration) {
         self.state.borrow_mut().clicks.1 =
             interval.clamp(Duration::from_millis(100), Duration::from_secs(5));
+    }
+    /// The double-click time in use (`set_double_click_time`): 500 ms until
+    /// the host gives the system's.
+    pub fn double_click_time(&self) -> Duration {
+        self.state.borrow().clicks.1
     }
     /// The box, in points, centred on a press, that the next must land in
     /// to count as its double (then triple) click: the system's, which the
@@ -877,6 +1094,79 @@ impl InputDispatcher {
         map: crate::actions::Keymap,
     ) -> crate::actions::KeymapBinding {
         crate::actions::Registry::bind(&self.actions, node, map)
+    }
+    /// Whether a key binding where focus is, or above it, takes `key` with
+    /// `modifiers` (alone or as a sequence's first stroke). A host asks
+    /// before taking a key from a native view that would otherwise use it
+    /// (a terminal's): one zgx binds is the app's shortcut. Reads only.
+    pub fn binds_key(&self, scene: &Scene, key: &Key, modifiers: Modifiers) -> bool {
+        if self.captures_keys(scene) {
+            return false;
+        }
+        let path = self.action_path(scene);
+        let stroke = crate::actions::Keystroke::new(key.clone(), modifiers);
+        let code = self.state.borrow().key_code.clone();
+        self.actions
+            .try_borrow()
+            .is_ok_and(|actions| actions.binds(&path, &stroke, code.as_deref()))
+    }
+    /// Whether the key binding that takes `key` with `modifiers` where focus
+    /// is (`binds_key`) is reserved (`KeyBinding::reserved`): the app's
+    /// before a native view (a page, a terminal) has it. Reads only.
+    pub fn reserves_key(&self, scene: &Scene, key: &Key, modifiers: Modifiers) -> bool {
+        if self.captures_keys(scene) {
+            return false;
+        }
+        let path = self.action_path(scene);
+        let stroke = crate::actions::Keystroke::new(key.clone(), modifiers);
+        let code = self.state.borrow().key_code.clone();
+        self.actions
+            .try_borrow()
+            .is_ok_and(|actions| actions.reserves(&path, &stroke, code.as_deref()))
+    }
+    /// While focus is in `node` (it or what it holds), every key goes to
+    /// the focused node: no key binding (the menus' shortcuts) takes one,
+    /// and a host gives the menu bar none (`captures_keys`). For a field
+    /// that records a shortcut: ⌘J is the key to record, not the command.
+    pub fn set_capture_keys(&self, node: NodeId, on: bool) {
+        let mut s = self.state.borrow_mut();
+        let at = s.capturing.iter().position(|id| *id == node);
+        match (on, at) {
+            (true, None) => s.capturing.push(node),
+            (false, Some(at)) => {
+                s.capturing.swap_remove(at);
+            }
+            _ => {}
+        }
+    }
+    /// Whether focus is in a node that takes every key
+    /// (`set_capture_keys`): bindings and the menu bar take none now.
+    pub fn captures_keys(&self, scene: &Scene) -> bool {
+        if self.state.borrow().capturing.is_empty() {
+            return false;
+        }
+        self.focus_captures_keys(scene)
+    }
+    /// `captures_keys` once some node does. A node gone stays listed until
+    /// here (ids are not reused), so removing a node costs nothing.
+    #[cold]
+    fn focus_captures_keys(&self, scene: &Scene) -> bool {
+        let mut s = self.state.borrow_mut();
+        s.capturing.retain(|id| scene.contains(*id));
+        let mut at = s.focused;
+        while let Some(id) = at {
+            if s.capturing.contains(&id) {
+                return true;
+            }
+            at = scene.parent(id);
+        }
+        false
+    }
+    /// Asked before Tab moves focus from where it is to where it would go:
+    /// true takes the move (the `Ui`'s, for a list whose next row isn't
+    /// built yet).
+    pub(crate) fn set_tab_hook(&self, hook: TabHook) {
+        self.state.borrow_mut().tab_hook = Some(hook);
     }
     /// Route a typed action from focus through its enabled ancestors.
     pub fn dispatch_action(
@@ -1188,6 +1478,33 @@ impl InputDispatcher {
     pub fn options(&self, node: NodeId) -> Option<NodeInput> {
         self.state.borrow().options.get(&node).copied()
     }
+    /// Mark `node` (registered: `set_options`) as hollow: the pointer passes
+    /// through it while nothing it holds is displayed.
+    pub(crate) fn set_hollow(&self, node: NodeId) {
+        let mut state = self.state.borrow_mut();
+        if !state.hollow.contains(&node) {
+            state.hollow.push(node);
+        }
+    }
+    /// Whether the pointer passes through `node`, which takes input as
+    /// `options` say, to what is under it: `pass_through`, or hollow with
+    /// nothing in it displayed (`Scene::displays_content`).
+    pub(crate) fn passes(&self, scene: &Scene, node: NodeId, options: &NodeInput) -> bool {
+        options.pass_through
+            || self
+                .state
+                .try_borrow()
+                .is_ok_and(|state| !state.hollow.is_empty() && state.hollow.contains(&node))
+                && !scene.displays_content(node)
+    }
+    /// `options`, and whether `node` is hollow, in one look at the state:
+    /// for the pointer's walk, which asks for every node it passes.
+    fn options_hollow(&self, node: NodeId) -> (Option<NodeInput>, bool) {
+        let state = self.state.borrow();
+        let options = state.options.get(&node).copied();
+        let hollow = options.is_some() && !state.hollow.is_empty() && state.hollow.contains(&node);
+        (options, hollow)
+    }
     /// Disconnect a removed node, including metadata-only container state.
     pub fn unregister(&self, node: NodeId) {
         let mut s = self.state.borrow_mut();
@@ -1200,7 +1517,10 @@ impl InputDispatcher {
             s.drag_orphans.extend(callbacks);
         }
         let observer = s.disabled_observers.remove(&node);
-        s.options.remove(&node);
+        // A hollow node has options: only one removed can be.
+        if s.options.remove(&node).is_some() && !s.hollow.is_empty() {
+            s.hollow.retain(|hollow| *hollow != node);
+        }
         s.groups.remove(&node);
         if removed.is_some() {
             crate::shrink_sparse(&mut s.entries);
@@ -1231,9 +1551,11 @@ impl InputDispatcher {
     /// focus, a press, a drag or a scope still names, as removing them does
     /// (`Ui::remove`, which leaves the others' registrations to be freed
     /// later: nothing routes to a node the scene no longer has, but through
-    /// these).
-    pub(crate) fn forget_removed(&self, scene: &Scene) {
+    /// these). The scene is read only to find them: unregistering drops
+    /// their listeners, whose destructors may remove nodes.
+    pub(crate) fn forget_removed(&self, scene: &RefCell<Scene>) {
         let named: Vec<NodeId> = {
+            let scene = scene.borrow();
             let s = self.state.borrow();
             s.focused
                 .into_iter()
@@ -1242,7 +1564,8 @@ impl InputDispatcher {
                 .chain(s.key_pressed.as_ref().map(|(id, _)| *id))
                 .chain(s.clicks.0.map(|click| click.target))
                 .chain(s.hover.iter().copied())
-                .chain(s.file_hovered)
+                .chain(s.hover_told.iter().copied())
+                .chain(s.file_hovered.iter().copied())
                 .chain(s.scroll_latch.map(|(id, ..)| id))
                 .chain(s.drag.iter().flat_map(drag::DragSession::nodes))
                 .chain(s.drag_ending)
@@ -1265,6 +1588,24 @@ impl InputDispatcher {
     /// The node with keyboard focus, if any.
     pub fn focused(&self) -> Option<NodeId> {
         self.state.borrow().focused
+    }
+    /// `focus`, the scroll views holding `target` left where they are (the
+    /// web's `preventScroll`): a script's `focus({ scroll = false })`.
+    pub fn focus_in_place(&self, scene: &Rc<RefCell<Scene>>, target: Option<NodeId>) -> bool {
+        let was = std::mem::replace(&mut self.state.borrow_mut().in_place, true);
+        let focused = self.focus(scene, target);
+        self.state.borrow_mut().in_place = was;
+        focused
+    }
+    /// Whether focus moving now scrolls into view: not under
+    /// `focus_in_place`.
+    pub fn focus_scrolls(&self) -> bool {
+        !self.state.borrow().in_place
+    }
+    /// Where the pointer last was over the window, in its points (where it
+    /// stays while locked); None while it is outside.
+    pub fn pointer(&self) -> Option<(f32, f32)> {
+        self.state.borrow().pointer
     }
     /// The node under the pointer that takes input (its hit target), while
     /// it still listens.
@@ -1294,6 +1635,25 @@ impl InputDispatcher {
         let hit = self.hit_target(&scene.borrow(), x, y);
         self.set_hover(scene, hit);
     }
+    /// What a press at `x, y` lands on, as dispatch finds it: the nearest
+    /// node with listeners under it, past pass-through and empty overlays.
+    pub fn pointer_target(&self, scene: &Scene, x: f32, y: f32) -> Option<NodeId> {
+        self.hit_target(scene, x, y)
+    }
+    /// What a primary press at `x, y` would focus, as dispatch finds it:
+    /// the nearest focusable, enabled node at or above what it lands on.
+    pub(crate) fn press_focus(&self, scene: &Scene, x: f32, y: f32) -> Option<NodeId> {
+        let mut node = self
+            .hit_target(scene, x, y)
+            .filter(|id| self.enabled(scene, *id));
+        while let Some(id) = node {
+            if self.options(id).is_some_and(|o| o.focusable) {
+                return Some(id);
+            }
+            node = scene.parent(id);
+        }
+        None
+    }
     /// Move hover to `hit` and its ancestors, as the DOM's `mouseenter` and
     /// `mouseleave` do: a node hears `PointerLeave` once the pointer is
     /// outside it and all its descendants, and `PointerEnter` once it comes
@@ -1306,9 +1666,12 @@ impl InputDispatcher {
     pub(crate) fn clear_hover(&self, scene: &Rc<RefCell<Scene>>) {
         self.set_hover(scene, None);
     }
-    fn set_hover(&self, scene: &Rc<RefCell<Scene>>, hit: Option<NodeId>) {
+    /// Move hover to `hit` and its ancestors, telling those left and
+    /// entered; whether any listener heard (and might have changed the
+    /// scene).
+    fn set_hover(&self, scene: &Rc<RefCell<Scene>>, hit: Option<NodeId>) -> bool {
         if self.state.borrow().hover.first().copied() == hit {
-            return;
+            return false;
         }
         let mut next = Vec::new();
         {
@@ -1323,46 +1686,59 @@ impl InputDispatcher {
                 node = scene.parent(id);
             }
         }
-        let entering = {
-            let mut state = self.state.borrow_mut();
-            let old = std::mem::take(&mut state.hover);
-            let common = old
-                .iter()
-                .rev()
-                .zip(next.iter().rev())
-                .take_while(|(a, b)| a == b)
-                .count();
-            let entering: Vec<NodeId> = next[..next.len() - common].to_vec();
-            state.hover = next;
-            drop(state);
-            for &id in &old[..old.len() - common] {
-                self.hover_event(scene, id, InputEvent::PointerLeave);
-            }
-            entering
-        };
-        // A leave handler that moved hover again (it dispatched) owns it now.
-        if self.state.borrow().hover.first().copied() != hit {
-            return;
-        }
-        for &id in entering.iter().rev() {
-            self.hover_event(scene, id, InputEvent::PointerEnter);
+        self.state.borrow_mut().hover = next;
+        let mut heard = false;
+        // Leave the innermost told node past where they agree, else enter
+        // the next hovered one past it, and look again: a listener that
+        // dispatched may have moved hover on. (Both are ancestor chains:
+        // told from the outermost, hover from the hit.)
+        loop {
+            let step = {
+                let mut state = self.state.borrow_mut();
+                let state = &mut *state;
+                let common = state
+                    .hover_told
+                    .iter()
+                    .zip(state.hover.iter().rev())
+                    .take_while(|(told, hovered)| told == hovered)
+                    .count();
+                if state.hover_told.len() > common {
+                    state
+                        .hover_told
+                        .pop()
+                        .map(|id| (id, InputEvent::PointerLeave))
+                } else if state.hover.len() > common {
+                    let id = state.hover[state.hover.len() - 1 - common];
+                    state.hover_told.push(id);
+                    Some((id, InputEvent::PointerEnter))
+                } else {
+                    None
+                }
+            };
+            let Some((id, event)) = step else {
+                return heard;
+            };
+            heard |= self.hover_event(scene, id, event);
         }
     }
-    /// Deliver an enter or leave to `node`'s own listeners only.
-    fn hover_event(&self, scene: &Rc<RefCell<Scene>>, node: NodeId, event: InputEvent) {
+    /// Deliver an enter or leave to `node`'s own listeners only, while it
+    /// still holds (a listener's dispatch may have left or entered it
+    /// again); whether it has any.
+    fn hover_event(&self, scene: &Rc<RefCell<Scene>>, node: NodeId, event: InputEvent) -> bool {
+        let entering = matches!(event, InputEvent::PointerEnter);
         if !scene.borrow().contains(node) {
-            return;
+            return false;
         }
         let callbacks: Vec<_> = {
             let state = self.state.borrow();
             let Some(entries) = state.entries.get(&node) else {
-                return;
+                return false;
             };
             // A disabled node is entered no more; leaving still cleans up.
             if matches!(event, InputEvent::PointerEnter)
                 && state.options.get(&node).is_some_and(|o| o.disabled)
             {
-                return;
+                return false;
             }
             entries
                 .iter()
@@ -1371,12 +1747,18 @@ impl InputDispatcher {
         };
         let mut ctx = EventContext::new(event, node);
         for (token, callback) in callbacks {
-            let attached = self
-                .state
-                .borrow()
-                .entries
-                .get(&node)
-                .is_some_and(|entries| entries.iter().any(|entry| entry.token == token));
+            let (attached, current) = {
+                let state = self.state.borrow();
+                let attached = state
+                    .entries
+                    .get(&node)
+                    .is_some_and(|entries| entries.iter().any(|entry| entry.token == token));
+                (attached, state.hover_told.contains(&node) == entering)
+            };
+            // A listener before it moved hover: what follows was told anew.
+            if !current {
+                break;
+            }
             if !attached || !scene.borrow().contains(node) {
                 continue;
             }
@@ -1387,6 +1769,63 @@ impl InputDispatcher {
                 break;
             }
         }
+        true
+    }
+    /// The node a key went to, if it is still there and still focused: its
+    /// listeners may have removed it or moved focus on (a dialog's button
+    /// closing the dialog), and what has focus now did not hear the key.
+    fn still_targeted(&self, scene: &Rc<RefCell<Scene>>, target: Option<NodeId>) -> Option<NodeId> {
+        target.filter(|id| {
+            let scene = scene.borrow();
+            // Inert content (a row leaving) activates on no key.
+            self.focused() == Some(*id) && scene.contains(*id) && scene.inert_around(*id).is_none()
+        })
+    }
+    /// Move focus off inert content (`Scene::set_inert`: a row playing its
+    /// exit, gone from its data): to the next focusable control after it,
+    /// else the one before, else the nearest focusable around it, as a
+    /// platform's list moves focus off a row it deletes. Whoever makes
+    /// content inert calls it (`NodeHandle::leave`).
+    pub fn leave_inert(&self, scene: &Rc<RefCell<Scene>>) {
+        let target = {
+            let scene = scene.borrow();
+            let Some(focused) = self.focused() else {
+                return;
+            };
+            let Some(leaving) = scene.inert_around(focused) else {
+                return;
+            };
+            let takes = |id: NodeId| {
+                self.options(id)
+                    .is_some_and(|o| o.focusable && o.tab_index >= 0)
+                    && scene.inert_around(id).is_none()
+                    && self.enabled(&scene, id)
+            };
+            // Document order, leaving's subtree passed over.
+            let (mut before, mut after) = (None, None);
+            let mut passed = false;
+            let mut stack = vec![scene.root()];
+            while let Some(id) = stack.pop() {
+                if id == leaving {
+                    passed = true;
+                    continue;
+                }
+                if takes(id) {
+                    if passed {
+                        after = Some(id);
+                        break;
+                    }
+                    before = Some(id);
+                }
+                stack.extend(scene.children(id).iter().rev().copied());
+            }
+            after
+                .or(before)
+                .or_else(|| scene.ancestors(leaving).find(|id| takes(*id)))
+        };
+        if target.is_none() || !self.focus(scene, target) {
+            self.focus(scene, None);
+        }
     }
     /// Whether `node` can take input now: shown, not disabled itself or by
     /// an ancestor, not transparent, and inside the active modal scope.
@@ -1396,6 +1835,269 @@ impl InputDispatcher {
     /// The node capturing the pointer, if any.
     pub fn captured(&self) -> Option<NodeId> {
         self.state.borrow().captured
+    }
+    /// Lock the pointer to `node`, as the DOM's `requestPointerLock`: a
+    /// game's look about, a 3D view's orbit. Every press, release and wheel
+    /// goes to it wherever the pointer is; the mouse's own motion comes as
+    /// `PointerMotion`, the pointer staying put; the host hides and holds
+    /// it (`pointer_lock`). It hears `PointerLockChange(true)`, then
+    /// `false` as it ends: `unlock_pointer`, Escape (which goes nowhere
+    /// else), the window losing focus, the node leaving the scene or
+    /// another node locking it.
+    ///
+    /// Only within `POINTER_LOCK_ACTIVATION` of a press, a release or a key
+    /// (in their handlers, as the web allows it; a host notes each, with
+    /// `note_gesture`, and settles their time, `settle_gestures`), and only
+    /// an enabled node
+    /// in the scene: false otherwise, nothing changed. True if it already
+    /// holds the lock.
+    pub fn lock_pointer(&self, scene: &Rc<RefCell<Scene>>, node: NodeId) -> bool {
+        {
+            let state = self.state.borrow();
+            if state.pointer_lock == Some(node) {
+                return true;
+            }
+            let active = state.gestures != state.settled
+                || state
+                    .activation
+                    .is_some_and(|at| at.elapsed() < POINTER_LOCK_ACTIVATION);
+            if !active {
+                return false;
+            }
+        }
+        if !scene.borrow().contains(node) || !self.enabled(&scene.borrow(), node) {
+            return false;
+        }
+        let old = {
+            let mut state = self.state.borrow_mut();
+            // The lock has the pointer now: a capture or a press it held
+            // ends, its release going to the locking node.
+            state.captured = None;
+            state.capture_button = None;
+            state.pressed = None;
+            state.pointer_lock.replace(node)
+        };
+        self.sync_lock_engaged();
+        if let Some(old) = old.filter(|id| scene.borrow().contains(*id)) {
+            self.route(scene, old, InputEvent::PointerLockChange(false));
+        }
+        self.route(scene, node, InputEvent::PointerLockChange(true));
+        true
+    }
+    /// End the pointer's lock, if any (the DOM's `exitPointerLock`): the
+    /// node that held it hears `PointerLockChange(false)`.
+    pub fn unlock_pointer(&self, scene: &Rc<RefCell<Scene>>) {
+        let Some(old) = self.state.borrow_mut().pointer_lock.take() else {
+            return;
+        };
+        self.sync_lock_engaged();
+        if scene.borrow().contains(old) {
+            self.route(scene, old, InputEvent::PointerLockChange(false));
+        }
+    }
+    /// A person pressed, released or typed: what the pointer may lock just
+    /// after (`lock_pointer`). A host's, as it hands a real press, release
+    /// or key (not a repeat) to `dispatch`, before it: nothing else counts
+    /// as one, and a dispatch pays nothing for it.
+    pub fn note_gesture(&self) {
+        let mut state = self.state.borrow_mut();
+        state.gestures = state.gestures.wrapping_add(1);
+    }
+    /// The presses, releases and keys noted since the last call, if
+    /// any, happened at `now`: a host's, once each turn of its loop, with
+    /// the time it reads there (a lock may come within
+    /// `POINTER_LOCK_ACTIVATION` of it). Until then they count as now, so
+    /// nothing reads the clock as they're dispatched.
+    pub fn settle_gestures(&self, now: Instant) {
+        let mut state = self.state.borrow_mut();
+        if state.gestures != state.settled {
+            state.settled = state.gestures;
+            state.activation = Some(now);
+        }
+    }
+    /// End the pointer's lock because the window can't hold it (it doesn't
+    /// have the keyboard), and spend the gesture that allowed it: the node
+    /// hears `PointerLockChange(false)` and can't take the pointer straight
+    /// back, every turn, until a press or key in the focused window.
+    pub fn refuse_pointer_lock(&self, scene: &Rc<RefCell<Scene>>) {
+        self.state.borrow_mut().spend_gestures();
+        self.unlock_pointer(scene);
+    }
+    fn sync_lock_engaged(&self) {
+        self.state.borrow_mut().count_engaged();
+    }
+    /// Whether a node has locked the pointer, gone from the scene or not:
+    /// a host's quick look before `pointer_lock`.
+    #[inline]
+    pub fn pointer_locked(&self) -> bool {
+        self.state.borrow().pointer_lock.is_some()
+    }
+    /// The node the pointer is locked to: what a host hides and holds the
+    /// pointer for, and sends `PointerMotion` while it is. None once that
+    /// node has left the scene or is disabled (the host then calls
+    /// `unlock_pointer`, and the lock ends).
+    pub fn pointer_lock(&self, scene: &Scene) -> Option<NodeId> {
+        self.state
+            .borrow()
+            .pointer_lock
+            .filter(|id| scene.contains(*id) && self.enabled(scene, *id))
+    }
+    /// Pointer events while `locked` holds the pointer: they go to it,
+    /// wherever the pointer is, and a primary press and release on it is a
+    /// click. Escape ends the lock and goes nowhere else; a move (the
+    /// pointer stays put) and a leave go nowhere. None for what dispatches
+    /// as ever (keys, text, focus).
+    fn dispatch_locked(
+        &self,
+        scene: &Rc<RefCell<Scene>>,
+        locked: NodeId,
+        event: &InputEvent,
+        modifiers: Option<Modifiers>,
+    ) -> Option<DispatchResult> {
+        let swallowed = DispatchResult {
+            target: Some(locked),
+            default_prevented: true,
+            focus_changed: false,
+        };
+        match event {
+            InputEvent::KeyDown {
+                key: Key::Escape, ..
+            } => {
+                // Not a gesture that may lock again: a handler hearing the
+                // lock end can't take the pointer straight back. The next
+                // press or key can.
+                {
+                    let mut state = self.state.borrow_mut();
+                    state.spend_gestures();
+                    state.escape_ended_lock = true;
+                }
+                self.sync_lock_engaged();
+                self.unlock_pointer(scene);
+                Some(swallowed)
+            }
+            InputEvent::PointerMove { .. }
+            | InputEvent::PointerEnter
+            | InputEvent::PointerLeave
+            | InputEvent::PointerLockChange(_) => Some(swallowed),
+            InputEvent::PointerDown { .. }
+            | InputEvent::PointerUp { .. }
+            | InputEvent::PointerCancel
+            | InputEvent::PointerMotion { .. }
+            | InputEvent::Scroll { .. }
+            | InputEvent::Pinch { .. } => {
+                let press = matches!(event, InputEvent::PointerDown { .. });
+                let ctx = self.route_pointer(
+                    scene,
+                    locked,
+                    event.clone(),
+                    modifiers.unwrap_or_default(),
+                    u8::from(press),
+                    false,
+                );
+                match event {
+                    InputEvent::PointerDown {
+                        button: PointerButton::Primary,
+                        ..
+                    } => self.state.borrow_mut().pressed = Some(locked),
+                    InputEvent::PointerUp {
+                        button: PointerButton::Primary,
+                        ..
+                    } => {
+                        let pressed = self.state.borrow_mut().pressed.take();
+                        if pressed == Some(locked)
+                            && !ctx.prevented
+                            && self.pointer_lock(&scene.borrow()) == Some(locked)
+                        {
+                            self.dispatch_to(scene, locked, InputEvent::Activate);
+                        }
+                    }
+                    InputEvent::PointerCancel => self.state.borrow_mut().pressed = None,
+                    _ => {}
+                }
+                Some(DispatchResult {
+                    target: Some(locked),
+                    default_prevented: ctx.prevented,
+                    focus_changed: false,
+                })
+            }
+            _ => None,
+        }
+    }
+    /// The pointer lock's part of a dispatch (`lock_pointer`): a person's
+    /// own press, release or key stamped, as what may lock just after;
+    /// while a lock is held, or the Escape that ended one is still down,
+    /// the event routed as the lock has it. Some when that settles it. Out
+    /// of `dispatch_impl`'s line: an app with no lock pays a test there.
+    #[inline(never)]
+    fn dispatch_pointer_lock(
+        &self,
+        scene: &Rc<RefCell<Scene>>,
+        event: &InputEvent,
+        modifiers: Option<Modifiers>,
+    ) -> Option<DispatchResult> {
+        // The Escape that ended a lock, held (its repeats) and let go: as
+        // its press, nowhere, and no more a gesture that may lock again.
+        if self.state.borrow().escape_ended_lock {
+            match *event {
+                InputEvent::KeyDown {
+                    key: Key::Escape,
+                    repeat: true,
+                    ..
+                } => {
+                    return Some(DispatchResult {
+                        default_prevented: true,
+                        ..Default::default()
+                    });
+                }
+                InputEvent::KeyUp {
+                    key: Key::Escape, ..
+                } => {
+                    let mut state = self.state.borrow_mut();
+                    state.escape_ended_lock = false;
+                    state.spend_gestures();
+                    state.count_engaged();
+                    return Some(DispatchResult {
+                        default_prevented: true,
+                        ..Default::default()
+                    });
+                }
+                // Another key, or focus gone: its release won't come here.
+                InputEvent::KeyDown { .. } | InputEvent::Blur => {
+                    self.state.borrow_mut().escape_ended_lock = false;
+                    self.sync_lock_engaged();
+                }
+                _ => {}
+            }
+        }
+        // Gone from the window, a gesture before doesn't lock the pointer.
+        if matches!(event, InputEvent::Blur) {
+            self.state.borrow_mut().spend_gestures();
+        }
+        if self.state.borrow().pointer_lock.is_some() {
+            // (Its borrow ends here: the listeners below change the scene.)
+            let live = self.pointer_lock(&scene.borrow());
+            match live {
+                Some(locked) => {
+                    if let Some(result) = self.dispatch_locked(scene, locked, event, modifiers) {
+                        return Some(result);
+                    }
+                }
+                // Its node left the scene or was disabled.
+                None => self.unlock_pointer(scene),
+            }
+            // The window lost focus: the pointer is the system's again.
+            if matches!(event, InputEvent::Blur) {
+                self.unlock_pointer(scene);
+            }
+        }
+        // Motion and lock changes are a lock's: without one, no node's.
+        if matches!(
+            event,
+            InputEvent::PointerMotion { .. } | InputEvent::PointerLockChange(_)
+        ) {
+            return Some(DispatchResult::default());
+        }
+        None
     }
     fn set_capture(&self, node: Option<NodeId>, event: &InputEvent) {
         let mut state = self.state.borrow_mut();
@@ -1414,6 +2116,21 @@ impl InputDispatcher {
             s.layers.push(root);
         }
     }
+    /// Keep `trigger` live while `root`'s scope is active, though outside it
+    /// (a popover's trigger row in its parent's panel, which toggles it), or
+    /// with `None`, no longer.
+    pub(crate) fn set_scope_trigger(&self, root: NodeId, trigger: Option<NodeId>) {
+        let mut s = self.state.borrow_mut();
+        s.triggers.retain(|(scope, _)| *scope != root);
+        if let Some(trigger) = trigger {
+            s.triggers.push((root, trigger));
+        }
+    }
+    /// The primary press about to be dispatched leaves focus as it is: a
+    /// popover it dismissed on blank space gave focus back to its trigger.
+    pub(crate) fn keep_focus_for_press(&self) {
+        self.state.borrow_mut().keep_focus = true;
+    }
     /// The active modal root, if any. Focus and pointer routing stay inside
     /// it.
     pub fn focus_scope(&self) -> Option<NodeId> {
@@ -1421,14 +2138,32 @@ impl InputDispatcher {
     }
     /// Enter a nested modal scope and save the previous focus for restoration.
     pub fn push_focus_scope(&self, scene: &Rc<RefCell<Scene>>, root: NodeId) -> bool {
-        self.push_scope(scene, root, false)
+        self.push_scope(scene, root, false, None)
     }
     /// As `push_focus_scope`, leaving the scope below live to the pointer
     /// and keys too: a submenu, whose parent menu's items stay hoverable.
     pub fn push_porous_focus_scope(&self, scene: &Rc<RefCell<Scene>>, root: NodeId) -> bool {
-        self.push_scope(scene, root, true)
+        self.push_scope(scene, root, true, None)
     }
-    fn push_scope(&self, scene: &Rc<RefCell<Scene>>, root: NodeId, porous: bool) -> bool {
+    /// As `push_focus_scope` (porous with `porous`), opened by `trigger`: a
+    /// popover's or menu's, where focus returns as it closes when what had
+    /// focus before is gone and it opened from the keyboard.
+    pub(crate) fn push_focus_scope_from(
+        &self,
+        scene: &Rc<RefCell<Scene>>,
+        root: NodeId,
+        porous: bool,
+        trigger: Option<NodeId>,
+    ) -> bool {
+        self.push_scope(scene, root, porous, trigger)
+    }
+    fn push_scope(
+        &self,
+        scene: &Rc<RefCell<Scene>>,
+        root: NodeId,
+        porous: bool,
+        trigger: Option<NodeId>,
+    ) -> bool {
         // Opening a sibling modal may supersede the current scope. Check the
         // node's actual ancestry, without applying the active scope boundary.
         if !self.enabled_without_scope(&scene.borrow(), root)
@@ -1446,10 +2181,21 @@ impl InputDispatcher {
             return false;
         }
         let previous = self.focused();
+        // Opened from the keyboard, or by a press on its trigger (which a
+        // browser's press would have focused): focus may go back to it.
+        let pressed = self.state.borrow().last_press;
+        let keyboard = self.focus_visible_now()
+            || (trigger.zip(pressed)).is_some_and(|(trigger, pressed)| {
+                let scene = scene.borrow();
+                pressed == trigger
+                    || (scene.contains(pressed) && scene.ancestors(pressed).any(|a| a == trigger))
+            });
         self.state.borrow_mut().scopes.push(FocusScope {
             root,
             previous,
             porous,
+            trigger,
+            keyboard,
         });
         let next = self.next_focus(&scene.borrow(), false);
         self.focus(scene, next);
@@ -1461,7 +2207,33 @@ impl InputDispatcher {
                 .iter()
                 .any(|scope| scope.root == root)
     }
-    /// Close the innermost scope and restore the previous mounted, enabled focus.
+    /// Each modal scope's root, and the nodes it gives focus back to as it
+    /// closes: what had focus as it opened, and what opened it.
+    pub(crate) fn scope_returns(&self) -> Vec<(NodeId, Option<NodeId>, Option<NodeId>)> {
+        let s = self.state.borrow();
+        let scopes = s.scopes.iter();
+        scopes
+            .map(|scope| (scope.root, scope.previous, scope.trigger))
+            .collect()
+    }
+    /// The scope at `root` gives focus back to `previous`, else `trigger`:
+    /// what a reload built in place of those it had.
+    pub(crate) fn set_scope_returns(
+        &self,
+        root: NodeId,
+        previous: Option<NodeId>,
+        trigger: Option<NodeId>,
+    ) {
+        let mut s = self.state.borrow_mut();
+        if let Some(scope) = s.scopes.iter_mut().find(|scope| scope.root == root) {
+            scope.previous = previous;
+            scope.trigger = trigger;
+        }
+    }
+    /// Close the innermost scope and give focus back, as browsers and native
+    /// toolkits do: to what had it as the scope opened, else (that gone) to
+    /// what opened it if that was from the keyboard, else to nothing. Never
+    /// to the window's first focusable node.
     pub fn pop_focus_scope(&self, scene: &Rc<RefCell<Scene>>) -> bool {
         let scope = self.state.borrow_mut().scopes.pop();
         let Some(scope) = scope else {
@@ -1471,10 +2243,9 @@ impl InputDispatcher {
         if scene.borrow().contains(scope.root) {
             self.route(scene, scope.root, InputEvent::FocusScopeClosed);
         }
-        let previous = scope
-            .previous
-            .filter(|id| self.enabled(&scene.borrow(), *id));
-        let next = previous.or_else(|| self.next_focus(&scene.borrow(), false));
+        let usable = |id: &NodeId| self.enabled(&scene.borrow(), *id);
+        let next = (scope.previous.filter(usable))
+            .or_else(|| scope.trigger.filter(|_| scope.keyboard).filter(usable));
         self.focus(scene, next);
         true
     }
@@ -1545,7 +2316,7 @@ impl InputDispatcher {
             }
         }
     }
-    fn enabled(&self, scene: &Scene, mut node: NodeId) -> bool {
+    pub(crate) fn enabled(&self, scene: &Scene, mut node: NodeId) -> bool {
         if !scene.layout_visible(node) {
             return false;
         }
@@ -1563,15 +2334,21 @@ impl InputDispatcher {
             }
             found
         };
-        // Inside the active scope, or, through porous scopes (submenus), any
-        // scope below it.
+        // Inside the active scope (or its trigger, `set_scope_trigger`), or,
+        // through porous scopes (submenus), any scope below it.
         let mut live = s.scopes.iter().rev().peekable();
         if !in_layer && live.peek().is_some() {
             let mut inside = false;
+            // Most scopes have no trigger (`set_scope_trigger`).
+            let triggers = !s.triggers.is_empty();
             for scope in live {
+                let trigger = triggers
+                    .then(|| s.triggers.iter().find(|(root, _)| *root == scope.root))
+                    .flatten()
+                    .map(|(_, trigger)| *trigger);
                 let mut ancestor = Some(node);
                 while let Some(id) = ancestor {
-                    if id == scope.root {
+                    if id == scope.root || Some(id) == trigger {
                         inside = true;
                         break;
                     }
@@ -1835,7 +2612,7 @@ impl InputDispatcher {
         }
     }
     /// The innermost focus group holding `id` (not `id` itself).
-    fn group_of(&self, scene: &Scene, id: NodeId) -> Option<NodeId> {
+    pub(crate) fn group_of(&self, scene: &Scene, id: NodeId) -> Option<NodeId> {
         let s = self.state.borrow();
         if s.groups.is_empty() || !scene.contains(id) {
             return None;
@@ -2095,16 +2872,62 @@ impl InputDispatcher {
         let state = self.state.try_borrow().ok()?;
         Some(receives_pointer(&state.options, scene, node))
     }
+    /// Whether a hit on `hit` is on no box: a contents node (`switch`, a
+    /// script's `ui.show`) fills the box of what it holds but has none of its
+    /// own, as CSS's `display: contents`, so only what it holds can take the
+    /// pointer, unless it listens itself.
+    pub(crate) fn boxless(&self, scene: &Scene, hit: NodeId) -> bool {
+        scene.is_contents(hit) && !self.has_listeners(hit)
+    }
+    /// The cursor over `x, y`, from what a press there would reach: past what
+    /// the pointer passes through, unless that says a cursor of its own (a
+    /// drag's overlay), as CSS's `pointer-events: none` has it.
+    pub fn cursor_at(&self, scene: &Scene, x: f32, y: f32) -> Option<crate::cursor::Cursor> {
+        if !scene.has_cursors() {
+            return None;
+        }
+        // (The hits a move's dispatch found, not walked again.)
+        scene.with_hits(x, y, |hits| {
+            'hits: for &hit in hits {
+                if self.boxless(scene, hit) {
+                    continue;
+                }
+                let mut node = Some(hit);
+                while let Some(id) = node {
+                    if self
+                        .options(id)
+                        .is_some_and(|options| self.passes(scene, id, &options))
+                    {
+                        match scene.own_cursor(id) {
+                            Some(cursor) => return Some(cursor),
+                            None => continue 'hits,
+                        }
+                    }
+                    if self.has_listeners(id) {
+                        break;
+                    }
+                    node = scene.parent(id);
+                }
+                return scene.cursor_over(hit);
+            }
+            None
+        })
+    }
     fn hit_target(&self, scene: &Scene, x: f32, y: f32) -> Option<NodeId> {
+        scene.with_hits(x, y, |hits| self.hit_target_in(scene, hits))
+    }
+    fn hit_target_in(&self, scene: &Scene, hits: &[NodeId]) -> Option<NodeId> {
         let mut fallback = None;
-        'hits: for hit in scene.hit_test_all(x, y) {
-            if !self.receives_pointer(scene, hit) {
+        'hits: for &hit in hits {
+            if self.boxless(scene, hit) || !self.receives_pointer(scene, hit) {
                 continue;
             }
             let mut node = Some(hit);
             while let Some(id) = node {
-                let options = self.options(id);
-                if options.is_some_and(|options| options.passes(scene, id)) {
+                let (options, hollow) = self.options_hollow(id);
+                if options.is_some_and(|options| options.pass_through)
+                    || (hollow && !scene.displays_content(id))
+                {
                     continue 'hits;
                 }
                 if options.is_some_and(|options| options.disabled) {
@@ -2127,7 +2950,7 @@ impl InputDispatcher {
     /// Route `event` as the platform delivers it: pointer events to what is
     /// under the pointer or captures it, keys to the focused node.
     pub fn dispatch(&self, scene: &Rc<RefCell<Scene>>, event: InputEvent) -> DispatchResult {
-        self.dispatch_impl(scene, event, None, true)
+        self.dispatch_entry(scene, event, None)
     }
     /// Dispatch native-style pointer modifiers and multi-click recognition.
     /// Clicks cycle 1, 2, 3 within 500 ms and four logical pixels on one target/button.
@@ -2137,7 +2960,31 @@ impl InputDispatcher {
         event: InputEvent,
         modifiers: Modifiers,
     ) -> DispatchResult {
-        self.dispatch_impl(scene, event, Some(modifiers), true)
+        self.dispatch_entry(scene, event, Some(modifiers))
+    }
+    /// A dispatch from outside: while a pointer lock is held or its Escape
+    /// still down, the lock's routing first (`dispatch_pointer_lock`), and
+    /// for blur and the lock's own events. An app with no lock pays a load
+    /// and a test.
+    #[inline]
+    fn dispatch_entry(
+        &self,
+        scene: &Rc<RefCell<Scene>>,
+        event: InputEvent,
+        modifiers: Option<Modifiers>,
+    ) -> DispatchResult {
+        if (LOCKS_ENGAGED.with(Cell::get) != 0
+            || matches!(
+                event,
+                InputEvent::Blur
+                    | InputEvent::PointerMotion { .. }
+                    | InputEvent::PointerLockChange(_)
+            ))
+            && let Some(result) = self.dispatch_pointer_lock(scene, &event, modifiers)
+        {
+            return result;
+        }
+        self.dispatch_impl(scene, event, modifiers, true)
     }
     fn dispatch_impl(
         &self,
@@ -2167,7 +3014,7 @@ impl InputDispatcher {
         // A node removed since the last event without `Ui::remove` (or by a
         // handler of the last one) leaves no capture, press, focus or
         // click behind for this one to route to.
-        self.forget_removed(&scene.borrow());
+        self.forget_removed(scene);
         if let Some(held) = modifiers {
             self.state.borrow_mut().modifiers = held;
         }
@@ -2177,10 +3024,16 @@ impl InputDispatcher {
         }
         match &event {
             InputEvent::PointerDown { .. } => self.state.borrow_mut().pointer_modality = true,
-            InputEvent::KeyDown { modifiers, .. }
+            // As `:focus-visible`: a key that moves or types does; Escape
+            // (closing a popup) and shortcuts don't. The key is looked at
+            // only while the pointer's in use: typing keeps the keyboard's.
+            InputEvent::KeyDown { key, modifiers, .. }
                 if !modifiers.meta && !modifiers.control && !modifiers.alt =>
             {
-                self.state.borrow_mut().pointer_modality = false
+                let mut state = self.state.borrow_mut();
+                if state.pointer_modality && !matches!(key, Key::Escape) {
+                    state.pointer_modality = false;
+                }
             }
             _ => {}
         }
@@ -2243,7 +3096,8 @@ impl InputDispatcher {
         ) {
             self.actions.borrow_mut().cancel();
         }
-        if bindings {
+        let keys = matches!(event, InputEvent::KeyDown { .. } | InputEvent::KeyUp { .. });
+        if bindings && !(keys && self.captures_keys(&scene.borrow())) {
             self.advance_key_sequence(scene, Instant::now());
             if self.actions.borrow_mut().retain_event(&event) {
                 return DispatchResult {
@@ -2258,11 +3112,14 @@ impl InputDispatcher {
                 repeat,
             } = &event
             {
+                // The physical key, for bindings of one (`KeyBinding::code`).
+                let code = self.state.borrow().key_code.clone();
                 loop {
                     let path = self.action_path(&scene.borrow());
                     let resolution = self.actions.borrow_mut().resolve(
                         path,
                         crate::actions::Keystroke::new(key.clone(), *modifiers),
+                        code.as_deref(),
                         *repeat,
                         Instant::now(),
                     );
@@ -2285,7 +3142,7 @@ impl InputDispatcher {
                 }
             }
         }
-        let capture = self
+        let mut capture = self
             .captured()
             .filter(|id| self.enabled(&scene.borrow(), *id));
         if capture.is_none() {
@@ -2318,7 +3175,7 @@ impl InputDispatcher {
                 };
             }
         }
-        let hit = match &event {
+        let mut hit = match &event {
             InputEvent::PointerDown { x, y, .. }
             | InputEvent::PointerUp { x, y, .. }
             | InputEvent::PointerMove { x, y }
@@ -2342,13 +3199,21 @@ impl InputDispatcher {
                 state.clicks.0 = None;
             }
         }
+        // Listeners told of hover may have removed what the move goes to:
+        // the node under it, or the one capturing it (whose capture ends).
         if matches!(
             event,
             InputEvent::PointerMove { .. } | InputEvent::PointerLeave
-        ) {
-            self.set_hover(scene, hit);
+        ) && self.set_hover(scene, hit)
+        {
+            let scene = scene.borrow();
+            hit = hit.filter(|id| scene.contains(*id));
+            if capture.is_some_and(|id| !scene.contains(id)) {
+                capture = None;
+                self.set_capture(None, &event);
+            }
         }
-        let target = match &event {
+        let mut target = match &event {
             InputEvent::PointerDown { .. }
             | InputEvent::PointerUp { .. }
             | InputEvent::PointerMove { .. } => capture.or(hit),
@@ -2358,7 +3223,11 @@ impl InputDispatcher {
             | InputEvent::FileDrop { .. }
             | InputEvent::FilesDrop { .. }
             | InputEvent::FilesDropRejected { .. } => hit,
-            InputEvent::FileHoverCancelled => self.state.borrow_mut().file_hovered.take(),
+            InputEvent::FileHoverCancelled => {
+                let hovered = std::mem::take(&mut self.state.borrow_mut().file_hovered);
+                let scene = scene.borrow();
+                hovered.into_iter().find(|id| scene.contains(*id))
+            }
             InputEvent::PointerCancel => capture,
             InputEvent::PointerLeave => None,
             // Empty or disabled modal contents still need dismissal keys.
@@ -2374,20 +3243,42 @@ impl InputDispatcher {
             _ => self.focused(),
         };
         if matches!(event, InputEvent::FileHover { .. }) {
-            let old = self.state.borrow_mut().file_hovered.take();
-            if old != target
-                && let Some(old) = old.filter(|id| scene.borrow().contains(*id))
+            let old = std::mem::take(&mut self.state.borrow_mut().file_hovered);
+            // Gone from the scene (made again as the files hovered), its
+            // nearest ancestor still there hears them go.
+            let live = {
+                let scene = scene.borrow();
+                old.iter().copied().find(|id| scene.contains(*id))
+            };
+            // What the files were over gone and one of its zones hit in its
+            // place (a hint the hover hid): they never left that zone, so
+            // no leave, which would bubble up to it.
+            let risen = old.first().is_some_and(|id| !scene.borrow().contains(*id))
+                && target.is_some_and(|target| old.contains(&target));
+            if old.first().copied() != target
+                && !risen
+                && let Some(old) = live
             {
-                self.dispatch_to(scene, old, InputEvent::FileHoverCancelled);
+                // Routed as a leave is, whether it shows or not: a zone
+                // hidden meanwhile still hears the files go.
+                self.route(scene, old, InputEvent::FileHoverCancelled);
+                // Its listeners may have removed where the files are now.
+                target = target.filter(|id| scene.borrow().contains(*id));
             }
-            self.state.borrow_mut().file_hovered = target;
+            let hovered = target.map_or_else(Vec::new, |target| {
+                let scene = scene.borrow();
+                std::iter::once(target)
+                    .chain(scene.ancestors(target))
+                    .collect()
+            });
+            self.state.borrow_mut().file_hovered = hovered;
         } else if matches!(
             event,
             InputEvent::FileDrop { .. }
                 | InputEvent::FilesDrop { .. }
                 | InputEvent::FilesDropRejected { .. }
         ) {
-            self.state.borrow_mut().file_hovered = None;
+            self.state.borrow_mut().file_hovered.clear();
         }
         let click_count = if let InputEvent::PointerDown { x, y, button } = &event {
             if modifiers.is_some() {
@@ -2406,6 +3297,19 @@ impl InputDispatcher {
         } else {
             0
         };
+        // This press's, whatever becomes of it (`keep_focus_for_press`).
+        // And, in the same borrow, what it lands on (`last_press`) and the
+        // scopes open before it: whether it opens a popup (below).
+        let (keep_focus, scopes) = if matches!(event, InputEvent::PointerDown { .. }) {
+            let mut state = self.state.borrow_mut();
+            state.last_press = target;
+            (
+                std::mem::take(&mut state.keep_focus),
+                Some(state.scopes.len()),
+            )
+        } else {
+            (false, None)
+        };
         let mut prevented = false;
         if let Some(id) = target {
             let ctx = self.route_pointer(
@@ -2417,6 +3321,21 @@ impl InputDispatcher {
                 false,
             );
             prevented = ctx.prevented;
+            // The press opened a popup (a menu opens on it): its release
+            // goes to the popup, so what was pressed hears no more of it
+            // and shows pressed no longer.
+            if let Some(scopes) = scopes
+                && self.state.borrow().scopes.len() > scopes
+                && let Some(root) = self.focus_scope()
+            {
+                let inside = {
+                    let scene = scene.borrow();
+                    id == root || (scene.contains(id) && scene.ancestors(id).any(|a| a == root))
+                };
+                if !inside && scene.borrow().contains(id) {
+                    self.route(scene, id, InputEvent::PointerCancel);
+                }
+            }
             if let InputEvent::Scroll {
                 delta_x, delta_y, ..
             } = event
@@ -2475,7 +3394,7 @@ impl InputDispatcher {
                         }
                         node = scene.borrow().parent(id);
                     }
-                    if !keep && (target.is_some() || self.focus_scope().is_none()) {
+                    if !keep && !keep_focus && (target.is_some() || self.focus_scope().is_none()) {
                         self.focus(scene, focus);
                     }
                 }
@@ -2488,7 +3407,14 @@ impl InputDispatcher {
                     ..
                 } if !modifiers.alt && !modifiers.meta => {
                     let next = self.next_focus(&scene.borrow(), modifiers.shift);
-                    self.focus(scene, next);
+                    let hook = self.state.borrow().tab_hook.clone();
+                    let taken = match (hook, self.focused()) {
+                        (Some(hook), Some(focused)) => hook(focused, modifiers.shift, next),
+                        _ => false,
+                    };
+                    if !taken {
+                        self.focus(scene, next);
+                    }
                     prevented = true;
                 }
                 InputEvent::KeyDown {
@@ -2536,7 +3462,10 @@ impl InputDispatcher {
                     ..
                 } => {
                     self.state.borrow_mut().key_pressed = None;
-                    if let Some(id) = self.focused().filter(|id| self.activates(*id, &Key::Enter)) {
+                    if let Some(id) = self
+                        .still_targeted(scene, target)
+                        .filter(|id| self.activates(*id, &Key::Enter))
+                    {
                         self.dispatch_to(scene, id, InputEvent::Activate);
                     }
                 }
@@ -2547,7 +3476,7 @@ impl InputDispatcher {
                     ..
                 } => {
                     let pressed = self
-                        .focused()
+                        .still_targeted(scene, target)
                         .filter(|id| self.activates(*id, &Key::Space))
                         .map(|id| (id, Key::Space));
                     self.state.borrow_mut().key_pressed = pressed;
@@ -2640,11 +3569,12 @@ mod tests {
         (Rc::new(RefCell::new(s)), a, b)
     }
     #[test]
-    fn click_tracker_time_distance_button_target_and_cycle_are_deterministic() {
+    fn click_tracker_time_distance_button_target_and_count_are_deterministic() {
         let (_, a, b) = setup();
         let mut tracker = ClickTracker::default();
         let now = Instant::now();
-        for (index, expected) in [1, 2, 3, 1].into_iter().enumerate() {
+        // Past a triple's, on counting (the web's `detail`), not round again.
+        for (index, expected) in [1, 2, 3, 4].into_iter().enumerate() {
             assert_eq!(
                 tracker.press(
                     a,
@@ -2662,7 +3592,7 @@ mod tests {
                 (4., 0.),
                 now + Duration::from_millis(2000)
             ),
-            2
+            5
         );
         assert_eq!(
             tracker.press(
@@ -2720,6 +3650,7 @@ mod tests {
         assert_eq!(press(0), 1);
         assert_eq!(press(700), 1, "past the default 500 ms");
         input.set_double_click_time(Duration::from_millis(900));
+        assert_eq!(input.double_click_time(), Duration::from_millis(900));
         assert_eq!(press(1400), 2);
         input.set_double_click_time(Duration::ZERO);
         assert_eq!(input.state.borrow().clicks.1, Duration::from_millis(100));
@@ -3857,4 +4788,50 @@ mod disabled_observer_tests {
 
 #[path = "input_drag.rs"]
 mod drag;
+pub(crate) use drag::starting_drag;
 pub use drag::{DragEnded, DragEvent, DragItem, DragPhase, DragState, DraggedText, SPRING_DELAY};
+
+#[cfg(test)]
+mod held_modifiers_tests {
+    use super::*;
+
+    /// Until something asks for the modifiers held, the host's reports
+    /// write nothing (no state is made); once asked, a modifier alone going
+    /// down and up re-runs what reads it, and the window losing focus
+    /// clears it.
+    #[test]
+    fn a_modifier_alone_changes_the_state_once_something_reads_it() {
+        let runtime = Runtime::new();
+        let command = Modifiers {
+            meta: true,
+            ..Modifiers::default()
+        };
+        set_held_modifiers(&runtime, command);
+        assert!(runtime.existing_extension::<HeldModifiers>().is_none());
+        let held = held_modifiers(&runtime);
+        assert_eq!(held.get(), Modifiers::default(), "made with none held");
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let _effect = {
+            let (held, seen) = (held.clone(), seen.clone());
+            runtime.effect(move || seen.borrow_mut().push(held.get()))
+        };
+        // Command alone, down then up.
+        set_held_modifiers(&runtime, command);
+        set_held_modifiers(&runtime, command);
+        set_held_modifiers(&runtime, Modifiers::default());
+        // Held again, then the window loses focus.
+        set_held_modifiers(&runtime, command);
+        set_held_modifiers(&runtime, Modifiers::default());
+        assert_eq!(
+            *seen.borrow(),
+            [
+                Modifiers::default(),
+                command,
+                Modifiers::default(),
+                command,
+                Modifiers::default()
+            ],
+            "each change once, a repeat none"
+        );
+    }
+}

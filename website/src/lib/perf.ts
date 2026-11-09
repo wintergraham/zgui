@@ -94,18 +94,32 @@ export type Group = { mode: string; label: string; bars: Bar[] };
 export function chart(s: Scene, metric: string) {
   const m = text.metrics[metric as keyof typeof text.metrics];
   const modes = s.modes.filter((mode) => m.applies === 'all' || mode !== 'idle');
+  // WindowServer: what each app adds over its round's desktop alone, where
+  // the run has it (idle; active cells too with six rounds; the builder's
+  // `idle_server_label` and `server`).
+  const idle = metric === 'server' ? (s as { idle_server?: { noise: boolean; desktop: Stat } }).idle_server : undefined;
+  const over = (mode: string) =>
+    metric === 'server' && s.frameworks.some((f) => cell(s, f, mode)?.['windowserver_over_desktop'] !== undefined);
+  const label = (mode: string) => text.modes[mode as keyof typeof text.modes];
   const groups: Group[] = modes.map((mode) => ({
     mode,
-    label: text.modes[mode as keyof typeof text.modes],
+    label: !over(mode)
+      ? label(mode)
+      : mode === 'idle' && idle
+        ? `${label(mode)}, less the desktop` +
+          (idle.noise
+            ? `: within noise (no app above the desktop alone's own spread, ${fmt(idle.desktop.min, 2)}–${fmt(idle.desktop.max, 2)})`
+            : '')
+        : `${label(mode)}, less the desktop`,
     bars: s.frameworks.flatMap((f) => {
-      const stat = cell(s, f, mode)?.[m.source] as Stat | undefined;
+      const stat = cell(s, f, mode)?.[over(mode) ? 'windowserver_over_desktop' : m.source] as Stat | undefined;
       if (!stat) return [];
       // Idle CPU is a fraction of a percent: two places show it.
       const places = metric === 'cpu' && mode === 'idle' ? 2 : m.digits;
       return [{ framework: f, name: names[f], median: stat.median * m.scale, min: stat.min * m.scale, max: stat.max * m.scale, places }];
     }),
   }));
-  const top = Math.max(...groups.flatMap((g) => g.bars.map((b) => b.median))) || 1;
+  const top = Math.max(...groups.flatMap((g) => g.bars.map((b) => Math.max(b.median, 0)))) || 1;
   return { title: m.title, unit: m.unit, groups, top };
 }
 
@@ -179,3 +193,28 @@ export function startupLead() {
     theirContent: theirs.content_ms.median,
   };
 }
+
+type ReleaseChange = { from: number; to: number; change: number };
+type Release = {
+  gate: {
+    from: { version: string; commit: string };
+    to: { version: string; commit: string };
+    unit: string;
+    how: string;
+    scenes: Record<string, [number, number, number]>;
+    /** Cells counted differently from earlier releases, and how (both columns counted the new way). */
+    redefined?: Record<string, string>;
+  };
+  /** The last published suite run, when this release ran the suite again. */
+  previous_commit?: string;
+  previous_date?: string;
+  rebuilt?: string | null;
+  changes?: { scene: string; mode: string; framework: string; change: Record<string, ReleaseChange> }[];
+  /** A release whose suite was not run again: the suite shown, the earlier release's. */
+  suite_commit?: string;
+};
+/** Release over release (data.json's `release`): the gate's exact counts and the suite's per-cell change, when the run has one. */
+export const release = ((perf as Record<string, unknown>).release ?? null) as Release | null;
+
+/** The field scene (data.json's `field`): a focused text field left alone, run apart from the suite, when there is one. */
+export const field = ((perf as Record<string, unknown>).field ?? null) as Scene | null;

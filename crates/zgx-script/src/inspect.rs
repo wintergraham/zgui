@@ -101,22 +101,92 @@ fn save_png(image: &zgx::image::ImageData) -> Result<std::path::PathBuf, String>
     Ok(path)
 }
 
+/// A memory report as a table, and as a list of lines: `area`, `name`, and
+/// `n` (entries) and `bytes` where the line can tell.
+fn memory_answer(report: &zgx::memory::Report) -> (String, Value) {
+    let named = |line: &zgx::memory::Line| format!("{} {}", line.area, line.name);
+    let width = report
+        .lines
+        .iter()
+        .map(|l| named(l).len())
+        .max()
+        .unwrap_or(0);
+    let mut text = String::new();
+    for line in &report.lines {
+        let entries = line.entries.map_or(String::new(), |n| n.to_string());
+        let bytes = line.bytes.map_or(String::new(), |bytes| {
+            format!("{:.1} MB", bytes as f64 / (1024. * 1024.))
+        });
+        let name = named(line);
+        text.push_str(&format!("{name:width$}  {entries:>8}  {bytes:>10}\n"));
+    }
+    let lines = report.lines.iter().map(|line| {
+        let mut fields = vec![
+            ("area", Value::from(line.area)),
+            ("name", Value::from(line.name.as_str())),
+        ];
+        if let Some(entries) = line.entries {
+            fields.push(("n", Value::Num(entries as f64)));
+        }
+        if let Some(bytes) = line.bytes {
+            fields.push(("bytes", Value::Num(bytes as f64)));
+        }
+        Value::record(fields)
+    });
+    (text, Value::List(lines.collect::<Vec<_>>().into()))
+}
+
 /// The window is hidden, minimized or covered: what devtools say of it.
 const NOT_PRESENTING: &str = "the window isn't presenting (hidden, minimized or covered): it \
      draws no frames, and input waits for it until it shows";
 
 /// How frames since `from` (`trace::now_ms`) were paced: how many, the
-/// time between them, and the work in each.
-fn pacing(from: f64) -> (String, Value) {
+/// time between them, and the work in each ([`interaction`]).
+fn pacing(from: f64, named: &dyn Fn(&str) -> String) -> (String, Value) {
     let frames: Vec<_> = zgx::trace::frames(usize::MAX)
         .into_iter()
         .filter(|f| f.ended_ms >= from)
         .collect();
+    interaction(&frames, named)
+}
+
+/// `values`' `p`th percentile (nearest rank), sorted first.
+fn percentile(sorted: &[f64], p: f64) -> f64 {
+    let rank = ((p / 100.) * sorted.len() as f64).ceil() as usize;
+    sorted[rank.clamp(1, sorted.len()) - 1]
+}
+
+/// The least-to-most spread of `values` (ms): median, p90, p95, p99, most
+/// and mean, as text and data.
+fn spread_ms(mut values: Vec<f64>) -> (String, Vec<(&'static str, Value)>) {
+    values.sort_by(f64::total_cmp);
+    let round = |v: f64| Value::Num((v * 1000.).round() / 1000.);
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let (p50, p95) = (percentile(&values, 50.), percentile(&values, 95.));
+    let most = values[values.len() - 1];
+    (
+        format!("{p50:.2} ms median, {p95:.2} ms p95, {most:.2} ms most"),
+        vec![
+            ("p50", round(p50)),
+            ("p90", round(percentile(&values, 90.))),
+            ("p95", round(p95)),
+            ("p99", round(percentile(&values, 99.))),
+            ("max", round(most)),
+            ("mean", round(mean)),
+        ],
+    )
+}
+
+/// What an interaction's `frames` cost: how many, the time between them,
+/// the work in each (its spread: median, p95, most), the input events they
+/// took and the work per event (a drag's moves, a fling's steps), and each
+/// phase's spread, the costliest at p95 first.
+fn interaction(frames: &[zgx::trace::Frame], named: &dyn Fn(&str) -> String) -> (String, Value) {
     if frames.len() < 2 {
         return (
             format!(
-                "{} frames: nothing to pace (did the tape move anything there? a target that \
-                 doesn't scroll draws nothing new)",
+                "{} frames: nothing to pace (did anything change there? a target that doesn't \
+                 scroll or move draws nothing new)",
                 frames.len()
             ),
             Value::record([("frames", Value::Num(frames.len() as f64))]),
@@ -134,38 +204,180 @@ fn pacing(from: f64) -> (String, Value) {
     let longest = gaps.iter().copied().fold(0., f64::max);
     // Later than half a refresh past its turn: a frame shown late.
     let late = gaps.iter().filter(|g| **g > every * 1.5).count();
-    let work: Vec<f64> = frames
-        .iter()
-        .map(|f| {
-            f.phases
-                .iter()
-                .filter(|p| p.0 != "wait")
-                .map(|p| p.2 as f64)
-                .sum::<f64>()
-                / 1e3
-        })
-        .collect();
+    let work_of = |f: &zgx::trace::Frame| {
+        f.phases
+            .iter()
+            .filter(|p| p.0 != "wait")
+            .map(|p| p.2 as f64)
+            .sum::<f64>()
+            / 1e3
+    };
+    let work: Vec<f64> = frames.iter().map(work_of).collect();
     let (most, at) =
-        work.iter().zip(&frames).fold(
+        work.iter().zip(frames).fold(
             (0., 0),
             |(most, at), (w, f)| {
                 if *w > most { (*w, f.index) } else { (most, at) }
             },
         );
-    let text = format!(
+    let (work_text, work_data) = spread_ms(work.clone());
+    let work_data = Value::record(work_data);
+    let mut text = format!(
         "{} frames, every {every:.2} ms (median), longest gap {longest:.2} ms, {late} over 1.5 \
-         frames; work {:.2} ms median, {most:.2} ms most (frame {at})",
+         frames; work {work_text} (frame {at})",
         frames.len(),
-        median(work.clone())
     );
+    // Each event's share of the frame it was taken in.
+    let events: u32 = frames.iter().map(|f| f.events).sum();
+    let per_event: Vec<f64> = frames
+        .iter()
+        .filter(|f| f.events > 0)
+        .flat_map(|f| {
+            let share = work_of(f) / f.events as f64;
+            std::iter::repeat_n(share, f.events as usize)
+        })
+        .collect();
+    let per_event_data = if per_event.is_empty() {
+        Value::Nil
+    } else {
+        let (t, data) = spread_ms(per_event);
+        text.push_str(&format!("\n{events} input events: each {t}"));
+        Value::record(data)
+    };
+    // Each phase's spread over the frames it ran in.
+    let mut names: Vec<&'static str> = Vec::new();
+    for f in frames {
+        for p in &f.phases {
+            if p.0 != "wait" && !names.contains(&p.0) {
+                names.push(p.0);
+            }
+        }
+    }
+    let mut phases: Vec<(f64, &'static str, Value)> = names
+        .into_iter()
+        .map(|name| {
+            let (micros, instructions): (Vec<f64>, u64) =
+                frames.iter().fold((Vec::new(), 0), |(mut m, i), f| {
+                    let ran = f.phases.iter().filter(|p| p.0 == name);
+                    let (us, n) = ran.fold((0., 0), |(us, n), p| (us + p.2 as f64, n + p.1));
+                    m.push(us / 1e3);
+                    (m, i + n)
+                });
+            let total: f64 = micros.iter().sum();
+            let mut sorted = micros.clone();
+            sorted.sort_by(f64::total_cmp);
+            let p95 = percentile(&sorted, 95.);
+            let (_, spread) = spread_ms(micros);
+            let mut fields = vec![
+                ("name", Value::from(name)),
+                ("total_ms", Value::Num((total * 1000.).round() / 1000.)),
+            ];
+            if instructions > 0 {
+                fields.push(("instructions", Value::Num(instructions as f64)));
+            }
+            fields.extend(spread);
+            (p95, name, Value::record(fields))
+        })
+        .collect();
+    phases.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let top: Vec<String> = phases
+        .iter()
+        .take(5)
+        .map(|(p95, name, _)| format!("{name} {p95:.2} ms"))
+        .collect();
+    text.push_str(&format!("\nphases at p95: {}", top.join(", ")));
+    // What layout measured afresh across them, and whose own measuring cost
+    // most in all (each frame keeps its costliest few).
+    let measured: u32 = frames.iter().map(|f| f.layout.measured).sum();
+    let mut by_node: Vec<(u32, f64, f64, u32)> = Vec::new();
+    for m in frames.iter().flat_map(|f| &f.layout.top) {
+        match by_node.iter_mut().find(|(node, ..)| *node == m.node) {
+            Some(entry) => {
+                entry.1 += m.self_micros as f64;
+                entry.2 += m.micros as f64;
+                entry.3 += 1;
+            }
+            None => by_node.push((m.node, m.self_micros as f64, m.micros as f64, 1)),
+        }
+    }
+    by_node.sort_by(|a, b| b.1.total_cmp(&a.1));
+    by_node.truncate(8);
+    if measured > 0 {
+        let costliest: Vec<String> = by_node
+            .iter()
+            .take(3)
+            .map(|(node, own, _, times)| {
+                format!(
+                    "{} {:.2} ms own over {times}",
+                    named(&format!("@{node}")),
+                    own / 1e3
+                )
+            })
+            .collect();
+        text.push_str(&format!(
+            "\nlayout: {measured} nodes measured afresh; costliest: {}",
+            costliest.join(", ")
+        ));
+    }
+    let layout = Value::record([
+        ("measured", Value::Num(measured as f64)),
+        (
+            "micros",
+            Value::Num(
+                frames
+                    .iter()
+                    .map(|f| f.layout.micros as f64)
+                    .sum::<f64>()
+                    .round(),
+            ),
+        ),
+        (
+            "top",
+            Value::List(
+                by_node
+                    .iter()
+                    .map(|(node, own, all, times)| {
+                        Value::record([
+                            ("node", Value::Num(*node as f64)),
+                            ("what", Value::from(named(&format!("@{node}")).as_str())),
+                            ("self_micros", Value::Num(own.round())),
+                            ("micros", Value::Num(all.round())),
+                            ("frames", Value::Num(*times as f64)),
+                        ])
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
+        ),
+    ]);
     let round = |v: f64| Value::Num((v * 100.).round() / 100.);
     let data = Value::record([
         ("frames", Value::Num(frames.len() as f64)),
+        ("first_frame", Value::Num(frames[0].index as f64)),
+        (
+            "last_frame",
+            Value::Num(frames[frames.len() - 1].index as f64),
+        ),
         ("interval_ms", round(every)),
         ("longest_gap_ms", round(longest)),
         ("late", Value::Num(late as f64)),
         ("work_median_ms", round(median(work))),
         ("work_most_ms", round(most)),
+        ("work_most_frame", Value::Num(at as f64)),
+        ("work_ms", work_data),
+        ("events", Value::Num(events as f64)),
+        ("per_event_ms", per_event_data),
+        (
+            "phases",
+            Value::List(
+                phases
+                    .into_iter()
+                    .map(|(_, _, d)| d)
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
+        ),
+        ("layout", layout),
     ]);
     (text, data)
 }
@@ -346,6 +558,9 @@ const HELP: &str = "commands (one JSON object a line, `cmd` and its fields):
   state   [name] [full]                          named states and their values
   set     name value                             set a named state (value is JSON)
   click   target                                 press and release at its middle
+  hover   target|x,y                             move the pointer there, as a hand does
+  right-click target|x,y                         click the context button there (a context menu opens)
+  drag    target|x,y to                          drag with the primary button; `to` is a target or x,y
   type    target text                            click it, then type text
   key     keys                                   e.g. \"Enter\", \"cmd+k\", \"alt+ArrowDown\"
   scroll  target dy                              scroll the viewport under it
@@ -355,6 +570,8 @@ const HELP: &str = "commands (one JSON object a line, `cmd` and its fields):
                                                  pacing (repeat: runs and their spread; every: ms apart)
   command id                                     run a ui.command
   errors                                         script error, type errors, lint, layout warnings
+  contributions                                  each plugin's targets: where, live matches, error
+  elements                                       named elements by the context they read (provide)
   lint                                           zgx lint over the app's scripts, file:line
   frames  [n=10] [runs=5] [all] [since] [keep]   the last frames that did anything: their phases, GPU
                                                  time, notes, what ran and why (since: a mark or frame)
@@ -362,9 +579,13 @@ const HELP: &str = "commands (one JSON object a line, `cmd` and its fields):
   switch  [name] [on]                            list fast paths, or switch one on or off, to compare
   search  [query] [next] [prev] [all] [n=5] [close]  find in page: the count, the current match, the first n
   zoom    [to: in|out|reset|1.5|150%]            the window's zoom (Cmd/Ctrl +, -, 0) and its viewport in points
+  memory                                         what the app holds, by what holds it: a line each
   wait    target [text] [gone] [timeout_ms=3000] until it shows (the text), or is gone
   sleep   ms                                     let the app run
-targets: #id, \"label or text\", role:button, @12, row 3, [2], a >> b (inside)";
+  windows                                        the app's windows, their sizes and popups open
+targets: #id, .class, \"label or text\", role:button, @12, row 3, [2], a >> b (inside)
+window: any command takes `window` (an id from `windows`, or an item's key in ui.windows): it
+        answers for that window; popups answer for the window they open from";
 
 impl Session {
     /// The session of a window's interface `ui`, the script view mounted
@@ -379,6 +600,8 @@ impl Session {
         // Names and values computed from state wait for a reader (an
         // assistive technology): devtools are one.
         ui.set_assistive_technology(true);
+        // Targets by class (`.tool`) read its elements' classes.
+        host.expose_classes();
         if let Some(inspector) = &inspector {
             // Its labels (the script line of each node) while devtools run.
             inspector.set_warnings(true);
@@ -395,11 +618,25 @@ impl Session {
         }))
     }
 
-    /// The answer to one request (a JSON object, a line).
+    /// The answer to one request (a JSON object, a line). With `window`
+    /// (another window's id, or an item's key in `ui.windows`), that
+    /// window's.
     pub fn answer(&self, request: &str) -> Reply {
         let Some(request) = Value::from_json(request.trim()) else {
             return Reply::Now(failed("a request is one JSON object: {\"cmd\":\"tree\"}"));
         };
+        let window = request.field("window").map(Value::to_string);
+        match window.as_deref() {
+            None | Some("") | Some("main") => self.answer_here(request),
+            Some(name) => match window_session(name) {
+                Ok(session) => session.answer_here(request),
+                Err(error) => Reply::Now(failed(error)),
+            },
+        }
+    }
+
+    /// The answer to `request`, this window's.
+    fn answer_here(&self, request: Value) -> Reply {
         let Some(mut ui) = self.0.ui.upgrade() else {
             return Reply::Now(failed("the window has closed"));
         };
@@ -414,8 +651,30 @@ impl Session {
             let target = text("target").ok_or("this command takes a `target`")?;
             driver::find(ui, &self.0.handle, &target)
         };
+        // The same for an action: what of it a person can reach, inside
+        // its clips and uncovered, or why not.
+        let reachable = |ui: &Ui| -> Result<zgx::scene::NodeId, String> {
+            let target = text("target").ok_or("this command takes a `target`")?;
+            driver::find_shown(ui, &self.0.handle, &target)
+        };
+        let reach = |ui: &Ui| -> Result<(zgx::scene::NodeId, zgx::scene::Rect), String> {
+            let target = text("target").ok_or("this command takes a `target`")?;
+            driver::reach(ui, &self.0.handle, &target)
+        };
+        // Where a field says: a target's middle, or `x,y` in window points.
+        let point_of = |ui: &Ui, name: &str| -> Result<(f32, f32), String> {
+            let said = text(name).ok_or_else(|| format!("this command takes a `{name}`"))?;
+            if let Some((x, y)) = said.split_once(',')
+                && let (Ok(x), Ok(y)) = (x.trim().parse(), y.trim().parse())
+            {
+                return Ok((x, y));
+            }
+            let (_, shown) = driver::reach(ui, &self.0.handle, &said)?;
+            Ok(driver::middle(shown))
+        };
         let answer = match cmd.as_str() {
             "help" => Ok((HELP.to_string(), Value::Nil)),
+            "windows" => Ok(windows(self)),
             "tree" => (|| {
                 let from = match text("target") {
                     Some(t) => Some(driver::find(&ui, &self.0.handle, &t)?),
@@ -426,7 +685,8 @@ impl Session {
                     budget: number("budget").map_or(200, |b| b as usize),
                     all: field("all").is_some_and(|v| v.truthy()),
                 };
-                let (lines, hidden) = driver::tree(&ui, &self.0.handle, from, &options);
+                let (shown, hidden) = driver::tree_lines(&ui, &self.0.handle, from, &options);
+                let lines: Vec<&driver::Line> = shown.iter().map(|l| &l.line).collect();
                 let data = Value::List(
                     lines
                         .iter()
@@ -471,7 +731,7 @@ impl Session {
                         .collect::<Vec<_>>()
                         .into(),
                 );
-                Ok((driver::tree_text(&lines, hidden), data))
+                Ok((driver::tree_lines_text(&shown, hidden), data))
             })(),
             "node" => target(&ui).map(|node| {
                 let fields = driver::node(&ui, self.0.inspector.as_ref(), node);
@@ -571,25 +831,52 @@ impl Session {
                 self.0.host.set_state(&name, value)?;
                 Ok((format!("{name} set"), Value::Nil))
             })(),
-            "click" => target(&ui).map(|node| {
-                let b = ui.scene.borrow().bounds(node);
+            "click" => reach(&ui).map(|(node, b)| {
                 driver::click_at(&mut ui, b);
                 (format!("clicked @{}", driver::number(node)), Value::Nil)
             }),
+            "hover" => point_of(&ui, "target").map(|at| {
+                driver::hover_at(&mut ui, at);
+                (format!("pointer at {:.0},{:.0}", at.0, at.1), Value::Nil)
+            }),
+            "right-click" => point_of(&ui, "target").map(|at| {
+                driver::right_click_at(&mut ui, at);
+                (
+                    format!("right-clicked at {:.0},{:.0}", at.0, at.1),
+                    Value::Nil,
+                )
+            }),
+            "drag" => (|| {
+                let (from, to) = (point_of(&ui, "target")?, point_of(&ui, "to")?);
+                driver::drag_between(&mut ui, from, to);
+                Ok((
+                    format!(
+                        "dragged {:.0},{:.0} to {:.0},{:.0}",
+                        from.0, from.1, to.0, to.1
+                    ),
+                    Value::Nil,
+                ))
+            })(),
             "type" => (|| {
-                let node = target(&ui)?;
+                let (node, b) = reach(&ui)?;
                 let typed = text("text").ok_or("type takes a `text`")?;
-                driver::type_into(&mut ui, node, &typed);
+                driver::click_at(&mut ui, b);
+                ui.dispatch(zgx::input::InputEvent::Text(typed));
                 Ok((format!("typed into @{}", driver::number(node)), Value::Nil))
             })(),
             "key" => (|| {
                 let keys = text("keys").ok_or("key takes `keys` (\"Enter\", \"cmd+k\")")?;
+                // Modifiers alone (`alt`): held, then let go.
+                if let Some(modifiers) = driver::parse_modifiers(&keys) {
+                    driver::tap_modifiers(&mut ui, modifiers);
+                    return Ok((format!("pressed {keys} alone"), Value::Nil));
+                }
                 let (key, modifiers) = driver::parse_keys(&keys)?;
                 driver::press(&mut ui, key, modifiers);
                 Ok((format!("pressed {keys}"), Value::Nil))
             })(),
             "snapshot" => (|| {
-                let node = target(&ui)?;
+                let node = reachable(&ui)?;
                 let width = number("width").map_or(4096, |w| w.clamp(1., 16384.) as u32);
                 let image = ui.snapshot(node, width).ok_or(
                     "no picture: the node is hidden or not laid out, or this window takes none \
@@ -612,7 +899,7 @@ impl Session {
                 ))
             })(),
             "scroll" => (|| {
-                let node = target(&ui)?;
+                let node = reachable(&ui)?;
                 driver::scroll(&mut ui, node, number("dy").unwrap_or(100.) as f32);
                 Ok((format!("scrolled @{}", driver::number(node)), Value::Nil))
             })(),
@@ -645,12 +932,58 @@ impl Session {
                 {
                     lines.push(format!("layout: {warning}"));
                 }
+                // What the framework said (`zgx::issues`), by kind.
+                for (kind, issue) in host.issues() {
+                    lines.push(format!("{}: {issue}", kind.name()));
+                }
                 let text = if lines.is_empty() {
                     "none".to_string()
                 } else {
                     lines.join("\n")
                 };
                 Ok((text, Value::Nil))
+            }
+            "elements" => {
+                let report = self.0.host.elements(&ui, &self.0.handle);
+                Ok((report.to_text(), report.to_value()))
+            }
+            "contributions" => {
+                let reports = self.0.host.contributions();
+                let text = match reports.is_empty() {
+                    true => "none".to_string(),
+                    false => reports
+                        .iter()
+                        .map(|r| {
+                            let error = r
+                                .error
+                                .as_deref()
+                                .map_or(String::new(), |e| format!("  error: {e}"));
+                            format!(
+                                "{} {} {}: {} matching{error}",
+                                r.plugin, r.place, r.target, r.matches
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                };
+                let value = Value::List(
+                    reports
+                        .into_iter()
+                        .map(|r| {
+                            Value::record([
+                                ("plugin", Value::Str(r.plugin.into())),
+                                ("target", Value::Str(r.target.into())),
+                                ("place", Value::Str(r.place.into())),
+                                ("matches", Value::Num(r.matches as f64)),
+                                (
+                                    "error",
+                                    r.error.map_or(Value::Nil, |e| Value::Str(e.into())),
+                                ),
+                            ])
+                        })
+                        .collect(),
+                );
+                Ok((text, value))
             }
             "lint" => (|| {
                 let path = self
@@ -732,13 +1065,14 @@ impl Session {
                 if let Some(keep) = number("keep") {
                     zgx::trace::set_kept(keep.max(1.) as usize);
                 }
-                // After a frame number, or the frame a mark was set after.
-                let since = match field("since") {
-                    None => None,
-                    Some(at) => Some(match at.as_f64() {
+                // A frame number, or the frame a mark was set after: a mark
+                // or number as the command line gives it (`--since 12`, text).
+                let frame_of = |key: &str| -> Result<Option<u64>, String> {
+                    let Some(at) = field(key) else {
+                        return Ok(None);
+                    };
+                    Ok(Some(match at.as_f64() {
                         Some(frame) => frame.max(0.) as u64,
-                        // A mark, or a frame's number as the command line
-                        // gives it (`--since 12`, text).
                         None => {
                             let name = at.to_string();
                             let marked = self.0.marks.borrow().get(&name).copied();
@@ -746,8 +1080,25 @@ impl Session {
                                 format!("no mark named `{name}` (`mark {name}` sets one)")
                             })?
                         }
-                    }),
+                    }))
                 };
+                let since = frame_of("since")?;
+                // Up to a frame or a mark: an interaction between two marks.
+                let until = frame_of("until")?;
+                if field("summary").is_some_and(|v| v.truthy()) {
+                    let frames: Vec<_> = zgx::trace::frames(usize::MAX)
+                        .into_iter()
+                        .filter(|f| since.is_none_or(|s| f.index > s))
+                        .filter(|f| until.is_none_or(|u| f.index <= u))
+                        .collect();
+                    let (text, data) = interaction(&frames, &self.node_namer());
+                    let text = if ui.is_presented() {
+                        text
+                    } else {
+                        format!("{NOT_PRESENTING}\n{text}")
+                    };
+                    return Ok((text, data));
+                }
                 let runs = if field("all").is_some_and(|v| v.truthy()) {
                     usize::MAX
                 } else {
@@ -756,7 +1107,7 @@ impl Session {
                 let n = number("n").map_or(if since.is_some() { usize::MAX } else { 10 }, |n| {
                     n.max(0.) as usize
                 });
-                let (text, data) = self.frames(n, runs, since);
+                let (text, data) = self.frames(n, runs, since, until);
                 // Hidden or covered, the window draws nothing: say so first.
                 let text = if ui.is_presented() {
                     text
@@ -765,6 +1116,74 @@ impl Session {
                 };
                 Ok::<_, String>((text, data))
             })(),
+            "reloads" => {
+                let reports = self.0.host.reload_report();
+                if reports.is_empty() {
+                    return Reply::Now(ok(
+                        "no reloads recorded: the host records them while it watches its \
+                         files, from the load after it began"
+                            .into(),
+                        Value::List(Vec::new().into()),
+                    ));
+                }
+                // Paths as the app names them: beside its script.
+                let base = self.0.host.app_dir();
+                let shown = |path: &std::path::Path| -> String {
+                    base.as_deref()
+                        .and_then(|base| path.strip_prefix(base).ok())
+                        .unwrap_or(path)
+                        .display()
+                        .to_string()
+                };
+                let mut lines = vec![
+                    "each reload's path: partial (the app's VM kept, what changed and what \
+                     requires it run again) or full (everything loads again), and why"
+                        .to_string(),
+                ];
+                let mut data = Vec::new();
+                for r in &reports {
+                    let changed: Vec<String> = r.changed.iter().map(|p| shown(p)).collect();
+                    let ran: Vec<String> = r.ran.iter().map(|p| shown(p)).collect();
+                    // A reload the host asked for names no file.
+                    let files = match changed.is_empty() {
+                        true => String::new(),
+                        false => format!(" (changed {})", changed.join(", ")),
+                    };
+                    lines.push(match &r.why {
+                        None => format!(
+                            "#{} partial{}: {} run again, {} kept{files}",
+                            r.number,
+                            if r.taken {
+                                ""
+                            } else {
+                                " (not taken: ZGX_RELOAD=partial takes it)"
+                            },
+                            ran.join(", "),
+                            r.kept,
+                        ),
+                        Some(why) => format!("#{} full: {why}{files}", r.number),
+                    });
+                    let list = |items: &[String]| {
+                        Value::List(
+                            items
+                                .iter()
+                                .map(|s| Value::from(s.as_str()))
+                                .collect::<Vec<_>>()
+                                .into(),
+                        )
+                    };
+                    data.push(Value::record([
+                        ("number", Value::Num(r.number as f64)),
+                        ("path", Value::from(r.path)),
+                        ("changed", list(&changed)),
+                        ("ran", list(&ran)),
+                        ("kept", Value::Num(r.kept as f64)),
+                        ("why", r.why.as_deref().map_or(Value::Nil, Value::from)),
+                        ("taken", Value::Bool(r.taken)),
+                    ]));
+                }
+                return Reply::Now(ok(lines.join("\n"), Value::List(data.into())));
+            }
             "mark" => {
                 let name = text("name").unwrap_or_else(|| "mark".into());
                 let after = zgx::trace::frame_index();
@@ -885,7 +1304,7 @@ impl Session {
                         .and_then(|l| l.split_whitespace().next()?.parse::<f64>().ok())
                         .unwrap_or(0.)
                         .clamp(0., 60_000.);
-                    let b = ui.scene.borrow().bounds(node);
+                    let b = ui.scene.borrow().transformed_bounds(node);
                     let at = (b.x + b.width / 2., b.y + b.height / 2.);
                     let from = zgx::trace::now_ms();
                     let said = ui.wheel_tape(zgx::widgets::WheelTape::Play {
@@ -916,7 +1335,7 @@ impl Session {
                                 }
                                 // Its frames, and the momentum and edges' after it.
                                 zgx::timer::sleep(Duration::from_millis(length as u64 + 400)).await;
-                                let (mut text, data) = pacing(from);
+                                let (mut text, data) = pacing(from, &session.node_namer());
                                 if session.0.ui.upgrade().is_some_and(|ui| !ui.is_presented()) {
                                     text.push_str(
                                         " (the window stopped presenting meanwhile: frames went \
@@ -935,6 +1354,37 @@ impl Session {
                     }
                 };
             }
+            "memory" => {
+                let session = self.clone();
+                return Reply::Later(Box::pin(async move {
+                    let mut report = zgx::memory::from_host().await;
+                    let Some(ui) = session.0.ui.upgrade() else {
+                        return failed("the window has closed");
+                    };
+                    ui.scene.borrow().memory(&mut report);
+                    zgx::trace::memory(&mut report);
+                    session.0.host.memory(&mut report);
+                    // Each layer by its node's `id` too, beside its `@n`.
+                    let ids = session.0.handle.ids();
+                    for line in report
+                        .lines
+                        .iter_mut()
+                        .filter(|line| line.area == "gpu layer")
+                    {
+                        let number = line.name.strip_prefix('@').and_then(|rest| {
+                            rest.split(' ').next().and_then(|n| n.parse::<u32>().ok())
+                        });
+                        if let Some(id) = number
+                            .and_then(|number| ids.iter().find(|(node, _)| node.number() == number))
+                        {
+                            let at = line.name.find(' ').unwrap_or(line.name.len());
+                            line.name.insert_str(at, &format!(" #{}", id.1));
+                        }
+                    }
+                    let (text, data) = memory_answer(&report);
+                    ok(text, data)
+                }));
+            }
             "sleep" => {
                 let ms = number("ms").unwrap_or(100.).clamp(0., 60_000.);
                 return Reply::Later(Box::pin(async move {
@@ -950,6 +1400,20 @@ impl Session {
             Ok((text, data)) => ok(text, data),
             Err(error) => failed(error),
         })
+    }
+
+    /// This window's size, and its popups open (`windows`).
+    fn about(&self) -> Option<(zgx::scene::Rect, Vec<String>)> {
+        let ui = self.0.ui.upgrade()?;
+        let scene = ui.scene.borrow();
+        let size = scene.bounds(scene.root());
+        let popups = scene.popups().to_vec();
+        drop(scene);
+        let popups = popups
+            .into_iter()
+            .map(|popup| driver::describe(&ui, popup))
+            .collect();
+        Some((size, popups))
     }
 
     /// Find in page's answer: how many matches, which is current, and the
@@ -1044,20 +1508,9 @@ impl Session {
     /// given): per frame, the states written and the effects they ran, each
     /// with its time (the costliest `runs` of them), its phases, the GPU's
     /// own time and what the engine noted of it.
-    fn frames(&self, n: usize, runs_shown: usize, since: Option<u64>) -> (String, Value) {
-        let names: std::collections::HashMap<usize, String> = self
-            .0
-            .host
-            .named_states()
-            .into_iter()
-            .map(|(name, signal)| (signal.addr(), name))
-            .collect();
-        let name_of = |addr: usize| {
-            names
-                .get(&addr)
-                .cloned()
-                .unwrap_or_else(|| "a state".into())
-        };
+    /// Names `@n` as the frames' listing does: its id where it has one, and
+    /// how the script made it (its line) or else its kind.
+    fn node_namer(&self) -> impl Fn(&str) -> String + use<> {
         // A binding names its node by number: its id too, where it has one.
         let ids: std::collections::HashMap<u32, String> = self
             .0
@@ -1090,7 +1543,7 @@ impl Session {
             }
             None => Default::default(),
         };
-        let named = |name: &str| -> String {
+        move |name: &str| -> String {
             let number = name
                 .strip_prefix('@')
                 .and_then(|r| r.split(' ').next()?.parse::<u32>().ok());
@@ -1105,10 +1558,35 @@ impl Session {
                 out.push_str(&format!(" ({kind})"));
             }
             out
+        }
+    }
+    fn frames(
+        &self,
+        n: usize,
+        runs_shown: usize,
+        since: Option<u64>,
+        until: Option<u64>,
+    ) -> (String, Value) {
+        let names: std::collections::HashMap<usize, String> = self
+            .0
+            .host
+            .named_states()
+            .into_iter()
+            .map(|(name, signal)| (signal.addr(), name))
+            .collect();
+        let name_of = |addr: usize| {
+            names
+                .get(&addr)
+                .cloned()
+                .unwrap_or_else(|| "a state".into())
         };
+        let named = self.node_namer();
         let mut text = Vec::new();
         let mut data = Vec::new();
         let mut frames = zgx::trace::frames(usize::MAX);
+        if let Some(until) = until {
+            frames.retain(|f| f.index <= until);
+        }
         if let Some(since) = since {
             frames.retain(|f| f.index > since);
         }
@@ -1156,10 +1634,19 @@ impl Session {
                 } else {
                     String::new()
                 },
-                if writes.is_empty() {
-                    "no writes".into()
-                } else {
-                    writes.join(", ")
+                {
+                    // The states written, then the input the frame took.
+                    let mut what = writes.clone();
+                    match frame.events {
+                        0 => {}
+                        1 => what.push("1 input event".into()),
+                        n => what.push(format!("{n} input events")),
+                    }
+                    if what.is_empty() {
+                        "no writes".into()
+                    } else {
+                        what.join(", ")
+                    }
                 },
                 frame.runs.len(),
                 total
@@ -1176,6 +1663,30 @@ impl Session {
                 .collect();
             if !split.is_empty() {
                 line.push_str(&format!("\n  phases: {}", split.join(", ")));
+            }
+            // What layout measured afresh, and where its own time went: the
+            // subtrees whose measuring cost most, their children's apart.
+            let layout = &frame.layout;
+            if layout.measured > 0 {
+                let top: Vec<String> = layout
+                    .top
+                    .iter()
+                    .take(3)
+                    .map(|m| {
+                        format!(
+                            "{} {:.0} µs (own {:.0} µs)",
+                            named(&format!("@{}", m.node)),
+                            m.micros,
+                            m.self_micros
+                        )
+                    })
+                    .collect();
+                line.push_str(&format!(
+                    "\n  layout: {} measured afresh, {:.0} µs; costliest: {}",
+                    layout.measured,
+                    layout.micros,
+                    top.join(", ")
+                ));
             }
             // The GPU's own time: `present` also counts waiting for the
             // window server and the display.
@@ -1195,7 +1706,7 @@ impl Session {
             let what = |run: &zgx::trace::Run| {
                 run.name
                     .as_deref()
-                    .map_or_else(|| format!("effect {}", run.effect), named)
+                    .map_or_else(|| format!("effect {}", run.effect), &named)
             };
             let shown = &runs[..runs.len().min(runs_shown)];
             for run in shown {
@@ -1232,6 +1743,41 @@ impl Session {
                     ),
                 ),
                 ("runs", Value::Num(frame.runs.len() as f64)),
+                ("events", Value::Num(frame.events as f64)),
+                (
+                    "layout",
+                    Value::record([
+                        ("measured", Value::Num(frame.layout.measured as f64)),
+                        ("micros", Value::Num(frame.layout.micros.round() as f64)),
+                        (
+                            "top",
+                            Value::List(
+                                frame
+                                    .layout
+                                    .top
+                                    .iter()
+                                    .map(|m| {
+                                        Value::record([
+                                            ("node", Value::Num(m.node as f64)),
+                                            (
+                                                "what",
+                                                Value::from(
+                                                    named(&format!("@{}", m.node)).as_str(),
+                                                ),
+                                            ),
+                                            ("micros", Value::Num(m.micros.round() as f64)),
+                                            (
+                                                "self_micros",
+                                                Value::Num(m.self_micros.round() as f64),
+                                            ),
+                                        ])
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .into(),
+                            ),
+                        ),
+                    ]),
+                ),
                 (
                     "run_list",
                     Value::List(
@@ -1314,7 +1860,8 @@ impl Session {
                 return failed("the window has closed");
             };
             ui.prepare_frame();
-            let found = driver::find(&ui, &self.0.handle, &target);
+            // What doesn't show isn't there, to wait for or to wait out.
+            let found = driver::find_shown(&ui, &self.0.handle, &target);
             let met = match (&found, gone) {
                 (Err(_), true) => true,
                 (Ok(_), true) => false,
@@ -1399,6 +1946,79 @@ impl Queue {
 }
 
 pub use crate::inspect_client::socket_dir;
+
+thread_local! {
+    /// The app's other windows' sessions (`ui.window`, `ui.windows`), by
+    /// id and title, while they are open: `window` routes a request to one,
+    /// `windows` lists them.
+    static WINDOWS: std::cell::RefCell<Vec<(String, String, Session)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+/// Make window `id`'s session (titled `title`) reachable from devtools,
+/// until [`forget_window`]: a host opening the app's other windows calls it.
+pub fn register_window(id: &str, title: &str, session: Session) {
+    WINDOWS.with_borrow_mut(|windows| {
+        windows.retain(|(other, _, _)| other != id);
+        windows.push((id.to_owned(), title.to_owned(), session));
+    });
+}
+/// Window `id` closed: devtools reach it no more.
+pub fn forget_window(id: &str) {
+    WINDOWS.with_borrow_mut(|windows| windows.retain(|(other, _, _)| other != id));
+}
+/// The session of window `name`: its id, or an item's key in `ui.windows`
+/// (whose window's id is its group's and the key).
+fn window_session(name: &str) -> Result<Session, String> {
+    WINDOWS.with_borrow(|windows| {
+        if let Some((_, _, session)) = windows.iter().find(|(id, _, _)| id == name) {
+            return Ok(session.clone());
+        }
+        let mut items = windows.iter().filter(|(id, _, _)| {
+            id.split_once(':')
+                .is_some_and(|(group, key)| group.starts_with("windows") && key == name)
+        });
+        match (items.next(), items.next()) {
+            (Some((_, _, session)), None) => Ok(session.clone()),
+            (Some(_), Some(_)) => Err(format!(
+                "two lists' windows hold an item `{name}`: name it by its window's id (`windows`)"
+            )),
+            (None, _) => Err(format!("no window `{name}` open (`windows` lists them)")),
+        }
+    })
+}
+/// `windows`: the main window and the app's others, each with its size and
+/// its popups open (menus, popovers past the window: targets inside reach
+/// them, as the window's own nodes).
+fn windows(main: &Session) -> (String, Value) {
+    let mut lines = Vec::new();
+    let mut data = Vec::new();
+    let others = WINDOWS.with_borrow(|windows| windows.clone());
+    let all = std::iter::once(("main".to_owned(), String::new(), main.clone())).chain(others);
+    for (id, title, session) in all {
+        let Some((size, popups)) = session.about() else {
+            continue;
+        };
+        let mut line = format!("{id}  {}x{}", size.width.round(), size.height.round());
+        if !title.is_empty() {
+            line.push_str(&format!("  \"{title}\""));
+        }
+        for popup in &popups {
+            line.push_str(&format!("\n  popup {popup}"));
+        }
+        lines.push(line);
+        data.push(Value::record([
+            ("id", Value::from(id.as_str())),
+            ("title", Value::from(title.as_str())),
+            ("width", Value::Num(size.width.round() as f64)),
+            ("height", Value::Num(size.height.round() as f64)),
+            (
+                "popups",
+                Value::List(popups.iter().map(|p| Value::from(p.as_str())).collect()),
+            ),
+        ]));
+    }
+    (lines.join("\n"), Value::List(data.into()))
+}
 
 /// A socket answering a session: it serves while this lives.
 pub struct Server {

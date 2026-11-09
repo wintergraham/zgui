@@ -1007,6 +1007,12 @@ fn check(ui: &Ui, labels: &HashMap<NodeId, Label>) -> Vec<Warning> {
                 .children(id)
                 .iter()
                 .filter(in_flow)
+                // A child that asks for none of the room isn't squeezed.
+                .filter(|c| {
+                    let child = scene.style(**c);
+                    !(zero_w && (child.width == Some(0.) || child.max_width == Some(0.)))
+                        && !(zero_h && (child.height == Some(0.) || child.max_height == Some(0.)))
+                })
                 .filter(|c| shows_content(&scene, **c, 0))
                 .count()
         } else {
@@ -1041,6 +1047,12 @@ fn check(ui: &Ui, labels: &HashMap<NodeId, Label>) -> Vec<Warning> {
             collapsed.insert(id);
         } else if parent_collapsed && (zero_w || zero_h) {
             collapsed.insert(id);
+        } else if (deliberate_w && item.bounds.width <= 0.5)
+            || (deliberate_h && item.bounds.height <= 0.5)
+        {
+            // Zero on purpose, and what's inside knows (an anchor for what
+            // overflows it, a panel slid shut): nothing in it is squeezed.
+            collapsed.insert(id);
         }
         // Content overflowing a clip that does not scroll.
         let (clip_x, clip_y) = scene.clips(id);
@@ -1063,8 +1075,12 @@ fn check(ui: &Ui, labels: &HashMap<NodeId, Label>) -> Vec<Warning> {
             let t = scene.transform(id);
             let b = Rect::new(b.x - t.x, b.y - t.y, b.width, b.height);
             if let Some(e) = extent {
-                let over_x = (b.x - e.x).max(e.x + e.width - (b.x + b.width));
-                let over_y = (b.y - e.y).max(e.y + e.height - (b.y + b.height));
+                // Content faded out where it runs past an edge is meant to.
+                let over = |past: f32, fade: f32| if fade > 0. { 0. } else { past };
+                let over_x = over(b.x - e.x, style.fade_edges_x[0])
+                    .max(over(e.x + e.width - (b.x + b.width), style.fade_edges_x[1]));
+                let over_y = over(b.y - e.y, style.fade_edges[0])
+                    .max(over(e.y + e.height - (b.y + b.height), style.fade_edges[1]));
                 let axis = if clip_y && over_y > 0.5 {
                     Some(("vertically", over_y, e.height, b.height))
                 } else if clip_x && over_x > 0.5 {
@@ -1085,9 +1101,37 @@ fn check(ui: &Ui, labels: &HashMap<NodeId, Label>) -> Vec<Warning> {
                 }
             }
         }
-        // A percentage against a parent that sizes to its content.
+        // A list's fixed row whose content is taller: it runs over the next.
+        // Rows are placed by transforms; a `scroll`'s children aren't.
+        if let Some(height) = style.height
+            && !clip_y
+            && scene.transform(id).y > 0.
+            && scene.parent(id).is_some_and(|p| scene.is_scroll_content(p))
+        {
+            let content = scene
+                .children(id)
+                .iter()
+                .filter(in_flow)
+                .map(|c| scene.bounds(*c).height)
+                .fold(0., f32::max);
+            if content > height + 0.5 {
+                warnings.push(warn(
+                    WarningKind::Overflow,
+                    format!(
+                        "a row {} tall holds content {} tall, which runs over the next row; set the list's height, or measured = true",
+                        n(height),
+                        n(content)
+                    ),
+                ));
+            }
+        }
+        // A percentage against a parent that sizes to its content: not a
+        // scroll's own viewport and content, which the engine sizes so (a
+        // `scroll_x` with no height takes a definite one, or its content's).
         let (pw, ph) = scene.unresolved_percentages(id);
-        if pw || ph {
+        let scrolls = scene.is_scroll_content(id)
+            || scene.children(id).iter().any(|c| scene.is_scroll_content(*c));
+        if (pw || ph) && !scrolls {
             let (axis, value, size) = if pw {
                 ("width", style.width_percent, item.bounds.width)
             } else {

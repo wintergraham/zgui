@@ -99,6 +99,17 @@ binding and replacement unregisters previous shortcuts. macOS displays and
 handles the same shortcuts in the native menu. Standard native OS-role items
 (About/Services/Hide) remain separate from this application-command model.
 
+With a web page or a terminal focused, it has each key first, as a page in a
+browser does: a shortcut it leaves alone (one the page does not
+`preventDefault`, one Ghostty does not bind) reaches the menus and zgx's key
+bindings. `Application::reserved_shortcuts` (or
+`WindowFactory::set_reserved_shortcuts`, later) names keystrokes the app keeps
+whatever has the keyboard: the menu items on them come before the page or
+terminal, which never sees the key, as a browser keeps ⌘T and ⌘W from its
+pages. `KeyBinding::reserved()` does the same for a key binding in no menu.
+Reserving an editing or system key (⌘C, ⌘V, ⌘Z, ⌘Q…) takes it from every page
+and terminal; a debug build says so once.
+
 Run `cargo run -p zgx-desktop --example platform_services` for an interactive
 example. `scripts/native_services_smoke.py` exercises a real GTK file portal in
 an isolated Sway session; it does not inject dialog results into application code.
@@ -147,3 +158,7 @@ On Wayland, global window position and arbitrary placement are unavailable, so b
 External Wayland file drops use an owned `wl_data_device` queue on the application's display. The receiver negotiates Copy and reads `text/uri-list` without blocking the UI thread. It delivers surface-local logical coordinates, per-path compatibility events, and one `FilesDrop` batch. A transfer finishes only after the UI accepts a drop (for example through `View::on_files_drop`); rejected regions, closed owners and failed transfers do not falsely report successful protocol completion. Surface routing is removed on suspend and teardown, and the worker joins before releasing its owned display connection.
 
 The URI transport accepts at most 1 MiB of encoded transfer data and 1,024 local file paths, with a three-second stalled-transfer deadline. Invalid/remote/NUL-bearing URIs reject the complete batch, with typed `FilesDropRejected` reasons. Nonblocking transfer polling keeps input responsive. Leaving the target clears hover and cancels an uncommitted receiver operation. Escape during an external drag is controlled by the source/compositor; the tested GTK3/Sway combination did not forward Escape to the source and still dropped on release. This differs from zgx's typed internal drag, which owns and handles Escape cancellation.
+
+## Notifications and badges
+
+`Platform::notify(Notification)` posts a system notification, and `next_notification_click` waits for the tag of the next one clicked. `Platform::set_badge(Some("3"))` puts a count on the app's icon, and `None` takes it off. Each system shows them its own way and needs the app to say who it is: [the table in the Luau reference](reference/native.md#notifications-and-badges) has what each needs.

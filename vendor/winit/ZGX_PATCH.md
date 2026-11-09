@@ -111,6 +111,41 @@ heard `ThemeChanged`, so its content kept its mode too.
    `scripts/windows_settings_smoke.py --both`: switched both ways while
    the window runs, its title bar and its content follow within a second.
 
+## Windows: `WindowEvent::Occluded`
+
+Windows has no event for a window being covered, and winit sent none, so a
+covered window went on drawing: 2.4–9.2 points of one core and all of its GPU
+use, against a minimized one (WING-PC, medians of 4 rotated rounds).
+
+10. `src/platform_impl/windows/occlusion.rs` finds a window occluded when it
+    is cloaked (another virtual desktop) or when windows above it known to be
+    opaque leave none of it. The rectangles' sums and when to
+    check are in `src/occlusion_area.rs`, built everywhere for its tests.
+    Whatever might show what's behind it covers nothing: layered,
+    click-through, tool and `WS_EX_NOREDIRECTIONBITMAP` windows, an acrylic
+    backdrop (Mica shows the wallpaper, no window), a shaped region, the window's own owned ones, and the corners a
+    framed window rounds. Two checks in a row must agree before it stops.
+    It says hidden only of a window whole on one monitor, under covers whole
+    on that monitor, among monitors of one scale at positive coordinates;
+    anything else keeps drawing. That's by construction, unit tested on
+    made-up layouts: no multi-monitor machine has run it.
+    A window checks from `pre_present_notify`, twice a second, so an idle one
+    does nothing; an occluded one has a `SetWinEventHook` hook and looks each
+    second for what no event reports. `scripts/windows_occlusion_smoke.py`.
+
+    A window translucent by the undocumented accent API isn't recognised, and
+    a window being captured while covered stops like any other.
+
+## Windows: a window's DPI read without a DC kept
+
+`hwnd_dpi` took the window's DC (`GetDC`) on every call, used it only on
+systems without `GetDpiForWindow` or `GetDpiForMonitor`, and never released
+it. The occlusion check above calls it twice a second while a window draws
+and each second while it's covered (an idle one not at all), so a process used up
+GDI's 10,000 handles in an hour or two and `GetDC`'s null panicked. The DC
+is taken only where it's read and released (`ReleaseDC`); a null reads as 96
+DPI (`dpi.rs`, tested by `hwnd_dpi_keeps_no_gdi_handles`).
+
 ## X11: no waiting on an input method that has gone
 
 libX11 learns that an input method's server went (ibus-x11 killed or
@@ -124,6 +159,15 @@ input method's server is asked for by its selection (`@server=name`, the
 X server answers): owned by no one, the input method counts as destroyed,
 as the callback would have it (`ime/mod.rs`, `InputMethod::server_name` in
 `ime/input_method.rs`).
+
+## X11: a wheel button counts on its press
+
+XInput2 reports a pointer's wheel buttons (4 to 7) as presses and releases;
+winit made a `MouseWheel` of each, so a pointer with no scroll valuators
+(XTEST's, a remote desktop's) scrolled two lines a notch and Control with
+the wheel zoomed two levels (zgx's zoom smoke). A wheel button's release is
+dropped (`xinput2_button_input` in `x11/event_processor.rs`); an evdev
+wheel's buttons are emulated and skipped as before, its valuators scroll.
 
 ## macOS: the Services menu on a window's selection
 
@@ -175,3 +219,190 @@ shows no copy badge and every release would look taken.
       `DragEnter`, `DragOver` and `Drop` get is a `POINTL` by value, as COM
       passes it (`definitions.rs` declared a pointer, never read before).
     Wayland's drags reach zgx's own data device, not winit.
+
+## Where dragged files are (macOS, Windows, X11)
+
+A drag holds the pointer: while files from Finder, Explorer or a file
+manager are over a window, the window hears no mouse moves, only the drag's
+own calls, and winit's `HoveredFile` and `DroppedFile` carry no position. An
+app placing them at the pointer's last place dropped them on whatever it was
+last over before the drag came in.
+
+12. `window_delegate.rs`: a drag carrying files sends `CursorMoved`, at the
+    drag's point in the content, as it enters (before `HoveredFile`), as it
+    moves to a new place (`draggingUpdated:`), and as it drops (before
+    `DroppedFile`), and `CursorLeft` as it leaves (after
+    `HoveredFileCancelled`). `scripts/macos_native_checks_probe.py` drops
+    two files on a box with the pointer last elsewhere.
+    - Windows (`drop_handler.rs`): the same, from `IDropTarget`'s
+      `DragEnter`, `DragOver` (when the point moved) and `Drop`, whose
+      `POINTL` is in the screen's pixels (`ScreenToClient`), and
+      `CursorLeft` after `DragLeave`'s `HoveredFileCancelled`. An OLE drag
+      from Explorer sends the window no `WM_MOUSEMOVE` at all.
+    - X11 (`event_processor.rs`, `dnd.rs`): each `XdndPosition` of a drag
+      carrying files, translated to the window, sends `CursorMoved` when it
+      moved (before the first `HoveredFile`, which waits for the data), and
+      `XdndLeave` `CursorLeft` after `HoveredFileCancelled`; `XdndDrop`
+      carries no point, so files drop at the last position's.
+      `scripts/file_drop_smoke.py` drops with the pointer last over a card,
+      at scale 1 and 1.5 (`file-drop-scaled`).
+    Wayland's drags reach zgx's own data device, whose drop carries its
+    point.
+
+## X11: a closing window, or an ending app, waits on no input method
+
+An input method's server that is alive but answers nothing (ibus-x11 hung,
+or stopped) held an app's close forever. A window being hidden for its close
+lost the focus, or took a FocusIn queued before, and `XSetICFocus` and
+`XUnsetICFocus` reach `XGetICValues`, a round trip. Then the event loop's end
+destroyed every context (`XDestroyIC` waits for its reply) and closed the
+input method (zgx#564). A hidden window (`Visibility::No`, or gone) now takes
+and gives up no input context focus (`EventProcessor::hidden` in
+`event_processor.rs`). `Ime`'s drop no longer destroys contexts or closes the
+input method: its connection closes with the event loop, and the server frees
+them then (`ime/mod.rs`). zgx's `ime-server-stopped` probe stops ibus-x11 as
+the app closes its focused window; the app exits.
+
+## A native view's unhandled keys reach the app (macOS)
+
+A web page that leaves a key alone hands it back: WebKit runs the key's
+command up the responder chain (`doCommandBySelector:`) and, if it reaches
+the end unperformed, re-sends the key to the app (`-[NSApplication
+sendEvent:]`), which offers it to the menus and then sends it to the first
+responder, whose responder chain passes it up. A page inside winit's view
+never got its keys back: the view's `doCommandBySelector:`, an input
+method's callback for its own keys, took every command coming up the chain
+and performed nothing, so WebKit found each key handled.
+
+13. `view.rs`: `doCommandBySelector:` and `keyDown:` coming up the chain
+    from a view inside winit's (`is_first_responder` false) are not the
+    view's own keys. The command goes on up the chain (NSResponder's), and
+    the key is a `KeyboardInput` with no text and no input method, for the
+    app's shortcuts.
+14. `platform::macos::key_event_of`: the `KeyEvent` a key `NSEvent` is, as
+    the view reports it, for an app asking whether a key a native view
+    keeps (a terminal's) is one of its shortcuts.
+
+`scripts/macos_key_routing_probe.py` (zgx) presses a menu key, a key the
+page takes and a binding in no menu with a page and a terminal focused.
+
+## Wayland: an input method hears what kind of text a field takes
+
+`ImePurpose` had only Normal, Password and Terminal, so text-input-v3's
+content purpose could not say email, URL, number, digits or phone (zgx's
+`InputMode`, HTML's `inputmode`). `ImePurpose` (`#[non_exhaustive]`) gains
+`Email`, `Url`, `Number`, `Digits` and `Phone` (`window.rs`), sent as
+those content purposes (`seat/text_input/mod.rs`); other platforms ignore a
+purpose, as before. zgx-desktop sets it as an editor takes the input method.
+
+## macOS: a trackpad's swipe between pages
+
+Safari, Finder and Xcode go back and forward on a trackpad's swipe between
+pages: two fingers across (the system's default) or three, as System
+Settings' Trackpad has it. Three fingers reach a view as `swipeWithEvent:`,
+which winit's left to the responder chain; two fingers are scroll events,
+which an app hands to AppKit's swipe tracking (`-[NSEvent
+trackSwipeEventWithOptions:…]`) when the gesture starts where nothing
+scrolls that way, and winit had no way to.
+
+15. `platform::macos::NavigationSwipes` and `set_navigation_swipes`: an
+    app's answer, kept on the main thread, to a swipe over a window that
+    went back or forward, from where it began (physical pixels in the
+    content, as `CursorMoved`'s). `view.rs`: `swipeWithEvent:` reports a
+    three-finger swipe by its `deltaX` (to the right, positive: back);
+    with no answer, or vertically, it goes up the chain as before.
+16. `platform::macos::begin_navigation_swipe`: the gesture scrolling over a
+    window swipes from its next scroll, for an app that found the gesture's
+    first scroll moved nothing it is over (each scroll view at its edge) and
+    something there navigates. As WebKit does once its web process says it
+    took no scroll, the view starts AppKit's tracking from that later scroll
+    of the gesture (`trackSwipeEventWithOptions` locked to its direction,
+    clamped, −1 to 1), the fingers still down and
+    `+[NSEvent isSwipeTrackingFromScrollEventsEnabled]` (the system's "Swipe
+    between pages" set to two fingers; `swipes_from_scrolls`). The app
+    hears its scroll gesture end there (a `MouseWheel` of nothing, phase
+    `Ended`); the gesture's remaining scrolls, momentum's too, are the
+    swipe's until a new touch or a mouse's wheel; one AppKit reports ended
+    (the fingers carried it through) reaches `swiped`, back when it went
+    right. A request no gesture takes is forgotten as its gesture ends.
+    `wantsScrollEventsForSwipeTrackingOnAxis:` answers yes across while an
+    app takes swipes. objc2-app-kit's `block2` feature, for the tracking's
+    handler (`Cargo.toml`).
+
+`scripts/macos_swipe_probe.py` (zgx) checks the three-finger path, and the
+two-finger one where the system swipes with two fingers.
+
+## Wayland: a window's blur through `ext-background-effect-v1`
+
+`set_blur` (and `with_blur`) asked only KWin's `org_kde_kwin_blur`, so no
+other compositor was asked to blur behind a window. The standard
+`ext-background-effect-v1` (wayland-protocols' staging, which winit already
+builds) is bound where the compositor advertises it
+(`types/ext_background_effect.rs`, `state.rs`) and preferred over KWin's:
+`set_blur(true)` makes the surface an `ext_background_effect_surface_v1`
+whose blur region is the whole surface, from its next commit, and
+`set_blur(false)` destroys it (`window/state.rs`). Where neither protocol is
+advertised (sway, GNOME, Weston) nothing is sent, as before; X11's
+`set_blur` stays a no-op. zgx-desktop asks for it for a window with glass,
+and again as `WindowHandle::set_glass` changes it.
+`scripts/linux_glass_blur_smoke.py` (zgx) reads the client's Wayland
+requests: sent where the compositor has the protocol, none where it hasn't.
+
+## Windows: `set_theme` is what `theme()` answers
+
+`Window::set_theme` set the window's dark mode (`try_theme`) and nothing else:
+`theme()` went on answering the system's, and a system change put the window
+back to it (`WM_SETTINGCHANGE` follows the system unless `preferred_theme` is
+set). So a window asked to be light on a dark system had light Mica and
+zgx's caption glyphs, which read `theme()`, white: unseen. It now sets
+`preferred_theme` and `current_theme`, as making a window with a theme does
+(`platform_impl/windows/window.rs`). `scripts/windows_caption_smoke.py` (zgx)
+checks the window, with its buttons drawn.
+
+## Windows: a timed wait arms its timer once per deadline
+
+A turn that waits with `ControlFlow::WaitUntil` set the high-resolution
+timer (`SetWaitableTimer`) again on every turn, even for the deadline it was
+already armed for. Under a burst of input (a 1000 Hz mouse: a turn a move)
+that is a kernel call a move for nothing: 9,938 in 10 s of a bare window
+under one deadline on WING-PC, none with this. (Its CPU time is below what
+Windows' 15.6 ms accounting can tell apart; a zgx window waiting with no
+deadline, as one idle under the pointer does, never arms it.) The timer now keeps the deadline it is armed for and is armed only
+for a new one; a wait that reaches its deadline (the timer's signal, which
+the wait consumes, or the wait's own timeout, which can beat the timer by a
+tick), or a failed wait, leaves it unarmed (`event_loop.rs`, `HighResolutionTimer`,
+tested by `a_deadline_already_armed_isnt_armed_again`).
+
+## X11: a choice of device events applies at once
+
+`EventLoop::listen_device_events` only stored the choice, which took effect
+at a window's next focus change. The loop selects XInput2's raw events on the
+root as it starts, as though focused, so until then (and for good, for a
+window that never took focus) the app heard every pointer move on the
+screen, in or out of its windows. A choice other than `WhenFocused`, which
+needs the focus, is now selected when it is made
+(`platform_impl/linux/x11/mod.rs`). zgx asks for none.
+
+## Windows: a mouse message's Shift and Control are the message's
+
+Every mouse message's `wParam` says whether Shift and Control were down when
+it was made (`MK_SHIFT`, `MK_CONTROL`), but winit read them from the
+thread's key state (`GetKeyState`) instead. The keyboard updates only the
+focused thread's, so over a window behind another (Windows sends the wheel to
+the window under the pointer) Shift with the wheel read as no Shift, and zgx
+scrolled down where browsers scroll across. Moves, buttons and both wheels now
+take Shift and Control from `wParam` (`update_mouse_modifiers` in
+`platform_impl/windows/event_loop.rs`; Alt and the Windows key are not in it,
+and are read as before). `a_wheel_with_shift_down_has_shift_without_focus`
+posts a wheel with `MK_SHIFT` to a hidden window.
+
+
+## X11: a pointer event's unchanged modifiers aren't worked out again
+
+Every XInput2 pointer event (each move of a 1000 Hz mouse) carries the
+keyboard's modifiers and group, which winit gave `xkb_state_update_mask`
+each time. That call sets the state from its masks alone, so the same masks
+again change nothing, yet xkbcommon worked out the effective modifiers and
+LEDs anew: about 400 instructions a move. `XkbState` keeps the masks it last
+gave and skips the call when they're the same
+(`platform_impl/linux/common/xkb/state.rs`).

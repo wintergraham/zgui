@@ -14,11 +14,27 @@ description = "Luau scripts that describe zgx component trees, with hot reload."
 
 [features]
 # Image formats (see zgx-gpu): all by default.
-default = ["components", "svg", "png", "jpeg", "gif"]
+default = ["components", "svg", "png", "jpeg", "gif", "cjk-thai-words"]
+# Words in Chinese, Japanese and Thai by dictionary (zgx's `cjk-thai-words`).
+cjk-thai-words = ["zgx/cjk-thai-words"]
 # The component library's `ui.*` (zgx-components): the data grid, tree,
 # dates and times, combobox, select, tabs, toasts, command palette and
 # controls.
 components = ["dep:zgx-components"]
+# `ui.scene3d` and its objects (`ui.mesh`, `ui.light`, `ui.group`): 3D
+# scenes drawn with zgx-3d. Off by default: it links the renderer (wgpu),
+# which a headless host (tests, tools, a server) would not otherwise.
+# zgx-run turns it on, so apps it runs have it.
+scene3d = ["dep:zgx-3d"]
+# Localized messages' plural rules and numbers for every locale (zgx's
+# `i18n`, ICU4X's data: about 90 KB). Off by default: `ui.t` reaches the
+# formatters, so a host would carry them whether or not its scripts call
+# it. Without it `ui.i18n` and `ui.t` work, with English's plural rules
+# (`one`, `other`) and numbers as Rust writes them. zgx-run turns it on.
+i18n = ["zgx/i18n"]
+# `ui.model`: glTF 2.0 models (`.glb`, `.gltf`) in 3D scenes, read by
+# zgx-3d's `gltf`.
+gltf = ["scene3d", "zgx-3d/gltf"]
 svg = ["zgx-gpu/svg"]
 png = ["zgx-gpu/png"]
 jpeg = ["zgx-gpu/jpeg"]
@@ -32,19 +48,26 @@ vulkan = ["zgx-gpu/vulkan"]
 inspect = ["zgx/trace", "dep:png"]
 
 [dependencies]
-zgx = { path = "../zgx", version = "0.1.3" }
-zgx-components = { path = "../zgx-components", version = "0.1.3", optional = true }
+zgx = { path = "../zgx", version = "0.1.10", default-features = false }
+zgx-components = { path = "../zgx-components", version = "0.1.10", optional = true }
+zgx-3d = { path = "../zgx-3d", version = "0.1.10", optional = true }
 # Image decoding for `ui.image` (PNG, JPEG).
-zgx-gpu = { path = "../zgx-gpu", version = "0.1.3", default-features = false }
-mlua = { package = "zgx-mlua", version = "0.12.4", path = "../../vendor/mlua", features = ["luau"] }
+zgx-gpu = { path = "../zgx-gpu", version = "0.1.10", default-features = false }
+mlua = { package = "zgx-mlua", version = "0.12.7", path = "../../vendor/mlua", features = ["luau"] }
 memchr = "2.7"
 # `.luaurc` aliases for `require("@alias/...")`.
 serde_json = "1"
 # Markdown for `ui.markdown` and `zgx_script::markdown`.
 pulldown-cmark = { version = "0.13", default-features = false }
 smallvec = "1.16"
+# Small integer keys (nodes) hashed by a multiply, not SipHash.
+rustc-hash = "2.1"
 # Devtools' snapshots (`inspect`).
 png = { version = "0.18", optional = true }
+# `zgx lint`'s plural cases: each locale's CLDR categories (`i18n-plural`),
+# in every build. The formatters stay behind the `i18n` feature.
+icu_plurals = { version = "~2.4", default-features = false, features = ["compiled_data"] }
+icu_locale_core = { version = "~2.4", default-features = false }
 
 # The script time budget counts the thread's CPU time (clock_gettime).
 [target.'cfg(unix)'.dependencies]
@@ -71,10 +94,38 @@ path = "examples/layout_bench.rs"
 name = "script_web_view"
 path = "examples/web_view.rs"
 
+[[example]]
+name = "scene3d"
+required-features = ["scene3d"]
+
 [dev-dependencies]
 zgx-desktop = { path = "../zgx-desktop" }
 # The benchmark workload of the vlist_luau example.
 zgx-workload = { path = "../../comparisons/workload" }
+
+[[test]]
+name = "luau_pages"
+path = "tests/luau_pages.rs"
+
+[[test]]
+# Its own process: it counts with `ZGX_PROFILE` (`zgx::profile::take`).
+name = "md_chunk_flat"
+path = "tests/md_chunk_flat.rs"
+
+[[test]]
+# Its own process: it counts with `ZGX_PROFILE` (`zgx::profile::take`).
+name = "md_chunk_flat_render"
+path = "tests/md_chunk_flat_render.rs"
+
+[[test]]
+# Its own process: what `compile_ahead` compiled is the process's.
+name = "compile_ahead"
+path = "tests/compile_ahead.rs"
+
+[[test]]
+# Its own process: the packages' compiled modules are the process's.
+name = "package_bytecode"
+path = "tests/package_bytecode.rs"
 
 [[test]]
 name = "anime"
@@ -101,6 +152,10 @@ name = "soak"
 path = "tests/soak.rs"
 
 [[test]]
+name = "streamed_memory"
+path = "tests/streamed_memory.rs"
+
+[[test]]
 name = "bundle"
 path = "tests/bundle.rs"
 
@@ -112,3 +167,6 @@ path = "tests/ask_ui_snapshots.rs"
 [[test]]
 name = "navbar_snapshots"
 path = "tests/navbar_snapshots.rs"
+[[test]]
+name = "reload_memory"
+path = "tests/reload_memory.rs"

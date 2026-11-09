@@ -1,5 +1,9 @@
 //! Scrolling and virtual lists. One test binary for the area (see AGENTS.md):
 //! a test file goes in the group for its area, listed here.
+#[path = "../composition_list_edges.rs"]
+mod composition_list_edges;
+#[path = "../composition_list_end.rs"]
+mod composition_list_end;
 #[path = "../composition_measured_list.rs"]
 mod composition_measured_list;
 #[path = "../composition_scroll.rs"]
@@ -14,6 +18,10 @@ mod composition_virtual_list;
 mod elastic_scrolling;
 #[path = "../keyboard_scrolling.rs"]
 mod keyboard_scrolling;
+#[path = "../list_wheel_lines.rs"]
+mod list_wheel_lines;
+#[path = "../navigation_swipes.rs"]
+mod navigation_swipes;
 #[path = "../overlay_scrollbars.rs"]
 mod overlay_scrollbars;
 #[path = "../scroll_latching.rs"]

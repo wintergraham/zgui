@@ -38,11 +38,78 @@ pub(crate) fn discard_native_composition(window: &winit::window::Window) {
 }
 
 /// Native composition permission follows editability, not logical focus.
+/// The editor an input method composes into: focused, editable, and not a
+/// password's. A password field takes no input method, as browsers' don't
+/// (Chrome turns it off there on every platform): its keys type their
+/// characters, nothing composes them where a candidate window shows them.
 pub(crate) fn editable_editor(ui: &Ui, native_focused: bool) -> Option<zgx::widgets::EditorHandle> {
     native_focused
         .then(|| ui.focused_editor())
         .flatten()
-        .filter(|editor| !editor.is_read_only())
+        .filter(|editor| !editor.is_read_only() && !editor.is_secure())
+}
+
+/// What an input method is told an editor takes (winit's `ImePurpose`, a
+/// Wayland text-input-v3 content purpose) for its `InputMode`. Wayland has
+/// no search purpose or one with no on-screen keyboard: those are normal.
+/// The purposes past `Normal` are the vendored winit's (`zgx_winit_patched`);
+/// with crates.io's, every field is normal.
+#[cfg(not(zgx_winit_patched))]
+pub(crate) fn ime_purpose(_: zgx::text_edit::InputMode) -> winit::window::ImePurpose {
+    winit::window::ImePurpose::Normal
+}
+/// What an input method is told an editor takes (winit's `ImePurpose`, a
+/// Wayland text-input-v3 content purpose) for its `InputMode`. Wayland has
+/// no search purpose or one with no on-screen keyboard: those are normal.
+#[cfg(zgx_winit_patched)]
+pub(crate) fn ime_purpose(mode: zgx::text_edit::InputMode) -> winit::window::ImePurpose {
+    use winit::window::ImePurpose;
+    use zgx::text_edit::InputMode;
+    match mode {
+        InputMode::Text | InputMode::Search | InputMode::None => ImePurpose::Normal,
+        InputMode::Email => ImePurpose::Email,
+        InputMode::Url => ImePurpose::Url,
+        InputMode::Decimal => ImePurpose::Number,
+        InputMode::Numeric => ImePurpose::Digits,
+        InputMode::Tel => ImePurpose::Phone,
+    }
+}
+
+/// Whether a password field has the keyboard: on macOS the host turns on
+/// secure keyboard entry meanwhile (`secure_input`), as Chrome and AppKit's
+/// secure text fields do, so no other process reads what it types.
+pub(crate) fn password_focused(ui: &Ui, native_focused: bool) -> bool {
+    native_focused
+        && ui
+            .focused_editor()
+            .is_some_and(|editor| editor.is_secure() && !editor.is_read_only())
+}
+
+/// macOS's secure keyboard entry (`EnableSecureEventInput`), on or off: on
+/// while a password field has the keyboard. HIToolbox has the functions and
+/// AppKit has loaded it already, so they're looked up rather than linked
+/// (no framework loaded at startup for them).
+#[cfg(target_os = "macos")]
+pub(crate) fn secure_input(on: bool) {
+    use std::ffi::{c_char, c_void};
+    unsafe extern "C" {
+        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    }
+    // RTLD_DEFAULT on Apple's platforms.
+    let default = -2isize as *mut c_void;
+    let name: &[u8] = match on {
+        true => b"EnableSecureEventInput\0",
+        false => b"DisableSecureEventInput\0",
+    };
+    // SAFETY: a lookup by a nul-terminated name; the function, when found,
+    // takes nothing and returns an OSStatus.
+    unsafe {
+        let function = dlsym(default, name.as_ptr().cast());
+        if !function.is_null() {
+            let function: extern "C" fn() -> i32 = std::mem::transmute(function);
+            function();
+        }
+    }
 }
 
 /// A reset must cross both native context notifications before accepting text.
@@ -200,6 +267,38 @@ fn preedit_cursor(text: &str, cursor: Option<(usize, usize)>) -> Option<(usize, 
 mod tests {
     use super::*;
     use crate::focus_memory::FocusMemory;
+
+    /// An editor's input mode is what its input method hears it takes:
+    /// Wayland's content purposes, the rest normal.
+    #[test]
+    fn input_modes_are_content_purposes() {
+        use winit::window::ImePurpose;
+        use zgx::text_edit::InputMode;
+        let purposes = [
+            InputMode::Text,
+            InputMode::Decimal,
+            InputMode::Numeric,
+            InputMode::Tel,
+            InputMode::Search,
+            InputMode::Email,
+            InputMode::Url,
+            InputMode::None,
+        ]
+        .map(ime_purpose);
+        assert_eq!(
+            purposes,
+            [
+                ImePurpose::Normal,
+                ImePurpose::Number,
+                ImePurpose::Digits,
+                ImePurpose::Phone,
+                ImePurpose::Normal,
+                ImePurpose::Email,
+                ImePurpose::Url,
+                ImePurpose::Normal,
+            ]
+        );
+    }
 
     #[test]
     fn rapid_read_only_toggle_keeps_native_reset_boundary() {
@@ -585,5 +684,29 @@ mod tests {
             None
         );
         assert_eq!(second_value.get(), "新");
+    }
+
+    /// A password field takes no input method (its keys type their
+    /// characters), and counts as having the keyboard for secure input.
+    #[test]
+    fn a_password_field_takes_no_input_method() {
+        let mut ui = Ui::new(400., 200.);
+        let value = ui.signal(String::new());
+        let editor = ui.text_input(ui.root(), "Password", value, 300., false);
+        ui.input.focus(&ui.scene, Some(editor.node));
+        assert_eq!(editable_editor(&ui, true).unwrap().node, editor.node);
+        assert!(!password_focused(&ui, true));
+        editor.set_secure(true);
+        assert!(
+            editable_editor(&ui, true).is_none(),
+            "no input method composes a password"
+        );
+        assert!(password_focused(&ui, true));
+        assert!(
+            !password_focused(&ui, false),
+            "not while the window doesn't have the keyboard"
+        );
+        editor.set_read_only(true);
+        assert!(!password_focused(&ui, true));
     }
 }

@@ -48,7 +48,7 @@ local function remove()
 			end
 			confirm_open:set(false)
 		else
-			removal_error:set(err)
+			removal_error:set(err.message)
 		end
 	end)
 end
@@ -136,6 +136,7 @@ return ui.column {
 	ui.scroll { grow = 1, body() },
 	ui.modal {
 		open = form_open,
+		label = "Member",
 		w = 420,
 		-- Built each time it opens: a new form, its fields starting from the
 		-- person edited.

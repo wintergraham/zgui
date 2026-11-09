@@ -20,12 +20,12 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "results.json").unlink(missing_ok=True)
-    xvfb = wm = app = None
+    xvfb = wm = compositor = app = None
     with tempfile.TemporaryDirectory(prefix="zgx-effects-") as runtime:
         try:
             with (args.output / "xvfb.log").open("w") as log:
                 xvfb = subprocess.Popen(["Xvfb", "-r", "-noreset", "-displayfd", "1", "-screen", "0", "1200x900x24", "-ac"], stdout=subprocess.PIPE, stderr=log, text=True)
-                if not select.select([xvfb.stdout], [], [], 8)[0]:
+                if not select.select([xvfb.stdout], [], [], 30)[0]:
                     raise RuntimeError("owned Xvfb startup timed out")
                 display = ":" + xvfb.stdout.readline().strip()
             env = dict(os.environ, DISPLAY=display, WINIT_X11_SCALE_FACTOR="1", ZGX_SECONDS="30", XDG_RUNTIME_DIR=runtime, XDG_CONFIG_HOME=runtime + "/config", XDG_CACHE_HOME=runtime + "/cache", GSETTINGS_BACKEND="memory", DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent")
@@ -34,6 +34,14 @@ def main():
             with (args.output / "openbox.log").open("w") as log:
                 wm = subprocess.Popen(["openbox"], env=env, stdout=log, stderr=log)
             wait_for_wm(env)
+            # A compositor: with none, the system reports reduced transparency,
+            # and a backdrop blur paints opaque, unblurred.
+            config = args.output / "picom.conf"
+            config.write_text('backend = "xrender"; shadow = false; fading = false; unredir-if-possible = false;\n')
+            with (args.output / "picom.log").open("w") as log:
+                compositor = subprocess.Popen(["picom", "--config", str(config)], env=env, stdout=log, stderr=log)
+            time.sleep(.5)
+            assert compositor.poll() is None, "picom exited"
             output = args.output / "effects.log"
             with output.open("w") as log:
                 app = subprocess.Popen([str(args.binary.resolve()), "--smoke-test"], env=env, stdout=log, stderr=log)
@@ -80,33 +88,44 @@ def main():
                 def difference(a, b):
                     pixels = ImageChops.difference(a, b).tobytes()
                     return sum(max(pixel) > 3 for pixel in zip(pixels[0::3], pixels[1::3], pixels[2::3]))
+                def changed(name, before):
+                    # The capture, once it differs from `before`. A report
+                    # says what the app holds; the frame showing it comes
+                    # later on a loaded runner (software Vulkan, a 24 point
+                    # blur), or never, which the assertions after this catch.
+                    deadline = time.monotonic() + 10
+                    while True:
+                        image = capture(name)
+                        if difference(before, image) > 100 or time.monotonic() > deadline:
+                            return image
+                        time.sleep(.1)
                 reports = {"initial": report(lambda r: r["blur"] == 10)}
                 initial = capture("initial")
                 assert reports["initial"]["blur"] == 10 and reports["initial"]["opacity"] == .88, reports
                 click(760, 286)
                 xdo("key", "Home")
                 reports["no_blur"] = report(lambda r: r["blur"] == 0)
-                no_blur = capture("no-blur")
+                no_blur = changed("no-blur", initial)
                 assert reports["no_blur"]["blur"] == 0, reports
                 changes = {"blur": difference(initial, no_blur)}
                 assert changes["blur"] > 100, changes
                 click(760, 368)
                 xdo("key", "End")
                 reports["fade"] = report(lambda r: r["fade"] == 80)
-                faded = capture("fade")
+                faded = changed("fade", no_blur)
                 assert reports["fade"]["fade"] == 80, reports
                 changes["fade"] = difference(no_blur, faded)
                 assert changes["fade"] > 100, changes
                 click(760, 204)
                 xdo("key", "Home")
                 reports["hidden"] = report(lambda r: r["opacity"] == 0)
-                hidden = capture("hidden")
+                hidden = changed("hidden", faded)
                 assert reports["hidden"]["opacity"] == 0, reports
                 changes["opacity"] = difference(faded, hidden)
                 assert changes["opacity"] > 100, changes
                 xdo("key", "End")
                 reports["restored"] = report(lambda r: r["opacity"] == 1)
-                restored = capture("restored")
+                restored = changed("restored", hidden)
                 assert reports["restored"]["opacity"] == 1, reports
                 assert difference(hidden, restored) > 100
                 click(760, 286)
@@ -116,8 +135,7 @@ def main():
                 restored = capture("blur-restored")
                 click(680, 412)
                 reports["moving"] = report(lambda r: r["animate"] and abs(r["x"] - 120) > 1)
-                time.sleep(.25)
-                moving = capture("moving")
+                moving = changed("moving", restored)
                 assert reports["moving"]["animate"] and abs(reports["moving"]["x"] - 120) > 1, reports
                 changes["animation"] = difference(restored, moving)
                 assert changes["animation"] > 100, changes
@@ -136,7 +154,7 @@ def main():
             (args.output / "results.json").write_text(json.dumps(dict(passed=True, backend="owned X11/Xvfb/Openbox", timed_close=True, reports=reports, changed_pixels=changes), indent=2) + "\n")
             print("Native declarative effects checks passed")
         finally:
-            for process in (app, wm, xvfb):
+            for process in (app, compositor, wm, xvfb):
                 stop(process)
 
 

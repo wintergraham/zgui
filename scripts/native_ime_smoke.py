@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
 """Drive an owned IBus/libpinyin XIM session with actual native key events.
 
+`--password`: the first editor is a password field. Pinyin typed into it
+types its letters (no preedit, nothing composed), as a browser's password
+field takes no input method.
+
 `--server-gone`: the input method's server (ibus-x11) goes while a focus
 for the app is queued behind it (the app stopped meanwhile), as when IBus
 went as a window closed (#564); the app takes the focus without waiting on
-the server, stays responsive, and closes on Alt+F4."""
+the server, stays responsive, and closes on Alt+F4.
+
+`--server-stopped`: the input method's server is there but answers nothing
+(ibus-x11 stopped) as the app closes its focused window. Closing must not
+wait on it: the app exits (#564, a closing window blocked in a synchronous
+XIM round trip, its server alive)."""
 import argparse
 import json
 import os
@@ -18,6 +27,27 @@ import tempfile
 import time
 
 from platform_smoke import release_mounts, stop, wait_for_wm, use_ibus_engine, wait_for_ibus_xim, wait_for_exit, close_window
+
+
+def password(env, app, window, xdo, key, type_text, output):
+    """Pinyin into a password field: the letters themselves, nothing composed."""
+    type_text('nihao'); key('space')
+    deadline = time.monotonic() + 10
+    while True:
+        log = (output/'application.log').read_text()
+        models = re.findall(r'MODEL \d+ first=(".*?") second=', log)
+        if models and json.loads(models[-1]) == 'nihao ':
+            break
+        if time.monotonic() > deadline:
+            raise AssertionError(f'the password field took {models[-1:] or "nothing"}, not the letters typed')
+        time.sleep(.1)
+    composed = [line for line in log.splitlines() if line.startswith(('PREEDIT first', 'COMMIT first'))]
+    if composed:
+        raise AssertionError(f'an input method composed into the password field: {composed}')
+    xdo('windowactivate', window); time.sleep(.3); xdo('key', 'alt+F4')
+    wait_for_exit(app, env, output, 10)
+    (output/'result.json').write_text(json.dumps({'result': 'pass'}, indent=2)+'\n')
+    print('PASS: pinyin typed into a password field typed its letters; no input method composed there')
 
 
 def server_gone(env, app, window, xdo, key, type_text, output):
@@ -67,11 +97,38 @@ def server_gone(env, app, window, xdo, key, type_text, output):
     print('PASS: the input method gone with a focus queued, the app took it, answered and closed')
 
 
+def server_stopped(env, app, window, xdo, key, type_text, output):
+    """ibus-x11 stopped, alive but answering nothing, as the app's focused
+    window closes: the app must exit, its close waiting on no round trip to
+    the input method."""
+    from platform_smoke import display_processes
+    type_text('nihao'); key('space')
+    deadline = time.monotonic() + 10
+    while 'COMMIT first "你好"' not in (output/'application.log').read_text():
+        if time.monotonic() > deadline: raise AssertionError('the composition did not commit')
+        time.sleep(.05)
+    servers = display_processes(env, 'ibus-x11')
+    if not servers: raise AssertionError("no ibus-x11 on the probe's display")
+    xdo('windowactivate', '--sync', window); time.sleep(.5)
+    for pid in servers: os.kill(pid, signal.SIGSTOP)
+    try:
+        # The app closes its focused window itself (ZGX_SECONDS): hidden,
+        # it loses the focus, and its input context goes, the server
+        # answering nothing.
+        wait_for_exit(app, env, output, 20)
+    finally:
+        for pid in servers: os.kill(pid, signal.SIGCONT)
+    (output/'result.json').write_text(json.dumps({'result': 'pass', 'stopped': servers}, indent=2)+'\n')
+    print('PASS: the input method answering nothing, the app\'s window closed and it exited')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('binary', type=pathlib.Path)
     parser.add_argument('--output', type=pathlib.Path, required=True)
     parser.add_argument('--server-gone', action='store_true', help="ibus-x11 goes with a focus queued (#564)")
+    parser.add_argument('--password', action='store_true', help="a password field takes no input method")
+    parser.add_argument('--server-stopped', action='store_true', help="ibus-x11 answers nothing as the window closes (#564)")
     args = parser.parse_args()
     for executable in ('Xvfb', 'openbox', 'dbus-daemon', 'gsettings', 'ibus-daemon', 'ibus', 'xdotool', 'xwininfo'):
         if shutil.which(executable) is None:
@@ -87,7 +144,7 @@ def main():
         try:
             with (args.output / 'xvfb.log').open('w') as log:
                 xvfb = subprocess.Popen(['Xvfb', '-r', '-noreset', '-displayfd', '1', '-screen', '0', '1024x768x24', '-ac'], stdout=subprocess.PIPE, stderr=log, text=True)
-                if not select.select([xvfb.stdout], [], [], 10)[0]:
+                if not select.select([xvfb.stdout], [], [], 30)[0]:
                     raise RuntimeError('Xvfb startup timed out')
                 display = ':' + xvfb.stdout.readline().strip()
             env = dict(os.environ, DISPLAY=display, XDG_RUNTIME_DIR=private,
@@ -131,7 +188,12 @@ def main():
             def xdo(*arguments):
                 return subprocess.check_output(['xdotool', *map(str,arguments)], env=env, text=True).strip()
             with (args.output / 'application.log').open('w') as output:
-                app = subprocess.Popen([str(args.binary.resolve())], env=env, stdout=output, stderr=output)
+                # --server-stopped: the app closes its own window (after 12 s),
+                # as it would quitting: no key and no window manager grab in
+                # flight to the stopped input method.
+                app_env = dict(env, ZGX_SECONDS='12') if args.server_stopped else env
+                app = subprocess.Popen([str(args.binary.resolve())] + (['--password'] if args.password else []),
+                                       env=app_env, stdout=output, stderr=output)
                 deadline=time.monotonic()+20
                 while True:
                     found=subprocess.run(['xdotool','search','--onlyvisible','--pid',str(app.pid)],env=env,capture_output=True,text=True)
@@ -179,6 +241,7 @@ def main():
                     values += [re.search(r'DISPLAY '+label+r' (".*?") Rect', tick) for label in ('first', 'second')]
                     if not all(values): return None
                     return (*map(json.loads, values[0].groups()), json.loads(values[1].group(1)), json.loads(values[2].group(1)))
+                nudges = []
                 def capture(stage, follows=None):
                     # A tick that begins after the input settled: one printed
                     # before a late preedit arrived shows the one before it.
@@ -190,11 +253,22 @@ def main():
                     settled = len((args.output/'application.log').read_text())
                     # The app may be writing it: read until it is whole.
                     deadline = time.monotonic()+5
+                    nudge_at = time.monotonic()+1.5
                     while True:
                         trace = (args.output/'application.log').read_text()
                         tick = trace[trace.rfind('MODEL '):]
                         whole = trace.rfind('MODEL ') >= settled and tick.count('DISPLAY ') == 2 and tick.count('CARET ') == 2
                         if (whole and shown(tick) == expected[stage-1]) or time.monotonic()>deadline: break
+                        # ibus-x11 1.5.29, asynchronous, can hold a preedit
+                        # update until its next XIM event: IBus sent 我, and
+                        # no ClientMessage reached the app for 6 s, until a
+                        # click (2 of 160 runs, traced on both sides). One key
+                        # that means nothing to libpinyin lets it go. What
+                        # the app shows after that is still checked.
+                        if nudge_at is not None and time.monotonic()>nudge_at:
+                            nudge_at = None
+                            nudges.append(stage)
+                            xdo('key','F24')
                         if whole:
                             # The next tick (the example prints one each half
                             # second).
@@ -223,11 +297,18 @@ def main():
                         sample['candidates'] = found
                     snapshots.append(sample)
                     ImageGrab.grab(xdisplay=display).save(args.output/f'ime-{stage}.png')
-                    (args.output/f'windows-{stage}.log').write_text(subprocess.check_output(['xwininfo','-root','-tree'],env=env,text=True))
+                    # Evidence: a popup closing as xwininfo walks the tree fails it, and that fails nothing here.
+                    (args.output/f'windows-{stage}.log').write_text(subprocess.run(['xwininfo','-root','-tree'],env=env,text=True,capture_output=True).stdout)
                 click(100,82)
                 use_ibus_engine(env,'libpinyin',ime)
                 if args.server_gone:
                     server_gone(env, app, window, xdo, key, type_text, args.output)
+                    return
+                if args.password:
+                    password(env, app, window, xdo, key, type_text, args.output)
+                    return
+                if args.server_stopped:
+                    server_stopped(env, app, window, xdo, key, type_text, args.output)
                     return
                 type_text('nihao');capture(1,'first')
                 key('space');capture(2)
@@ -261,7 +342,7 @@ def main():
                 if not any(abs(r['x']-desired_x)<=3 and abs(r['y']-desired_y)<=3 for r in sample['candidates']):
                     raise AssertionError(f'Candidate does not follow caret below text: {sample!r}')
             if text.count('COMMIT ') != 2: raise AssertionError('Unexpected extra commit: '+text)
-            result={'result':'pass' ,'backend':'X11 XIM / IBus libpinyin','ibus_enable_sync_mode':env['IBUS_ENABLE_SYNC_MODE'],'ibus_version':subprocess.check_output(['ibus','version'],env=env,text=True).strip(),'limitations':['IBus 1.5.29 default synchronous bridge omits preedit lifecycle signals; this run explicitly uses the asynchronous bridge.'],'checks':['native preedit','Unicode commits','Escape cancellation','focus switch cancellation','separate editor models','candidate popup follows caret below text'],'snapshots':snapshots}
+            result={'result':'pass' ,'backend':'X11 XIM / IBus libpinyin','ibus_enable_sync_mode':env['IBUS_ENABLE_SYNC_MODE'],'nudged_stages':nudges,'ibus_version':subprocess.check_output(['ibus','version'],env=env,text=True).strip(),'limitations':['IBus 1.5.29 default synchronous bridge omits preedit lifecycle signals; this run explicitly uses the asynchronous bridge.'],'checks':['native preedit','Unicode commits','Escape cancellation','focus switch cancellation','separate editor models','candidate popup follows caret below text'],'snapshots':snapshots}
             (args.output/'result.json').write_text(json.dumps(result,indent=2)+'\n')
             print('PASS: '+', '.join(result['checks']))
         finally:

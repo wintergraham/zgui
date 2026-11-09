@@ -81,8 +81,68 @@ pub(crate) enum PopupInput {
 
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{
-    PopupHost, content_origin, enabled, popup_screens, server_move, warm, window_at, window_number,
+    PopupHost, content_origin, enabled, popup_backdrops, popup_screens, server_move, warm,
+    window_at, window_number,
 };
+
+/// Whether anything in `node`'s subtree blurs what's behind it: what a
+/// popup's window then blurs is its parent's last frame
+/// (`GpuRenderer::set_backdrop`), a window of its own holding nothing of the
+/// app's.
+#[cfg(any(windows, target_os = "linux"))]
+fn blurs(scene: &zgx::scene::Scene, node: zgx::scene::NodeId) -> bool {
+    scene.effects(node).blur_radius > 0.
+        || scene
+            .children(node)
+            .iter()
+            .any(|child| blurs(scene, *child))
+}
+
+/// One line of a memory report for the popups' renderers, however a
+/// backend holds them: each has textures of its own.
+#[allow(dead_code)]
+fn report_popups<'a>(
+    renderers: impl Iterator<Item = &'a zgx_gpu::GpuRenderer>,
+    report: &mut zgx::memory::Report,
+) {
+    let (mut count, mut bytes) = (0, 0);
+    for renderer in renderers {
+        let mut own = zgx::memory::Report::default();
+        renderer.memory(&mut own);
+        let held = own.lines.iter().filter(|line| line.area == "gpu");
+        bytes += held.filter_map(|line| line.bytes).sum::<usize>();
+        count += 1;
+    }
+    report.add("gpu", "popup windows", Some(count), Some(bytes));
+}
+
+/// Popup `root`'s panel: what it holds, or, through boxes that paint
+/// nothing and hold one thing (a node tooltip's clear layer and the column it
+/// fades), the one they hold: a hover card is its own panel, its shadow and
+/// its translucent fill seen as a menu's are. What the system's material
+/// goes behind (macOS) and DWM frames (Windows).
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
+fn panel_of(scene: &zgx::scene::Scene, root: zgx::scene::NodeId) -> Option<zgx::scene::NodeId> {
+    use zgx::scene::NodeKind;
+    let mut panel = *scene.children(root).first()?;
+    for _ in 0..4 {
+        let clear = match scene.kind(panel) {
+            NodeKind::Container(_) => true,
+            NodeKind::Quad(quad) => {
+                quad.fill.3 == 0
+                    && quad.border_width == 0.
+                    && (quad.decoration.as_ref()).is_none_or(|d| d.background.is_none())
+                    && quad.shadows().iter().all(|shadow| shadow.color.3 == 0)
+            }
+            _ => false,
+        };
+        match scene.children(panel) {
+            [only] if clear => panel = *only,
+            _ => break,
+        }
+    }
+    Some(panel)
+}
 
 #[cfg(windows)]
 mod win32;
@@ -118,6 +178,25 @@ pub(crate) fn set_zoom(window: winit::window::WindowId, zoom: f64) {
         }
     });
 }
+/// A popup's box `rect`, in the scene's points, in its window's at `zoom`:
+/// where its own window goes (macOS, Wayland; Windows and X11 fold the zoom
+/// into their scale).
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+pub(crate) fn window_rect(rect: zgx::scene::Rect, zoom: f32) -> zgx::scene::Rect {
+    zgx::scene::Rect::new(
+        rect.x * zoom,
+        rect.y * zoom,
+        rect.width * zoom,
+        rect.height * zoom,
+    )
+}
+/// A point `local` in a popup's own window points (from its box's top-left,
+/// at `origin` in the scene's) as the scene's at `zoom`: where its input
+/// goes.
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+pub(crate) fn scene_point(origin: (f32, f32), local: (f32, f32), zoom: f32) -> (f32, f32) {
+    (origin.0 + local.0 / zoom, origin.1 + local.1 / zoom)
+}
 /// Window `window`'s zoom: what its content points are of its own.
 pub(crate) fn zoom_of(window: winit::window::WindowId) -> f64 {
     ZOOMS.with(|zooms| {
@@ -152,6 +231,72 @@ pub(crate) fn points_at(at: (f64, f64), origin: (f64, f64), scale: f64) -> (f64,
 /// A window's point `at` (its content at `origin`) in global units.
 pub(crate) fn global_at(at: (f64, f64), origin: (f64, f64), scale: f64) -> (f64, f64) {
     (origin.0 + at.0 * scale, origin.1 + at.1 * scale)
+}
+
+#[cfg(test)]
+mod zoom_tests {
+    use super::*;
+    use zgx::{compose::prelude::*, scene::Rect, widgets::Ui};
+
+    /// A window at 90%: a menu the scene has at (500, 400), 200 by 100, has
+    /// its own window at the content's (450, 360), 180 by 90; and a point of
+    /// that window is the scene's where it shows.
+    #[test]
+    fn a_popup_window_is_placed_and_hit_at_its_windows_zoom() {
+        let zoom = 0.9;
+        let placed = window_rect(Rect::new(500., 400., 200., 100.), zoom);
+        assert_eq!(placed, Rect::new(450., 360., 180., 90.));
+        // Its middle, in its own window points, is the scene's middle.
+        assert_eq!(scene_point((500., 400.), (90., 45.), zoom), (600., 450.));
+        assert_eq!(scene_point((500., 400.), (90., 45.), 1.), (590., 445.));
+    }
+
+    /// An open menu shown in a window of its own, its window at 90% and at
+    /// 125%: a click on its second item, in that window's points, reaches
+    /// that item.
+    #[test]
+    fn a_click_in_a_zoomed_popup_window_lands_on_its_item() {
+        for zoom in [0.9, 1.25] {
+            let mut ui = Ui::new(400., 200.);
+            ui.set_popup_screens(vec![Rect::new(0., 0., 1000., 800.)]);
+            let open = ui.signal(true);
+            let view = ui.mount(
+                column().p(20.).child(
+                    menu(
+                        "Actions",
+                        open,
+                        button().size(80., 20.).child(text("Actions")),
+                    )
+                    .children([
+                        menu_item("First").id("first"),
+                        menu_item("Second").id("second"),
+                    ]),
+                ),
+            );
+            ui.prepare_frame();
+            let scene = ui.scene.borrow();
+            let root = *scene
+                .popups()
+                .first()
+                .expect("shown in a window of its own");
+            let bounds = scene.popup_bounds(root).unwrap();
+            let window = window_rect(bounds, zoom);
+            assert!((window.width - bounds.width * zoom).abs() < 1e-3);
+            let second = view.find("second").unwrap();
+            let item = scene.bounds(second);
+            // The item's middle, in the popup window's own points.
+            let local = (
+                (item.x + item.width / 2. - bounds.x) * zoom,
+                (item.y + item.height / 2. - bounds.y) * zoom,
+            );
+            let (x, y) = scene_point((bounds.x, bounds.y), local, zoom);
+            let hit = scene.hit_test(x, y).expect("something under it");
+            assert!(
+                hit == second || scene.is_within(hit, second),
+                "at {zoom}: the click lands on the second item"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -194,6 +339,10 @@ mod other {
         pub fn showing(&self) -> bool {
             false
         }
+        pub fn deadline(&self) -> Option<std::time::Instant> {
+            None
+        }
+        pub fn memory(&self, _: &mut zgx::memory::Report) {}
         #[allow(clippy::too_many_arguments)]
         pub fn update(
             &mut self,
@@ -205,6 +354,7 @@ mod other {
             _: bool,
             _: Option<&zgx::input::DragState>,
             _: Option<zgx::input::DragEnded>,
+            _: &dyn Fn(zgx::scene::NodeId) -> Option<bool>,
         ) -> Result<(), zgx_gpu::GpuError> {
             Ok(())
         }
@@ -248,7 +398,7 @@ mod other {
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use super::PopupInput;
+    use super::{PopupInput, panel_of};
     use objc2::{
         DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
         runtime::AnyObject,
@@ -297,8 +447,27 @@ mod macos {
     #[derive(Default)]
     pub(crate) struct Target {
         origin: Cell<(f32, f32)>,
+        /// Its parent window's zoom (`zoom_of`): the scene's points are the
+        /// window's divided by it. Unset (0) is 1.
+        zoom: Cell<f32>,
         send: RefCell<Option<Sink>>,
         parent: RefCell<Option<Retained<NSWindow>>>,
+    }
+    impl Target {
+        fn zoom(&self) -> f32 {
+            match self.zoom.get() {
+                zoom if zoom > 0. => zoom,
+                _ => 1.,
+            }
+        }
+    }
+    /// `rect`, in the scene's points, in its window's at `zoom`.
+    fn local(rect: Rect, zoom: f32) -> NSRect {
+        let rect = super::window_rect(rect, zoom);
+        NSRect::new(
+            NSPoint::new(rect.x as f64, rect.y as f64),
+            NSSize::new(rect.width as f64, rect.height as f64),
+        )
     }
     // SAFETY: an NSView subclass, main-thread only as views are, with nothing
     // to clean up beyond its ivars; each method has NSView's or NSResponder's
@@ -385,11 +554,15 @@ mod macos {
                 send(input);
             }
         }
-        /// `event`'s point in the parent window's coordinates.
+        /// `event`'s point in the parent window's scene coordinates (its
+        /// points divided by its zoom).
         fn point(&self, event: &NSEvent) -> (f32, f32) {
             let point = self.convertPoint_fromView(event.locationInWindow(), None);
-            let (x, y) = self.ivars().origin.get();
-            (x + point.x as f32, y + point.y as f32)
+            super::scene_point(
+                self.ivars().origin.get(),
+                (point.x as f32, point.y as f32),
+                self.ivars().zoom(),
+            )
         }
         fn button(&self, event: &NSEvent, button: MouseButton, pressed: bool) {
             let (x, y) = self.point(event);
@@ -468,6 +641,10 @@ mod macos {
         /// A popover's arrow (`View::arrow`): its triangle past the panel's
         /// edge, in its window's coordinates.
         arrow: Option<[(f32, f32); 3]>,
+        /// How opaque the panel is, through what holds it (a tooltip's fade):
+        /// the material fades with it, so it never outlives the panel's
+        /// content (an empty pane of glass as a tooltip fades out).
+        alpha: f32,
     }
     impl Material {
         /// For popup root `root`: its panel (what the root holds) is a box
@@ -479,12 +656,20 @@ mod macos {
             let panel = if preview {
                 root
             } else {
-                *scene.children(root).first()?
+                panel_of(scene, root)?
             };
             let (NodeKind::Quad(quad) | NodeKind::Panel { quad, .. }) = scene.kind(panel) else {
                 return None;
             };
             if quad.fill.3 == 255 || (preview && scene.effects(panel).blur_radius <= 0.) {
+                return None;
+            }
+            let alpha = std::iter::once(panel)
+                .chain(scene.ancestors(panel).take_while(|node| *node != root))
+                .chain(std::iter::once(root))
+                .map(|node| scene.effects(node).opacity.clamp(0., 1.))
+                .product::<f32>();
+            if alpha <= 0. {
                 return None;
             }
             let menu = semantics
@@ -519,9 +704,22 @@ mod macos {
                     NSVisualEffectMaterial::Popover
                 },
                 arrow,
+                alpha,
             })
         }
         /// Moved by `(dx, dy)`.
+        /// In its window's points at `zoom`, from the scene's.
+        fn zoomed(mut self, zoom: f32) -> Self {
+            self.rect = super::window_rect(self.rect, zoom);
+            self.radius *= zoom;
+            if let Some(arrow) = &mut self.arrow {
+                for (x, y) in arrow {
+                    *x *= zoom;
+                    *y *= zoom;
+                }
+            }
+            self
+        }
         fn moved(mut self, dx: f32, dy: f32) -> Self {
             self.rect.x += dx;
             self.rect.y += dy;
@@ -534,6 +732,15 @@ mod macos {
             self
         }
         /// Its box: the panel's, and the arrow's.
+        /// Its box (arrow and all) and corner radius, -1 when its arrow's
+        /// mask shapes it (`popup_backdrops`).
+        fn report(&self) -> (Rect, f32) {
+            let radius = match self.arrow {
+                Some(_) => -1.,
+                None => self.radius,
+            };
+            (self.bounds(), radius)
+        }
         fn bounds(&self) -> Rect {
             let mut bounds = self.rect;
             for (x, y) in self.arrow.into_iter().flatten() {
@@ -544,6 +751,22 @@ mod macos {
                 bounds.height = bottom.max(y) - bounds.y;
             }
             bounds
+        }
+    }
+    /// Whether the window server shadows popup `root`'s window: not when
+    /// its panel paints a shadow of its own. The window then takes in that
+    /// shadow's ink, and the window server's shadow, which follows what the
+    /// window shows, would outline the whole soft shadow (on macOS 26 a
+    /// dark rim round it) besides the panel's own.
+    fn window_shadow(scene: &Scene, root: NodeId) -> bool {
+        let Some(panel) = panel_of(scene, root) else {
+            return true;
+        };
+        match scene.kind(panel) {
+            NodeKind::Quad(quad) | NodeKind::Panel { quad, .. } => {
+                quad.shadows().iter().all(|shadow| shadow.color.3 == 0)
+            }
+            _ => true,
         }
     }
     /// A mask of `material`'s shape (its rounded box and arrow), the size of
@@ -590,12 +813,17 @@ mod macos {
         material: Option<Material>,
         host: Retained<CALayer>,
         renderer: Option<GpuRenderer>,
-        /// The scale its renderer was made for.
+        /// The scale its renderer was made for: its screen's (`backing`)
+        /// times its window's zoom.
         scale: f32,
+        /// Its screen's backing scale, found as it showed.
+        backing: f32,
         /// Its frame in its parent window's coordinates, as last placed.
         rect: Option<Rect>,
         /// Its popup root's layer revision it last drew.
         revision: Option<u64>,
+        /// Its frame's last contained panic (`contain::run`).
+        fault: Option<crate::contain::Fault>,
         /// A drag preview's: from where its preview goes to its frame.
         preview: Option<(f32, f32)>,
         /// Moved by the window server alone (`follow`), to `rect` over its
@@ -690,8 +918,10 @@ mod macos {
                 host,
                 renderer: None,
                 scale: 0.,
+                backing: 1.,
                 rect: None,
                 revision: None,
+                fault: None,
                 preview: None,
                 moved: None,
             }
@@ -722,10 +952,14 @@ mod macos {
                 return;
             }
             self.material = material;
-            match material {
+            // Drawn in the window's points, at its zoom.
+            let zoom = self.view.ivars().zoom();
+            let rect = super::window_rect(rect, zoom);
+            match material.map(|material| material.zoomed(zoom)) {
                 None => self.effect.setHidden(true),
                 Some(material) => {
                     self.effect.setMaterial(material.material);
+                    self.effect.setAlphaValue(material.alpha as f64);
                     let bounds = material.bounds();
                     self.effect.setFrame(NSRect::new(
                         NSPoint::new(
@@ -755,17 +989,15 @@ mod macos {
                 }
             }
         }
-        /// Place it at `rect` (its parent's coordinates) over `parent`.
+        /// Place it at `rect` (its parent's scene coordinates, the window's
+        /// at its zoom) over `parent`.
         fn place(&mut self, parent: &NSWindow, content: &NSView, rect: Rect) {
             self.sync();
             if self.rect == Some(rect) {
                 return;
             }
             self.rect = Some(rect);
-            let local = NSRect::new(
-                NSPoint::new(rect.x as f64, rect.y as f64),
-                NSSize::new(rect.width as f64, rect.height as f64),
-            );
+            let local = local(rect, self.view.ivars().zoom());
             let screen = parent.convertRectToScreen(content.convertRect_toView(local, None));
             self.window.setFrame_display(screen, false);
             self.view.ivars().origin.set((rect.x, rect.y));
@@ -802,6 +1034,7 @@ mod macos {
             self.material = None;
             self.rect = None;
             self.revision = None;
+            self.fault = None;
             if self.preview.take().is_some() {
                 let number = self.window.windowNumber();
                 PREVIEWS.with(|previews| previews.borrow_mut().retain(|other| *other != number));
@@ -827,6 +1060,10 @@ mod macos {
         static POOL_PANELS: RefCell<Vec<Panel>> = const { RefCell::new(Vec::new()) };
         /// Windows showing popups, by window number, and their hosts.
         static PARENTS: RefCell<Vec<(isize, Sink)>> =
+            const { RefCell::new(Vec::new()) };
+        /// What AppKit's material shows behind each translucent popup panel,
+        /// by its parent's window number and host (`popup_backdrops`).
+        static MATERIALS: RefCell<Vec<(isize, Sink, Backdrops)>> =
             const { RefCell::new(Vec::new()) };
         /// Panels showing drag previews, by window number: the pointer is
         /// over what is under them (`window_at`).
@@ -973,10 +1210,7 @@ mod macos {
     /// with the duration and ease of AppKit's drag images sliding back, then
     /// put it back in the pool.
     fn slide_back(panel: Panel, parent: &NSWindow, content: &NSView, to: Rect) {
-        let local = NSRect::new(
-            NSPoint::new(to.x as f64, to.y as f64),
-            NSSize::new(to.width as f64, to.height as f64),
-        );
+        let local = local(to, panel.view.ivars().zoom());
         let target = parent.convertRectToScreen(content.convertRect_toView(local, None));
         let window = panel.window.clone();
         let id = NEXT_FADE.with(|next| {
@@ -1198,11 +1432,11 @@ mod macos {
     }
     /// The backing scale of the screen holding `rect`'s centre (the
     /// parent's coordinates): a popup draws at the scale it shows at.
-    fn scale_at(parent: &NSWindow, content: &NSView, rect: Rect) -> Option<f32> {
+    fn scale_at(parent: &NSWindow, content: &NSView, rect: Rect, zoom: f32) -> Option<f32> {
         let local = NSRect::new(
             NSPoint::new(
-                (rect.x + rect.width / 2.) as f64,
-                (rect.y + rect.height / 2.) as f64,
+                ((rect.x + rect.width / 2.) * zoom) as f64,
+                ((rect.y + rect.height / 2.) * zoom) as f64,
             ),
             NSSize::new(0., 0.),
         );
@@ -1220,20 +1454,30 @@ mod macos {
     }
 
     /// A window's shown popups.
+    /// What each popup last showed, for `Ui::snapshot`: its root, its
+    /// surface, the surface's scale and where it lies in the scene.
+    pub(crate) type PopupFrames = Rc<RefCell<Vec<(NodeId, zgx_gpu::ShownFrame, f32, Rect)>>>;
     pub(crate) struct PopupHost {
         shown: Vec<(NodeId, Panel)>,
         send: Sink,
+        frames: PopupFrames,
     }
     impl PopupHost {
         pub fn new(send: impl Fn(PopupInput) + 'static) -> Self {
             Self {
                 shown: Vec::new(),
                 send: Rc::new(send),
+                frames: PopupFrames::default(),
             }
         }
         /// Whether any popup shows.
         pub fn showing(&self) -> bool {
             !self.shown.is_empty()
+        }
+        /// When the loop must turn for a popup's frame (none here: each
+        /// draws as it changes).
+        pub fn deadline(&self) -> Option<std::time::Instant> {
+            None
         }
         /// After the scene's flush: show each visible popup root in a panel
         /// over `window`, draw it again where it changed (its layer revision,
@@ -1251,6 +1495,8 @@ mod macos {
             full: bool,
             drag: Option<&DragState>,
             ended: Option<DragEnded>,
+            // (AppKit lets the pointer through a panel's clear pixels.)
+            _takes: &dyn Fn(NodeId) -> Option<bool>,
         ) -> Result<(), GpuError> {
             if self.shown.is_empty() && scene.popups().is_empty() {
                 return Ok(());
@@ -1261,6 +1507,9 @@ mod macos {
             let Some((parent, content)) = parent_of(window) else {
                 return Ok(());
             };
+            // Its window's zoom: the scene's points are the window's divided
+            // by it, for each panel's frame, renderer and input.
+            let zoom = super::zoom_of(window.id()) as f32;
             // A drag moving its window shows no preview: the window is it.
             let unshown = drag
                 .filter(|drag| drag.moves_window)
@@ -1271,6 +1520,9 @@ mod macos {
                 .filter(|root| Some(**root) != unshown)
                 .filter_map(|root| scene.popup_bounds(*root).map(|bounds| (*root, bounds)))
                 .collect();
+            self.frames
+                .borrow_mut()
+                .retain(|frame| wanted.iter().any(|(root, _)| *root == frame.0));
             let mut index = 0;
             while index < self.shown.len() {
                 if wanted.iter().any(|(root, _)| *root == self.shown[index].0) {
@@ -1330,11 +1582,16 @@ mod macos {
                     .find(|(shown, _)| *shown == root)
                     .expect("pushed above")
                     .1;
-                // Its screen's scale, found as it shows.
-                let scale = match new {
-                    true => scale_at(&parent, &content, bounds).unwrap_or(scale),
-                    false => panel.scale,
-                };
+                // Its screen's scale, found as it shows, times the window's
+                // zoom: the scene's points are the window's divided by it.
+                panel.view.ivars().zoom.set(zoom);
+                if new {
+                    // `scale` is the window's content scale: its screen's
+                    // times its zoom.
+                    panel.backing =
+                        scale_at(&parent, &content, bounds, zoom).unwrap_or(scale / zoom);
+                }
+                let scale = panel.backing * zoom;
                 // Popups are small: one that changed is drawn whole.
                 let revision = scene.layer_revision(root);
                 let changed = new || full || panel.revision != Some(revision);
@@ -1346,9 +1603,25 @@ mod macos {
                     .rect
                     .is_none_or(|old| (old.width, old.height) != (rect.width, rect.height));
                 if changed || resized {
+                    zgx_gpu::present_log::log(|| format!("popup draw {root:?}"));
                     let renderer = panel.renderer.as_mut().expect("made above");
-                    renderer.repaint_all();
-                    renderer.render(scene, &[])?;
+                    let drawn = crate::contain::run_frame(
+                        &mut panel.fault,
+                        revision,
+                        std::time::Instant::now(),
+                        "a popup's frame",
+                        crate::contain::queue,
+                        || {
+                            renderer.repaint_all();
+                            renderer.render(scene, &[])
+                        },
+                    );
+                    for issue in renderer.take_issues() {
+                        crate::contain::queue_issue(issue);
+                    }
+                    if let Some(drawn) = drawn {
+                        drawn?;
+                    }
                 }
                 // A drag preview's panel goes where the drag puts it; its
                 // frame is drawn where the scene has it.
@@ -1379,9 +1652,23 @@ mod macos {
                 // The frame and where it shows change together.
                 CATransaction::begin();
                 CATransaction::setDisableActions(true);
-                panel.renderer.as_mut().expect("made above").present()?;
+                let renderer = panel.renderer.as_mut().expect("made above");
+                renderer.present()?;
+                // What it shows now, for `Ui::snapshot`.
+                let mut frames = self.frames.borrow_mut();
+                frames.retain(|shown| shown.0 != root);
+                if let Some(shown) = renderer.shown_frame() {
+                    frames.push((root, shown, panel.scale, rect));
+                }
+                drop(frames);
                 panel.back(material, frame);
                 panel.place(&parent, &content, frame);
+                if panel.preview.is_none() {
+                    let shadow = window_shadow(scene, root);
+                    if panel.window.hasShadow() != shadow {
+                        panel.window.setHasShadow(shadow);
+                    }
+                }
                 if new {
                     panel.host.setHidden(false);
                 }
@@ -1421,6 +1708,16 @@ mod macos {
                     panel.window.invalidateShadow();
                 }
             }
+            let backdrops: Vec<(Rect, f32)> = (self.shown.iter())
+                .filter_map(|(_, panel)| panel.material.as_ref().map(Material::report))
+                .collect();
+            MATERIALS.with(|materials| {
+                let mut materials = materials.borrow_mut();
+                materials.retain(|(window, ..)| *window != number);
+                if !backdrops.is_empty() {
+                    materials.push((number, self.send.clone(), backdrops));
+                }
+            });
             Ok(())
         }
         /// Move the drag preview's panel to where `drag` puts it, drawing
@@ -1442,10 +1739,7 @@ mod macos {
             if panel.rect == Some(frame) {
                 return;
             }
-            let local = NSRect::new(
-                NSPoint::new(frame.x as f64, frame.y as f64),
-                NSSize::new(frame.width as f64, frame.height as f64),
-            );
+            let local = local(frame, panel.view.ivars().zoom());
             let screen = parent.convertRectToScreen(content.convertRect_toView(local, None));
             let top = flip_height(MainThreadMarker::from(&*parent))
                 - (screen.origin.y + screen.size.height);
@@ -1470,8 +1764,12 @@ mod macos {
                 width,
                 height,
                 bgra,
-                scale: panel.scale,
-                grab: (drag.x - rect.x, drag.y - rect.y),
+                // Pixels per window point, the grab in window points.
+                scale: panel.backing,
+                grab: {
+                    let zoom = panel.view.ivars().zoom();
+                    ((drag.x - rect.x) * zoom, (drag.y - rect.y) * zoom)
+                },
             })
         }
         /// Show the drag preview, or not (`None`: AppKit shows the drag's
@@ -1504,10 +1802,30 @@ mod macos {
             }
         }
         /// Hide every popup (the window closes or goes away).
+        pub fn frames(&self) -> PopupFrames {
+            self.frames.clone()
+        }
+        pub fn memory(&self, report: &mut zgx::memory::Report) {
+            let renderers = self.shown.iter();
+            super::report_popups(
+                renderers.filter_map(|(_, panel)| panel.renderer.as_ref()),
+                report,
+            );
+        }
         pub fn hide_all(&mut self, _: &winit::window::Window) {
+            self.frames.borrow_mut().clear();
             for (_, panel) in self.shown.drain(..) {
                 release(panel);
             }
+            self.forget_materials();
+        }
+        /// None of its panels shows a material any more.
+        fn forget_materials(&self) {
+            let _ = MATERIALS.try_with(|materials| {
+                materials
+                    .borrow_mut()
+                    .retain(|(_, send, _)| !Rc::ptr_eq(send, &self.send));
+            });
         }
     }
     impl Drop for PopupHost {
@@ -1523,12 +1841,27 @@ mod macos {
                     .borrow_mut()
                     .retain(|(_, send)| !Rc::ptr_eq(send, &self.send));
             });
+            self.forget_materials();
         }
+    }
+    /// Each popup panel's material box and corner radius (`Material::report`).
+    type Backdrops = Vec<(Rect, f32)>;
+    /// The materials window `number`'s popup panels show behind them (a
+    /// popup's backdrop, in a window of its own): each one's box in the
+    /// window's coordinates and its corner radius (-1: a popover's arrow
+    /// shapes it), as last placed.
+    pub(crate) fn popup_backdrops(number: isize) -> Vec<(Rect, f32)> {
+        MATERIALS.with(|materials| {
+            (materials.borrow().iter())
+                .filter(|(window, ..)| *window == number)
+                .flat_map(|(_, _, backdrops)| backdrops.iter().copied())
+                .collect()
+        })
     }
 
     #[cfg(test)]
     mod tests {
-        use super::Material;
+        use super::{Material, window_shadow};
         use objc2_app_kit::NSVisualEffectMaterial;
         use zgx::{compose::prelude::*, widgets::Ui};
 
@@ -1561,6 +1894,100 @@ mod macos {
             assert!(material(chip().blur(24.).bg(rgb(0x202020)), true).is_none());
         }
 
+        /// What a popup's material reports as its window's backdrop
+        /// (`popup_backdrops`): its rounded box; a popover's arrow, a mask,
+        /// reports -1 as a masked backdrop layer does.
+        #[test]
+        fn a_popups_material_reports_its_box_and_corner_radius() {
+            let mut blurred = material(chip().blur(24.), true).expect("a material");
+            assert_eq!(blurred.report(), (blurred.rect, 8.));
+            let (x, y, w, h) = (blurred.rect.x, blurred.rect.y, 120., 28.);
+            blurred.arrow = Some([(x + 50., y), (x + 60., y - 10.), (x + 70., y)]);
+            let (bounds, radius) = blurred.report();
+            assert_eq!(radius, -1.);
+            assert_eq!((bounds.y, bounds.height), (y - 10., h + 10.));
+            assert_eq!(bounds.width, w);
+        }
+
+        #[test]
+        fn a_panel_painting_its_own_shadow_takes_none_from_the_window_server() {
+            use zgx::scene::{BoxShadow, Transform};
+            let shadowed = |color| {
+                div().child(chip().shadow(BoxShadow {
+                    color: rgba(color),
+                    offset: Transform { x: 0., y: 24. },
+                    blur_radius: 64.,
+                    spread: 0.,
+                }))
+            };
+            let shadow = |view: View| {
+                let mut ui = Ui::new(400., 300.);
+                let handle = ui.mount(view);
+                ui.prepare_frame();
+                window_shadow(&ui.scene.borrow(), handle.node())
+            };
+            assert!(!shadow(shadowed(0x00000099)));
+            assert!(shadow(div().child(chip())), "a menu's or popover's rim");
+            assert!(
+                shadow(shadowed(0x00000000)),
+                "a clear shadow paints nothing"
+            );
+            // The panel keeps its own box: the shadow's ink is no material.
+            let material = material(shadowed(0x00000099), false).expect("a material");
+            assert_eq!(material.bounds(), material.rect);
+            assert_eq!((material.rect.width, material.rect.height), (120., 28.));
+        }
+
+        /// A node tooltip's panel is its clear layer holding the column it
+        /// fades, holding the card: the card is the panel, its shadow its
+        /// own (no window server rim round the shadow's reach) and its
+        /// translucent fill over AppKit's material, cut to its corners.
+        #[test]
+        fn a_tooltips_card_through_its_clear_layer_is_the_panel() {
+            use zgx::scene::{BoxShadow, Transform};
+            let card = || {
+                chip().shadow(BoxShadow {
+                    color: rgba(0x00000066),
+                    offset: Transform { x: 0., y: 20. },
+                    blur_radius: 56.,
+                    spread: 0.,
+                })
+            };
+            let tooltip =
+                |card: View| div().child(div().layer().child(column().opacity(0.9).child(card)));
+            let mut ui = Ui::new(400., 300.);
+            let handle = ui.mount(tooltip(card()));
+            ui.prepare_frame();
+            assert!(!window_shadow(&ui.scene.borrow(), handle.node()));
+            let found = material(tooltip(card()), false).expect("the card's material");
+            assert_eq!(
+                (found.rect.width, found.rect.height, found.radius),
+                (120., 28., 8.)
+            );
+            // A card without a shadow of its own: the window server's.
+            let mut ui = Ui::new(400., 300.);
+            let handle = ui.mount(tooltip(chip()));
+            ui.prepare_frame();
+            assert!(window_shadow(&ui.scene.borrow(), handle.node()));
+            // A layer that paints (a fill of its own) is the panel itself.
+            let painted = div().child(div().bg(rgba(0xffffff20)).rounded(4.).child(card()));
+            let found = material(painted, false).expect("its own material");
+            assert_eq!(found.radius, 4.);
+        }
+
+        /// A tooltip fading in or out fades the material under its card
+        /// with it: half faded, half the material; faded out, none, so no
+        /// empty pane of glass outlives the card.
+        #[test]
+        fn a_tooltips_material_fades_with_its_card() {
+            let tooltip =
+                |fade: f32| div().child(div().layer().child(column().opacity(fade).child(chip())));
+            assert_eq!(material(tooltip(1.), false).expect("shown").alpha, 1.);
+            let half = material(tooltip(0.5), false).expect("half faded");
+            assert!((half.alpha - 0.5).abs() < 1e-6, "{}", half.alpha);
+            assert!(material(tooltip(0.), false).is_none(), "faded out: none");
+        }
+
         #[test]
         fn a_popups_panel_is_what_its_root_holds() {
             // A popover's root holds its panel; the root itself is no panel.
@@ -1575,6 +2002,8 @@ mod macos {
 mod wayland;
 #[cfg(target_os = "linux")]
 pub(crate) use wayland::dispatch as dispatch_wayland;
+#[cfg(target_os = "linux")]
+pub(crate) use wayland::pointer_over_popup;
 
 #[cfg(target_os = "linux")]
 mod x11 {
@@ -1594,7 +2023,7 @@ mod x11 {
         window::{Window, WindowId},
     };
     use zgx::{
-        scene::{NodeId, Rect, Scene},
+        scene::{NodeId, NodeKind, Rect, Scene},
         semantics::{Role, Semantics},
     };
     use zgx_gpu::{GpuContext, GpuError, GpuRenderer};
@@ -1621,14 +2050,22 @@ mod x11 {
         send: Sink,
     }
     struct Popup {
+        /// Whether what it shows blurs what's behind it (`blurs`), as of
+        /// `revision`.
+        glass: bool,
         window: Arc<Window>,
         renderer: Option<GpuRenderer>,
         revision: Option<u64>,
+        /// Its frame's last contained panic (`contain::run`).
+        fault: Option<crate::contain::Fault>,
         /// Where it shows: its box in the parent's coordinates.
         rect: Option<Rect>,
         /// A drag preview's: its box's offset from where the scene lays the
         /// preview out (its shadow's margin), to move it with the drag.
         preview: Option<(f32, f32)>,
+        /// With no compositor, its corners cut (`cut_corners`): its size in
+        /// pixels and their radius.
+        cut: Option<(u32, u32, u32)>,
     }
     thread_local! {
         static HIDDEN: RefCell<Vec<Popup>> = const { RefCell::new(Vec::new()) };
@@ -2058,12 +2495,16 @@ mod x11 {
                 let Ok(window) = event_loop.create_window(attributes) else {
                     return;
                 };
+                no_shadow_of_a_compositors(&window);
                 hidden.push(Popup {
                     window: Arc::new(window),
                     renderer: None,
+                    glass: false,
                     revision: None,
+                    fault: None,
                     rect: None,
                     preview: None,
+                    cut: None,
                 });
             }
         });
@@ -2134,6 +2575,9 @@ mod x11 {
         grabbed: Option<usize>,
         /// A Wayland window's popups.
         wayland: super::wayland::Popups,
+        /// Whether a compositor shows what these popups leave transparent:
+        /// asked as the first opens.
+        composited: bool,
     }
     impl PopupHost {
         pub fn new(send: impl Fn(PopupInput) + 'static) -> Self {
@@ -2143,6 +2587,7 @@ mod x11 {
                 wayland: super::wayland::Popups::new(send.clone()),
                 send,
                 grabbed: None,
+                composited: true,
             }
         }
         /// Hold the pointer for `parent`, or let go of it.
@@ -2156,6 +2601,11 @@ mod x11 {
         /// Whether any popup shows.
         pub fn showing(&self) -> bool {
             !self.shown.is_empty() || self.wayland.showing()
+        }
+        /// When the loop must turn for a Wayland popup's frame left
+        /// waiting on the compositor (`wayland::Popups::deadline`).
+        pub fn deadline(&self) -> Option<std::time::Instant> {
+            self.wayland.deadline()
         }
         /// After the scene's flush: show each visible popup root in a window
         /// over `parent`, draw it again where it changed (always when
@@ -2171,18 +2621,39 @@ mod x11 {
             full: bool,
             drag: Option<&zgx::input::DragState>,
             ended: Option<zgx::input::DragEnded>,
+            takes: &dyn Fn(NodeId) -> Option<bool>,
+            // The window's renderer, its frame just presented, and what
+            // changed in it: a popup's glass blurs that frame.
+            under: &GpuRenderer,
+            damage: &[Rect],
         ) -> Result<(), GpuError> {
             reap();
             if !x11(parent) {
-                return self.wayland.update(parent, scene, context, scale, full);
+                return self
+                    .wayland
+                    .update(parent, scene, context, scale, full, takes, under, damage);
             }
             if self.shown.is_empty() && scene.popups().is_empty() {
                 return Ok(());
             }
+            if self.shown.is_empty() {
+                self.composited = crate::x11_settings::composited();
+            }
+            let composited = self.composited;
             let wanted: Vec<(NodeId, Rect)> = scene
                 .popups()
                 .iter()
-                .filter_map(|root| scene.popup_bounds(*root).map(|bounds| (*root, bounds)))
+                .filter_map(|root| {
+                    // With no compositor to show them, a shadow's margin and
+                    // what it leaves clear are black: the panel alone.
+                    let bounds = scene.popup_bounds(*root)?;
+                    let bounds = if composited {
+                        bounds
+                    } else {
+                        super::wayland::panel_of(scene, *root, bounds)
+                    };
+                    Some((*root, bounds))
+                })
                 .collect();
             let mut index = 0;
             while index < self.shown.len() {
@@ -2279,16 +2750,51 @@ mod x11 {
                         (rect.height * scale).round() as u32,
                     );
                     let _ = popup.window.request_inner_size(size);
+                    let radius = if composited {
+                        0
+                    } else {
+                        (corner_radius(scene, root) * scale).round() as u32
+                    };
+                    cut_corners(
+                        &popup.window,
+                        &mut popup.cut,
+                        (size.width, size.height),
+                        radius,
+                    );
                 }
                 // Popups are small: one that changed is drawn whole. One that
                 // only moved (a drag preview) is not drawn again.
                 let revision = scene.layer_revision(root);
-                if new || full || resized || popup.revision != Some(revision) {
+                if popup.revision != Some(revision) {
+                    // (A preview goes where the drag puts it, not over its box.)
+                    popup.glass = drag.is_none_or(|drag| drag.preview != Some(root))
+                        && super::blurs(scene, root);
+                }
+                // Glass shows the window's new pixels under it.
+                let under_changed =
+                    popup.glass && damage.iter().any(|at| at.intersection(rect).is_some());
+                if new || full || resized || under_changed || popup.revision != Some(revision) {
                     popup.revision = Some(revision);
                     zgx_gpu::present_log::log(|| format!("popup draw {root:?}"));
-                    renderer.repaint_all();
-                    renderer.render(scene, &[])?;
-                    renderer.present()?;
+                    renderer.set_backdrop(popup.glass.then_some(under));
+                    let drawn = crate::contain::run_frame(
+                        &mut popup.fault,
+                        revision,
+                        std::time::Instant::now(),
+                        "a popup's frame",
+                        crate::contain::queue,
+                        || {
+                            renderer.repaint_all();
+                            renderer.render(scene, &[])
+                        },
+                    );
+                    for issue in renderer.take_issues() {
+                        crate::contain::queue_issue(issue);
+                    }
+                    if let Some(drawn) = drawn {
+                        drawn?;
+                        renderer.present()?;
+                    }
                 }
                 // Onto the screen once its frame is there.
                 if popup.rect != Some(frame) {
@@ -2361,6 +2867,10 @@ mod x11 {
             _: Option<(f32, f32)>,
         ) {
         }
+        pub fn memory(&self, report: &mut zgx::memory::Report) {
+            let renderers = self.shown.iter().filter_map(|(_, p)| p.renderer.as_ref());
+            super::report_popups(renderers.chain(self.wayland.renderers()), report);
+        }
         pub fn hide_all(&mut self, parent: &Window) {
             for (_, popup) in self.shown.drain(..) {
                 release(popup);
@@ -2396,12 +2906,167 @@ mod x11 {
             pass_through(&popup.window, false);
         }
         popup.revision = None;
+        popup.fault = None;
         popup.rect = None;
         TARGETS.with(|targets| targets.borrow_mut().remove(&popup.window.id()));
         HIDDEN.with(|hidden| {
             let mut hidden = hidden.borrow_mut();
             if hidden.len() < POOL {
                 hidden.push(popup);
+            }
+        });
+    }
+    /// A popup's panel's corner radius, in points: its root's, or that of the
+    /// box filling it that paints.
+    fn corner_radius(scene: &Scene, root: NodeId) -> f32 {
+        let bounds = scene.bounds(root);
+        let mut node = root;
+        for _ in 0..4 {
+            if let NodeKind::Quad(quad) | NodeKind::Panel { quad, .. } = scene.kind(node)
+                && quad.radius > 0.
+            {
+                return quad.radius;
+            }
+            let filling = scene.children(node).iter().copied().find(|child| {
+                let child = scene.bounds(*child);
+                (child.width - bounds.width).abs() < 1. && (child.height - bounds.height).abs() < 1.
+            });
+            match filling {
+                Some(child) => node = child,
+                None => break,
+            }
+        }
+        0.
+    }
+    /// The rows of a box `width` by `height` with corners of `radius`, all in
+    /// pixels: a row each across the corners, the rest in one.
+    fn rounded_rows(
+        width: u32,
+        height: u32,
+        radius: u32,
+    ) -> Vec<x11rb::protocol::xproto::Rectangle> {
+        use x11rb::protocol::xproto::Rectangle;
+        let radius = radius.min(width / 2).min(height / 2);
+        let row = |y: u32, inset: u32| Rectangle {
+            x: inset as i16,
+            y: y as i16,
+            width: (width - 2 * inset) as u16,
+            height: 1,
+        };
+        let mut rows = Vec::with_capacity(2 * radius as usize + 1);
+        for y in 0..radius {
+            let r = radius as f32;
+            let up = r - y as f32 - 0.5;
+            let inset = (r - (r * r - up * up).sqrt()).round() as u32;
+            rows.push(row(y, inset));
+            rows.push(row(height - 1 - y, inset));
+        }
+        rows.push(Rectangle {
+            x: 0,
+            y: radius as i16,
+            width: width as u16,
+            height: (height - 2 * radius) as u16,
+        });
+        rows
+    }
+    #[cfg(test)]
+    #[test]
+    fn rounded_rows_cover_the_box_but_its_corners() {
+        let rows = rounded_rows(200, 100, 10);
+        let covers = |x: i16, y: i16| {
+            rows.iter().any(|r| {
+                (r.x..r.x + r.width as i16).contains(&x)
+                    && (r.y..r.y + r.height as i16).contains(&y)
+            })
+        };
+        for (x, y) in [(0, 0), (199, 0), (0, 99), (199, 99)] {
+            assert!(!covers(x, y), "corner {x},{y} is cut");
+        }
+        for (x, y) in [(10, 0), (189, 0), (10, 99), (0, 10), (199, 89), (100, 50)] {
+            assert!(covers(x, y), "{x},{y} stays");
+        }
+        // No two rows overlap, and none leaves the box.
+        let area: u32 = rows.iter().map(|r| r.width as u32 * r.height as u32).sum();
+        assert!(area < 200 * 100 && area > 200 * 100 - 4 * 100);
+        assert!(rows.iter().all(|r| r.x >= 0 && r.x as u16 + r.width <= 200));
+        // A radius too big for the box takes half its short side.
+        assert_eq!(rounded_rows(20, 10, 99).last().unwrap().height, 0);
+    }
+    /// Cut `popup`'s window to its panel's rounded box: with no compositor
+    /// what its corners leave clear is black. A radius of 0 puts its whole
+    /// window back.
+    fn cut_corners(
+        window: &Window,
+        cut: &mut Option<(u32, u32, u32)>,
+        (width, height): (u32, u32),
+        radius: u32,
+    ) {
+        use x11rb::{
+            connection::Connection,
+            protocol::{
+                shape::{self, SK, SO},
+                xproto::ClipOrdering,
+            },
+        };
+        let wanted = (radius > 0).then_some((width, height, radius));
+        if *cut == wanted {
+            return;
+        }
+        *cut = wanted;
+        let Some(id) = xid(window) else {
+            return;
+        };
+        CONNECTION.with(|connection| {
+            let Some(connection) = connection else {
+                return;
+            };
+            let _ = match wanted {
+                Some(_) => shape::rectangles(
+                    connection,
+                    SO::SET,
+                    SK::BOUNDING,
+                    ClipOrdering::UNSORTED,
+                    id,
+                    0,
+                    0,
+                    &rounded_rows(width, height, radius),
+                )
+                .map(|_| ()),
+                None => shape::mask(connection, SO::SET, SK::BOUNDING, id, 0, 0, x11rb::NONE)
+                    .map(|_| ()),
+            };
+            let _ = connection.flush();
+        });
+    }
+    /// Keep a compositor's own shadow off `window`, as menus' are: picom's
+    /// and compton's would go round the whole window, the clear margin zgx
+    /// draws the popup's shadow in, a box round nothing.
+    fn no_shadow_of_a_compositors(window: &Window) {
+        use x11rb::{
+            connection::Connection,
+            protocol::xproto::{AtomEnum, ConnectionExt as _, PropMode},
+            wrapper::ConnectionExt as _,
+        };
+        let Some(id) = xid(window) else {
+            return;
+        };
+        CONNECTION.with(|connection| {
+            let Some(connection) = connection else {
+                return;
+            };
+            let atom = connection
+                .intern_atom(false, b"_COMPTON_SHADOW")
+                .ok()
+                .and_then(|atom| atom.reply().ok());
+            if let Some(atom) = atom {
+                let _ = connection.change_property32(
+                    PropMode::REPLACE,
+                    id,
+                    atom.atom,
+                    AtomEnum::CARDINAL,
+                    &[0],
+                );
+                let _ = connection.flush();
             }
         });
     }

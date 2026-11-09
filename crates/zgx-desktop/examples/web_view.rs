@@ -1,6 +1,7 @@
-//! An embedded web page (WKWebView on macOS, WebView2 on Windows) under zgx chrome: a toolbar
-//! with navigation, a frosted menu popover over the page, and a floating
-//! frosted composer whose glass blurs the page beneath it.
+//! An embedded web page (WKWebView on macOS, WebView2 on Windows, WebKitGTK
+//! on Linux) under zgx chrome: a toolbar with navigation, a frosted menu
+//! popover over the page, and a floating frosted composer whose glass blurs
+//! the page beneath it.
 //!
 //! `cargo run -p zgx-desktop --example web_view [-- URL]`
 //! `-- --fixture`: checks geometry, layering, backdrops, hit testing and
@@ -8,15 +9,25 @@
 //! holds the window for a screenshot (`WINDOW <n>`, `screencapture -l <n>`),
 //! then exits (non-zero on failure). `--zoom 1.25` zooms the window first:
 //! the same checks, in zgx's points, with AppKit's frames at the zoom.
+//! `--unaccelerated`: the page painted on the CPU (Linux;
+//! `WebViewOptions::accelerated`). `--control`: commands read a line each
+//! from stdin, so a probe can drive the page with no input sent:
+//! `find <text>` (prints `FIND`), `save-link` (the page's script clicks its
+//! download link), `open-download` (the app opens the same file itself), `reload` and `downloads save` or `downloads cancel` (the app's
+//! download handler, as Ctrl+D sets it, or one cancelling each).
 #[cfg(target_os = "macos")]
 use std::time::Duration;
 use std::{cell::RefCell, rc::Rc};
 use zgx::{
+    actions::{Action, KeyBinding, Keymap, Keystroke},
     compose::prelude::*,
+    input::{EventPhase, InputEvent, Key, Modifiers},
     web_view::{WebView, WebViewEvent, WebViewOptions},
 };
-use zgx_desktop::{Application, WindowOptions};
+use zgx_desktop::{Application, MenuAction, WindowOptions};
 
+/// The page's download link's file, for `--control`'s `open-download`.
+const SAVED_FILE: &str = "data:application/octet-stream;base64,c2F2ZWQgYnkgdGhlIGFwcA==";
 const PAGE: &str = r#"<!doctype html>
 <html><head><meta charset="utf-8"><title>zgx web view</title>
 <style>
@@ -36,6 +47,10 @@ const PAGE: &str = r#"<!doctype html>
   <p>This page is the platform's web view, laid out by zgx. The menu and the composer are zgx
   content drawn above it; on macOS their glass blurs it.</p>
   <button onclick="window.zgx.postMessage({clicked: Date.now()})">Message the app</button>
+  <input id="upload" type="file" multiple style="position:absolute;left:-9999px"
+    onchange="window.chosen = [...this.files].map((f) => f.name).join(',')">
+  <a id="save" download="zgx-example.txt" href="data:text/plain,saved by the app"
+    style="position:absolute;left:700px;top:290px;color:#fff;font-weight:700">Save a file</a>
   <div class="grid">
     <div class="tile" style="background:#1d3557">Navy</div>
     <div class="tile" style="background:#e63946">Red</div>
@@ -51,6 +66,91 @@ const PAGE: &str = r#"<!doctype html>
   </div>
 </main></body></html>"#;
 
+/// Whether `view` or one inside it is one of AppKit's print panel's.
+#[cfg(target_os = "macos")]
+fn holds_print_view(view: &objc2_app_kit::NSView) -> bool {
+    view.class().name().to_string_lossy().contains("Print")
+        || view.subviews().iter().any(|child| holds_print_view(&child))
+}
+/// A window's sheet, and the window, if one is attached (a page's dialog,
+/// a print panel).
+#[cfg(target_os = "macos")]
+fn attached_sheet() -> Option<(
+    objc2::rc::Retained<objc2_app_kit::NSWindow>,
+    objc2::rc::Retained<objc2_app_kit::NSWindow>,
+)> {
+    let mtm = objc2::MainThreadMarker::new()?;
+    objc2_app_kit::NSApplication::sharedApplication(mtm)
+        .windows()
+        .iter()
+        .find_map(|window| Some((window.clone(), window.attachedSheet()?)))
+}
+/// End `sheet` with `button` (1000 the first, 1001 the second), typing
+/// `typed` into its text field first: what its field held before, if it
+/// has one.
+#[cfg(target_os = "macos")]
+fn answer_sheet(
+    parent: &objc2_app_kit::NSWindow,
+    sheet: &objc2_app_kit::NSWindow,
+    button: isize,
+    typed: Option<&str>,
+) -> Option<String> {
+    fn field(
+        view: &objc2_app_kit::NSView,
+    ) -> Option<objc2::rc::Retained<objc2_app_kit::NSTextField>> {
+        if let Some(field) = view.downcast_ref::<objc2_app_kit::NSTextField>()
+            && field.isEditable()
+        {
+            return Some(objc2::Message::retain(field));
+        }
+        view.subviews().iter().find_map(|child| field(&child))
+    }
+    let found = sheet.contentView().and_then(|view| field(&view));
+    let held = found.as_ref().map(|field| field.stringValue().to_string());
+    if let (Some(field), Some(typed)) = (&found, typed) {
+        field.setStringValue(&objc2_foundation::NSString::from_str(typed));
+    }
+    parent.endSheet_returnCode(sheet, button);
+    held
+}
+
+/// The fixture's file dialog: what a page's file input asks the window for
+/// (`WebView::choose_files`), answered with one file at once, no panel shown.
+#[derive(Default)]
+struct FixtureFiles {
+    asked: std::cell::Cell<Option<bool>>,
+}
+impl zgx::platform::Platform for FixtureFiles {
+    fn clipboard_text(&self) -> Option<String> {
+        None
+    }
+    fn set_clipboard_text(&self, _: String) -> bool {
+        false
+    }
+    fn open_files(
+        &self,
+        picker: zgx::platform::FilePicker,
+    ) -> zgx::platform::Pending<Result<Vec<std::path::PathBuf>, String>> {
+        self.asked.set(Some(picker.multiple));
+        let file = std::env::temp_dir().join("zgx-fixture-upload.txt");
+        let written = std::fs::write(&file, "chosen for the page\n");
+        Box::pin(async move { written.map(|()| vec![file]).map_err(|e| e.to_string()) })
+    }
+    fn save_file(
+        &self,
+        _: zgx::platform::FilePicker,
+    ) -> zgx::platform::Pending<Result<Option<std::path::PathBuf>, String>> {
+        Box::pin(async { Ok(None) })
+    }
+}
+/// `view` with `files` for its file dialogs, if given (the fixture's).
+fn provide_files(files: Option<Rc<FixtureFiles>>, view: View) -> View {
+    match files {
+        Some(files) => provide(zgx::platform::PlatformService(files), view),
+        None => view,
+    }
+}
+
 fn icon_button(label: &str) -> View {
     button()
         .h(30.)
@@ -64,6 +164,8 @@ fn icon_button(label: &str) -> View {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let fixture = args.iter().any(|arg| arg == "--fixture");
+    let accelerated = !args.iter().any(|arg| arg == "--unaccelerated");
+    let controlled = args.iter().any(|arg| arg == "--control");
     let zoom = args
         .iter()
         .skip_while(|arg| *arg != "--zoom")
@@ -85,7 +187,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(zoom) = zoom {
                 cx.ui.set_zoom(zoom);
             }
-            let web = WebView::new(&cx.ui.runtime, WebViewOptions::default());
+            let options = WebViewOptions {
+                accelerated,
+                ..Default::default()
+            };
+            let web = WebView::new(&cx.ui.runtime, options);
+            let files = Rc::new(FixtureFiles::default());
             match &url {
                 Some(url) => web.load_url(url.clone()),
                 None => web.load_html(PAGE, Some("https://zgx.example/")),
@@ -239,7 +346,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .grow()
                 .flex_shrink(1.)
                 .min_h(0.)
-                .child(
+                .child(provide_files(
+                    fixture.then(|| files.clone()),
                     web_view(&web)
                         .id("page")
                         .absolute()
@@ -253,7 +361,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let shown = page_shown.clone();
                             move || if shown.get() { Styles::default() } else { Styles::default().hidden() }
                         }),
-                )
+                ))
                 .child(composer);
             let view = cx.render(
                 column()
@@ -264,24 +372,163 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .child(toolbar)
                     .child(page),
             );
-            let keep = Rc::new(RefCell::new(Some(subscription)));
+            // Ctrl+F: find the heading's first word, printing `FIND`. Pressed
+            // in the page (which leaves it alone), it reaches this binding:
+            // WebView2's own find key is off.
+            // Ctrl+D (reserved): the app saves the page's downloads into
+            // `ZGX_EXAMPLE_SAVE_DIR` (a temporary folder without it),
+            // printing `DOWNLOAD <name> <type>` and `DOWNLOAD_STATUS …`.
+            // Before it the app has no handler, and saves none.
+            let root = cx.ui.root();
+            let finder = web.clone();
+            cx.ui.on_event(root, false, move |event| {
+                if event.phase != EventPhase::Capture
+                    && let InputEvent::Action(action) = &event.event
+                    && action.downcast_ref::<MenuAction>().is_some_and(|action| action.0 == "find")
+                {
+                    find(&finder, "Hello");
+                    event.prevent_default();
+                }
+            });
+            let downloads = web.clone();
+            cx.ui.on_event(root, false, move |event| {
+                if event.phase != EventPhase::Capture
+                    && let InputEvent::Action(action) = &event.event
+                    && action.downcast_ref::<MenuAction>().is_some_and(|action| action.0 == "downloads")
+                {
+                    handle_downloads(&downloads, true);
+                    event.prevent_default();
+                }
+            });
+            let control = Modifiers {
+                control: true,
+                ..Default::default()
+            };
+            let keymap = cx.ui.input.bind_keys(
+                root,
+                Keymap::new()
+                    .bind(
+                        KeyBinding::new(
+                            [Keystroke::new(Key::Character("f".into()), control)],
+                            Action::new(MenuAction("find".into())),
+                        )
+                        .expect("one keystroke"),
+                    )
+                    .bind(
+                        KeyBinding::new(
+                            [Keystroke::new(Key::Character("d".into()), control)],
+                            Action::new(MenuAction("downloads".into())),
+                        )
+                        .expect("one keystroke")
+                        .reserved(),
+                    ),
+            );
+            let keep = Rc::new(RefCell::new(Some((subscription, keymap))));
             cx.on_closed(move || drop(keep.borrow_mut().take()));
+            if controlled {
+                follow_commands(cx, web.clone());
+            }
             if fixture {
-                run_fixture(cx, web, view, menu_open, page_shown, finished, messages);
+                run_fixture(
+                    cx,
+                    web,
+                    Fixture {
+                        view,
+                        menu_open,
+                        page_shown,
+                        finished,
+                        messages,
+                        files,
+                    },
+                );
             }
         })
 }
 
-/// Checks against live AppKit state (see the module documentation).
-fn run_fixture(
-    cx: &mut zgx_desktop::WindowContext,
-    web: WebView,
+/// Find `text` in the page, printing `FIND <text> found=… matches=…`.
+fn find(web: &WebView, text: &str) {
+    let shown = text.to_owned();
+    web.find(text, Default::default(), move |found| {
+        println!(
+            "FIND {shown} found={} matches={:?}",
+            found.found, found.matches
+        )
+    });
+}
+
+/// The app's download handler: each download saved into
+/// `ZGX_EXAMPLE_SAVE_DIR` (a temporary folder without it), printing
+/// `DOWNLOAD <name> <type>` and `DOWNLOAD_STATUS …`, or, unless `save`,
+/// each cancelled (`DOWNLOAD_CANCELLED <name>`).
+fn handle_downloads(web: &WebView, save: bool) {
+    let folder = std::env::var_os("ZGX_EXAMPLE_SAVE_DIR")
+        .map_or_else(std::env::temp_dir, std::path::PathBuf::from);
+    web.set_download_handler(move |request, responder| {
+        println!("DOWNLOAD {} {}", request.name, request.mime);
+        if save {
+            responder.save_to(folder.join(&request.name), |status| {
+                println!("DOWNLOAD_STATUS {status:?}")
+            });
+        } else {
+            println!("DOWNLOAD_CANCELLED {}", request.name);
+            responder.cancel();
+        }
+    });
+    println!("DOWNLOADS {}", if save { "on" } else { "cancelled" });
+}
+
+/// `--control`: a command a line from stdin (see the module documentation),
+/// read on a thread of its own and carried out on the UI thread.
+fn follow_commands(cx: &mut zgx_desktop::WindowContext, web: WebView) {
+    let (send, commands) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        for line in std::io::stdin().lines().map_while(Result::ok) {
+            if send.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    cx.tasks.spawn(async move {
+        loop {
+            zgx::timer::sleep(std::time::Duration::from_millis(50)).await;
+            while let Ok(line) = commands.try_recv() {
+                let (command, rest) = line.split_once(' ').unwrap_or((line.as_str(), ""));
+                match command {
+                    "find" => find(&web, rest),
+                    "save-link" => web.run_js("document.getElementById('save').click()"),
+                    // The same file, opened by the app (a browser's own
+                    // navigation, no page script): a download WebView2
+                    // starts with no gesture to ask for.
+                    "open-download" => web.load_url(SAVED_FILE),
+                    "reload" => web.reload(),
+                    "downloads" => handle_downloads(&web, rest == "save"),
+                    _ => println!("CONTROL unknown: {line}"),
+                }
+            }
+        }
+    });
+}
+
+/// What the fixture reads and drives besides the window and the page.
+struct Fixture {
     view: zgx::compose::ViewHandle,
     menu_open: zgx::reactive::Signal<bool>,
     page_shown: zgx::reactive::Signal<bool>,
     finished: zgx::reactive::Signal<u32>,
     messages: zgx::reactive::Signal<u32>,
-) {
+    files: Rc<FixtureFiles>,
+}
+
+/// Checks against live AppKit state (see the module documentation).
+fn run_fixture(cx: &mut zgx_desktop::WindowContext, web: WebView, fixture: Fixture) {
+    let Fixture {
+        view,
+        menu_open,
+        page_shown,
+        finished,
+        messages,
+        files,
+    } = fixture;
     #[cfg(target_os = "macos")]
     {
         let scene = cx.ui.scene.clone();
@@ -393,6 +640,188 @@ fn run_fixture(
                 "page CSS width is its box's",
                 css.is_some_and(|css| (css - bounds("page").width).abs() <= 1.),
                 format!("{css:?} vs {}", bounds("page").width),
+            );
+            // Script dialogs: sheets on the window, answered here as a
+            // person would (OK, OK, Cancel, then a name typed and OK).
+            web.run_js(
+                "window.dialogs = []; dialogs.push(alert('Hello from the page') === undefined); \
+                 dialogs.push(confirm('Sure?')); dialogs.push(confirm('Again?')); \
+                 dialogs.push(prompt('Name?', 'default'));",
+            );
+            let mut shown = Vec::new();
+            for (button, typed) in [
+                (1000, None),
+                (1000, None),
+                (1001, None),
+                (1000, Some("zgx")),
+            ] {
+                let mut sheet = None;
+                for _ in 0..60 {
+                    sleep(50).await;
+                    sheet = attached_sheet();
+                    if sheet.is_some() {
+                        break;
+                    }
+                }
+                let Some((parent, sheet)) = sheet else {
+                    break;
+                };
+                shown.push(answer_sheet(&parent, &sheet, button, typed));
+                sleep(100).await;
+            }
+            let dialogs = Rc::new(RefCell::new(None));
+            {
+                let dialogs = dialogs.clone();
+                web.evaluate_js("JSON.stringify(window.dialogs)", move |value| {
+                    *dialogs.borrow_mut() = Some(value)
+                });
+            }
+            for _ in 0..40 {
+                if dialogs.borrow().is_some() {
+                    break;
+                }
+                sleep(25).await;
+            }
+            let dialogs = dialogs.borrow().clone();
+            check(
+                "alert, confirm and prompt are sheets with their answers",
+                shown.len() == 4
+                    && shown[3] == Some("default".into())
+                    && dialogs == Some(Ok("\"[true,true,false,\\\"zgx\\\"]\"".into())),
+                format!("prompt fields {shown:?}, page heard {dialogs:?}"),
+            );
+            // A file input: the window's file dialog (the fixture's here,
+            // which shows no panel), its file the input's.
+            web.run_js("document.getElementById('upload').click()");
+            let chosen = Rc::new(RefCell::new(None));
+            for _ in 0..40 {
+                sleep(50).await;
+                let reply = chosen.clone();
+                web.evaluate_js("window.chosen || ''", move |value| {
+                    *reply.borrow_mut() = Some(value)
+                });
+                sleep(25).await;
+                if matches!(&*chosen.borrow(), Some(Ok(value)) if value != "\"\"") {
+                    break;
+                }
+            }
+            let chosen = chosen.borrow().clone();
+            check(
+                "a file input asks the window's file dialog",
+                files.asked.get() == Some(true)
+                    && chosen == Some(Ok("\"zgx-fixture-upload.txt\"".into())),
+                format!("multiple {:?}, chosen {chosen:?}", files.asked.get()),
+            );
+            // Printing: the app's `print`, then the page's `window.print()`,
+            // each the print panel as a sheet on the window, cancelled here.
+            let mut printed = Vec::new();
+            for from_page in [false, true] {
+                if from_page {
+                    web.run_js("window.print()");
+                } else {
+                    web.print();
+                }
+                let mut sheet = None;
+                for _ in 0..80 {
+                    sleep(50).await;
+                    sheet = attached_sheet();
+                    if sheet.is_some() {
+                        break;
+                    }
+                }
+                // A sheet holding a print panel's views.
+                printed.push(sheet.as_ref().is_some_and(|(_, sheet)| {
+                    sheet
+                        .contentView()
+                        .is_some_and(|view| holds_print_view(&view))
+                }));
+                if let Some((parent, sheet)) = sheet {
+                    // NSModalResponseCancel.
+                    parent.endSheet_returnCode(&sheet, 0);
+                }
+                sleep(500).await;
+            }
+            check(
+                "print and the page's window.print() show the print panel on the window",
+                printed == [true, true],
+                format!("{printed:?}"),
+            );
+            // Find: the heading's word, found and selected; a word the page
+            // hasn't, not; then cleared.
+            let finds = Rc::new(RefCell::new(Vec::new()));
+            for text in ["Hello", "nowhere-in-the-page"] {
+                let finds = finds.clone();
+                web.find(text, Default::default(), move |found| {
+                    finds.borrow_mut().push(found.found)
+                });
+            }
+            for _ in 0..40 {
+                if finds.borrow().len() == 2 {
+                    break;
+                }
+                sleep(25).await;
+            }
+            web.clear_find();
+            let finds = finds.borrow().clone();
+            check(
+                "find finds the heading's word and not a word the page hasn't",
+                finds == [true, false],
+                format!("{finds:?}"),
+            );
+            // Downloads: the app's handler hears each, with its name and
+            // type. A `download` link it saves (here, in a temporary folder);
+            // a response the page can't show (an iframe's octet stream) it
+            // cancels, which saves nothing. It decides by name: WebKit names
+            // and types the octet stream as its version sniffs it
+            // (`application/octet-stream`, or `text/plain` as `Unknown.txt`).
+            let folder = std::env::temp_dir().join(format!("zgx-fixture-downloads-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&folder);
+            let asked = Rc::new(RefCell::new(Vec::new()));
+            let statuses = Rc::new(RefCell::new(Vec::new()));
+            {
+                let (asked, statuses, folder) = (asked.clone(), statuses.clone(), folder.clone());
+                web.set_download_handler(move |request, responder| {
+                    asked.borrow_mut().push((request.name.clone(), request.mime.clone()));
+                    if request.name == "zgx-fixture.txt" {
+                        let statuses = statuses.clone();
+                        responder.save_to(folder.join(&request.name), move |status| {
+                            statuses.borrow_mut().push(status)
+                        });
+                    }
+                });
+            }
+            web.run_js(
+                "const a = document.createElement('a'); a.href = 'data:text/plain,saved by the app'; \
+                 a.download = 'zgx-fixture.txt'; document.body.appendChild(a); a.click();",
+            );
+            for _ in 0..80 {
+                sleep(50).await;
+                if statuses.borrow().contains(&zgx::web_view::DownloadStatus::Finished) {
+                    break;
+                }
+            }
+            web.run_js(
+                "const f = document.createElement('iframe'); f.style.display = 'none'; \
+                 f.src = 'data:application/octet-stream,not shown'; document.body.appendChild(f);",
+            );
+            for _ in 0..80 {
+                sleep(50).await;
+                if asked.borrow().len() == 2 {
+                    break;
+                }
+            }
+            sleep(300).await;
+            let saved = std::fs::read_to_string(folder.join("zgx-fixture.txt")).ok();
+            let others = std::fs::read_dir(&folder).map_or(0, |entries| entries.count());
+            let _ = std::fs::remove_dir_all(&folder);
+            check(
+                "a download is the app's: saved where it says, or nothing",
+                asked.borrow().first() == Some(&("zgx-fixture.txt".into(), "text/plain".into()))
+                    && asked.borrow().get(1).is_some_and(|(name, _)| name != "zgx-fixture.txt")
+                    && saved.as_deref() == Some("saved by the app")
+                    && others == 1
+                    && statuses.borrow().last() == Some(&zgx::web_view::DownloadStatus::Finished),
+                format!("asked {:?}, saved {saved:?}, files {others}, statuses {:?}", asked.borrow(), statuses.borrow()),
             );
             web.run_js("window.zgx.postMessage({hello: 1})");
             sleep(200).await;
@@ -656,6 +1085,46 @@ fn run_fixture(
                     .is_some_and(|r| !r.hidden && framed(r.frame, bounds("page"))),
                 format!("{shown:?}"),
             );
+            // Full screen: the page's own request (WebKit's window over
+            // the screen), seen in its state; then exited, the page back in
+            // its node.
+            web.run_js("document.querySelector('.stripes').requestFullscreen()");
+            let mut entered = false;
+            for _ in 0..80 {
+                sleep(50).await;
+                if web.state().with_untracked(|state| state.full_screen) {
+                    entered = true;
+                    break;
+                }
+            }
+            check(
+                "a page's full screen shows in its state",
+                entered,
+                format!("full_screen={entered}"),
+            );
+            sleep(1500).await;
+            web.exit_full_screen();
+            let mut left = false;
+            for _ in 0..80 {
+                sleep(50).await;
+                if !web.state().with_untracked(|state| state.full_screen) {
+                    left = true;
+                    break;
+                }
+            }
+            sleep(1500).await;
+            let back = diagnostics
+                .natives()
+                .iter()
+                .find(|r| r.node == page)
+                .cloned();
+            check(
+                "exiting full screen puts the page back in its node",
+                left && back
+                    .as_ref()
+                    .is_some_and(|r| !r.hidden && framed(r.frame, bounds("page"))),
+                format!("left={left} {back:?}"),
+            );
             println!("FIXTURE {} failures", failures);
             println!("LAYERS\n{}", diagnostics.layer_tree());
             window.close();
@@ -666,5 +1135,7 @@ fn run_fixture(
     }
     // The fixture checks AppKit state; elsewhere there is nothing to check.
     #[cfg(not(target_os = "macos"))]
-    let _ = (cx, web, view, menu_open, page_shown, finished, messages);
+    let _ = (
+        cx, web, view, menu_open, page_shown, finished, messages, files,
+    );
 }

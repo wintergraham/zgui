@@ -11,6 +11,14 @@ for the run and restores the user's list after. native_ime --open-ime opens it
 
     cargo build -p zgx-desktop --example native_ime
     python scripts/windows_ime_smoke.py target/debug/examples/native_ime.exe --install-korean
+
+It runs through winit's IMM32 path (`ZGX_TSF=0`, the opt-out). `--tsf` runs
+it through Windows' Text Services Framework as the default (`ZGX_TSF` unset,
+removed if set), and `--force-tsf` with it forced (`ZGX_TSF=1`); it prints
+which. Through the framework, the
+composition is the editor's preedit through zgx's text store, not IMM32's
+events, so the editors' text is what is checked: 한글 committed into the
+first, nothing in the second.
 """
 import argparse
 import ctypes
@@ -52,10 +60,33 @@ def restore(saved):
     powershell("; ".join(script))
 
 
+def finish_replaced(proc, lines):
+    """What the app's edit mid-composition left: its text, none of the
+    composition, and the app alive to the end."""
+    output = "".join(lines)
+    if proc.returncode != 0:
+        raise AssertionError(f"the app ended with {proc.returncode}:\n{output}")
+    final = next((line for line in lines if line.startswith("FINAL")), "")
+    first = final.split("first=", 1)[1].split(" second=", 1)[0].strip('"') if "first=" in final else ""
+    replaced = next(line for line in lines if line.startswith("REPLACED while composing"))
+    if '"안"' not in replaced:
+        raise AssertionError(f"the app replaced the text before 안 was composed: {replaced}\n{output}")
+    # The space after the cancellation types a space: nothing of 안.
+    if first != "REPLACED ":
+        raise AssertionError(f"the cancelled composition came back: {final}\n{output}")
+    print(f"PASS: the app's edit ended the composition, none of it committed: {final.strip()}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=pathlib.Path)
     parser.add_argument("--install-korean", action="store_true")
+    paths = parser.add_mutually_exclusive_group()
+    paths.add_argument("--tsf", action="store_true", help="through the Text Services Framework, the default")
+    paths.add_argument("--force-tsf", action="store_true", help="through the Text Services Framework, forced")
+    parser.add_argument("--replace-while-composing", action="store_true",
+                        help="the app sets the field's text mid-composition: the composition ends, "
+                             "none of it committed")
     args = parser.parse_args()
     saved = input_methods()
     if KOREAN_TIP.split(":")[1] not in saved:
@@ -66,7 +97,12 @@ def main():
                    f"$k.InputMethodTips.Clear(); $k.InputMethodTips.Add('{KOREAN_TIP}'); "
                    "Set-WinUserLanguageList $l -Force -WarningAction SilentlyContinue")
     env = dict(os.environ, ZGX_SECONDS="30")
-    proc = subprocess.Popen([str(args.binary.resolve()), "--open-ime"], env=env, stdout=subprocess.PIPE,
+    win.input_path(env, "force-tsf" if args.force_tsf else "default" if args.tsf else "imm32")
+    args.tsf = args.tsf or args.force_tsf
+    command = [str(args.binary.resolve()), "--open-ime"]
+    if args.replace_while_composing:
+        command.append("--replace-while-composing")
+    proc = subprocess.Popen(command, env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, encoding="utf-8")
     lines = []
     threading.Thread(target=lambda: lines.extend(proc.stdout), daemon=True).start()
@@ -86,11 +122,35 @@ def main():
             time.sleep(0.3)
         else:
             raise RuntimeError("could not switch the window to the Korean IME")
+        # Through the framework, IMM32's context isn't the window's, so
+        # `--open-ime` can't open it: the Korean input method starts in its
+        # English mode, and its Hangul key opens it.
+        if args.tsf:
+            win.require_foreground(window)
+            win.key("hangul")
+            time.sleep(0.3)
         deadline = time.monotonic() + 5
-        while "IME_OPEN true\n" not in lines:
+        while not args.tsf and "IME_OPEN true\n" not in lines:
             if time.monotonic() > deadline:
                 raise RuntimeError("the input method did not open")
             time.sleep(0.1)
+        if args.replace_while_composing:
+            # 안, held composing until the app replaces the text (its 500 ms
+            # report), then a key the input method takes again.
+            win.require_foreground(window)
+            for key in "dks":
+                win.key(key)
+            deadline = time.monotonic() + 6
+            while not any(line.startswith("REPLACED while composing") for line in lines):
+                if time.monotonic() > deadline:
+                    raise RuntimeError("the app never saw the composition to replace")
+                time.sleep(0.1)
+            time.sleep(0.6)
+            win.key("space")
+            time.sleep(0.4)
+            win.close(window)
+            proc.wait(timeout=15)
+            return finish_replaced(proc, lines)
         # 한글: two syllables composed from six keys, committed by a space.
         win.require_foreground(window)
         for key in "gksrmf":
@@ -114,12 +174,20 @@ def main():
         if input_methods() != saved:
             restore(saved)
     output = "".join(lines)
+    final = next(line for line in lines if line.startswith("FINAL"))
+    if args.tsf:
+        first = final.split("first=", 1)[1].split(" second=", 1)[0]
+        if "한글" not in first:
+            raise AssertionError(f"the composition didn't commit through the text store: {final}\n{output}")
+        if "second=\"\"" not in final:
+            raise AssertionError(f"the composition followed focus into the other editor: {final}")
+        print(f"PASS: Korean IME through the Text Services Framework: {final.strip()}")
+        return
     # The caret after the composing syllable, as in Windows' own fields.
     for expected in ['PREEDIT first "ㅎ" Some((3, 3))', 'PREEDIT first "한" Some((3, 3))', 'COMMIT first "한"',
                      'COMMIT first "글"', 'PREEDIT first "안"']:
         if expected not in output:
             raise AssertionError(f"missing {expected!r}:\n{output}")
-    final = next(line for line in lines if line.startswith("FINAL"))
     if "second=\"\"" not in final or "ㅇ" in final.split("second=")[1]:
         raise AssertionError(f"the composition followed focus into the other editor: {final}")
     print(f"PASS: Korean IME preedit and commit, focus change mid-composition: {final.strip()}")

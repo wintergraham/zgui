@@ -27,7 +27,8 @@ context_menu_below: boolean?
 
 | Option | Type | Default | |
 | --- | --- | --- | --- |
-| `open` | `State<boolean>` | required (not `menu_item`) | true while shown; written back as it closes |
+| `open` | `State<boolean>`, or `() -> boolean` | required (not `menu_item`) | true while shown; written back as it closes. A function controls it: it shows while the function says so, and its closing (Escape, the backdrop, a choice) goes to `on_close` (a modal route, [routing](state.md#routing)) |
+| `on_close` | `() -> ()` | none | a controlled overlay's closing |
 | `build` (`modal`, `popover`, `menu`) | `() -> Node` | none | its content, built each time it opens and kept while it closes: a form starts from what it edits, its components' state new (as React's conditionally rendered dialog). Children given as well come before it, built once |
 | `anchor` (`popover`, `menu`) | `Node` | required | the trigger, laid out where the popover is |
 | `autofocus` (`modal`, `popover`, `menu`) | `boolean` | `true` | focus its first control as it opens; `false` keeps the panel itself focused (keys still reach it) |
@@ -36,13 +37,14 @@ context_menu_below: boolean?
 | `trigger` (`submenu`) | `Node` | the label and `›` | the submenu's trigger row, drawn by the app: a `ui.menu_item` with content of its own (an icon, the label, a value, a chevron). A submenu opens when the pointer moves onto its trigger, and closes when it moves onto another item of the menu |
 | `placement` (`modal`) | `{ x, y, inset }` | centred | where the panel sits in the window: lined up with its `"start"`, `"center"` or `"end"` across (`x`) and down (`y`), `inset` points from the edges (a number, or `{ top, right, bottom, left }`): a side sheet is `{ x = "end", y = "start" }` with `h` the window's height |
 | `placement` (`popover`, `menu`) | `{ side, align, offset }` | `{ side = "bottom", align = "start", offset = 4 }` | where it opens: on `side` of the trigger (`"bottom"`, `"top"`, `"left"`, `"right"`, flipping to the other side when that one lacks room), lined up with the trigger's `"start"`, `"center"` or `"end"`, `offset` points away; it stays inside the window |
-| `label` | `string` | `""` | the accessible name; a `menu_item`'s and a `submenu`'s visible label (a `menu_item`'s may be its first entry instead: `ui.menu_item { "Copy" }`) |
+| `label` | `string` | `""` | the accessible name; a `menu_item`'s and a `submenu`'s visible label (a `menu_item`'s may be its first entry instead: `ui.menu_item { "Copy" }`). A `popover` or `menu` without one is named by its trigger, as it reads now (`aria-labelledby`) |
 | children (not `menu_item`) | `Child` | none | the panel's content |
 | properties | [Props](properties.md) | | style the panel (not the anchor): `w`, `p`, `gap`, `bg`, `rounded`, `backdrop_blur`, `border`, `shadow`… |
 | `on_click` (`menu_item`) | `Handler \| Action` | none | runs once the menu has closed |
 | `checked`, `radio` (`menu_item`) | `boolean \| Readable<boolean> \| (() -> boolean)`, `boolean` | none | a check in the item's gutter while true (a toggle item), or a dot with `radio = true` (one of a group); assistive technology hears a checkbox or radio item |
 | `shortcut` (`menu_item`) | `string` | none | the keys that do it, shown at its end in the tertiary text colour: keys (`"cmd+c"`) as the platform shows them (⌘C on macOS, Ctrl+C elsewhere), or text as it is (`"⌘C"`) |
 | `match_anchor_width` (`popover`, `menu`) | `boolean` | `false` | at least as wide as its trigger, as a select's list is |
+| `at_caret` (`popover`) | `boolean` | `false` | at the caret of the input or textarea in its `anchor`, not at the anchor's box, as a mention's or a slash command's suggestions are (tiptap's suggestion, a chat composer's `@`): it follows the caret as text is typed, a line wraps or breaks, the field scrolls and an input method composes. It takes no focus and has no backdrop: keys go on to the field, whose `on_key` moves through the suggestions (with `active_descendant` naming the one it is on) and chooses one; `open` says when it shows, and a click elsewhere passes through |
 | `dismiss_on_backdrop` (`modal`, `popover`) | `boolean` | `true` | `false`: a click outside doesn't close it (a dialog that must be answered); Escape still does |
 | `disabled` (`menu_item`, `submenu`) | `boolean \| Readable<boolean> \| (() -> boolean)` | `false` | keyboard navigation skips it |
 | `context_menu` | `(e: PointerEvent) -> { Node }?` | none | `e` is `{ x, y, local_x, local_y }`; return the items, or nothing for no menu |
@@ -53,11 +55,14 @@ Panels start with 16 points of padding, the theme's surface color and rounded co
 
 ## Behavior
 
-- Escape closes the top panel; a click outside one closes it (and does nothing else); a click on blank panel space does not.
+- Escape closes the top panel; a click on blank panel space does not. A click outside a modal or a menu closes it and does nothing else.
+- A click outside a popover closes it and still does what it does there, as on the web and in AppKit: a button acts and a field takes focus; on blank space, focus goes back to its anchor, as Escape gives it. A click on its own anchor runs the anchor's `on_click` once (a toggle closes it, rather than it closing and opening again).
+- A popover built in another popover's panel (a row opening a nested menu) closes on a click anywhere outside it, the parent's panel included, and the parent stays open; a click outside both closes both.
 - A modal or popover traps keyboard focus while open, starting on its first enabled control, and gives focus back when it closes.
 - A menu takes focus to its first enabled item. Up and Down move (wrapping), Home and End jump, typing a letter finds an item by its label, Tab closes the menu and moves on.
 - Choosing an item closes its menu, and the menus it opened from, before its `on_click` runs, so the handler can open another dialog.
 - A submenu opens when the pointer moves onto its item, or with a click, Right or Enter (Left right to left, the way it opens); Left (Right) or Escape closes it alone. A long menu scrolls.
+- A span (`ui.span`) takes `context_menu` too, and a `ui.rich` paragraph's is told the run (`e.span`): see [Text](text.md).
 - The innermost node with a `context_menu` takes the secondary click; Shift+F10 or the Menu key opens it under what has focus. Terminals hand the right clicks their program does not use to the node, so a terminal's context menu opens over it.
 
 ## Example
@@ -117,6 +122,66 @@ return ui.column {
 }
 ```
 
+### Suggestions at the caret
+
+A mention's suggestions: a popover `at_caret` over the composer, open while the text before the caret ends in `@name`, the composer's keys moving through them.
+
+```lua
+local people = { "ada", "grace", "alan" }
+local text = ui.state("text", "")
+local active = ui.state("active", 1)
+local query = ui.computed(function(): string?
+	return text:get():match("@(%w*)$")
+end)
+local function choose(name: string)
+	text:set((text:peek():gsub("@%w*$", `@{name} `)))
+end
+local options: ContainerProps = {}
+for i, name in people do
+	options[i] = ui.button {
+		id = `person-{name}`,
+		role = "option",
+		selected = function()
+			return active:get() == i
+		end,
+		on_click = function()
+			choose(name)
+		end,
+		name,
+	}
+end
+return ui.popover {
+	open = function()
+		return query:get() ~= nil
+	end,
+	on_close = function() end,
+	at_caret = true,
+	w = 160,
+	anchor = ui.textarea {
+		value = text,
+		w = 320,
+		active_descendant = function()
+			return if query:get() then `person-{people[active:get()]}` else nil
+		end,
+		on_key = function(e: KeyEvent)
+			if query:peek() == nil then
+				return false
+			end
+			if e.key == "ArrowDown" or e.key == "ArrowUp" then
+				local step = if e.key == "ArrowDown" then 1 else -1
+				active:set((active:peek() - 1 + step) % #people + 1)
+				return true
+			elseif e.key == "Enter" or e.key == "Tab" then
+				choose(people[active:peek()])
+				return true
+			end
+			return false
+		end,
+	},
+	ui.column(options),
+}
+```
+
 ## Gotchas
 
 - `open` must be a state; the panel writes `false` back to it when it closes, so a toggle that reads it stays right.
@@ -130,6 +195,43 @@ return ui.column {
 ## layer
 
 `ui.layer { open?, placement?, … }` is a non-modal layer over the window, for toasts and other heads-up content: it takes no focus and has no backdrop, the pointer passes through it except over what it holds, and what it holds stays clickable while a dialog holds focus. It is raised over everything (dialogs included) each time it opens, so toasts shown while a dialog is open draw over the dialog's backdrop. `open` is a state (open when not given); `placement` sits it in the window as a modal's does (`{ x = "end", y = "end", inset = { 0, 24, 16, 0 } }` for a bottom-right stack).
+
+## decision
+
+`ui.decision { key, label?, … }` holds controls no plugin may reach or cover: tool approval, sign-in, keeping or reverting a template. Only the app's own script makes one (from a plugin it is an error).
+
+```lua
+local answer = ui.state("answer", "")
+return ui.decision { key = "approve",
+    ui.row { gap = 8,
+        ui.button { "Allow", on_click = function() answer:set("allow") end },
+        ui.button { "Deny", on_click = function() answer:set("deny") end },
+    },
+}
+```
+
+What it holds is drawn and hit over everything in the window, a plugin's `ui.modal` and `ui.layer` included, and stays live under them. It stays out of plugins' reach however it builds: no contribution, replacement, filter or slot gets in, rows and components included.
+
+The element itself stays in flow and holds the room its content takes, across and down; give it `w`, `h`, `w_full` or `h_full` and its content takes that size instead. The content scrolls with it and is cut to what shows of it. Its own props style only that box in flow: put what paints (a background) on what it holds. Effects on its ancestors (a fade, a filter) don't reach its content.
+
+While a keyboard modal of a plugin's is up, the pointer reaches a decision but Tab stays in the modal.
+
+See [plugins](../plugins.md) for what a plugin is refused and what a host checks (`ScriptHost::decision_shown`).
+
+## sealed
+
+`ui.sealed { key?, label?, … }` is a region no plugin reaches or draws over, as a [decision](#decision) is, for what is bigger than a few controls: a Settings page. Give it its size (`w_full`, `h_full`). Only the app's own script makes one.
+
+`ui.plugin_page { plugin = name, … }` inside it is that plugin's own page: what that plugin alone gave `ui.contribute("plugin_page", …)`. Everything it draws and opens (a modal, a layer, a popover) is cut to this box, and its popups stay in the window. Outside a `ui.sealed` region it shows nothing, and reports an error.
+
+```lua
+return ui.sealed { w_full = true, h_full = true,
+    ui.column { w_full = true, h_full = true,
+        ui.text { "Settings" },
+        ui.plugin_page { plugin = "spell-check", w_full = true, h = 200 },
+    },
+}
+```
 
 ## toast
 

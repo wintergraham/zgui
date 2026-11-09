@@ -401,3 +401,284 @@ fn reactive_editor_text_color_only_damages_paint() {
     ui.prepare_frame();
     assert!(ui.scene.borrow_mut().flush().is_idle());
 }
+
+/// Whether an editor of `long` text, mounted, edited and dropped with its
+/// whole interface, leaves its text shaper held: bound to a `TextValue`
+/// (`text_area_value`), or to a `String` (`text_area`).
+fn shaper_kept_after_drop(long: bool, string: bool) -> bool {
+    use zgx::text_layout::{FallbackTextLayout, FontStyle, TextLayout};
+    let owner = std::rc::Rc::new(());
+    let held = std::rc::Rc::downgrade(&owner);
+    {
+        let mut ui = Ui::new(320., 240.);
+        ui.scene.borrow_mut().set_font_text_shaper(
+            move |text: &str, size, width, font: &FontStyle| -> Box<dyn TextLayout> {
+                std::hint::black_box(&owner);
+                Box::new(FallbackTextLayout::with_font(text, size, width, font))
+            },
+        );
+        let text = if long {
+            "line of text\n".repeat(6000)
+        } else {
+            "short text".to_owned()
+        };
+        let area = if string {
+            zgx::compose::text_area("Notes", ui.signal(text))
+        } else {
+            zgx::compose::text_area_value("Notes", ui.signal(TextValue::from(text)))
+        };
+        let view = ui.mount(area.size(300., 200.));
+        ui.prepare_frame();
+        let editor = ui.editor(view.node()).unwrap();
+        // (A String's editor keeps it flat; its layout goes by lines all
+        // the same once it is long.)
+        if !string {
+            assert_eq!(editor.editor.borrow().long_text().is_some(), long);
+        }
+        editor.set_selection(0, 0);
+        ui.prepare_frame();
+        ui.scene.borrow_mut().flush();
+    }
+    held.upgrade().is_some()
+}
+
+#[test]
+fn a_dropped_editor_lets_go_of_its_layout_and_shaper() {
+    for string in [false, true] {
+        let bound = if string { "a String" } else { "a TextValue" };
+        assert!(
+            !shaper_kept_after_drop(false, string),
+            "a short editor of {bound}"
+        );
+        assert!(
+            !shaper_kept_after_drop(true, string),
+            "a long editor of {bound} (its lines' layout)"
+        );
+    }
+}
+
+/// The text the frame draws, in paint order.
+fn shown_text(ui: &Ui) -> Vec<String> {
+    ui.scene
+        .borrow()
+        .paint_items()
+        .filter_map(|item| match item.kind {
+            NodeKind::Text { text, .. } => Some(text.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Editing in the same text (`replace_text` or `insert_text`) while
+/// composing ends the composition without changing what is committed: the
+/// next frame draws the text without it.
+#[test]
+fn putting_in_the_same_text_ends_the_drawn_composition() {
+    for insert in [false, true] {
+        let mut ui = Ui::new(400., 200.);
+        let model = ui.signal(String::from("abc"));
+        let view = ui.mount(zgx::compose::text_area("test", model).size(300., 120.));
+        ui.prepare_frame();
+        ui.input.focus(&ui.scene, Some(view.node()));
+        let editor = ui.focused_editor().unwrap();
+        editor.set_selection(1, 2);
+        editor.set_composition("候補", Some((0, 6)), &[]);
+        ui.prepare_frame();
+        let changed = if insert {
+            editor.insert_text("b")
+        } else {
+            editor.replace_text(0..3, "abc")
+        };
+        assert!(!changed);
+        ui.prepare_frame();
+        assert!(editor.editor.borrow().preedit().is_none());
+        let drawn = shown_text(&ui);
+        editor.refresh();
+        ui.prepare_frame();
+        let how = if insert {
+            "insert_text"
+        } else {
+            "replace_text"
+        };
+        assert_eq!(
+            drawn,
+            shown_text(&ui),
+            "{how}: the frame still drew the composition"
+        );
+    }
+}
+
+#[test]
+fn a_long_editor_takes_a_character_straddling_a_chunk_cut() {
+    for wide in ["é", "候", "😀"] {
+        let text = format!("{}{wide}{}", "a".repeat(6143), "b".repeat(60_000));
+        let editor = zgx::text_edit::TextEditor::new(text.clone());
+        assert_eq!(editor.text(), text, "{wide}");
+    }
+}
+
+/// A short bound text stays the editor's through every kind of edit, the
+/// app's own values between them taken as before; a keystroke after the
+/// first goes into the bound string where it is, not as a new copy of it.
+#[test]
+fn a_short_bound_text_takes_each_edit_in_place() {
+    let mut ui = Ui::new(500., 400.);
+    let mut start = String::with_capacity(4096);
+    start.push_str("hello");
+    let value = ui.signal(start);
+    let flat = ui.signal(TextValue::Flat(String::from("one")));
+    let mounted = ui.mount(
+        column().children([
+            text_area("Notes", value.clone())
+                .id("notes")
+                .size(300., 120.),
+            text_area_value("Flat", flat.clone())
+                .id("flat")
+                .size(300., 120.),
+        ]),
+    );
+    let key = |ui: &mut Ui, key: Key| {
+        ui.dispatch(InputEvent::KeyDown {
+            key,
+            modifiers: Modifiers::default(),
+            repeat: false,
+        })
+    };
+    assert!(
+        ui.input
+            .focus(&ui.scene, Some(mounted.find("notes").unwrap()))
+    );
+    let editor = ui.focused_editor().unwrap();
+    let same = |editor: &EditorHandle| value.get() == editor.editor.borrow().text();
+    ui.dispatch(InputEvent::Text("!".into()));
+    assert_eq!(value.get(), "hello!");
+    // Room to type into, the value unchanged (no write, no new version).
+    value.mutate(|v| {
+        v.reserve(4096);
+        false
+    });
+    let at = value.with_untracked(|v| v.as_ptr());
+    ui.dispatch(InputEvent::Text("?".into()));
+    assert_eq!(value.get(), "hello!?");
+    assert_eq!(value.with_untracked(|v| v.as_ptr()), at, "typed in place");
+    editor.editor.borrow_mut().set_selection(0, 0);
+    ui.dispatch(InputEvent::Text("¡".into()));
+    let end = editor.editor.borrow().len();
+    editor.editor.borrow_mut().set_selection(end, end);
+    key(&mut ui, Key::Backspace);
+    assert_eq!(value.get(), "¡hello!");
+    assert!(same(&editor));
+    // The app's value between keys is taken, and the next key edits it.
+    value.set(String::from("from the app"));
+    assert!(same(&editor));
+    ui.dispatch(InputEvent::Text("\nsecond".into()));
+    assert_eq!(value.get(), "from the app\nsecond");
+    // A value not in canonical form is made so, then typed into.
+    value.set(String::from("a\r\nb"));
+    assert_eq!(editor.editor.borrow().text(), "a\nb");
+    assert_eq!(value.get(), "a\nb");
+    ui.dispatch(InputEvent::Text("c".into()));
+    assert_eq!(value.get(), "a\nbc");
+    assert!(editor.undo() && same(&editor));
+    assert!(editor.redo() && same(&editor));
+    editor.paste(" pasted");
+    ui.dispatch(InputEvent::ImePreedit {
+        text: "日本".into(),
+        cursor: Some((6, 6)),
+    });
+    assert_eq!(value.get(), "a\nbc pasted", "preedit leaves it");
+    ui.dispatch(InputEvent::ImeCommit("日本".into()));
+    assert_eq!(value.get(), "a\nbc pasted日本");
+    assert!(same(&editor));
+    // A flat text value, the same.
+    assert!(
+        ui.input
+            .focus(&ui.scene, Some(mounted.find("flat").unwrap()))
+    );
+    let editor = ui.focused_editor().unwrap();
+    ui.dispatch(InputEvent::Text("s".into()));
+    editor.editor.borrow_mut().set_selection(0, 0);
+    ui.dispatch(InputEvent::Text("<".into()));
+    assert!(flat.with_untracked(|v| *v == *"<ones"));
+    assert!(editor.undo());
+    assert!(flat.with_untracked(|v| *v == *"ones"));
+    mounted.unmount();
+}
+
+/// A long bound document holding carriage returns is still made canonical,
+/// as is one with line breaks bound to a single line.
+#[test]
+fn a_long_document_with_returns_is_made_canonical() {
+    let mut ui = Ui::new(500., 400.);
+    let document: String = (0..10_000).map(|i| format!("line {i}\r\n")).collect();
+    let value = ui.signal(TextValue::from(document.as_str()));
+    let mounted = ui.mount(text_area_value("Document", value.clone()).size(300., 180.));
+    assert!(ui.input.focus(&ui.scene, Some(mounted.node())));
+    let editor = ui.focused_editor().unwrap();
+    assert_eq!(
+        editor.editor.borrow().text(),
+        document.replace("\r\n", "\n")
+    );
+    assert!(value.with_untracked(|v| !v.to_cow().contains('\r')));
+    mounted.unmount();
+    let line: String = (0..10_000).map(|i| format!("word {i}\n")).collect();
+    let value = ui.signal(TextValue::from(line.as_str()));
+    let mounted = ui.mount(text_input_value("Line", value.clone()));
+    assert!(ui.input.focus(&ui.scene, Some(mounted.node())));
+    let editor = ui.focused_editor().unwrap();
+    assert!(!editor.editor.borrow().text().contains('\n'));
+    mounted.unmount();
+}
+
+/// A field one line high is as high as `control.height` says, and follows
+/// it, and the system text size, as they change: its line stays inside it.
+/// An app's own height holds, and a text area keeps its own.
+#[test]
+fn a_one_line_field_follows_the_control_height_and_text_size_live() {
+    use zgx::theme::{ThemeOverride, tok};
+    let mut ui = Ui::new(500., 400.);
+    let value = ui.signal(String::from("Hello"));
+    let height = ui.signal(36.0f32);
+    let read = height.clone();
+    let mounted = ui.mount(theme_scope_with(
+        move || ThemeOverride::new().with(tok::CONTROL_HEIGHT, read.get()),
+        column().children([
+            text_input("Name", value.clone()).id("name").w(240.),
+            text_input("Own", value.clone()).id("own").w(240.).h(30.),
+            text_area("Notes", value.clone()).id("notes").w(240.),
+        ]),
+    ));
+    ui.prepare_frame();
+    let [name, own, notes] = ["name", "own", "notes"].map(|id| mounted.find(id).unwrap());
+    let height_of = |ui: &Ui, node| ui.scene.borrow().bounds(node).height;
+    // The line, inside the field's box.
+    let fits = |ui: &Ui| {
+        let line = ui.editor(name).unwrap().text_area(0..1).unwrap();
+        let field = ui.scene.borrow().bounds(name);
+        assert!(
+            line.y >= field.y && line.y + line.height <= field.y + field.height,
+            "line {line:?} inside {field:?}"
+        );
+        line.height
+    };
+    assert_eq!(height_of(&ui, name), 36.);
+    let notes_height = height_of(&ui, notes);
+    let line = fits(&ui);
+    height.set(48.);
+    ui.prepare_frame();
+    assert_eq!(height_of(&ui, name), 48.);
+    fits(&ui);
+    // Twice the text: its line and padding, past the theme's 48.
+    ui.theme().set_system_text_scale(2.);
+    ui.prepare_frame();
+    let scaled = fits(&ui);
+    assert!(scaled > line * 1.8, "the line grew: {line} to {scaled}");
+    assert_eq!(height_of(&ui, name), scaled + 12.);
+    assert_eq!(height_of(&ui, own), 30., "the app's own height");
+    assert_eq!(height_of(&ui, notes), notes_height, "a text area's own");
+    // Back: the theme's again.
+    ui.theme().set_system_text_scale(1.);
+    ui.prepare_frame();
+    assert_eq!(height_of(&ui, name), 48.);
+    fits(&ui);
+}

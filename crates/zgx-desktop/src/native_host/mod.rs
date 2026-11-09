@@ -8,21 +8,32 @@
 //! backdrops under overlay glass in one Core Animation transaction (macOS)
 //! or DirectComposition commit (Windows, with the `webview2` feature), so
 //! they never drift a frame apart. A window without native views does none
-//! of it.
+//! of it. On Linux (the `webkitgtk` feature) pages are images in the
+//! window's own paint instead (`webkitgtk.rs`), and none of this applies.
 #[cfg(all(windows, not(feature = "webview2")))]
 mod child;
 #[cfg(all(windows, feature = "webview2"))]
 mod dcomp;
 #[cfg(all(target_os = "macos", feature = "ghostty"))]
 mod ghostty;
+#[cfg(any(all(target_os = "macos", feature = "ghostty"), test))]
+mod ghostty_colors;
+#[cfg(all(target_os = "linux", feature = "webkitgtk"))]
+mod gtk;
+#[cfg(all(target_os = "linux", feature = "webkitgtk"))]
+pub(crate) mod webkitgtk;
 #[cfg(all(target_os = "macos", feature = "ghostty"))]
 pub(crate) use ghostty::processes_changed;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
+pub(crate) use macos::modifiers_watched;
+#[cfg(target_os = "macos")]
 mod webkit;
 #[cfg(all(windows, feature = "webview2"))]
 mod webview2;
+#[cfg(any(all(windows, feature = "webview2"), test))]
+mod webview2_keys;
 
 use std::rc::Rc;
 use zgx::{
@@ -34,7 +45,7 @@ use zgx::{
 #[cfg(target_os = "macos")]
 pub use macos::{BackdropReport, NativeDiagnostics, NativeViewReport};
 #[cfg(target_os = "macos")]
-pub(crate) use macos::{disable_cursor_rects, set_cursor};
+pub(crate) use macos::{disable_cursor_rects, set_cursor, show_cursor};
 #[cfg(target_os = "macos")]
 pub(crate) type NativeDiagnosticsHandle = NativeDiagnostics;
 #[cfg(not(target_os = "macos"))]
@@ -98,11 +109,19 @@ pub(crate) struct NativeHost {
         allow(dead_code)
     )]
     input: zgx::input::InputDispatcher,
+    /// The window's runtime, for the modifier keys a page's focus hides
+    /// from winit (macOS's `Router::runtime`).
+    #[cfg(target_os = "macos")]
+    runtime: zgx::reactive::WeakRuntime,
     _waker: zgx::native_view::WakerGuard,
+    /// Wakes the window when WebKitGTK's thread has something for it.
+    #[cfg(all(target_os = "linux", feature = "webkitgtk"))]
+    _pages_waker: webkitgtk::WakerGuard,
 }
 
 impl NativeHost {
-    pub fn new(ui: &Ui, wake: impl Fn() + 'static) -> Self {
+    pub fn new(ui: &Ui, wake: impl Fn() + Send + Sync + 'static) -> Self {
+        let wake = std::sync::Arc::new(wake);
         let natives = NativeViews::new();
         // Pages go in DirectComposition visuals, which only Direct3D 12
         // presents into: a `WGPU_BACKEND` without it leaves them placeholders.
@@ -115,6 +134,8 @@ impl NativeHost {
         #[cfg(not(all(windows, feature = "webview2")))]
         let supported = cfg!(any(target_os = "macos", windows));
         natives.set_supported(supported);
+        #[cfg(target_os = "macos")]
+        natives.set_glass_supported(macos::glass_available());
         Self {
             natives,
             diagnostics: Default::default(),
@@ -138,7 +159,11 @@ impl NativeHost {
             pending: false,
             scene: Rc::downgrade(&ui.scene),
             input: ui.input.clone(),
-            _waker: zgx::native_view::set_waker(wake),
+            #[cfg(target_os = "macos")]
+            runtime: ui.runtime.downgrade(),
+            #[cfg(all(target_os = "linux", feature = "webkitgtk"))]
+            _pages_waker: webkitgtk::add_waker(wake.clone()),
+            _waker: zgx::native_view::set_waker(move || wake()),
         }
     }
     /// The window's renderer, sharing `context` when given. On Windows with
@@ -292,6 +317,8 @@ impl NativeHost {
                 #[cfg(target_os = "macos")]
                 unheard: Default::default(),
                 zoom: std::cell::Cell::new(1.),
+                #[cfg(target_os = "macos")]
+                runtime: self.runtime.clone(),
             };
             #[cfg(target_os = "macos")]
             let surfaces = macos::Surfaces::new(window, router);

@@ -32,7 +32,19 @@ struct EffectRecord {
     queued: bool,
     /// Never to run again (`Effect::stop`); freed when its handle drops.
     stopped: bool,
+    /// Reads no layout: a mount runs it without drawing its text inputs
+    /// first (`Runtime::batch_watched`).
+    mount_pure: bool,
+    /// Has held what was made while it ran (`Runtime::own`, in
+    /// `Inner::owned`): its callback was wrapped to drop that before it runs
+    /// again, and its drop drops it. Effects that never own pay nothing.
+    owns: bool,
 }
+/// What effects made while they ran, by effect (`Runtime::own`).
+type Owned = HashMap<EffectId, Vec<Box<dyn Any>>, std::hash::BuildHasherDefault<IdHasher>>;
+/// An effect running ([`Runtime::running`]), to compare with another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Running(EffectId);
 /// Effect ids are unique integers; a multiplicative hash beats SipHash here.
 #[derive(Default, Clone, Copy)]
 struct IdHasher(u64);
@@ -49,14 +61,91 @@ impl std::hash::Hasher for IdHasher {
         self.0 = value.wrapping_mul(0x9e37_79b9_7f4a_7c15);
     }
 }
-type IdMap<V> = HashMap<EffectId, V, std::hash::BuildHasherDefault<IdHasher>>;
+/// Low bits of an effect's id: its slot in `Effects`.
+const SLOT_BITS: u32 = 24;
+const SLOT_MASK: EffectId = (1 << SLOT_BITS) - 1;
+/// Effects by id: slots, reused once freed. An id is `born << SLOT_BITS |
+/// slot`, `born` counting effects made, never reused: ids order effects
+/// by age as a plain count does, and a slot remembers whose it is, so a
+/// stale id finds nothing.
+#[derive(Default)]
+struct Effects {
+    slots: Vec<(EffectId, Option<EffectRecord>)>,
+    free: Vec<u32>,
+    live: usize,
+}
+impl Effects {
+    /// Keep `record` as the effect `born`-th made: its id.
+    fn insert(&mut self, born: u64, record: EffectRecord) -> EffectId {
+        assert!(born < 1 << (64 - SLOT_BITS), "effect identifiers exhausted");
+        let slot = match self.free.pop() {
+            Some(slot) => slot as usize,
+            None => {
+                assert!(self.slots.len() < 1 << SLOT_BITS, "too many effects");
+                self.slots.push((EffectId::MAX, None));
+                self.slots.len() - 1
+            }
+        };
+        let id = born << SLOT_BITS | slot as EffectId;
+        self.slots[slot] = (id, Some(record));
+        self.live += 1;
+        id
+    }
+    #[inline(always)]
+    fn get(&self, id: &EffectId) -> Option<&EffectRecord> {
+        match self.slots.get((id & SLOT_MASK) as usize) {
+            Some((at, record)) if at == id => record.as_ref(),
+            _ => None,
+        }
+    }
+    #[inline(always)]
+    fn get_mut(&mut self, id: &EffectId) -> Option<&mut EffectRecord> {
+        match self.slots.get_mut((id & SLOT_MASK) as usize) {
+            Some((at, record)) if at == id => record.as_mut(),
+            _ => None,
+        }
+    }
+    fn remove(&mut self, id: &EffectId) -> Option<EffectRecord> {
+        let slot = (id & SLOT_MASK) as usize;
+        match self.slots.get_mut(slot) {
+            Some((at, record)) if at == id => {
+                *at = EffectId::MAX;
+                let record = record.take();
+                self.live -= 1;
+                self.free.push(slot as u32);
+                record
+            }
+            _ => None,
+        }
+    }
+    fn len(&self) -> usize {
+        self.live
+    }
+    /// The slots past the last effect in use go, with the room above what
+    /// is left, and what is made next takes the lowest. (A slot's id never
+    /// comes back, so that one gone and made again names no stale effect.)
+    fn rest(&mut self) {
+        while self
+            .slots
+            .last()
+            .is_some_and(|(_, record)| record.is_none())
+        {
+            self.slots.pop();
+        }
+        let left = self.slots.len() as u32;
+        self.free.retain(|slot| *slot < left);
+        self.free.sort_unstable_by(|a, b| b.cmp(a));
+        self.slots.shrink_to_fit();
+        self.free.shrink_to_fit();
+    }
+}
 /// A signal's subscribers, in no order: a flush orders what runs. A set
 /// most nodes' effects join (the inherited typography) is removed from
 /// one by one as they go, in constant time.
 type IdSet = HashSet<EffectId, std::hash::BuildHasherDefault<IdHasher>>;
 #[derive(Default)]
 struct Inner {
-    effects: RefCell<IdMap<EffectRecord>>,
+    effects: RefCell<Effects>,
     /// Effects to run, the oldest first (they were made before what they
     /// made): those queued outside a flush (a batch's writes, most of them)
     /// in `queued`, sorted once as a flush starts; those queued while it
@@ -66,9 +155,10 @@ struct Inner {
     queued: RefCell<Vec<EffectId>>,
     pending: RefCell<BinaryHeap<Reverse<EffectId>>>,
     /// Room `newest_first` orders `queued` in, kept between flushes.
-    order: RefCell<Vec<u64>>,
+    order: RefCell<Order>,
     active: Cell<Option<EffectId>>,
-    next: Cell<EffectId>,
+    /// Effects made so far (`Effects::insert`'s `born`).
+    next: Cell<u64>,
     /// Effects stopped whose handles still live (`Effect::stop`).
     stopped: Cell<usize>,
     batch_depth: Cell<usize>,
@@ -79,6 +169,13 @@ struct Inner {
     holds: Cell<usize>,
     /// One value per type that belongs to this runtime (`Runtime::extension`).
     extensions: RefCell<Vec<(TypeId, Rc<dyn Any>)>>,
+    /// What runs as a host of this runtime goes idle (`idle::on_idle`). A
+    /// field, not an extension: `extension` scans in order, and an entry
+    /// ahead of `Themes` would tax every theme read.
+    idle: RefCell<Vec<std::rc::Weak<dyn Fn()>>>,
+    /// What effects made while they ran (`Runtime::own`), by effect: few
+    /// ever do, so a side map rather than a field each.
+    owned: RefCell<Owned>,
 }
 
 /// The effect running for as long as it lives: whatever ran before runs
@@ -101,47 +198,124 @@ impl Drop for Active<'_> {
         self.slot.set(self.previous);
     }
 }
+/// `newest_first`'s room: a bit for each effect born in the range queued,
+/// and its slot.
+#[derive(Default)]
+struct Order {
+    bits: Vec<u64>,
+    slots: Vec<u32>,
+}
 /// Sort `ids` newest (highest) first. Subscribers come in no order, but the
 /// ids a write queues are mostly close together (effects made together): a
-/// bit for each id in their range, read from the top, orders them in one
-/// pass rather than a sort's many (a dashboard queues a thousand a tick).
-/// No id is queued twice (`EffectRecord::queued`), so none is lost.
-fn newest_first(ids: &mut Vec<EffectId>, bits: &mut Vec<u64>) {
+/// bit for each id's `born` in their range, read from the top, orders them
+/// in one pass rather than a sort's many (a dashboard queues a thousand a
+/// tick). No id is queued twice (`EffectRecord::queued`), so none is lost.
+#[inline(always)]
+fn newest_first<const IN_PLACE: bool>(ids: &mut Vec<EffectId>, order: &mut Order) {
     // Effects queued as they are made come oldest first: reversed.
-    let (mut low, mut high, mut ascending) = (EffectId::MAX, 0, true);
+    let (mut low, mut high, mut ascending) = (u64::MAX, 0, true);
     let mut last = 0;
     for &id in ids.iter() {
         ascending &= id >= last;
         last = id;
-        low = low.min(id);
-        high = high.max(id);
+        let bound = if IN_PLACE { id } else { id >> SLOT_BITS };
+        low = low.min(bound);
+        high = high.max(bound);
     }
     if ascending {
         ids.reverse();
         return;
     }
+    let (low, high) = if IN_PLACE {
+        (low >> SLOT_BITS, high >> SLOT_BITS)
+    } else {
+        (low, high)
+    };
     let span = high - low;
     if ids.len() < 32 || span / 32 > ids.len() as u64 {
         ids.sort_unstable_by(|a, b| b.cmp(a));
         return;
     }
+    let Order { bits, slots } = order;
     bits.clear();
     bits.resize(span as usize / 64 + 1, 0);
-    for id in ids.iter() {
-        let at = id - low;
-        bits[at as usize / 64] |= 1 << (at % 64);
+    if slots.len() <= span as usize {
+        slots.resize(span as usize + 1, 0);
     }
-    ids.clear();
-    for (word, &set) in bits.iter().enumerate().rev() {
-        let mut set = set;
-        while set != 0 {
-            let bit = 63 - set.leading_zeros() as u64;
-            ids.push(low + word as u64 * 64 + bit);
-            set &= !(1 << bit);
+    for id in ids.iter() {
+        let at = (id >> SLOT_BITS) - low;
+        bits[at as usize / 64] |= 1 << (at % 64);
+        slots[at as usize] = (id & SLOT_MASK) as u32;
+    }
+    let id = |at: u64| (low + at) << SLOT_BITS | EffectId::from(slots[at as usize]);
+    // In place, over the ids taken (as many come out): for `flush`. The
+    // barrier's flush keeps clearing and pushing, which codegens smaller
+    // there (research A's A22).
+    if IN_PLACE {
+        let mut written = 0;
+        for (word, &set) in bits.iter().enumerate().rev() {
+            let mut set = set;
+            while set != 0 {
+                let bit = 63 - set.leading_zeros() as u64;
+                ids[written] = id(word as u64 * 64 + bit);
+                written += 1;
+                set &= !(1 << bit);
+            }
+        }
+        ids.truncate(written);
+    } else {
+        ids.clear();
+        for (word, &set) in bits.iter().enumerate().rev() {
+            let mut set = set;
+            while set != 0 {
+                let bit = 63 - set.leading_zeros() as u64;
+                ids.push(id(word as u64 * 64 + bit));
+                set &= !(1 << bit);
+            }
         }
     }
 }
 impl Inner {
+    /// Drop what effect `id` made while it ran, with no borrow held: a
+    /// resource's drop (a script's cleanup) may run effects and make more.
+    #[cold]
+    #[inline(never)]
+    fn release(&self, id: EffectId) {
+        let made = self.owned.borrow_mut().remove(&id);
+        drop(made);
+    }
+    /// [`Inner::release`] before effect `id` runs again: untracked, so a
+    /// cleanup's reads don't become the effect's dependencies.
+    #[cold]
+    #[inline(never)]
+    fn release_before_run(&self, id: EffectId) {
+        struct Restore<'a>(&'a Cell<Option<EffectId>>, Option<EffectId>);
+        impl Drop for Restore<'_> {
+            fn drop(&mut self) {
+                self.0.set(self.1);
+            }
+        }
+        let _restore = Restore(&self.active, self.active.replace(None));
+        self.release(id);
+    }
+    /// Queue effect `id` again, in a flush's heap if one is running: it
+    /// was asked to run (`Refresh::refresh`) while it ran.
+    #[cold]
+    #[inline(never)]
+    fn run_again(&self, id: EffectId) {
+        let queued = match self.effects.borrow_mut().get_mut(&id) {
+            Some(record) if !record.stopped => !std::mem::replace(&mut record.queued, true),
+            _ => false,
+        };
+        // Not `queue`: a second caller would stop it inlining in
+        // `effect_callback`.
+        if queued {
+            match self.flushing.get() {
+                true => self.pending.borrow_mut().push(Reverse(id)),
+                false => self.queued.borrow_mut().push(id),
+            }
+        }
+    }
     /// Queue effect `id` to run: in a flush's heap if one is running.
     fn queue(&self, id: EffectId) {
         match self.flushing.get() {
@@ -152,6 +326,7 @@ impl Inner {
     /// Run effect `id` if it is queued. Its heap entry may outlive the
     /// queueing (`Refresh::refresh` ran it early), so an effect that isn't
     /// queued is left alone. Returns whether it ran.
+    #[inline(always)]
     fn run(&self, id: EffectId) -> bool {
         let callback = {
             let mut effects = self.effects.borrow_mut();
@@ -249,18 +424,36 @@ impl Runtime {
     }
     /// Runs immediately. Keep the returned handle alive to keep the subscription.
     pub fn effect(&self, callback: impl FnMut() + 'static) -> Effect {
-        let id = self.inner.next.get();
-        self.inner
-            .next
-            .set(id.checked_add(1).expect("effect identifiers exhausted"));
-        self.inner.effects.borrow_mut().insert(
-            id,
+        self.effect_marked(false, callback)
+    }
+    /// [`Runtime::effect`], `mount_pure` if it reads no layout.
+    pub(crate) fn effect_marked(
+        &self,
+        mount_pure: bool,
+        callback: impl FnMut() + 'static,
+    ) -> Effect {
+        self.effect_callback(mount_pure, Rc::new(RefCell::new(callback)))
+    }
+    /// [`Runtime::effect_marked`] with its callback already allocated: a
+    /// large closure moves into its allocation once.
+    /// A host at rest (`idle::trim`): what its effects' table holds beyond
+    /// the effects there are.
+    pub(crate) fn rest(&self) {
+        self.inner.effects.borrow_mut().rest();
+    }
+    pub(crate) fn effect_callback(&self, mount_pure: bool, callback: Callback) -> Effect {
+        let born = self.inner.next.get();
+        self.inner.next.set(born + 1);
+        let id = self.inner.effects.borrow_mut().insert(
+            born,
             EffectRecord {
-                callback: Rc::new(RefCell::new(callback)),
+                callback,
                 dependencies: Default::default(),
                 run: 0,
                 queued: true,
                 stopped: false,
+                mount_pure,
+                owns: false,
             },
         );
         self.inner.queue(id);
@@ -279,19 +472,19 @@ impl Runtime {
         if self.inner.batch_depth.get() == 0 && !self.inner.flushing.get() {
             return self.effect(callback);
         }
-        let id = self.inner.next.get();
-        self.inner
-            .next
-            .set(id.checked_add(1).expect("effect identifiers exhausted"));
+        let born = self.inner.next.get();
+        self.inner.next.set(born + 1);
         let callback: Callback = Rc::new(RefCell::new(callback));
-        self.inner.effects.borrow_mut().insert(
-            id,
+        let id = self.inner.effects.borrow_mut().insert(
+            born,
             EffectRecord {
                 callback: callback.clone(),
                 dependencies: Default::default(),
                 run: 1,
                 queued: false,
                 stopped: false,
+                mount_pure: false,
+                owns: false,
             },
         );
         // Made before it runs: a first run that panics drops it, so
@@ -305,6 +498,57 @@ impl Runtime {
             (*callback.borrow_mut())();
         }
         effect
+    }
+    /// The effect running now, if one is: a computed's or an effect's run.
+    /// A host compares it with the one that ran as it began building
+    /// something, to tell which of the two made what it is given.
+    pub fn running(&self) -> Option<Running> {
+        self.inner.active.get().map(Running)
+    }
+    /// Give `resource` to the effect running now: it is dropped before that
+    /// effect runs again and when the effect goes, as a React effect's
+    /// cleanup runs between runs. Given back when no effect is running.
+    pub fn own(&self, resource: Box<dyn Any>) -> Result<(), Box<dyn Any>> {
+        let Some(id) = self.inner.active.get() else {
+            return Err(resource);
+        };
+        match self.inner.effects.borrow_mut().get_mut(&id) {
+            Some(record) if !record.owns => {
+                record.owns = true;
+                record.callback = self.releasing(id, record.callback.clone());
+            }
+            Some(_) => {}
+            None => return Err(resource),
+        }
+        self.inner
+            .owned
+            .borrow_mut()
+            .entry(id)
+            .or_default()
+            .push(resource);
+        Ok(())
+    }
+    /// Effect `id`'s `callback`, dropping what its last run made before it
+    /// runs: wrapped the first time it owns something, so a run (in
+    /// `flush`) of an effect that never does costs what it did.
+    #[cold]
+    #[inline(never)]
+    fn releasing(&self, id: EffectId, callback: Callback) -> Callback {
+        let inner = Rc::downgrade(&self.inner);
+        Rc::new(RefCell::new(move || {
+            let Some(inner) = inner.upgrade() else {
+                return;
+            };
+            // Wrapped while it ran: a refresh then sees this wrapper free,
+            // though the run it wraps isn't over. It runs once that is.
+            let Ok(mut run) = callback.try_borrow_mut() else {
+                inner.run_again(id);
+                return;
+            };
+            inner.release_before_run(id);
+            drop(inner);
+            run();
+        }))
     }
     /// Whether a write now runs no effects before returning: inside a batch,
     /// or a flush, which run them once they end.
@@ -387,6 +631,152 @@ impl Runtime {
         let _guard = Guard(self);
         f()
     }
+    /// Holds the effects writes wake until the returned guard drops, as a
+    /// batch does, with no flush at all when none woke; nothing (`None`)
+    /// inside a batch or a flush, where writes already wait. For a removal,
+    /// whose destructors may write state its own effects read: those are
+    /// gone when the guard drops.
+    #[inline(always)]
+    pub(crate) fn hold_effects(&self) -> Option<HeldEffects> {
+        if self.deferring() {
+            return None;
+        }
+        self.inner.batch_depth.set(self.inner.batch_depth.get() + 1);
+        Some(HeldEffects(self.clone()))
+    }
+    /// The effect whose reads subscribe it now.
+    pub(crate) fn active_effect(&self) -> Option<EffectId> {
+        self.inner.active.get()
+    }
+    /// Run `f` with its reads subscribing effect `id`, as if it were part of
+    /// its last run: a draw a mount deferred from an effect.
+    pub(crate) fn run_as(&self, id: EffectId, f: &dyn Fn()) {
+        let _active = Active::run(&self.inner.active, id);
+        f();
+    }
+    /// [`Runtime::batch`], whose flush, if `watched` says it once `f` has
+    /// returned, tells `watch` of each observer that isn't `mount_pure` as
+    /// it starts (`true`) and ends (`false`, a panic's unwinding included).
+    /// For a mount, which keeps what they read of its geometry.
+    pub(crate) fn batch_watched<R>(
+        &self,
+        f: impl FnOnce() -> R,
+        mut watch: impl FnMut(EffectId, bool),
+        watched: impl Fn() -> bool,
+    ) -> R {
+        self.inner.batch_depth.set(self.inner.batch_depth.get() + 1);
+        struct Guard<'a, F: FnMut(EffectId, bool), P: Fn() -> bool>(&'a Runtime, &'a mut F, P);
+        impl<F: FnMut(EffectId, bool), P: Fn() -> bool> Drop for Guard<'_, F, P> {
+            fn drop(&mut self) {
+                self.0
+                    .inner
+                    .batch_depth
+                    .set(self.0.inner.batch_depth.get() - 1);
+                if !std::thread::panicking() {
+                    if (self.2)() {
+                        self.0.flush_watched(&mut self.1);
+                    } else {
+                        self.0.flush();
+                    }
+                }
+            }
+        }
+        let _guard = Guard(self, &mut watch, watched);
+        f()
+    }
+    /// Run observers `ids` again, oldest first, and what they queue, telling
+    /// `watch` as `batch_watched` does. One stopped or gone is left alone.
+    pub(crate) fn rerun_watched(&self, ids: &[EffectId], mut watch: impl FnMut(EffectId, bool)) {
+        self.requeue(ids);
+        self.flush_watched(&mut watch);
+    }
+    /// Queue observers `ids` to run again at the next flush, not now.
+    pub(crate) fn requeue(&self, ids: &[EffectId]) {
+        let mut effects = self.inner.effects.borrow_mut();
+        for id in ids {
+            if let Some(record) = effects.get_mut(id).filter(|record| !record.stopped)
+                && !std::mem::replace(&mut record.queued, true)
+            {
+                self.inner.queued.borrow_mut().push(*id);
+            }
+        }
+    }
+    /// [`Runtime::flush`], with `watch` told of each observer that isn't
+    /// `mount_pure`. Apart, so that `flush` stays as it is.
+    #[inline(never)]
+    fn flush_watched(&self, watch: &mut impl FnMut(EffectId, bool)) {
+        if self.inner.batch_depth.get() != 0 || self.inner.flushing.replace(true) {
+            return;
+        }
+        struct Guard<'a>(&'a Inner);
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                self.0.active.set(None);
+                self.0.flushing.set(false);
+            }
+        }
+        let _guard = Guard(&self.inner);
+        let _span = (crate::profile::enabled()
+            && !(self.inner.queued.borrow().is_empty() && self.inner.pending.borrow().is_empty()))
+        .then(|| crate::profile::span(crate::profile::Phase::Update));
+        // As `flush`'s: left unrun by a panic, they are queued again.
+        struct Sorted<'a>(&'a Inner, Vec<EffectId>);
+        impl Drop for Sorted<'_> {
+            fn drop(&mut self) {
+                let mut queued = self.0.queued.borrow_mut();
+                match queued.is_empty() {
+                    true => std::mem::swap(&mut *queued, &mut self.1),
+                    false => queued.append(&mut self.1),
+                }
+            }
+        }
+        let mut sorted = Sorted(
+            &self.inner,
+            std::mem::take(&mut *self.inner.queued.borrow_mut()),
+        );
+        newest_first::<false>(&mut sorted.1, &mut self.inner.order.borrow_mut());
+        // Its end told even when it panics.
+        struct Watched<'a, F: FnMut(EffectId, bool)>(&'a mut F, EffectId);
+        impl<F: FnMut(EffectId, bool)> Drop for Watched<'_, F> {
+            fn drop(&mut self) {
+                (self.0)(self.1, false);
+            }
+        }
+        loop {
+            // The oldest waiting, and whether it is `pending`'s: taken off
+            // once `watch` has been told, so that a panic there leaves it
+            // queued.
+            let (id, from_pending) = {
+                let pending = self.inner.pending.borrow();
+                match (sorted.1.last(), pending.peek()) {
+                    (Some(&old), Some(&Reverse(new))) if new < old => (new, true),
+                    (Some(&old), _) => (old, false),
+                    (None, Some(&Reverse(new))) => (new, true),
+                    (None, None) => break,
+                }
+            };
+            let pure = self
+                .inner
+                .effects
+                .borrow()
+                .get(&id)
+                .is_some_and(|record| record.mount_pure);
+            if !pure {
+                watch(id, true);
+            }
+            if from_pending {
+                self.inner.pending.borrow_mut().pop();
+            } else {
+                sorted.1.pop();
+            }
+            if pure {
+                self.inner.run(id);
+                continue;
+            }
+            let _watched = Watched(watch, id);
+            self.inner.run(id);
+        }
+    }
     /// Run queued observers now, even inside a batch, as React's
     /// `flushSync` does: for code about to read what an observer writes (a
     /// field's text synced from a state a handler just set, before it
@@ -401,6 +791,12 @@ impl Runtime {
         let _restore = Restore(&self.inner, self.inner.batch_depth.replace(0));
         // Effects only: deferred work still waits for the batch.
         self.flush_effects();
+    }
+    /// Whether a flush now would find nothing to run: no observer queued, and
+    /// no write waiting to queue one. `settle` then does nothing.
+    #[doc(hidden)]
+    pub fn nothing_due(&self) -> bool {
+        self.inner.queued.borrow().is_empty() && self.inner.pending.borrow().is_empty()
     }
     /// Run queued observers, then what was deferred outside a hold.
     /// Reentrant writes join the current flush.
@@ -442,7 +838,7 @@ impl Runtime {
             &self.inner,
             std::mem::take(&mut *self.inner.queued.borrow_mut()),
         );
-        newest_first(&mut sorted.1, &mut self.inner.order.borrow_mut());
+        newest_first::<true>(&mut sorted.1, &mut self.inner.order.borrow_mut());
         loop {
             let id = {
                 let mut pending = self.inner.pending.borrow_mut();
@@ -484,6 +880,10 @@ impl Runtime {
     pub fn effect_count(&self) -> usize {
         self.inner.effects.borrow().len() - self.inner.stopped.get()
     }
+    /// What `idle::on_idle` registered.
+    pub(crate) fn idle_trims(&self) -> &RefCell<Vec<std::rc::Weak<dyn Fn()>>> {
+        &self.inner.idle
+    }
     /// The runtime's one value of type `T`, made by `init` the first time
     /// it is asked for, so that independent parts of an application (its
     /// `Ui`, a script host) share it without passing it around. It lives as
@@ -506,6 +906,17 @@ impl Runtime {
             .borrow_mut()
             .push((id, value.clone() as Rc<dyn Any>));
         value
+    }
+    /// The runtime's value of type `T`, if something made it
+    /// ([`Runtime::extension`]); none is made.
+    pub(crate) fn existing_extension<T: 'static>(&self) -> Option<Rc<T>> {
+        let id = TypeId::of::<T>();
+        self.inner
+            .extensions
+            .borrow()
+            .iter()
+            .find(|(key, _)| *key == id)
+            .map(|(_, value)| value.clone().downcast().expect("extension type"))
     }
     /// A handle that does not keep the runtime alive.
     pub fn downgrade(&self) -> WeakRuntime {
@@ -582,11 +993,20 @@ impl Refresh {
 }
 impl Drop for Effect {
     fn drop(&mut self) {
+        // While tracing, its name and pending cause go with it.
+        #[cfg(feature = "trace")]
+        if crate::trace::enabled() {
+            crate::trace::forget(self.id);
+        }
         if let Some(runtime) = self.runtime.upgrade() {
             let record = runtime.effects.borrow_mut().remove(&self.id);
             if let Some(record) = record {
                 if record.stopped {
                     runtime.stopped.set(runtime.stopped.get() - 1);
+                }
+                // What it made goes with it.
+                if record.owns {
+                    runtime.release(self.id);
                 }
                 for dependency in record.dependencies {
                     if let Some(dependency) = dependency.source.upgrade() {
@@ -608,6 +1028,19 @@ struct SignalInner<T> {
 impl<T> Dependency for SignalInner<T> {
     fn unsubscribe(&self, id: EffectId) {
         self.subscribers.borrow_mut().remove(&id);
+    }
+}
+/// Effects held by [`Runtime::hold_effects`] until it drops.
+pub(crate) struct HeldEffects(Runtime);
+impl Drop for HeldEffects {
+    fn drop(&mut self) {
+        let inner = &self.0.inner;
+        inner.batch_depth.set(inner.batch_depth.get() - 1);
+        if !std::thread::panicking()
+            && (!inner.queued.borrow().is_empty() || !inner.pending.borrow().is_empty())
+        {
+            self.0.flush();
+        }
     }
 }
 /// A reactive value. Reading it in an effect subscribes the effect, and a write
@@ -703,6 +1136,7 @@ impl<T: 'static> Signal<T> {
         WeakSignal(Rc::downgrade(&self.inner))
     }
     /// Call `f` with the value, subscribing the running effect.
+    #[inline(always)]
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         self.track();
         f(&self.inner.value.borrow())
@@ -837,6 +1271,27 @@ mod tests {
     use super::*;
     /// Queued ids come out newest first, as a sort leaves them, whether
     /// they are close together (a bitmap orders them) or far apart.
+    /// `settle` skips its clocks on this: true only when it would run nothing.
+    #[test]
+    fn nothing_is_due_only_when_a_flush_would_run_nothing() {
+        let runtime = Runtime::new();
+        let value = runtime.signal(0);
+        let seen = Rc::new(Cell::new(0));
+        let (read, wrote) = (value.clone(), seen.clone());
+        let _effect = runtime.effect(move || wrote.set(read.get()));
+        runtime.flush();
+        assert!(runtime.nothing_due());
+        runtime.batch(|| {
+            value.set(1);
+            assert!(!runtime.nothing_due(), "a write waits in the batch");
+            assert_eq!(seen.get(), 0);
+            runtime.settle();
+            assert_eq!(seen.get(), 1, "settling runs it");
+            assert!(runtime.nothing_due());
+        });
+        assert!(runtime.nothing_due());
+    }
+
     #[test]
     fn queued_effects_are_ordered_newest_first() {
         let mut seed = 0x2545_f491_4f6c_dd1d_u64;
@@ -846,26 +1301,28 @@ mod tests {
             seed ^= seed << 17;
             seed
         };
-        let mut bits = Vec::new();
+        let mut order = Order::default();
         for (count, spread) in [(0, 1), (1, 1), (31, 40), (32, 32), (900, 1000), (900, 5000)]
             .into_iter()
-            .chain([(64, 64 * 33), (500, 1 << 40)])
+            .chain([(64, 64 * 33), (500, 1 << 38)])
         {
             let base = next() % 1_000_000;
             let mut ids: Vec<EffectId> = Vec::new();
             while ids.len() < count {
-                let id = base + next() % spread;
-                if !ids.contains(&id) {
+                // Born close together or far apart, in any slot.
+                let born = base + next() % spread;
+                let id = born << SLOT_BITS | next() & SLOT_MASK;
+                if !ids.iter().any(|&other| other >> SLOT_BITS == born) {
                     ids.push(id);
                 }
             }
             let mut sorted = ids.clone();
             sorted.sort_unstable_by(|a, b| b.cmp(a));
-            newest_first(&mut ids, &mut bits);
+            newest_first::<true>(&mut ids, &mut order);
             assert_eq!(ids, sorted, "{count} ids over {spread}");
             // Queued as they were made: oldest first.
             ids.reverse();
-            newest_first(&mut ids, &mut bits);
+            newest_first::<false>(&mut ids, &mut order);
             assert_eq!(ids, sorted, "{count} ascending ids over {spread}");
         }
     }
@@ -985,6 +1442,94 @@ mod tests {
         before.set(1);
         after.set(1);
         assert_eq!(runs.get(), 3);
+    }
+
+    /// Logs its name when it goes, as a script's cleanup runs.
+    struct Made(
+        &'static str,
+        Rc<RefCell<Vec<&'static str>>>,
+        Option<Signal<i32>>,
+    );
+    impl Drop for Made {
+        fn drop(&mut self) {
+            if let Some(read) = &self.2 {
+                read.get();
+            }
+            self.1.borrow_mut().push(self.0);
+        }
+    }
+
+    /// What an effect's run owns goes before its next run, and with it; a
+    /// cleanup's reads aren't the effect's, and outside a run nothing owns.
+    #[test]
+    fn what_a_run_owns_goes_before_the_next_run_and_with_the_effect() {
+        let runtime = Runtime::new();
+        let input = runtime.signal(0);
+        let other = runtime.signal(0);
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let runs = Rc::new(Cell::new(0));
+        let effect = runtime.effect({
+            let (runtime, input, other) = (runtime.clone(), input.clone(), other.clone());
+            let (log, runs) = (log.clone(), runs.clone());
+            move || {
+                let n = input.get();
+                runs.set(runs.get() + 1);
+                let name = ["zero", "one", "two"][n as usize];
+                let owned = Made(name, log.clone(), Some(other.clone()));
+                assert!(runtime.own(Box::new(owned)).is_ok());
+            }
+        });
+        assert!(log.borrow().is_empty());
+        input.set(1);
+        assert_eq!(*log.borrow(), ["zero"]);
+        // The cleanup read `other`: not the effect's dependency.
+        other.set(1);
+        assert_eq!(runs.get(), 2);
+        input.set(2);
+        assert_eq!(*log.borrow(), ["zero", "one"]);
+        drop(effect);
+        assert_eq!(*log.borrow(), ["zero", "one", "two"]);
+        let given = runtime.own(Box::new(Made("loose", log.clone(), None)));
+        assert!(given.is_err(), "no effect running: given back");
+        drop(given);
+        assert_eq!(log.borrow().last(), Some(&"loose"));
+    }
+
+    /// A refresh during the run that first owns something (its callback
+    /// wrapped while it runs) doesn't run it inside itself: it runs after.
+    #[test]
+    fn a_refresh_during_the_first_owning_run_waits_for_it() {
+        let runtime = Runtime::new();
+        let input = runtime.signal(0);
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let runs = Rc::new(Cell::new(0));
+        let refresh: Rc<RefCell<Option<Refresh>>> = Rc::default();
+        let effect = runtime.effect({
+            let (runtime, input) = (runtime.clone(), input.clone());
+            let (log, runs, refresh) = (log.clone(), runs.clone(), refresh.clone());
+            move || {
+                let n = input.get();
+                runs.set(runs.get() + 1);
+                if n == 0 {
+                    return;
+                }
+                let _ = runtime.own(Box::new(Made("run", log.clone(), None)));
+                if n == 1 {
+                    // Asked to run again while it runs, then refreshed.
+                    input.set(2);
+                    if let Some(refresh) = &*refresh.borrow() {
+                        assert!(refresh.refresh(), "queued: it runs, once this run is over");
+                    }
+                    assert_eq!(runs.get(), 2, "not inside this run");
+                }
+            }
+        });
+        *refresh.borrow_mut() = Some(effect.refresher());
+        input.set(1);
+        assert_eq!(runs.get(), 3, "the second write's run came after the first");
+        assert_eq!(*log.borrow(), ["run"], "the first owning run's went first");
+        drop(effect);
+        assert_eq!(*log.borrow(), ["run", "run"]);
     }
 
     #[test]
@@ -1262,5 +1807,67 @@ mod tests {
         assert!(result.is_err());
         value.set(2);
         assert_eq!(observed.get(), 2);
+    }
+}
+
+#[cfg(test)]
+mod watched_tests {
+    use super::*;
+    #[test]
+    fn a_watched_flush_tells_of_each_observer_as_it_starts_and_ends() {
+        let runtime = Runtime::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let value = runtime.signal(0);
+        let read = value.clone();
+        let out = log.clone();
+        let watched = runtime.effect(move || {
+            read.get();
+            out.borrow_mut().push("ran");
+        });
+        let read = value.clone();
+        let out = log.clone();
+        let pure = runtime.effect_marked(true, move || {
+            read.get();
+            out.borrow_mut().push("pure");
+        });
+        log.borrow_mut().clear();
+        let id = watched.number();
+        runtime.batch_watched(
+            || value.set(1),
+            |effect, starts| {
+                assert_eq!(effect, id);
+                log.borrow_mut()
+                    .push(if starts { "starts" } else { "ends" });
+            },
+            || true,
+        );
+        assert_eq!(*log.borrow(), ["starts", "ran", "ends", "pure"]);
+        log.borrow_mut().clear();
+        runtime.rerun_watched(&[id], |_, starts| {
+            log.borrow_mut()
+                .push(if starts { "starts" } else { "ends" });
+        });
+        assert_eq!(*log.borrow(), ["starts", "ran", "ends"]);
+        drop((watched, pure));
+    }
+    #[test]
+    fn a_panicking_watch_keeps_the_selected_observer_queued() {
+        let runtime = Runtime::new();
+        let runs = Rc::new(Cell::new(0));
+        let value = runtime.signal(0);
+        let read = value.clone();
+        let count = runs.clone();
+        let _effect = runtime.effect(move || {
+            read.get();
+            count.set(count.get() + 1);
+        });
+        assert_eq!(runs.get(), 1);
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.batch_watched(|| value.set(1), |_, _| panic!("watch probe"), || true);
+        }));
+        assert!(failed.is_err());
+        assert_eq!(runs.get(), 1);
+        runtime.flush();
+        assert_eq!(runs.get(), 2);
     }
 }

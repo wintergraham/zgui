@@ -56,7 +56,10 @@ fn tokens() -> Vec<(TokenId, TokenInput)> {
     }
     #[cfg(windows)]
     {
-        let mut tokens = windows_contrast().unwrap_or_else(windows_selection);
+        // Windows 11's colours for focus and scrollbars, under high
+        // contrast's or the accent's.
+        let mut tokens = zgx::theme::windows_look();
+        tokens.extend(windows_contrast().unwrap_or_else(windows_selection));
         tokens.extend(windows_motion());
         tokens
     }
@@ -78,6 +81,10 @@ fn tokens() -> Vec<(TokenId, TokenInput)> {
         };
         if settings.reduced_motion {
             tokens.extend(still());
+        }
+        // GNOME's colours for menus, under high contrast's.
+        if !settings.contrast {
+            tokens.extend(zgx::theme::linux_look());
         }
         tokens
     }
@@ -273,9 +280,49 @@ fn windows_motion() -> Vec<(TokenId, TokenInput)> {
     still()
 }
 
+/// The key holding Windows' Transparency effects switch (Settings,
+/// Personalization, Colors), under `HKEY_CURRENT_USER`.
+#[cfg(windows)]
+const PERSONALIZE: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
+
+/// Whether Windows' Transparency effects are off: `EnableTransparency`, a
+/// DWORD, 0 for off. Unread (no such value, as on a Windows that has no
+/// switch), they are on. It is read again as Windows announces the change
+/// (`WM_SETTINGCHANGE`, "ImmersiveColorSet"; `window_chrome`'s subclass).
+#[cfg(windows)]
+pub(crate) fn windows_transparency_off() -> bool {
+    dword_is_zero(PERSONALIZE, "EnableTransparency")
+}
+
+/// Whether DWORD `value` under `HKEY_CURRENT_USER\key` is there and 0.
+#[cfg(windows)]
+fn dword_is_zero(key: &str, value: &str) -> bool {
+    use windows::{
+        Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW},
+        core::HSTRING,
+    };
+    let mut data = 1u32;
+    let mut size = size_of::<u32>() as u32;
+    // SAFETY: reads one DWORD into a local, given its size in bytes; the
+    // names are NUL-terminated and outlive the call.
+    let read = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            &HSTRING::from(key),
+            &HSTRING::from(value),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&raw mut data).cast()),
+            Some(&mut size),
+        )
+    };
+    read.is_ok() && data == 0
+}
+
 /// The system's accessibility display settings (`SystemPreferences`):
 /// macOS's Reduce motion, Increase contrast and Reduce transparency;
-/// Windows' animation effects off and contrast themes; the Linux desktop's
+/// Windows' animation effects off, contrast themes and Transparency effects
+/// off; the Linux desktop's
 /// reduced motion and high contrast (`linux_appearance`).
 fn preferences() -> SystemPreferences {
     #[cfg(target_os = "macos")]
@@ -292,7 +339,7 @@ fn preferences() -> SystemPreferences {
         SystemPreferences {
             reduced_motion: !windows_motion().is_empty(),
             increased_contrast: windows_contrast().is_some(),
-            reduced_transparency: false,
+            reduced_transparency: windows_transparency_off(),
         }
     }
     #[cfg(target_os = "linux")]
@@ -301,7 +348,8 @@ fn preferences() -> SystemPreferences {
         SystemPreferences {
             reduced_motion: settings.reduced_motion,
             increased_contrast: settings.contrast,
-            reduced_transparency: false,
+            // On X11 with no compositor, nothing shows through a window.
+            reduced_transparency: !crate::x11_settings::composited(),
         }
     }
     #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
@@ -314,8 +362,8 @@ fn preferences() -> SystemPreferences {
 /// motion durations of zero, so what takes them changes at once. Increase
 /// contrast: borders as strong as secondary text and tertiary text as
 /// secondary, as AppKit darkens separators and secondary labels. Reduce
-/// transparency: glass opaque, unblurred. (Windows' come with its own
-/// colours, in `tokens`.)
+/// transparency: glass opaque, unblurred. (Windows' motion and contrast come
+/// with its own colours, in `tokens`: `transparency_tokens` alone is shared.)
 #[cfg(target_os = "macos")]
 fn preference_tokens(preferences: SystemPreferences) -> Vec<(TokenId, TokenInput)> {
     let expr = |text: &str| TokenInput::parse(text).expect("a theme expression");
@@ -335,13 +383,70 @@ fn preference_tokens(preferences: SystemPreferences) -> Vec<(TokenId, TokenInput
             (tok::TEXT_TERTIARY.0, expr("{text.secondary}")),
         ]);
     }
-    if preferences.reduced_transparency {
-        tokens.extend([
-            (tok::GLASS_TINT.0, expr("{surface.raised}")),
-            (tok::GLASS_BLUR.0, 0f32.into()),
-        ]);
-    }
+    tokens.extend(transparency_tokens(preferences));
     tokens
+}
+
+/// What transparency turned off makes of the themes' tokens: glass opaque,
+/// unblurred. An app's theme that sets them keeps its own.
+#[cfg(any(target_os = "macos", windows, target_os = "linux", test))]
+fn transparency_tokens(preferences: SystemPreferences) -> Vec<(TokenId, TokenInput)> {
+    if !preferences.reduced_transparency {
+        return Vec::new();
+    }
+    vec![
+        (
+            tok::GLASS_TINT.0,
+            TokenInput::parse("{surface.raised}").expect("a theme expression"),
+        ),
+        (tok::GLASS_BLUR.0, 0f32.into()),
+    ]
+}
+
+/// The user's preferred languages, most preferred first, as BCP 47 tags
+/// (`zgx::i18n::set_system_languages`): macOS's list, Windows' UI
+/// languages (elsewhere zgx reads the environment itself).
+#[cfg(any(target_os = "macos", windows))]
+pub(crate) fn preferred_languages() -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_foundation::NSLocale;
+        NSLocale::preferredLanguages()
+            .iter()
+            .map(|language| language.to_string())
+            .collect()
+    }
+    #[cfg(windows)]
+    {
+        use windows::Win32::Globalization::{GetUserPreferredUILanguages, MUI_LANGUAGE_NAME};
+        let (mut count, mut length) = (0_u32, 0_u32);
+        // SAFETY: first the length the list takes, then the list into a
+        // buffer that long: NUL-separated names ending in two NULs.
+        let mut buffer = Vec::new();
+        unsafe {
+            if GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &mut count, None, &mut length)
+                .is_err()
+            {
+                return Vec::new();
+            }
+            buffer.resize(length as usize, 0_u16);
+            if GetUserPreferredUILanguages(
+                MUI_LANGUAGE_NAME,
+                &mut count,
+                Some(windows::core::PWSTR(buffer.as_mut_ptr())),
+                &mut length,
+            )
+            .is_err()
+            {
+                return Vec::new();
+            }
+        }
+        buffer
+            .split(|&c| c == 0)
+            .filter(|name| !name.is_empty())
+            .map(String::from_utf16_lossy)
+            .collect()
+    }
 }
 
 /// The way the user's language runs (`ZGX_DIRECTION=rtl` or `ltr`
@@ -419,10 +524,15 @@ pub(crate) fn sync(ui: &zgx::widgets::Ui) {
             (direction == zgx::scene::Direction::Rtl).then_some(direction),
         );
     }
-    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+    #[cfg_attr(
+        not(any(target_os = "macos", windows, target_os = "linux")),
+        allow(unused_mut)
+    )]
     let mut tokens = tokens();
     #[cfg(target_os = "macos")]
     tokens.extend(preference_tokens(preferences));
+    #[cfg(any(windows, target_os = "linux"))]
+    tokens.extend(transparency_tokens(preferences));
     ui.theme().set_system_tokens(tokens);
     ui.theme().set_system_preferences(preferences);
     if let Some(interval) = double_click_time() {
@@ -737,8 +847,110 @@ pub(crate) fn display_options_changed() -> bool {
     }
 }
 
+#[cfg(test)]
+mod transparency_tests {
+    use super::*;
+    use zgx::{reactive::Runtime, theme::Themes};
+
+    /// Transparency off makes glass opaque, unblurred; on, the theme's own.
+    #[test]
+    fn reduced_transparency_makes_glass_opaque() {
+        let runtime = Runtime::new();
+        let themes = Themes::of(&runtime);
+        let (tint, blur) = (
+            themes.color(tok::GLASS_TINT),
+            themes.number(tok::GLASS_BLUR),
+        );
+        let off = SystemPreferences {
+            reduced_transparency: true,
+            ..Default::default()
+        };
+        themes.set_system_tokens(transparency_tokens(off));
+        assert_eq!(
+            themes.color(tok::GLASS_TINT),
+            themes.color(tok::SURFACE_RAISED)
+        );
+        assert_eq!(themes.number(tok::GLASS_BLUR), 0.);
+        themes.set_system_tokens(transparency_tokens(SystemPreferences::default()));
+        assert_eq!(themes.color(tok::GLASS_TINT), tint);
+        assert_eq!(themes.number(tok::GLASS_BLUR), blur);
+    }
+}
+
 #[cfg(all(test, windows))]
 mod tests {
+    /// `EnableTransparency` read from a key of the test's own: 0 is off, any
+    /// other value on, and no value on, as on a Windows with no such switch.
+    #[test]
+    fn transparency_effects_are_off_only_for_a_zero() {
+        use windows::{
+            Win32::System::Registry::{
+                HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_DWORD, REG_OPTION_VOLATILE, RegCloseKey,
+                RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW,
+            },
+            core::{HSTRING, PCWSTR},
+        };
+        let name = format!(r"Software\zgx-test-transparency-{}", std::process::id());
+        let path = HSTRING::from(&name);
+        let mut key = HKEY::default();
+        // SAFETY: a volatile key of this test's own under the user's hive,
+        // written and deleted here; the names and values outlive the calls.
+        unsafe {
+            RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                &path,
+                None,
+                PCWSTR::null(),
+                REG_OPTION_VOLATILE,
+                KEY_WRITE,
+                None,
+                &mut key,
+                None,
+            )
+            .ok()
+            .unwrap();
+        }
+        let set = |value: u32| {
+            // SAFETY: as above; four bytes of a DWORD.
+            unsafe {
+                RegSetValueExW(
+                    key,
+                    &HSTRING::from("EnableTransparency"),
+                    None,
+                    REG_DWORD,
+                    Some(&value.to_ne_bytes()),
+                )
+                .ok()
+                .unwrap();
+            }
+        };
+        let read = || super::dword_is_zero(&name, "EnableTransparency");
+        assert!(!read(), "no value: on");
+        set(0);
+        assert!(read(), "0: off");
+        set(1);
+        assert!(!read(), "1: on");
+        set(0);
+        assert!(read(), "0 again: off, read afresh");
+        // SAFETY: as above.
+        unsafe {
+            let _ = RegCloseKey(key);
+            let _ = RegDeleteTreeW(HKEY_CURRENT_USER, &path);
+        }
+        assert!(!read(), "no key: on");
+    }
+
+    /// What Windows says is what a window reports.
+    #[test]
+    fn a_window_reports_windows_transparency_setting() {
+        let ui = zgx::widgets::Ui::new(100., 100.);
+        super::sync(&ui);
+        assert_eq!(
+            ui.theme().system_preferences().reduced_transparency,
+            super::windows_transparency_off()
+        );
+    }
+
     /// A window's drag threshold is Windows' own (`SM_CXDRAG`), in points,
     /// not zgx's default.
     #[test]

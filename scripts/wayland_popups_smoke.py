@@ -23,12 +23,16 @@ Under a headless sway, driven with a virtual pointer (`wayland_pointer.py`):
   bottom edge, pointing down at the trigger's centre;
 - on outputs scaled 2× and 1.5× (fractional, through the viewporter), the
   menu's buffer is its size in the output's pixels, it shows where the
-  scene put it in those pixels, and its last item takes a click.
+  scene put it in those pixels, and its last item takes a click;
+- in a window zoomed 90% and 125% (`POPUP_PROBE_ZOOM`), the menu shows
+  where the scene put it and its size, both times the zoom, and its last
+  item takes a click there.
 
 Under a headless Weston, whose windows winit decorates itself (the window
 geometry starts at its title bar, above the content), the menu opened by the
 app (`POPUP_PROBE_OPEN`) shows at the same place on the content: the title
-bar is accounted for."""
+bar is accounted for. Opened between pixels (`POPUP_PROBE_INSET`), its buffer
+is the size its viewport shows it."""
 import argparse
 import json
 import os
@@ -44,6 +48,7 @@ from PIL import Image, ImageChops
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from platform_smoke import stop  # noqa: E402
 from wayland_pointer import VirtualPointer  # noqa: E402
+from sway_host import sway_config
 
 OUTPUT = (1280, 960)
 CONTENT = (16, 20, 28)
@@ -111,7 +116,7 @@ def main():
         runtime.mkdir(mode=0o700)
         env["XDG_RUNTIME_DIR"] = str(runtime)
         config = runtime / "sway.conf"
-        config.write_text("output * mode %dx%d scale %g\ndefault_border none\n"
+        sway_config(config, "output * mode %dx%d scale %g\ndefault_border none\n"
                           "for_window [app_id=\".*\"] floating enable, move position 0 0\n" % (*output, scale))
         sway, _ = launch(f"sway-{scale}x", ["sway", "--unsupported-gpu", "-c", str(config)], env)
         sockets = lambda: [p for p in runtime.glob("wayland-*") if p.suffix != ".lock"]
@@ -160,6 +165,76 @@ def main():
         stop(app)
         stop(sway)
 
+    def zoomed(zoom):
+        """popup_probe's window zoomed `zoom` (`POPUP_PROBE_ZOOM`) on an
+        unscaled sway output: its menu's popup at the scene's place and size
+        times the zoom, and its last item taking a click there."""
+        name = f"sway zoom {zoom}"
+        at = lambda points: round(points * zoom)
+        env = dict(base, WLR_BACKENDS="headless", WLR_RENDERER="pixman", WLR_LIBINPUT_NO_DEVICES="1")
+        runtime = pathlib.Path(base["XDG_RUNTIME_DIR"], f"zoomed-{zoom}")
+        runtime.mkdir(mode=0o700)
+        env["XDG_RUNTIME_DIR"] = str(runtime)
+        config = runtime / "sway.conf"
+        sway_config(config, "output * mode %dx%d\ndefault_border none\n"
+                          "for_window [app_id=\".*\"] floating enable, move position 0 0\n" % OUTPUT)
+        sway, _ = launch(f"sway-zoom-{zoom}", ["sway", "--unsupported-gpu", "-c", str(config)], env)
+        sockets = lambda: [p for p in runtime.glob("wayland-*") if p.suffix != ".lock"]
+        display = until(f"{name}'s socket", sockets, 10)[0].name
+        env["WAYLAND_DISPLAY"] = display
+        app, log = launch(f"sway-zoom-{zoom}-app", [str(args.probe)], dict(env, POPUP_PROBE_ZOOM=str(zoom)))
+        until(f"the probe on {name}", lambda: "READY" in log.read_text())
+
+        def shot(stage):
+            path = args.output / f"zoom-{zoom}-{stage}.png"
+            subprocess.run(["grim", str(path)], env=env, check=True)
+            return Image.open(path).convert("RGB")
+
+        content = until(f"the window on {name}", lambda: box(shot("start"), CONTENT))
+        pointer = VirtualPointer(str(runtime), display)
+
+        def click(x, y):
+            pointer.move_to(x, y, *OUTPUT)
+            time.sleep(.2)
+            pointer.click()
+
+        # The File button, where the zoom draws it: its scene box times the
+        # zoom (the zoomed window lays out taller, in more scene points).
+        rect = lambda line: [float(v) for v in line.split(",")]
+        file_at = until(f"the File button on {name}", lambda: re.search(r"^FILE (\S+)$", log.read_text(), re.M))
+        fx, fy, fw, fh = rect(file_at.group(1))
+        click(content[0] + at(fx + fw / 2), content[1] + at(fy + fh / 2))
+        until(f"the menu on {name}", lambda: "popup configured" in log.read_text())
+        scene_menu = until(f"the menu's box on {name}", lambda: re.search(r"^MENU (\S+)$", log.read_text(), re.M))
+        mx, my, mw, mh = rect(scene_menu.group(1))
+        time.sleep(.3)
+        image = shot("open")
+        below = content[1] + at(fy + fh + 2)
+        menu = box(image.crop((0, below, image.width, image.height)), MENU)
+        assert menu, f"{name}: no menu drawn"
+        menu = (menu[0], menu[1] + below, menu[2], menu[3] + below)
+        expected = (at(mx), at(my), at(mw), at(mh))
+        measured = (menu[0] - content[0], menu[1] - content[1], menu[2] - menu[0], menu[3] - menu[1])
+        checks[name] = {"content": content, "menu": menu, "expected": expected, "scene": [mx, my, mw, mh]}
+        # What zgx asked the compositor for: the scene's box times the zoom,
+        # to the pixel.
+        configured = re.search(r"popup configured at (-?\d+),(-?\d+) (\d+)x(\d+)", log.read_text())
+        asked = tuple(int(v) for v in configured.groups()) if configured else None
+        checks[f"{name}: configured"] = asked
+        checks[f"{name}: configured where the scene put it, at the zoom, its size"] = asked is not None and all(
+            abs(a - b) <= 1 for a, b in zip(asked, expected))
+        # Drawn there: within two pixels, a fractional zoom anti-aliasing the
+        # fill's edges on both sides.
+        checks[f"{name}: drawn where the scene put it, at the zoom, its size"] = all(
+            abs(a - b) <= 2 for a, b in zip(measured, expected))
+        # Its last item, where the zoom draws it.
+        click(menu[0] + at(100), menu[3] - at(17))
+        until(f"the choice on {name}", lambda: 'CHOSEN "Item 8"' in log.read_text())
+        checks[f"{name}: its last item takes a click there"] = True
+        pointer.close()
+        stop(app)
+        stop(sway)
+
     try:
         with tempfile.TemporaryDirectory(prefix="zgx-popups-") as private:
             os.chmod(private, 0o700)
@@ -170,7 +245,7 @@ def main():
             # sway: clicked.
             env = dict(base, WLR_BACKENDS="headless", WLR_RENDERER="pixman", WLR_LIBINPUT_NO_DEVICES="1")
             config = pathlib.Path(private, "sway.conf")
-            config.write_text("output * mode %dx%d\ndefault_border none\n"
+            sway_config(config, "output * mode %dx%d\ndefault_border none\n"
                               "for_window [app_id=\".*\"] floating enable, move position 0 0\n" % OUTPUT)
             sway, _ = launch("sway", ["sway", "--unsupported-gpu", "-c", str(config)], env)
             sockets = lambda: [p for p in pathlib.Path(private).glob("wayland-*") if p.suffix != ".lock"]
@@ -266,6 +341,11 @@ def main():
             until("a choice", lambda: 'CHOSEN "Item' in said())
             chosen = [line for line in said().splitlines() if line.startswith("OPEN")][-1]
             checks["sway: tall menu's choice"] = chosen
+            # The window's release heard after the popup's enter (#1199): the
+            # order that closed this menu as it opened, now heard where it was.
+            # Counted on every run; the trace is kept on every run too.
+            crossed = said().count("window button at ")
+            checks["sway: tall: window buttons heard after a popup's move"] = crossed
             checks["sway: its last item, scrolled to, takes a click"] = 'CHOSEN "Item 60"' in chosen
             stop(app)
 
@@ -329,6 +409,10 @@ def main():
             for scale in (2, 1.5):
                 scaled(scale)
 
+            # A zoomed window: its popups at the zoom, in place and in size.
+            for zoom in (0.9, 1.25):
+                zoomed(zoom)
+
             # Weston: winit's title bar above the content.
             env = dict(base, WAYLAND_DISPLAY="zgx-popups")
             weston, _ = launch("weston", ["weston", "--backend=headless", "--renderer=pixman", "--width=%d" % OUTPUT[0],
@@ -347,15 +431,50 @@ def main():
             checks["weston: below winit's title bar, where the scene put it"] = placed(
                 "weston", Image.open(screenshot).convert("RGB"))
             stop(app)
+
+            # A menu opened between pixels: its buffer is the size its
+            # viewport shows it, one to one, not a pixel more resampled to fit
+            # (its text blurred).
+            app, log = launch("weston-between", [str(args.probe)],
+                              dict(env, POPUP_PROBE_OPEN="1", POPUP_PROBE_INSET="16.5", WAYLAND_DEBUG="client"))
+            until("the menu between pixels", lambda: "popup configured" in log.read_text())
+            time.sleep(.5)
+            said = log.read_text()
+            shown = re.search(r"popup show .* buffer (\d+)x(\d+)", said)
+            destination = re.findall(r"set_destination\((\d+), (\d+)\)", said)
+            # After the window's own (its surface comes first).
+            sized = re.findall(r"create_buffer\(new id wl_buffer@\d+, 0, (\d+), (\d+), \d+, \d+\)", said)
+            between = {"shown": shown and shown.groups(), "viewport": destination[-1:], "buffer": sized[-1:]}
+            checks["weston: between pixels"] = between
+            checks["weston: a menu between pixels has a buffer the size of its surface"] = (
+                bool(shown) and destination[-1:] == sized[-1:] == [shown.groups()])
+            stop(app)
+
+            # A popover grown and shrunk a step a frame, as an animated one
+            # is: one popup the whole time, moved and resized in place
+            # (`xdg_popup.reposition`), never shown anew (compositors fade
+            # each new popup in: it flashed see-through). On Weston, whose
+            # xdg_wm_base is v5: sway 1.9's is v2, which has no reposition
+            # (there it shows anew, as before).
+            app, log = launch("weston-grow", [str(args.probe)], dict(env, POPUP_PROBE_GROW="1"))
+            until("the popover grown and shrunk", lambda: "GROWN" in log.read_text(), 30)
+            said = log.read_text()
+            grow = {"shows": said.count("popup show "), "repositions": said.count("popup reposition ")}
+            checks["weston: grow"] = grow
+            checks["weston: a growing popover is one popup, resized in place"] = (
+                grow["shows"] == 1 and grow["repositions"] >= 60)
+            stop(app)
             stop(weston)
 
         (args.output / "result.json").write_text(json.dumps(checks, indent=2) + "\n")
         failed = [key for key, value in checks.items() if value is False]
         assert not failed, f"failed: {failed}\n{json.dumps(checks, indent=2)}"
+        crossed = checks.get("sway: tall: window buttons heard after a popup's move", 0)
+        print(f"tall menu: {crossed} window button(s) heard after a popup's move (#1199's order)")
         print("PASS: Wayland popups: past the window on sway and Weston, chosen from, closed, flipped at the output's "
               "edge, a submenu beside its flipped menu, a menu taller than the output cut to it and scrolled, "
-              "a flipped popover's arrow facing its trigger, "
-              "and on outputs scaled 2x and 1.5x")
+              "a flipped popover's arrow facing its trigger, a growing popover resized in place, "
+              "on outputs scaled 2x and 1.5x, and in a window zoomed 90% and 125%")
     finally:
         for process in reversed(processes):
             stop(process)

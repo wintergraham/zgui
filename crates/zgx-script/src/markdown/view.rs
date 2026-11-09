@@ -40,26 +40,69 @@ fn flag(run: &Value, name: &str) -> bool {
     matches!(run.field(name), Some(Value::Bool(true)))
 }
 
+/// A run's fields (`markdown::runs_value`): its text, its flags and its
+/// link.
+#[derive(Default)]
+struct RunFields<'a> {
+    text: Option<&'a Value>,
+    bold: bool,
+    italic: bool,
+    strike: bool,
+    code: bool,
+    link: Option<&'a Value>,
+}
+impl<'a> RunFields<'a> {
+    /// Read in one pass over its fields, a run being a small map: not a
+    /// search for each of six names, a document's every run.
+    fn of(run: &'a Value) -> Self {
+        let Value::Map(fields) = run else {
+            return Self {
+                text: run.field("x"),
+                bold: flag(run, "b"),
+                italic: flag(run, "i"),
+                strike: flag(run, "s"),
+                code: flag(run, "c"),
+                link: run.field("a"),
+            };
+        };
+        let mut out = Self::default();
+        for (key, value) in fields.iter() {
+            let on = matches!(value, Value::Bool(true));
+            match &**key {
+                "x" => out.text = Some(value),
+                "b" => out.bold = on,
+                "i" => out.italic = on,
+                "s" => out.strike = on,
+                "c" => out.code = on,
+                "a" => out.link = Some(value),
+                _ => {}
+            }
+        }
+        out
+    }
+}
+
 /// A run of text as a span: bold, italic, struck, code or a link.
 fn span(run: &Value, bold: bool) -> zgx::compose::TextSpan {
-    let mut out = zgx::compose::text_span(text_of(run.field("x")));
-    if bold || flag(run, "b") {
+    let fields = RunFields::of(run);
+    let mut out = zgx::compose::text_span(text_of(fields.text));
+    if bold || fields.bold {
         out = out.font_bold();
     }
-    if flag(run, "i") {
+    if fields.italic {
         out = out.italic(true);
     }
-    if flag(run, "s") {
+    if fields.strike {
         out = out.strikethrough(Default::default());
     }
-    if flag(run, "c") {
+    if fields.code {
         out = out
             .font_family(FontFamily::Monospace)
             .background(themed("surface.sunken"))
             .padding(3., 0.5)
             .radius(3.);
     }
-    if let Some(Value::Str(href)) = run.field("a") {
+    if let Some(Value::Str(href)) = fields.link {
         out = out.text_color(themed("accent"));
         // Still streaming its address: styled as a link, going nowhere.
         if &**href != PENDING_LINK_URL {
@@ -255,27 +298,44 @@ fn static_block(b: &Value, options: &ViewOptions, cx: &mut Context) -> View {
 /// settled (a parse keeps them as they were): built as they are, again
 /// only if their value changes (the last becoming settled, once), as a
 /// table always is.
+/// `Kept`: its place, kind (`kind_id`), and a heading's level or an
+/// ordered list's start (0 for others). Plain numbers: a key holds no
+/// part of the block it was found for.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum Place {
-    Kept(usize, Rc<str>),
+    Kept(u32, u8, u32),
     Whole(usize, usize),
 }
+/// The kinds of block the parser makes (`t`), by number; `None` for any
+/// other, built whole.
+fn kind_id(kind: &str) -> Option<u8> {
+    Some(match kind {
+        "p" => 1,
+        "h" => 2,
+        "quote" => 3,
+        "code" => 4,
+        "ul" => 5,
+        "ol" => 6,
+        "img" => 7,
+        "hr" => 8,
+        _ => return None,
+    })
+}
 fn place(index: usize, last: bool, b: &Value) -> Place {
-    let kind = text_of(b.field("t"));
-    if !last || kind == "table" {
+    let kind = match b.field("t") {
+        Some(Value::Str(kind)) if last => kind_id(kind),
+        _ => None,
+    };
+    let Some(kind) = kind else {
         return Place::Whole(index, identity(b));
-    }
-    match kind.as_str() {
-        "h" => {
-            let level = b.field("l").and_then(Value::as_f64).unwrap_or(1.) as usize;
-            Place::Kept(index, format!("h{level}").into())
-        }
-        "ol" => {
-            let start = b.field("start").and_then(Value::as_f64).unwrap_or(1.) as usize;
-            Place::Kept(index, format!("ol{start}").into())
-        }
-        _ => Place::Kept(index, kind.into()),
-    }
+    };
+    let number = |field: &str| b.field(field).and_then(Value::as_f64).unwrap_or(1.) as u32;
+    let n = match kind {
+        2 => number("l"),
+        6 => number("start"),
+        _ => 0,
+    };
+    Place::Kept(index as u32, kind, n)
 }
 
 /// Write `value` into `cell` if it is another value (blocks a parse kept
@@ -320,7 +380,7 @@ fn block_list(list: Signal<Value>, options: &ViewOptions) -> View {
         },
         move |place: Place, cx: &mut Context| {
             let (index, live) = match place {
-                Place::Kept(i, _) => (i, true),
+                Place::Kept(i, ..) => (i as usize, true),
                 Place::Whole(i, _) => (i, false),
             };
             let b = reading.with_untracked(|l| l.list().get(index).cloned().unwrap_or(Value::Nil));
@@ -590,14 +650,23 @@ fn block(cell: Signal<Value>, options: &ViewOptions, cx: &mut Context) -> View {
 /// place and kind, and only what a block's new value changes laid out and
 /// painted again: a reply streaming in grows its last paragraph or code
 /// block in place.
-pub(crate) fn view(mut source: impl FnMut() -> String + 'static, options: ViewOptions) -> View {
+/// What a markdown view shows: text made for it, or a state's value as it
+/// holds it (`"{reply}"`), which a long text's edits are followed in.
+pub(crate) enum Source {
+    Made(String),
+    Held(Value),
+}
+pub(crate) fn view(mut source: impl FnMut() -> Source + 'static, options: ViewOptions) -> View {
     zgx::compose::component(move |cx| {
         let parser = RefCell::new(Incremental::new(options.parse.clone()));
         let top = cx.runtime().signal(Value::List(Vec::new().into()));
         let blocks = top.clone();
         cx.retain(cx.runtime().effect(move || {
             let mut parser = parser.borrow_mut();
-            parser.set_text(&source());
+            match source() {
+                Source::Made(text) => parser.set_text(&text),
+                Source::Held(value) => parser.set_value(&value),
+            }
             let parsed = parser.blocks();
             blocks.mutate(|was| {
                 *was = Value::List(parsed.into());

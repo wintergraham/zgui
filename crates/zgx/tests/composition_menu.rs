@@ -411,6 +411,60 @@ fn a_menu_opens_from_its_triggers_start_right_to_left() {
     assert_eq!(panel.x + panel.width, anchor.x + anchor.width, "{panel:?}");
 }
 
+/// A popover's arrow is painted as its panel is, as that changes: a
+/// background, border and opacity following state follow in the arrow.
+#[test]
+fn a_popovers_arrow_follows_its_panels_paint() {
+    use zgx::scene::NodeKind;
+    let mut ui = Ui::new(500., 400.);
+    let open = ui.signal(true);
+    let dark = ui.signal(false);
+    let read = dark.clone();
+    let view = ui.mount(
+        column().p(20.).child(
+            popover("Details", open, button().id("anchor").size(80., 28.))
+                .id("panel")
+                .w(200.)
+                .arrow(8.)
+                .reactive_style(move || {
+                    let (bg, border, opacity) = match read.get() {
+                        true => (rgb(0x202020), rgb(0xffffff), 0.8),
+                        false => (rgb(0xf0f0f0), rgb(0x808080), 1.),
+                    };
+                    Styles::new()
+                        .bg(bg)
+                        .border(1.)
+                        .border_color(border)
+                        .opacity(opacity)
+                }),
+        ),
+    );
+    let paint = |ui: &Ui| {
+        let scene = ui.scene.borrow();
+        let panel = view.find("panel").unwrap();
+        let position = scene.parent(panel).unwrap();
+        let diamond = scene.children(scene.children(position)[1])[0];
+        let quad = |node| match scene.kind(node) {
+            NodeKind::Quad(quad) | NodeKind::Panel { quad, .. } => {
+                Some((quad.fill, quad.border_color, quad.border_width))
+            }
+            _ => None,
+        };
+        (
+            (quad(panel), scene.effects(panel).opacity),
+            (quad(diamond), scene.effects(diamond).opacity),
+        )
+    };
+    for now in [false, true, false] {
+        dark.set(now);
+        ui.prepare_frame();
+        ui.prepare_frame();
+        let (panel, arrow) = paint(&ui);
+        assert!(panel.0.is_some(), "the panel paints");
+        assert_eq!(arrow, panel, "dark {now}: the arrow as the panel");
+    }
+}
+
 /// A popover's arrow (`View::arrow`) sits between it and its trigger,
 /// under the trigger's centre, and the panel opens that much further away.
 #[test]
@@ -519,4 +573,108 @@ fn a_menu_in_a_popup_window_names_its_trigger_while_open() {
     ui.prepare_frame();
     assert!(ui.scene.borrow().popups().is_empty());
     assert_eq!(ui.scene.borrow().popup_anchor(root), None);
+}
+
+/// A menu takes its platform's shape: on Windows WinUI's (its panel
+/// rounded 8, 2 above its items and none across, each item's highlight
+/// inset 4 and rounded 4); on Linux GNOME's (libadwaita's: its panel rounded
+/// 15 holding its items 6 in, each 32 tall and rounded 9); elsewhere zgx's
+/// (rounded `radius.md`, padded 16, items edge to edge).
+#[test]
+fn a_menu_takes_its_platforms_shape() {
+    use zgx::scene::NodeKind;
+    let mut ui = Ui::new(500., 400.);
+    let open = ui.signal(true);
+    let view = ui.mount(
+        column().p(20.).child(
+            menu("Edit", open, button().id("anchor").size(80., 28.))
+                .id("panel")
+                .child(menu_item("Cut").id("cut"))
+                .child(menu_item("Copy").id("copy").h(20.)),
+        ),
+    );
+    ui.prepare_frame();
+    ui.prepare_frame();
+    let scene = ui.scene.borrow();
+    let panel = view.find("panel").unwrap();
+    let cut = view.find("cut").unwrap();
+    // An item the app sizes keeps its size on every platform.
+    assert_eq!(scene.bounds(view.find("copy").unwrap()).height, 20.);
+    let (panel_box, item) = (scene.bounds(panel), scene.bounds(cut));
+    let radius = |node| match scene.kind(node) {
+        NodeKind::Panel { quad, .. } => quad.radius,
+        other => panic!("{other:?}"),
+    };
+    let (inset, above) = (item.x - panel_box.x, item.y - panel_box.y);
+    if cfg!(windows) {
+        assert_eq!(radius(panel), 8.);
+        assert_eq!((inset, above), (4., 4.), "0 + 4 across, 2 + 2 down");
+    } else if cfg!(target_os = "linux") {
+        assert_eq!(radius(panel), 15.);
+        assert_eq!((inset, above), (6., 6.));
+        assert_eq!(item.height, 32., "GTK's min-height");
+        assert_eq!(radius(cut), 9.);
+    } else {
+        assert_eq!(radius(panel), 6., "radius.md");
+        assert_eq!((inset, above), (16., 16.));
+    }
+}
+
+/// Where menus are windows of their own, a chosen item flashes before its
+/// menu closes and its action runs, as AppKit's do; on Windows and Linux, as
+/// WinUI's and GTK's, the menu closes and the action runs at once.
+#[test]
+fn a_chosen_item_flashes_first_where_menus_do() {
+    use std::{cell::RefCell, rc::Rc};
+    use zgx::compose::{TaskRunner, TaskToken};
+    let spawned: Rc<RefCell<usize>> = Rc::default();
+    let count = spawned.clone();
+    let runner = TaskRunner::new(move |future| {
+        *count.borrow_mut() += 1;
+        TaskToken::new(Rc::new(RefCell::new(future)), |_| true)
+    });
+    let mut ui = Ui::new(500., 400.);
+    ui.set_popup_screens(vec![zgx::scene::Rect::new(0., 0., 1000., 800.)]);
+    let open = ui.signal(true);
+    let chosen = Rc::new(RefCell::new(0));
+    let ran = chosen.clone();
+    let view = ui.mount(provide(
+        runner,
+        column().p(20.).child(
+            menu("Edit", open.clone(), button().id("anchor").size(80., 28.)).child(
+                menu_item("Cut")
+                    .id("cut")
+                    .on_click(move || *ran.borrow_mut() += 1),
+            ),
+        ),
+    ));
+    ui.prepare_frame();
+    ui.prepare_frame();
+    let bounds = ui.scene.borrow().bounds(view.find("cut").unwrap());
+    let (x, y) = (bounds.x + 4., bounds.y + 4.);
+    for event in [
+        InputEvent::PointerMove { x, y },
+        InputEvent::PointerDown {
+            x,
+            y,
+            button: PointerButton::Primary,
+        },
+        InputEvent::PointerUp {
+            x,
+            y,
+            button: PointerButton::Primary,
+        },
+    ] {
+        ui.dispatch(event);
+    }
+    ui.prepare_frame();
+    if cfg!(any(windows, target_os = "linux")) {
+        assert_eq!(*chosen.borrow(), 1, "its action at once");
+        assert!(!open.get(), "its menu closed at once");
+        assert_eq!(*spawned.borrow(), 0, "no flash");
+    } else {
+        assert_eq!(*chosen.borrow(), 0, "its action after the flash");
+        assert!(open.get(), "its menu open while it flashes");
+        assert_eq!(*spawned.borrow(), 1, "a flash");
+    }
 }

@@ -78,9 +78,51 @@ alternating launches on an RTX 4090:
 | zgx, shaders kept | 278 ms | 219 ms |
 | GPUI Fast | 307 ms | 273 ms |
 
+### Shader compiler
+
+Direct3D 12 compiles shaders with FXC unless the app ships Microsoft's DXC:
+with `dxcompiler.dll` beside the executable, zgx compiles with it, and with
+FXC if that fails. Compiling all 50 of zgx's pipelines took 689 ms with it,
+cold. FXC is deprecated, and its optimizer has overflowed its
+stack on zgx shaders that DXC compiles: canvases' filled areas draw on the
+GPU with DXC, and rasterize with FXC (Windows CI compiles every shader
+under FXC as a release build does, `tests/every_shader.rs`). DXC is quicker
+to a cold window's first text; its output is kept in the shader cache too,
+under a key naming the DLL, so a launch after the first compiles nothing. On
+an RTX 4090, the lab scene's first text, medians of 5 launches:
+
+| | Cold | Kept |
+| --- | --- | --- |
+| FXC | 776 ms | 511 ms |
+| DXC (Windows SDK's 1.8.2502) | 437 ms | to measure with the cache |
+
+`WGPU_DX12_COMPILER` (`fxc`, `dxc`) chooses one alone, the DLL found by
+name. Direct3D 11 (`ZGX_D3D11`) takes its shaders compiled ahead of time
+and never compiles at run time. Shipping DXC is described below.
+
+An app's own shader fills and layer shaders, which no gate of zgx's has
+compiled, compile with FXC in a process of their own: the app's executable
+started again as a compiler (`ZGX_FXC_CHILD`, answered before its `main`),
+the bytecode handed to Direct3D 12 as a passthrough module and kept in
+`%LOCALAPPDATA%\zgx\fxc` (256 shaders at most). A shader FXC can't survive
+fails alone and draws nothing. `crates/zgx-gpu/tests/app_shaders_d3d12.rs`
+checks the bytecode draws what wgpu's own build draws, byte for byte, which
+also catches a wgpu update moving the registers `dx12_fill` writes for.
+
 Most of the rest is the GPU driver opening its device (about 160 ms for a
 Direct3D 11 device and 180 ms for Direct3D 12, alone in a process), a floor
 any app on this GPU pays.
+
+A zgx window appears with its content, never empty: it draws through a
+DirectComposition visual with no redirection bitmap, so the compositor has
+nothing of it to show until its first frame is presented, and showing the
+window before drawing costs nothing. `scripts/windows_first_frame_probe.py`
+guards it: it reads every composition of the window's header on screen as it
+opens (Desktop Duplication) and fails on one that shows the window's
+background alone. Windows fades and scales a new window in; those
+compositions show the text, however faint, and pass. Two of the comparison
+frameworks' windows, MyGo's and Rune's, each show one empty composition
+every launch.
 
 ### What a frame costs below zgx
 
@@ -147,6 +189,64 @@ cycles, the empty loop's too, once doubled together and then came back: the
 processor clocked down. Hold High performance, and compare only modes run in
 alternation.
 
+### Direct3D 11 (experimental)
+
+zgx-desktop's (and zgx-gpu's) `d3d11` feature, off by default, builds in a
+renderer path drawing with Direct3D 11; `ZGX_D3D11=1` at run time takes it,
+and without it nothing changes. No Direct3D 12 device is opened then: wgpu
+runs on its no-op backend, keeping the renderer's handles without a driver,
+and frames, the glyph atlas and the window's swap chain (the same
+flip-sequential chain, dirty rectangles and pacing) are Direct3D 11's
+(`crates/zgx-gpu/src/d3d11_frame.rs`). `ZGX_D3D11_THREADED=1` leaves the
+driver's own threading on, which on NVIDIA costs the CPU win below.
+
+```powershell
+cargo build --release -p zgx-desktop --features d3d11 --example component_workload
+$env:ZGX_D3D11 = "1"; target\release\examples\component_workload.exe
+```
+
+It draws what the Windows suite's scenes do: quads (borders, rounded
+corners, shadows' shading), text, clip regions with their rounded corners
+and fades, kept frames, scroll copies, and isolated layers (translucent,
+nested, transformed), each drawn into a texture of its own and composited,
+images the CPU writes (pictures, gradients, canvases' and SVGs' images),
+and canvases' polyline strokes and filled areas, and shader fills and
+layer shaders that don't read the backdrop (`radial` gradients, `hue_rotate`,
+`sepia` and `invert`, and zgx-fx's fills and layer effects among them), each
+one's pixel stage compiled by FXC off the frame as Direct3D 12's is, in a
+process of its own. What it doesn't draw yet, it leaves out where what's
+left can't show a picture a user would wrongly trust, naming each kind once
+on stderr: drop shadows are left out; images a GPU view draws are left
+empty; a backdrop blur, or a layer shader reading the backdrop (glass),
+draws its box opaque in its own colour, as the system's Reduce transparency
+draws glass, so what's over it stays legible. The rest fails the frame
+with an error naming it (and panics in a debug build), since there is no
+Direct3D 12 to fall back to: content blur and masks (content meant hidden
+would show), blend modes and image effects (an inverted icon or a blended
+text could read as something else), and a backdrop over a box with no
+colour of its own. What it draws (all but the opaque boxes) is Direct3D 12's
+frame byte for byte (`tests/d3d11_parity.rs`, at 1×, 1.5× and 2×). Both run
+the same HLSL compiled by FXC: Direct3D 11 ahead of time (`dxbc/`, written
+again by `python scripts/d3d11_shaders.py`, on Windows), and zgx
+pins wgpu's Direct3D 12 to FXC too. Left to choose, wgpu takes DXC wherever
+dxcompiler.dll is on PATH (a developer shell with the Windows SDK), and DXC's
+code rounds antialiased edges a level apart from FXC's.
+`WGPU_DX12_COMPILER=dxc` still picks it.
+
+What it trades, measured with the Windows suite on an RTX 4090
+([results](results/d3d11-proof-windows-2026-10-27/)):
+- **Memory:** about half. The lab scene at rest takes 61 MiB of private
+  memory against 124, 6 MiB over a bare Direct3D 11 window; GPU shared memory
+  goes from 31 MiB to 2.
+- **CPU:** 15 to 36% fewer cycles in every animating scene, 47% fewer at
+  rest. Startup to the first text: 227 ms against 280.
+- **GPU:** about 10 µs more a frame (0.4 to 0.8 ms a second at 60 Hz, at the
+  GPU's lowest clock). That is Direct3D 11's own: `d3d_frame_floor`, which
+  only clears and presents, pays the same against Direct3D 12.
+- Pacing, the compositor's work and board power are level.
+
+These are NVIDIA's numbers; AMD's and Intel's drivers have not been measured.
+
 ## Presentation
 
 wgpu runs on Direct3D 12 alone (`WGPU_BACKEND` still overrides, among the
@@ -200,6 +300,40 @@ screen that every buffer is brought up to date; with
 `ZGX_DXGI_PRESENT_WHOLE=1` each present covers its whole buffer, which the
 compositor otherwise takes only within the dirty rectangles.
 
+Frames of an app's own timing (a 60 Hz stream, a timer) are drawn as their
+timer fires, at whatever phase it has against the display's refresh. DWM
+latches a frame for a refresh shortly before its vblank. Measured as each
+present's time after the compositor's vblank against whether the screen then
+missed a refresh (lab stream, 60 Hz, Desktop Duplication captures):
+
+| Present after the vblank | Followed by a missed refresh |
+| --- | --- |
+| 0 to 9.5 ms | none (of about 5,000) |
+| 13.5 to 15 ms | about 2% |
+| the last 1.5 ms | 13% |
+
+A timer drifts slowly against the display, so a launch whose timer sits near
+the latch keeps there for seconds: in captures, about one launch in eight lost
+about 60 refreshes in 8 s. A frame of the app's own timing ready within 3.5 ms
+before the vblank (or 1 ms after it) now waits, on a high-resolution timer,
+until 1 ms past it (`frame_source::latch_wait`; the window widens by 1 ms
+while frames wait, so a timer at its edge does not alternate). Input presents
+at once. With the lab stream's ticks pinned to a phase (alternating runs of
+one binary, 6 captures each):
+
+| Ticks at | Missed refreshes per capture, waiting | Not waiting |
+| --- | --- | --- |
+| 15.5 ms (near the latch) | 0, 1, 0, 0, 0, 0 | 76, 72, 54, 70, 53, 45 |
+| 13 ms (the window's edge) | 0 each | 1, 0, 4, 0, 5, 0 |
+| 6 ms | 0 each | 0, 0, 0, 0, 2, 0 |
+
+The app's cycles, its GPU time and the compositor's are the same within the
+runs' spread (lab stream +1.9%, heavy +0.5%, animate −1.8%), and a window at
+rest does no work. Keeping the compositor's clock running for such frames
+instead fixed the misses too but cost 6 to 8% more cycles on the lab stream (a
+second wake a frame). `zgx inspect switch refresh_grid off` presents at once,
+as before.
+
 `ZGX_PRESENT_LOG=1` logs each shown present as DXGI reports it. The probes
 measure the same things on any machine:
 
@@ -241,6 +375,44 @@ python scripts/windows_resize_probe.py target/release/examples/resize_probe.exe 
 python scripts/windows_resize_probe.py --reference --drag
 ```
 
+### Covered windows
+
+Windows doesn't say when a window is covered, so `WindowEvent::Occluded` comes
+from our winit (`platform_impl/windows/occlusion.rs`). A window is occluded on
+another virtual desktop (cloaked), or when windows above it that are known to
+be opaque leave none of it. It then stops drawing, as on macOS
+and X11; a covered ticker, spinner or heavy dashboard otherwise cost 2.4 to 9.2
+points of one core more than a minimized one, and all of its GPU use. Measured on this branch against main in one sitting, a
+shown heavy dashboard costs what it did, and covered it fell from 14.0 points to
+5.4, its timers' work, and its GPU use to none.
+
+Stopping a window someone can see is far worse than drawing one nobody can, so
+whatever may show what's behind it covers nothing: layered, click-through and
+tool windows (overlays, the taskbar), those composed by their own swap chain
+(`WS_EX_NOREDIRECTIONBITMAP`: WinUI apps, Windows Terminal, Zeron), an acrylic
+backdrop, a
+shaped region, and the window's own owned windows. Mica, as on File Explorer,
+shows the wallpaper and no window behind it, so it covers. A framed
+window's rounded corners don't cover what's under them. So under those a
+covered window goes on drawing, which costs what it did before.
+
+Only a layout free of doubt counts: a window whole on one monitor, under covers
+whole on that monitor, with every monitor at one scale and none at negative
+coordinates. A window spanning two monitors, or partly off screen, a cover
+reaching past the monitor's edge, or mixed scales, and it goes on drawing. This
+holds by construction and made-up layouts in unit tests: it hasn't been run on
+more than one monitor.
+
+A window drawing checks twice a second, from its frames, and two checks must
+agree before it stops; an idle window does nothing. An occluded one hears of
+other windows' changes through `SetWinEventHook` and looks each second for
+those no event reports (a z-order or style change alone).
+
+Two cases it can't see: a window made translucent through the undocumented
+accent API counts as opaque, and a covered window being captured (Teams, OBS)
+stops like any other. `ZGX_RENDER_WHEN_COVERED=1` keeps a covered window
+drawing.
+
 ## Title bars
 
 `Titlebar::Inset` and `Titlebar::Hidden` are frameless windows that keep the
@@ -261,7 +433,21 @@ Windows present through a DirectComposition visual, so `WindowOptions::transpare
 windows are transparent where zgx paints nothing, and `WindowOptions::glass`
 puts the Windows 11 system backdrop behind them: Acrylic for the heads-up and
 transient materials, Mica for window and page backgrounds, Mica Alt for title
-bars (see [window controls](window-controls.md)). Presentation through the visual
+bars (see [window controls](window-controls.md)). `Glass::plain` has no system
+backdrop: it is the acrylic blur of what is behind the window, untinted (the
+window's accent, `SetWindowCompositionAttribute`'s
+`ACCENT_ENABLE_ACRYLICBLURBEHIND` with a tint of alpha 1), as gpui's
+`WindowBackgroundAppearance::Blurred` is, for apps laying their own tint over
+it; Windows 10 1809 and later. It is not a pure blur: its luminosity pass lets about 83% of what
+is behind through and adds 8 (831 thousandths and 8, measured over flat black, grey and
+white, whatever the accent's state or tint), so a scrim laid over it reads darker over
+something bright than over macOS's material; `WindowCapabilities::blur_pass` and
+`blur_lift` say so, for an app to solve a scrim that comes out as macOS's would. Its frame is not extended under the client
+(as gpui's is not): DWM would draw the frame over the blur. Mica tints with
+the wallpaper alone and blurs nothing behind the window. With Transparency effects off
+Windows stops that blur and shows the accent's black tint, so plain glass then
+takes its material's backdrop, which goes solid, and follows the setting as it
+changes. Presentation through the visual
 measured the same as a window's own swap chain: every frame shown, the same
 keystroke latency and idle cost. Only transparent and glass windows present
 with alpha: an opaque window's swap chain is opaque from the start
@@ -272,6 +458,31 @@ first frame's background lets what is behind show is made again with alpha
 GPU time a frame on a zgx window than on an opaque one, more than on GPUI's
 (`windows_compare.py` reads the compositor's share).
 `scripts/windows_chrome_smoke.py` checks the buttons and the resize bands.
+
+`Titlebar::Inset`'s caption buttons are drawn by zgx as boxes and bars of whole
+pixels, not a font, so they show on any Windows. Like the buttons Windows would
+draw, they don't zoom with the content: 46 by 32 points of the display each.
+`WindowOptions::caption_height` sets their height, in the content's points, so
+they span an app's title bar at any zoom. What is drawn, what `WM_NCHITTEST`
+answers (snap layouts included) and `WindowInfo::controls` read one geometry in
+physical pixels (`windows_caption.rs`), and agree. A window that isn't resizable,
+or whose smallest and largest sizes are the same, has no Maximize and no resize
+bands. The glyphs are inked from the app's theme, as its own title bar controls
+are: `text.secondary` at rest, `text.primary` under the pointer and
+`text.tertiary` while the window is in the back, over the theme's `hover` and
+`pressed`, with Close's red and white glyph kept (in a contrast theme, the
+highlight's own text under the pointer). So they follow the app's light
+or dark, not the system's, from the window's root theme: a `theme` scoped over
+an app's title bar alone doesn't reach them. A theme inks them apart from the
+rest through their own tokens, which default to those: `caption.text`,
+`caption.text.hover` (under the pointer and pressed), `caption.text.inactive`,
+`caption.hover` and `caption.pressed`, and for Close `caption.close`,
+`caption.close.pressed`, `caption.close.text` and `caption.close.text.pressed`
+(`#c42b1c`, `#c42b1ce6` and white by default). In a contrast theme the system's
+colours stand in for all but Close's, whatever a theme sets. Their line is an outline icon's
+weight (1.75 at 24 points, drawn at 16), in whole pixels: 1 at 100% and 125%, 2
+at 150% to 200%. `scripts/windows_caption_smoke.py` checks all of it in a real
+window at 100% and 150% zoom, light and dark.
 
 Windows take the executable's own icon (its first icon group, the one
 Explorer shows) for the title bar, the taskbar and Alt+Tab, sized for the
@@ -299,12 +510,34 @@ title bar is pressed, on Escape and on a press outside it.
 A menu or popover that is one rounded panel gets DWM's rounded corners, rim
 and shadow, as Windows 11 frames its menus.
 
-Known gap: menus and popovers keep the theme's flat background, where Windows
-11's own menus are acrylic. DWM draws a system backdrop
-(`DWMSBT_TRANSIENTWINDOW`) only behind an activated window, and a flat colour
-behind one never activated; a popup must not take activation from its window,
-which keeps the keyboard. The undocumented `SetWindowCompositionAttribute`
-acrylic is not used.
+On Windows 11 a popup whose panel is translucent (a menu's tint) is acrylic,
+as Windows 11's own menus are: its window has the accent plain glass has
+(`SetWindowCompositionAttribute`'s `ACCENT_ENABLE_ACRYLICBLURBEHIND`, its
+tint of alpha 1), which blurs whatever is behind it, the app's window, other
+apps and the desktop, and the panel's tint lies over it. A system backdrop
+(`DWMSBT_TRANSIENTWINDOW`) would not do: DWM draws it only behind an activated
+window, and a flat colour behind one never activated, and a popup must not
+take activation from its window, which keeps the keyboard. The accent's blur
+fills the window, so the window is the panel's box alone, which DWM rounds
+and shadows. The panel's own shadow is not drawn (`GpuRenderer::
+set_unshadowed`): the window cut it past the panel, and zgx draws a box's
+shadow whole under it, so through the translucent fill it darkened the blur,
+by half under a menu's shadow of alpha 0.5. DWM's rim goes too (the panel
+draws its own edge). A small popup's blur takes in its window above it: over
+white, 204 where a large one far from it reads 218, as a plain window's. DWM's corners are 8 or 4 pixels at 100%, so a panel
+rounded otherwise shows a sliver of blur, or loses one, at its corners. A
+popover with an arrow, a drag preview and an opaque panel have no accent. The
+blur can't fade: through a popup's fade it shows whole. With Transparency
+effects off, or on Windows 10 (whose blur would be square past a rounded
+panel's corners), popups have none. `WindowCapabilities::popup_blur_behind`
+says whether they have it, so an app can draw its popups solid where not.
+
+Without the accent, a popup's `backdrop_blur` blurs the app's own pixels, as on Linux: what its window last drew
+under the popup, copied into a texture of the popup's size while it shows
+(`GpuRenderer::set_backdrop`), and copied and drawn again when the window
+repaints under it. Where the popup reaches past its window, that window's edge
+goes on, blurred, so the glass is opaque throughout with nothing sharp through
+it. Over another popup it blurs the window, not that popup.
 
 No popup window exists before the pointer first reaches something that opens
 one, and a closed one is kept hidden for the next: an app that never opens a
@@ -354,6 +587,9 @@ window whatever its title bar:
   accent, selections and hover take the contrast theme's system colours.
 - Animation effects off (Accessibility, Visual effects): the motion duration
   tokens are zero, so what animates with them changes at once.
+- Transparency effects off (Personalization, Colors; `EnableTransparency`):
+  `SystemPreferences::reduced_transparency` and `ui.prefers.reduced_transparency`
+  are true, `glass.tint` is the raised surface and `glass.blur` zero, as on macOS.
 - Text size (Accessibility): the font size and line height tokens scale with
   it, 100% to 225%, and spacing and icons keep their size. A subtree whose
   layout depends on fixed text, like a terminal grid, opts out with
@@ -426,8 +662,16 @@ Unlike macOS:
   `https://zgx-file.invalid/` along with the files of its folder (WebView2
   asks the app for no `file:` request), so its origin is that host.
 
-As with WebKit without delegates for them, pages save no downloads and get no
-permission (camera, microphone, location, notifications, clipboard reads).
+As with WebKit without delegates for them, pages get no permission (camera,
+microphone, location, notifications, clipboard reads). A download is the app's
+(`WebView::set_download_handler`): saved where it says, with WebView2's
+download bar hidden, or cancelled, as with no handler.
+
+WebView2's browser keys are off (`AreBrowserAcceleratorKeysEnabled`): Ctrl+F,
+F3, Ctrl+P, Ctrl+R, F5, zoom, Alt+arrows and F12 reach the page, and the
+app's bindings when the page leaves them alone, as on macOS and Linux.
+Editing keys (Ctrl+C, X, V, A, Z, Y) stay the page's. `WebView::find` finds
+in the page (WebView2's find, its own bar suppressed), counting matches.
 
 `scripts/windows_webview_smoke.py` checks the page against zgx content
 around and over it.
@@ -470,6 +714,14 @@ and how they fit what zgx does at run time.
   Visual C++ Redistributable.
 - ARM64 machines run x64 builds emulated. Build `aarch64-pc-windows-msvc`
   as well for native speed (see ARM64 above).
+
+**DXC (optional).** Copy `dxcompiler.dll` from the Windows SDK
+(`Windows Kits\10\bin\<version>\x64`) or a DirectXShaderCompiler release
+next to the executable: 14.3 MB for 1.8.2502. It is Microsoft's, signed, and
+redistributable (the release's license allows it). `dxil.dll` (1.5 MB) isn't
+needed: DXC 1.8 validates and signs on its own (every zgx shader compiled
+with `dxcompiler.dll` alone on an RTX 4090). Without it zgx uses FXC, which
+ships with Windows (see Shader compiler).
 
 **Size.** zgx's comparison app (`component_workload`, every image format)
 is 12.1 MiB x64 built as it ships: `lto = "fat"` and `codegen-units = 1`,
@@ -551,12 +803,15 @@ runtime:
 
 ## Limitations
 
+- **A covered window goes on drawing, with crates.io's winit.** It reports no `Occluded` on Windows (ours does: [covered windows](#covered-windows)), so zgx can't tell: a covered window animating draws at its full rate, where on macOS and X11 it stops. `ZGX_RENDER_WHEN_COVERED=1` makes no difference here (measured on WING-PC, a window fully covered: 51 frames in 2 s without it, 50 with it, 55 shown).
 - Cancelling a file-picker or prompt future invalidates result delivery but
   does not dismiss its native dialog. A pending native dialog can retain its
   parent until dismissed. Backend failures can appear as cancellation.
 - Rendered application menus are supported; native Win32 menu bars are not.
-- Ghostty terminals and `NativeContent::Platform` views are macOS only; web
-  views need the `webview2` feature (see Web views).
+- Terminals are drawn by zgx with the `terminal` feature (ConPTY; see
+  [native surfaces](native-surfaces.md#terminals)); Ghostty terminals and
+  `NativeContent::Platform` views are macOS only; web views need the
+  `webview2` feature (see Web views).
 - The Linux benchmark sampler and the X11/Wayland smoke scripts do not run on
   Windows; Windows has its own (below).
 
@@ -572,19 +827,38 @@ cargo build -p zgx-desktop --example gallery --example dpi_transition --example 
 python scripts/windows_desktop_smoke.py target/debug/examples/gallery.exe
 python scripts/windows_dpi_smoke.py target/debug/examples/dpi_transition.exe
 python scripts/windows_ime_smoke.py target/debug/examples/native_ime.exe --install-korean
+python scripts/windows_ime_smoke.py target/debug/examples/native_ime.exe --install-korean --tsf
+python scripts/windows_ime_smoke.py target/debug/examples/native_ime.exe --install-korean --tsf --replace-while-composing
+python scripts/windows_tsf_smoke.py target/debug/examples/native_ime.exe
+python scripts/windows_tsf_japanese_smoke.py target/debug/examples/native_ime.exe
+python scripts/windows_tsf_japanese_smoke.py target/debug/examples/native_ime.exe --imm32
+python scripts/windows_tsf_chinese_smoke.py target/debug/examples/native_ime.exe
+python scripts/windows_tsf_chinese_smoke.py target/debug/examples/native_ime.exe --imm32
+python scripts/windows_tsf_reconvert_smoke.py target/debug/examples/native_ime.exe --install-korean
+python scripts/windows_uia_find_smoke.py target/debug/examples/selectable_text.exe
 python scripts/windows_platform_smoke.py target/debug/examples
 python scripts/windows_settings_smoke.py target/debug/examples/scrollbars.exe --both
 python scripts/windows_touch_smoke.py target/debug/examples
 python scripts/windows_popup_smoke.py target/debug/examples
 python scripts/windows_drag_smoke.py target/debug/examples
 python scripts/windows_window_smoke.py target/debug/examples
+python scripts/windows_occlusion_smoke.py target/release --snap --desktops
 python scripts/windows_text_smoke.py target/debug/examples/text_selection.exe
 python scripts/windows_clipboard_image_smoke.py target/debug/examples/clipboard_image.exe
 python scripts/windows_contrast_smoke.py target/debug/examples/text_selection.exe
 python scripts/windows_caret_blink_probe.py target/release/examples/text_selection.exe
 cargo build --release -p zgx-gpu --example present_check
 python scripts/windows_present_probe.py target/release/examples/present_check.exe --lose
+cargo build --release -p zgx-gpu --example framepace
+cargo build --release -p zgx-desktop --example component_workload
+python scripts/windows_first_frame_probe.py target/release/examples/component_workload.exe target/release/examples/framepace.exe
 ```
+
+- `windows_first_frame_probe.py` (`component_workload`, idle): five launches
+  at the same place; from before the window opens, no composition of its
+  header strip is the background alone (luminance spread under 2 of 255)
+  where the settled header shows text. Each launch prints the strip's spread
+  per composition.
 
 - `windows_present_probe.py` (`present_check`): a mark moves along a row
   over 30 frames, each drawing its damage alone; on screen every place it
@@ -607,7 +881,113 @@ python scripts/windows_present_probe.py target/release/examples/present_check.ex
   run and restores the list after. The Japanese and Chinese IMEs need their
   language's typing features (an administrator install) before they compose.
   `native_ime --open-ime` opens the IME itself: input methods ignore a
-  synthesized on/off key.
+  synthesized on/off key. It runs through IMM32 (`ZGX_TSF=0`, the opt-out);
+  `--tsf` runs it through the Text Services Framework as the default (below),
+  `--force-tsf` with it forced, checking the editors' text. `--replace-while-composing`
+  has the app set the field's text mid-composition (`native_ime
+  --replace-while-composing`): the composition ends there and none of it is
+  committed, through either path.
+- `windows_tsf_smoke.py`: the emoji panel (Win+., Enter) inserts
+  through zgx's text store, and typing after it reaches the editor. It needs
+  no input method beyond English.
+- `windows_uia_find_smoke.py`: UI Automation finds text in a zgx document (`FindText`, AccessKit's zgx patch): a word forward, one without case, one backward, nothing for what it doesn't have, each match with its box.
+- `windows_tsf_reconvert_smoke.py`: reconversion. 한, typed,
+  committed and selected, goes to hanja in its place by the Korean IME's
+  Hanja key and its first candidate. `--install-korean` as above.
+- `windows_tsf_chinese_smoke.py`: Microsoft Pinyin composes "nihao", the
+  digit 1 takes 你好 and commits it, and pinyin composed then cancelled with
+  Escape commits nothing. Through the Text Services Framework, or IMM32 with
+  `--imm32`. It prints PENDING without Chinese (Simplified) installed.
+- `windows_tsf_japanese_smoke.py`: the Microsoft Japanese IME converts
+  "nihongo" and commits the candidate it selected (日本語, or what it has
+  learned to put first), the target clause underlined thick while converted.
+  Through the Text Services Framework, or IMM32 with `--imm32`. It prints
+  PENDING without the Japanese typing features installed.
+
+  **Manual review only.** Run them with a person watching the screen (CI
+  has no language packs, and they print PENDING there). Both ask Windows
+  for their language in the probe's own window (`windows_input.use_layout`),
+  never editing the user's languages, and answer no prompt. What keeps them
+  from accepting one:
+  - **The keys they send.** Pinyin's first-use cloud offer is accepted by
+    Space or Enter, so the Chinese probe sends only letters, digits (a
+    candidate by its number) and Escape. The Japanese IME converts with
+    Space and commits with Enter, so its runs need the person watching.
+  - **A settings tripwire.** The input methods' preferences (HKCU
+    `InputMethod\Settings\CHS`, `JPN`, `IME\15.0\IMEJP`) are read before
+    every key and after the last; a change (an offer accepted) stops the
+    probe on the key that caused it, with a screenshot, after putting them
+    back (`windows_input.guard_windows`).
+  - **New windows.** A top-level window that wasn't showing when the probe
+    began and isn't a classic candidate list stops it too, sending nothing.
+    Given the app it launched (`app=(pid, title)`), the guard passes that
+    app's own new windows, each checked once as it appears
+    (`scripts/windows_guard.py`): a `ZgxPopup` or Win32 menu (`#32768`, its
+    window's system menu) of its process, and its
+    WebView2 surface, an unowned top-level window of a
+    `msedgewebview2.exe` that is a direct child of the app's process and
+    bears its title. Anything else, another app's web view included, still
+    stops it.
+  - **The candidate list itself.** Windows 11 draws candidates, and offers
+    like Bing's, in TextInputHost's "Windows Input Experience" window (a
+    `Windows.UI.Core.CoreWindow` under an `ApplicationFrameWindow`) that
+    window enumeration (`EnumWindows`) doesn't list while it shows. The
+    guard finds it by hit-testing the screen just below the composition
+    (`WindowFromPoint`, `windows_input.below_caret`) and reads its UI
+    Automation tree: anything but its candidate UI (the "Microsoft Candidate
+    UI" menu, the "Candidate Item Panel" list and its items, and the
+    Previous Page, Next Page, Emoji and Symbol and Search Suggestion
+    buttons; the Japanese IME's "Pager" menu and its "Page N" buttons;
+    unnamed Panes lay it out and pass only as what they hold does)
+    stops the probe, as does a hit-test or read that fails.
+    Classic candidate windows are read through their child windows and UI
+    Automation the same way. `ZGX_GUARD_WITHOUT` takes names off that list,
+    to see the guard stop.
+
+  A pass is not a review: look at each run's screenshots in `--out`.
+
+The probes that choose an input path run the app's default unless told
+otherwise: `ZGX_TSF` unset, removed if the probe's own environment has it,
+so they test what an app gets with nothing set. `--imm32` runs winit's IMM32
+path (`ZGX_TSF=0`) and `--force-tsf` the framework forced (`ZGX_TSF=1`); each
+run prints a `MODE:` line saying which ran. `windows_ime_smoke.py` alone
+runs IMM32 unless given `--tsf` (the default) or `--force-tsf`.
+
+### The Text Services Framework
+
+Editors take input methods and text services through Windows' Text Services
+Framework, the default from 0.1.6. An app keeps winit's IMM32 path instead
+with `Application::text_services(false)`, and a user with `ZGX_TSF=0` in the
+environment (`ZGX_TSF=1` forces the framework back on); a window where the
+framework does not start uses IMM32 too. IMM32 composes, but has none of what
+follows: no text store, reconversion, input scopes or clause underlines.
+- **The text store.** An `ITextStoreACP2` of zgx's own (`tsf.rs`, over
+  `text_store.rs`, which is tested on every platform) holds the focused
+  editor's text in UTF-16 offsets, with the composition in place of the
+  selection while one is open.
+- **What it gives input methods.** They read the text around the caret and
+  ask where any range of it shows (`GetTextExt`, through
+  `EditorHandle::text_area`: the box around it across its lines, in the
+  window's points through any zoom and the editor's scroll), to place their
+  candidates and prediction lists at the clause they convert. Text services
+  (the emoji panel, dictation, the touch keyboard) insert at the selection.
+- **The composition** is the editor's preedit, committed when the input
+  method ends it, as on other platforms. Its clauses are the input method's
+  display attributes (`GUID_PROP_ATTRIBUTE`), read after each of its edits
+  (`ITfTextEditSink::OnEndEdit`): each clause underlined apart from the next,
+  thick under the one being converted.
+- **Reconversion.** An input method opening its composition over committed
+  text (selected, then Convert or Hanja) composes that text in its place:
+  what it ends as replaces it, and ending it unchanged edits nothing.
+- **Input scopes.** An editor's input mode (`View::input_mode`, Luau's
+  `inputmode`, HTML's) is its input scope (`GUID_PROP_INPUTSCOPE`, an
+  `ITfInputScope`): `IS_DIGITS` for numeric, `IS_NUMBER` for decimal,
+  `IS_TELEPHONE_FULLTELEPHONENUMBER`, `IS_SEARCH`, `IS_EMAIL_SMTPEMAILADDRESS`,
+  `IS_URL`, which the touch keyboard and input methods follow. Focus moving
+  to an editor of another mode tells them (`OnAttrsChange`). `None` shows no
+  touch keyboard.
+
+The probes for the rest of Windows:
 - `windows_platform_smoke.py`: selected display text copied as text and HTML
   and read by another process, text from another process pasted into an
   editor, the file picker, the save dialog (a name typed into it reaches the
@@ -632,7 +1012,12 @@ python scripts/windows_present_probe.py target/release/examples/present_check.ex
 - `windows_glass_smoke.py` (`glass_counter`): each glass material asks the
   compositor for its system backdrop, read back from outside the app
   (`DWMWA_SYSTEMBACKDROP_TYPE`): Acrylic for the heads-up glass, Mica for a
-  window's background, Mica Alt for a title bar's. Acrylic must also show: an
+  window's background, Mica Alt for a title bar's, none for plain glass
+  (whose blur is the window's accent, which Windows reads back to no one:
+  `GetWindowCompositionAttribute` refuses it; a unit test,
+  `plain_glass_blurs_behind_the_window_and_other_glass_takes_it_away`, sees
+  it taken).
+  Acrylic must also show: an
   empty patch of the window changes as another test window takes the
   activation (Windows draws a solid colour for an inactive window's acrylic),
   where an opaque fill would not.
@@ -669,7 +1054,18 @@ python scripts/windows_present_probe.py target/release/examples/present_check.ex
   it, zgx's composer over the page takes clicks and typing and its script
   changes the page, the menu popover draws above the page and takes its
   clicks, the wheel scrolls the page, and after a resize the page still fills
-  its node.
+  its node; Ctrl+F in the page reaches the app, whose `WebView::find` finds
+  the heading, and a `download` link saves nothing with no handler and, after
+  Ctrl+D (the app's handler), saves where the app says, never in Downloads.
+  `--no-foreground` sends no input, for a desktop another window may hold:
+  through the example's `--control` commands on stdin, WebView2's browser
+  keys read back off, find finds the heading's word and not a word the page
+  hasn't, and the page's own script starts its download with no handler, with
+  one cancelling it and with one saving it, the file landing only in the last
+  case (the page reloaded before each later one: WebView2 holds a page's
+  second download started without a gesture back until it navigates, asking
+  nothing); the real Ctrl+F is a case of its own, `BLOCKED` rather than
+  failed while a system overlay holds the foreground.
 - `windows_touch_smoke.py`: synthetic touch and pen (no touchscreen needed):
   a tap clicks, a finger drags a slider, pans a list and flings it, a held
   finger opens a context menu or selects text by words, and a pen's stroke
@@ -681,6 +1077,11 @@ python scripts/windows_present_probe.py target/release/examples/present_check.ex
   switches the app mode both ways while a window runs (`primary_selection`,
   whose theme follows the system's): its title bar and content must follow
   within seconds. The user's own settings are restored after.
+- `windows_popup_glass_probe.py <zgx-run.exe>`: a popover's glass over hard
+  stripes, read from the popup's own capture: even and brighter than its fill
+  with `backdrop_blur`, only the fill without; and the CPU time of each with a
+  box moving under it. `crates/zgx-gpu/tests/popup_backdrop.rs` covers the crop, the scale,
+  the window's edge going on and a new frame under it.
 - `windows_popup_smoke.py` (`popup_probe`): no popup window before the first
   popup; a menu opens past its window's bottom edge within milliseconds of
   the click and shows on screen; hovering and clicking, or pressing the
@@ -711,6 +1112,11 @@ python scripts/windows_present_probe.py target/release/examples/present_check.ex
   the pointer to the pixel; dropped on the other window's strip it merges
   there. It lays the windows out from the work area, so it fits at any
   scale (checked at 100% and 150%).
+- `windows_occlusion_smoke.py` (`zgx-run`, and windows of its own that it
+  confirms are above the app): a covered window stops drawing and comes back
+  however the cover goes, and a window anything of which can be seen never
+  stops. `--snap` and `--desktops` press Win+Left and make and remove a
+  virtual desktop; all its keys go through `guard_windows`.
 - `windows_window_smoke.py` (`window_probe`): a second window opens a step
   on from the first (`CW_USEDEFAULT`); a window with `frame_autosave` moved and
   closed reopens there at its size, left maximized reopens maximized, and at a

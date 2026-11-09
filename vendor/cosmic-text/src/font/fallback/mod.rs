@@ -83,6 +83,9 @@ pub struct Fallbacks {
     forbidden_fallback_range: Range<usize>,
     // PERF: Consider using NoHashHasher since Script is just an integer
     script_fallback_ranges: HashMap<Script, Range<usize>>,
+    /// zgx: Han's fallbacks in simplified, traditional and Hong Kong
+    /// Chinese (`FontFeatures::HAN` 4 to 6), whatever the locale.
+    chinese: [Range<usize>; 3],
     locale: String,
 }
 
@@ -108,6 +111,11 @@ impl Fallbacks {
         lists.extend_from_slice(forbidden_fallback);
         let forbidden_fallback_range = new_range(&lists);
 
+        let chinese = ["zh-CN", "zh-TW", "zh-HK"].map(|chinese| {
+            lists.extend_from_slice(fallbacks.script_fallback(Script::Han, chinese));
+            new_range(&lists)
+        });
+
         let mut script_fallback_ranges =
             HashMap::with_capacity_and_hasher(scripts.len(), BuildHasher::default());
         for &script in scripts {
@@ -123,6 +131,7 @@ impl Fallbacks {
             common_fallback_range,
             forbidden_fallback_range,
             script_fallback_ranges,
+            chinese,
             locale,
         }
     }
@@ -161,6 +170,13 @@ impl Fallbacks {
             .get(&script)
             .map_or(&[], |range| &self.lists[range.clone()])
     }
+
+    /// zgx: the fallbacks for Han characters said to be in Chinese
+    /// (`FontFeatures::HAN` 4 to 6, `han`): that Chinese's.
+    fn chinese_fallback(&self, han: u32) -> Option<&[&'static str]> {
+        let range = self.chinese.get(han.checked_sub(4)? as usize)?;
+        Some(&self.lists[range.clone()])
+    }
 }
 
 pub use platform::PlatformFallback;
@@ -179,6 +195,14 @@ pub struct MonospaceFallbackInfo {
     codepoint_non_matches: Option<usize>,
     font_weight: u16,
     id: fontdb::ID,
+}
+
+/// zgx patch: where a fallback search stopped (`FontFallbackIter::place`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SearchPlace {
+    script_i: (usize, usize),
+    common_i: usize,
+    other_i: usize,
 }
 
 #[derive(Debug)]
@@ -228,6 +252,7 @@ impl<'a> FontFallbackIter<'a> {
         }
     }
 
+
     /// zgx patch: whether the font `next` gave first was its default
     /// family's face (no monospace, script or other fallback looked at).
     pub(crate) fn gave_default(&self) -> bool {
@@ -238,10 +263,47 @@ impl<'a> FontFallbackIter<'a> {
             && !self.end
     }
 
+    /// zgx patch: whether `font`, which `next` gave first, is its default
+    /// family's face. Monospace without a face of its own gives the
+    /// fixed-width face with most of the word's characters instead, which
+    /// depends on the word.
+    pub(crate) fn is_default_face(&self, font: &Font) -> bool {
+        self.default_i == 1
+            && self
+                .default_font_match_key()
+                .is_some_and(|key| key.id == font.id())
+    }
+
     /// zgx patch: as `next` leaves it after giving its default family's
     /// face (`gave_default`), that face known already.
     pub(crate) fn pass_default(&mut self) {
         self.default_i = 1;
+    }
+
+    /// zgx patch: where the search stands, its default family passed, for
+    /// `pass_to`. It looks at a word's characters only for monospace: a
+    /// family with no face of its own finds the same fallback for every run
+    /// of the same scripts, and walked every installed face to do so per word.
+    pub(crate) fn place(&self) -> SearchPlace {
+        SearchPlace {
+            script_i: self.script_i,
+            common_i: self.common_i,
+            other_i: self.other_i,
+        }
+    }
+
+    /// zgx patch: as `next` leaves it after giving the font found at `place`.
+    pub(crate) fn pass_to(&mut self, place: SearchPlace) {
+        self.default_i = 1;
+        self.script_i = place.script_i;
+        self.common_i = place.common_i;
+        self.other_i = place.other_i;
+    }
+
+    /// zgx patch: whether the search gave its font with its default family
+    /// passed and none left to look at: one `pass_to` can come back to.
+    pub(crate) fn past_default(&self) -> bool {
+        self.default_i == 1 && !self.end
     }
 
     pub fn check_missing(&self, word: &str) {
@@ -304,11 +366,25 @@ impl<'a> FontFallbackIter<'a> {
     fn default_font_match_key(&self) -> Option<&FontMatchKey> {
         let default_family = self.default_families[self.default_i - 1];
         let default_family_name = self.font_system.db().family_name(default_family);
+        let in_family = |m_key: &&FontMatchKey| self.face_contains_family(m_key.id, default_family_name);
 
         self.font_match_keys
             .iter()
             .filter(|m_key| m_key.font_weight_diff == 0 || m_key.variable_weight_match)
-            .find(|m_key| self.face_contains_family(m_key.id, default_family_name))
+            .find(in_family)
+            // zgx patch: a family without the weight asked for (a Medium of
+            // a family that has Regular and Bold alone) draws in the face
+            // fontdb's query picks for it, as CSS's font matching does,
+            // rather than in another family that has that weight. The keys
+            // hold the query's face first (`get_font_matches`, marked
+            // `query`): where fontdb found none (the family isn't installed),
+            // nothing more is looked at.
+            .or_else(|| {
+                self.font_match_keys
+                    .first()
+                    .filter(|m_key| m_key.query)
+                    .filter(in_family)
+            })
     }
 
     fn next_item(&mut self, fallbacks: &Fallbacks) -> Option<<Self as Iterator>::Item> {
@@ -451,7 +527,13 @@ impl<'a> FontFallbackIter<'a> {
         while self.script_i.0 < self.scripts.len() {
             let script = self.scripts[self.script_i.0];
 
-            let script_families = fallbacks.script_fallback(script);
+            let script_families = match script {
+                // Its run's language (`ShapeBuffer::han`): a Chinese
+                // one's fonts, not the locale's.
+                Script::Han => fallbacks.chinese_fallback(self.font_system.shape_buffer.han),
+                _ => None,
+            }
+            .unwrap_or_else(|| fallbacks.script_fallback(script));
 
             while self.script_i.1 < script_families.len() {
                 let script_family = script_families[self.script_i.1];

@@ -137,6 +137,37 @@ fn handler_errors_show_and_the_banner_dismisses() {
     assert_eq!(h.text("label"), "Count: 1");
 }
 
+/// An error raised in an open modal: the banner shows over the modal and
+/// its × dismisses it, the click going to the banner, not to the modal's
+/// backdrop (which closed the modal and left the error).
+#[test]
+fn the_banner_dismisses_over_an_open_modal() {
+    let mut h = Harness::inline(
+        r#"local open = ui.state("open", true)
+return ui.column {
+    p = 12,
+    ui.text { id = "state", function() return if open:get() then "open" else "closed" end },
+    ui.modal {
+        open = open,
+        label = "Dialog",
+        w = 200, h = 120,
+        ui.button { id = "boom", w = 120, h = 40, on_click = function() error("boom") end, "Boom" },
+    },
+}
+"#,
+    );
+    assert_eq!(h.text("state"), "open");
+    h.click("boom");
+    assert!(h.find("script-error-banner").is_some());
+    h.click("script-error-dismiss");
+    assert_eq!(h.host.error().get(), None, "the click reached the banner");
+    assert!(h.find("script-error-banner").is_none());
+    assert_eq!(h.text("state"), "open", "the modal stays open");
+    // It still takes its own clicks.
+    h.click("boom");
+    assert!(h.find("script-error-banner").is_some());
+}
+
 #[test]
 fn the_inspector_names_nodes_by_the_script_line_that_made_them() {
     let inspector = Inspector::off();
@@ -189,6 +220,30 @@ fn the_inspector_names_nodes_by_the_script_line_that_made_them() {
     inspector.set_enabled(false);
     inspector.update(&h.ui, None);
     assert_eq!(inspector.overlay(), None);
+}
+
+/// A panic while reloading shows as a script error does, and the next save
+/// reloads: hot reload outlives it.
+#[test]
+fn a_panic_in_a_reload_is_reported_and_the_next_save_reloads() {
+    let path = temp_script("reload-panic", APP);
+    let mut h = Harness::new(|runtime| {
+        let host = ScriptHost::new(runtime, &path);
+        host.action("boom", |_| panic!("boom in a reload"));
+        host
+    });
+    h.settle();
+    rewrite(&path, "ui.invoke(\"boom\")\nreturn ui.text { \"never\" }\n");
+    assert!(h.host.reload_if_changed());
+    h.settle();
+    let error = h.host.error().get().unwrap_or_default();
+    assert!(error.contains("boom in a reload"), "{error}");
+    rewrite(&path, &APP.replace("Count:", "Total:"));
+    assert!(h.host.reload_if_changed());
+    h.settle();
+    h.ui.prepare_frame();
+    assert_eq!(h.host.error().get(), None);
+    assert_eq!(h.text("label"), "Total: 0");
 }
 
 /// Watching, a reload follows a save without waiting out the poll: the
@@ -270,4 +325,28 @@ fn a_debug_build_lints_its_scripts_after_each_load() {
         "fixed, it goes"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same error raised twice reaches `on_error` twice: each is an error,
+/// though the banner (shown or not) is the same.
+#[test]
+fn a_repeated_error_reaches_the_error_hook_each_time() {
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let sink = seen.clone();
+    let mut h = Harness::new(|runtime| {
+        let host = ScriptHost::inline(
+            runtime,
+            "hook_probe",
+            r#"return ui.button { id = "fail", w = 120, h = 35, "Fail", on_click = function() error("same-boom") end }"#,
+        )
+        .error_banner(false);
+        host.on_error(move |e| sink.borrow_mut().push(e.to_string()));
+        host
+    });
+    h.click("fail");
+    h.frames(1);
+    h.click("fail");
+    h.frames(1);
+    assert_eq!(seen.borrow().len(), 2, "{:?}", seen.borrow());
+    assert!(seen.borrow().iter().all(|e| e.contains("same-boom")));
 }

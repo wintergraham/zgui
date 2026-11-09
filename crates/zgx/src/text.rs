@@ -4,7 +4,15 @@
 //! pointer (`Clone`), and a line or the line of a byte is found in
 //! `O(log n)`. An editor holding a long document, its layout and its
 //! semantics share one.
-use std::{borrow::Cow, ops::Range, sync::Arc};
+use std::{
+    borrow::Cow,
+    collections::VecDeque,
+    ops::Range,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 /// What a chunk is cut to (a long line lies across several).
 const CHUNK: usize = 8 * 1024;
@@ -36,6 +44,77 @@ struct Chunks {
     /// Before each chunk, and one past the last: its bytes and line breaks.
     bytes: Vec<usize>,
     breaks: Vec<usize>,
+    /// How many carriage returns it holds, so whether a text has any is
+    /// known without reading it (`Text::has_returns`): counted where it is
+    /// made, and in the chunks an edit makes again.
+    returns: usize,
+    /// Which text this is (`Text::id`): fresh when made and after every
+    /// edit, shared by its clones. 0 only for the empty text `Default`
+    /// makes, which every such text is.
+    id: u64,
+    /// Its last edits, the earliest first (`Text::edits_since`).
+    log: EditLog,
+}
+/// A fresh text id: never one made before in this process.
+fn fresh_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+/// One edit of a text (`Text::edits_since`): at `start`, the `old_len`
+/// bytes there became `inserted`, turning the text `before` into the next.
+#[derive(Clone, Debug)]
+pub(crate) struct TextDelta {
+    /// The id of the text it was made to.
+    pub(crate) before: u64,
+    pub(crate) start: usize,
+    pub(crate) old_len: usize,
+    pub(crate) inserted: Arc<str>,
+}
+/// A text's last edits: at most `LOG_EDITS` of them, holding at most
+/// `LOG_BYTES` inserted, the earliest dropped first. An edit inserting more
+/// than that empties it: what was before can't be followed past it.
+#[derive(Clone, Debug, Default)]
+struct EditLog {
+    edits: VecDeque<TextDelta>,
+    bytes: usize,
+    /// Whether a reader follows the text by its edits (`Text::keep_edits`):
+    /// until one does, an edit keeps none, and costs only its id.
+    followed: Followed,
+}
+/// `EditLog::followed`: set through a shared text (a reader holds the
+/// text it took, not the producer's), and carried to the text an edit
+/// makes of it.
+#[derive(Debug, Default)]
+struct Followed(std::sync::atomic::AtomicBool);
+impl Clone for Followed {
+    fn clone(&self) -> Self {
+        Self(self.0.load(Ordering::Relaxed).into())
+    }
+}
+impl Followed {
+    fn get(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+    fn set(&self, followed: bool) {
+        self.0.store(followed, Ordering::Relaxed);
+    }
+}
+const LOG_EDITS: usize = 16;
+const LOG_BYTES: usize = 64 * 1024;
+impl EditLog {
+    fn record(&mut self, edit: TextDelta) {
+        if edit.inserted.len() > LOG_BYTES {
+            self.edits.clear();
+            self.bytes = 0;
+            return;
+        }
+        self.bytes += edit.inserted.len();
+        self.edits.push_back(edit);
+        while self.edits.len() > LOG_EDITS || self.bytes > LOG_BYTES {
+            let dropped = self.edits.pop_front().expect("over a bound, not empty");
+            self.bytes -= dropped.inserted.len();
+        }
+    }
 }
 impl Chunks {
     /// The sums of what comes before each chunk, from `from` on.
@@ -62,14 +141,15 @@ fn cut(text: &str) -> Vec<Chunk> {
     let mut chunks = Vec::with_capacity(text.len() / CHUNK + 1);
     let mut rest = text;
     while rest.len() > CHUNK {
-        let mut end = CHUNK;
-        while !rest.is_char_boundary(end) {
-            end -= 1;
-        }
+        let end = rest.floor_char_boundary(CHUNK);
         // A line break in the last quarter, if there is one: end after it.
-        if let Some(at) = rest[CHUNK * 3 / 4..end].rfind('\n') {
-            end = CHUNK * 3 / 4 + at + 1;
-        }
+        // (Both bounds on character boundaries: a character may straddle
+        // either.)
+        let quarter = rest.floor_char_boundary(CHUNK * 3 / 4);
+        let end = match rest[quarter..end].rfind('\n') {
+            Some(at) => quarter + at + 1,
+            None => end,
+        };
         chunks.push(Chunk::new(&rest[..end]));
         rest = &rest[end..];
     }
@@ -89,6 +169,8 @@ impl Text {
     pub fn new(text: &str) -> Self {
         let mut chunks = Chunks {
             chunks: cut(text),
+            returns: text.matches('\r').count(),
+            id: fresh_id(),
             ..Default::default()
         };
         chunks.sum(0);
@@ -102,9 +184,68 @@ impl Text {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    /// Whether it holds a carriage return, without reading it.
+    pub fn has_returns(&self) -> bool {
+        self.0.returns > 0
+    }
     /// How many lines it has (one more than its line breaks).
     pub fn line_count(&self) -> usize {
         self.0.breaks.last().unwrap_or(&0) + 1
+    }
+    /// Which text this is: the same number for it and its clones, a new one
+    /// for each text made or edited.
+    pub fn id(&self) -> u64 {
+        self.0.id
+    }
+    /// The edits that made this text from the one `id` names, earliest
+    /// first, if its log reaches back to it: none for this text itself,
+    /// `None` for a text it doesn't follow (its log dropped it, or it
+    /// never was).
+    pub(crate) fn edits_since(
+        &self,
+        id: u64,
+    ) -> Option<std::collections::vec_deque::Iter<'_, TextDelta>> {
+        let edits = &self.0.log.edits;
+        let from = match id == self.0.id {
+            true => edits.len(),
+            false => edits.iter().position(|edit| edit.before == id)?,
+        };
+        Some(edits.range(from..))
+    }
+    /// What was inserted to make this text from the one `id` names, where
+    /// (the byte it went in at, then), earliest first, if its log reaches
+    /// back to that one and nothing was removed since: a reader that took
+    /// that text follows this one by these alone (a reply streamed in,
+    /// each token where it ends). `None` otherwise: read it whole.
+    pub fn inserts_since(&self, id: u64) -> Option<impl Iterator<Item = (usize, &str)> + Clone> {
+        let edits = self.edits_since(id)?;
+        let inserts = edits.clone().all(|edit| edit.old_len == 0);
+        inserts.then(|| edits.map(|edit| (edit.start, &*edit.inserted)))
+    }
+    /// Drops the edits it keeps for its readers ([`Text::inserts_since`])
+    /// once a stream into it has stopped, staying the same text (its
+    /// [`id`](Text::id)): a reader that took it goes on from here, and one
+    /// that took an earlier text reads it whole. Only while nothing else
+    /// holds it (a clone keeps them); whether it dropped any.
+    /// It stops keeping edits too, until a reader asks again
+    /// ([`keep_edits`](Text::keep_edits)), shared or not.
+    pub fn forget_edits(&mut self) -> bool {
+        self.0.log.followed.set(false);
+        match Arc::get_mut(&mut self.0) {
+            Some(chunks) if !chunks.log.edits.is_empty() => {
+                chunks.log = EditLog::default();
+                true
+            }
+            _ => false,
+        }
+    }
+    /// Says a reader follows this text by its edits ([`inserts_since`](
+    /// Text::inserts_since)): from now on its edits, and those of the
+    /// texts edits make of it, are kept for it. A reader asks as it takes
+    /// the text (an editor bound to it, `ui.markdown_view`); a text nothing
+    /// follows keeps none, and an edit costs it only its new id.
+    pub fn keep_edits(&self) {
+        self.0.log.followed.set(true);
     }
     /// Whether `other` is this same text (a clone of it), not just equal.
     pub fn ptr_eq(&self, other: &Text) -> bool {
@@ -243,6 +384,38 @@ impl Text {
                 room - bytes,
             )
     }
+    /// This text edited to be `text`: the bytes they start and end with
+    /// compared, those between replaced. It shares this one's chunks but
+    /// the edited one's (a copy made by `Text::new` would copy them all).
+    pub(crate) fn edited_to(&self, text: &str) -> Text {
+        let bytes = text.as_bytes();
+        let prefix = prefix_of(
+            self.0.chunks.iter().map(|c| c.text.as_bytes()),
+            std::iter::once(bytes),
+        );
+        let room = (self.len() - prefix).min(text.len() - prefix);
+        let suffix = suffix_of(
+            self.0.chunks.iter().rev().map(|c| c.text.as_bytes()),
+            std::iter::once(bytes),
+            room,
+        );
+        // Where both have a character boundary: the bytes past the common
+        // ones differ, and with them what starts a character.
+        let mut start = prefix;
+        while !text.is_char_boundary(start) || !self.is_char_boundary(start) {
+            start -= 1;
+        }
+        let (mut end, mut from) = (self.len() - suffix, text.len() - suffix);
+        while !text.is_char_boundary(from) || !self.is_char_boundary(end) {
+            end += 1;
+            from += 1;
+        }
+        let mut edited = self.clone();
+        if start != end || start != from {
+            edited.replace_range(start..end, &text[start..from]);
+        }
+        edited
+    }
     /// Its longest line's length in bytes.
     pub fn longest_line(&self) -> usize {
         let (mut longest, mut run) = (0, 0);
@@ -294,12 +467,38 @@ impl Text {
         } else {
             vec![Chunk::new(&joined)]
         };
+        let returns = |chunk: &Chunk| chunk.text.matches('\r').count();
+        chunks.returns -= chunks.chunks[first..=last]
+            .iter()
+            .map(returns)
+            .sum::<usize>();
+        chunks.returns += made.iter().map(returns).sum::<usize>();
         chunks.chunks.splice(first..=last, made);
         // An empty chunk goes, unless it is the only one.
         if chunks.chunks.len() > 1 {
             chunks.chunks.retain(|chunk| !chunk.text.is_empty());
         }
         chunks.sum(first.min(chunks.chunks.len().saturating_sub(1)));
+        // Another text now, following the one it was: the edit kept only
+        // for a reader that follows it.
+        let before = std::mem::replace(&mut chunks.id, fresh_id());
+        if chunks.log.followed.get() {
+            chunks.log.record(TextDelta {
+                before,
+                start,
+                old_len: end - start,
+                inserted: with.into(),
+            });
+        } else if !chunks.log.edits.is_empty() {
+            // Edits kept before it no longer reach this text.
+            chunks.log.edits.clear();
+            chunks.log.bytes = 0;
+        }
+    }
+    /// `with` added at the end, as `replace_range` would put it there.
+    pub fn append(&mut self, with: &str) {
+        let end = self.len();
+        self.replace_range(end..end, with);
     }
 }
 impl Text {
@@ -572,6 +771,208 @@ impl std::fmt::Display for TextValue {
 mod tests {
     use super::*;
 
+    /// (start, old length, inserted) of the edits since `id`.
+    fn since(text: &Text, id: u64) -> Option<Vec<(usize, usize, String)>> {
+        Some(
+            text.edits_since(id)?
+                .map(|e| (e.start, e.old_len, e.inserted.to_string()))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn a_text_and_its_clones_share_an_id_and_each_edit_makes_another() {
+        let a = Text::new("hello");
+        let b = a.clone();
+        assert_eq!(a.id(), b.id());
+        let mut c = a.clone();
+        c.append(" world");
+        assert_ne!(c.id(), a.id());
+        assert_eq!(a.to_cow(), "hello", "the original is as it was");
+        assert_ne!(Text::new("hello").id(), a.id(), "an equal text is another");
+    }
+
+    #[test]
+    fn a_text_grown_by_inserts_lists_them_and_one_cut_lists_none() {
+        let start = Text::new("ab");
+        start.keep_edits();
+        let mut text = start.clone();
+        text.append("c");
+        text.replace_range(0..0, "<");
+        let inserts: Vec<_> = text.inserts_since(start.id()).unwrap().collect();
+        assert_eq!(inserts, [(2, "c"), (0, "<")]);
+        assert_eq!(text.inserts_since(text.id()).unwrap().count(), 0);
+        text.replace_range(0..1, "");
+        assert!(text.inserts_since(start.id()).is_none(), "a removal");
+        assert!(
+            text.inserts_since(Text::new("x").id()).is_none(),
+            "not followed"
+        );
+    }
+
+    #[test]
+    fn a_text_forgets_its_edits_staying_itself_unless_shared() {
+        let start = Text::new("ab");
+        start.keep_edits();
+        let mut text = start.clone();
+        text.append("c");
+        let id = text.id();
+        let held = text.clone();
+        assert!(!text.forget_edits(), "a clone keeps them");
+        drop(held);
+        assert!(text.forget_edits());
+        assert_eq!(text.id(), id, "the same text");
+        assert_eq!(text.inserts_since(id).unwrap().count(), 0);
+        assert!(text.inserts_since(start.id()).is_none(), "read whole");
+        assert!(!text.forget_edits(), "none left");
+    }
+
+    #[test]
+    fn a_text_nothing_follows_keeps_no_edits_and_one_followed_does() {
+        let start = Text::new("ab");
+        let mut text = start.clone();
+        text.append("c");
+        assert_ne!(text.id(), start.id(), "another text");
+        assert!(text.inserts_since(start.id()).is_none(), "none kept");
+        // A reader takes it: what follows is kept, for it.
+        let taken = text.clone();
+        taken.keep_edits();
+        text.append("d");
+        let inserts: Vec<_> = text.inserts_since(taken.id()).unwrap().collect();
+        assert_eq!(inserts, [(3, "d")]);
+        // Forgotten (its host idle): none kept again, shared or not.
+        let mut idle = text.clone();
+        idle.forget_edits();
+        text.append("e");
+        assert!(text.inserts_since(taken.id()).is_none());
+    }
+
+    #[test]
+    fn a_text_lists_the_edits_since_one_it_follows() {
+        let start = Text::new("ab");
+        start.keep_edits();
+        let mut text = start.clone();
+        text.append("c");
+        let middle = text.id();
+        text.replace_range(0..1, "A");
+        assert_eq!(
+            since(&text, start.id()),
+            Some(vec![(2, 0, "c".into()), (0, 1, "A".into())])
+        );
+        assert_eq!(since(&text, middle), Some(vec![(0, 1, "A".into())]));
+        assert_eq!(since(&text, text.id()), Some(vec![]));
+        assert_eq!(
+            since(&text, Text::new("ab").id()),
+            None,
+            "not one it follows"
+        );
+    }
+
+    #[test]
+    fn a_texts_log_keeps_its_last_edits_within_its_bounds() {
+        let start = Text::new("");
+        start.keep_edits();
+        let mut text = start.clone();
+        let mut ids = vec![start.id()];
+        for i in 0..20 {
+            text.append(&i.to_string());
+            ids.push(text.id());
+        }
+        // Sixteen edits back, and no further.
+        assert_eq!(since(&text, ids[4]).map(|e| e.len()), Some(16));
+        assert_eq!(since(&text, ids[3]), None);
+        // An insert past the bytes kept leaves nothing to follow across it.
+        let before = text.id();
+        text.append(&"x".repeat(LOG_BYTES + 1));
+        assert_eq!(since(&text, before), None);
+        text.append("y");
+        assert_eq!(since(&text, ids[20]), None);
+        // Inserts within it drop the earliest to fit.
+        let mut text = Text::new("");
+        text.keep_edits();
+        let first = text.id();
+        text.append(&"a".repeat(LOG_BYTES / 2));
+        let second = text.id();
+        text.append(&"b".repeat(LOG_BYTES / 2));
+        text.append("c");
+        assert_eq!(since(&text, first), None, "the earliest dropped to fit");
+        assert_eq!(since(&text, second).map(|e| e.len()), Some(2));
+    }
+
+    /// A text edited to another (`edited_to`) holds it, whatever the edit:
+    /// appended, cut, replaced across chunks, or between characters that
+    /// share their first bytes. Its counts are the other's own, and the
+    /// chunks the edit missed are shared.
+    #[test]
+    fn a_text_edited_to_another_is_it() {
+        let line = "a line of the document so far, é候😀\n";
+        let base = line.repeat(3 * CHUNK / line.len());
+        let mut cases = vec![
+            format!("{base}token "),
+            base[..base.len() - line.len()].to_owned(),
+            format!("x{base}"),
+            base.replacen("so far", "SO FAR\r\nand on", 2),
+            String::new(),
+            base.replace('é', "è"),
+            base.replacen('😀', "😁", 1),
+        ];
+        let middle = base.len() / 2;
+        let middle = (middle..).find(|at| base.is_char_boundary(*at)).unwrap();
+        cases.push(format!("{}{}", &base[..middle], &base[middle + 4..]));
+        let old = Text::new(&base);
+        for case in cases {
+            let edited = old.edited_to(&case);
+            assert_eq!(edited.to_cow(), case);
+            let made = Text::new(&case);
+            assert_eq!(edited.line_count(), made.line_count());
+            assert_eq!(edited.has_returns(), made.has_returns());
+            for line in 0..made.line_count() {
+                assert_eq!(edited.line_range(line), made.line_range(line));
+            }
+        }
+        let appended = old.edited_to(&format!("{base}token "));
+        assert!(Arc::ptr_eq(
+            &old.0.chunks[0].text,
+            &appended.0.chunks[0].text
+        ));
+    }
+
+    /// A 2-, 3- and 4-byte character at every byte around where chunks are
+    /// cut (the last quarter's start, a chunk's end, the next chunk's),
+    /// with and without line breaks: the text cut, sliced and edited there
+    /// is the text, and every chunk ends on a character boundary.
+    #[test]
+    fn a_character_straddling_any_cut_is_kept_whole() {
+        for wide in ["é", "候", "😀"] {
+            for around in [CHUNK * 3 / 4, CHUNK, 2 * CHUNK, 2 * CHUNK + CHUNK * 3 / 4] {
+                for at in around - 5..around + 5 {
+                    for newline in [false, true] {
+                        let mut plain = "a".repeat(at);
+                        plain.push_str(wide);
+                        plain.push_str(&"b".repeat(3 * CHUNK - at));
+                        if newline {
+                            plain.insert(CHUNK * 3 / 4 + 40, '\n');
+                        }
+                        let mut text = Text::new(&plain);
+                        assert_eq!(text.to_cow(), plain, "{wide} at {at}");
+                        assert!(text.chunks().all(|chunk| !chunk.is_empty()));
+                        let start = plain.find(wide).unwrap();
+                        let end = start + wide.len();
+                        assert_eq!(text.slice(start..end), wide);
+                        // Edited where it is: removed, and put back twice.
+                        text.replace_range(start..end, "");
+                        plain.replace_range(start..end, "");
+                        assert_eq!(text.to_cow(), plain, "{wide} removed at {at}");
+                        let twice = wide.repeat(2);
+                        text.replace_range(start..start, &twice);
+                        plain.replace_range(start..start, &twice);
+                        assert_eq!(text.to_cow(), plain, "{wide} put back at {at}");
+                    }
+                }
+            }
+        }
+    }
+
     fn lines(n: usize) -> String {
         (0..n)
             .map(|i| format!("line {i} {}\n", "x".repeat(i % 50)))
@@ -711,5 +1112,23 @@ mod tests {
         assert!(TextValue::from("short").as_text().is_none());
         assert!(value.ptr_eq(&value.clone()) && !value.ptr_eq(&TextValue::from(plain.as_str())));
         assert_eq!(value.to_string(), plain);
+    }
+
+    /// Whether a text holds a carriage return follows its edits, wherever
+    /// they cut its chunks, without reading it.
+    #[test]
+    fn a_text_knows_whether_it_holds_a_carriage_return() {
+        let plain = "line of text\n".repeat(4 * CHUNK / 13);
+        let mut text = Text::new(&plain);
+        assert!(!text.has_returns());
+        let at = 2 * CHUNK + 7;
+        text.replace_range(at..at, "\r");
+        assert!(text.has_returns());
+        text.replace_range(0..0, &"x".repeat(CHUNK));
+        assert!(text.has_returns(), "the chunk holding it cut again");
+        let at = text.to_cow().find('\r').unwrap();
+        text.replace_range(at..at + 1, "");
+        assert!(!text.has_returns());
+        assert!(Text::new("a\r\nb").has_returns() && !Text::new("").has_returns());
     }
 }

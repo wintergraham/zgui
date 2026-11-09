@@ -1,21 +1,23 @@
 # zgx
 
-zgx is a retained-mode GUI framework in Rust for macOS, Windows and Linux. Components mount once and fine-grained signals update only the nodes that depend on them, so an idle window does no work and a busy one repaints only what changed. Interfaces are written in Rust or in Luau scripts that hot reload without losing state. It is young (0.1, used from git) and its API still changes.
+zgx is a retained-mode GUI framework in Rust for macOS, Windows and Linux. Components mount once and fine-grained signals update only the nodes that depend on them, so an idle window does no work and a busy one repaints only what changed. Interfaces are written in Rust or in Luau scripts that hot reload without losing state. It is young (0.1, on crates.io) and its API still changes.
 
 ## What it has
 
 - **Layout** as CSS's flexbox and grid do it, defaults included: children stretch across and shrink to fit (`min-width: auto`), grids, wrapping, percentages, absolute positioning, `display: contents`, right-to-left with logical `start`/`end` edges, and layouts that answer the room they have.
 - **Text:** shaped rich text with font fallbacks, selectable documents (drag, double and triple press, copy as HTML), editors with undo, clipboard, spellchecking, IME (Japanese, Chinese, Korean) and bidirectional text.
 - **Paint:** a wgpu renderer (Metal, Direct3D 12, Vulkan; GL on Linux where no Vulkan driver is) that redraws only damaged regions, with rounded borders, gradients, shadows, backdrop blur, SVG, images, canvas drawing and custom WGSL fills.
-- **Controls:** buttons, inputs, checkboxes, sliders, progress, virtual lists, scroll views with native scrollbars and rubber-banding, menus, popovers, modals, tooltips, web views (WebKit on macOS, WebView2 on Windows) and terminals (Ghostty, on macOS).
+- **Controls:** buttons, inputs, checkboxes, sliders, progress, virtual lists, scroll views with native scrollbars and rubber-banding, menus, popovers, modals, tooltips, web views (WebKit on macOS, WebView2 on Windows, WebKitGTK on Linux) and terminals (drawn by zgx on macOS, Linux and Windows, or Ghostty on macOS).
 - **Components** (`zgx-components`): a data grid, a tree view, a calendar, a date picker and a time field, a combobox, a select, tabs, toasts, a command palette, a segmented control, a stepper, a disclosure and an accordion, built on the controls above, keyboard complete and accessible.
-- **The platform:** native menus and dialogs, multiple windows, the clipboard and primary selection, drag and drop, touch and pen, the system's accent, appearance, text size, reduced motion, contrast and transparency, and the user's language direction.
+- **3D:** a retained world in any box, drawing only when it changes: PBR materials, glTF models with animations and skins, image-based light, shadows, tone mapping, picking and orbit controls ([Rust](docs/3d.md), [Luau](docs/reference/3d.md)).
+- **The platform:** native menus and dialogs, multiple windows, system notifications and icon badges, the clipboard and primary selection, drag and drop, touch and pen, the system's accent, appearance, text size, reduced motion, contrast and transparency, and the user's language direction.
 - **Accessibility** through AccessKit (VoiceOver, Narrator, Orca): roles, headings, live regions, selection and keyboard-only use, with focus groups as ARIA's composite widgets.
-- **Scripting:** Luau with types, a linter, hot reload that keeps state, anime.js-style animation, sandboxed plugins, and `zgx-run` to run a script as an app. Release builds carry scripts compiled into the binary.
+- **Video** (`zgx-video`): an interface rendered offscreen a frame at a time to H.264, ProRes or GIF, on a virtual clock that every animation, timer and shader follows, with a studio to preview it ([video](docs/video.md)).
+- **Scripting:** Luau with types, a linter, hot reload that keeps state, anime.js-style animation, routing, data loading and live connections, localized messages, sandboxed plugins, and `zgx new`, `zgx test` and `zgx-run` to start, test and run an app. Release builds carry scripts compiled into the binary.
 
 ## Quick start
 
-In Rust, with the dependencies [getting started](docs/getting-started.md#in-rust) lists (zgx's crates from git, and the forks it builds with):
+In Rust, with the dependencies [getting started](docs/getting-started.md#in-rust) lists (`zgx = "0.1.3"` and `zgx-desktop = "0.1.3"` from crates.io):
 
 ```rust,no_run
 use zgx::compose::prelude::*;
@@ -40,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-In Luau: put this in `hello/app.luau` and run `zgx-run hello/` (`LUAU_CXXFLAGS=-DNDEBUG cargo install --git https://github.com/zeronsh/zgx zgx-run`). Saving the file updates the window and keeps the count.
+In Luau: put this in `hello/app.luau` and run `zgx-run hello/` (`LUAU_CXXFLAGS=-DNDEBUG cargo install zgx-run`). Saving the file updates the window and keeps the count.
 
 ```lua
 local count = ui.state("count", 0)
@@ -90,4 +92,4 @@ Every scene, charted: [zgui-performance.pages.dev](https://zgui-performance.page
 
 ## Docs
 
-[Getting started](docs/getting-started.md), [coming from React](docs/coming-from-react.md), [components](docs/composition.md), [styling](docs/styling.md), [layout](docs/layout.md), [scripting](docs/scripting.md), [Luau reference](docs/reference/index.md), [Windows](docs/windows.md), [Linux](docs/linux.md), [changes](CHANGELOG.md), [roadmap](docs/ROADMAP.md). MIT licensed.
+[Getting started](docs/getting-started.md), [coming from React](docs/coming-from-react.md), [components](docs/composition.md), [styling](docs/styling.md), [layout](docs/layout.md), [scripting](docs/scripting.md), [video](docs/video.md), [Luau reference](docs/reference/index.md), [Windows](docs/windows.md), [Linux](docs/linux.md), [changes](CHANGELOG.md), [roadmap](docs/ROADMAP.md). MIT licensed.

@@ -27,7 +27,30 @@ pub struct ContextMenuEvent {
     pub local_y: f32,
 }
 
-pub(crate) type ContextMenuBuilder = Box<dyn FnMut(&ContextMenuEvent) -> Vec<View>>;
+/// The run of a paragraph (a [`rich_text`](crate::compose::rich_text)
+/// span) a context menu was asked for on, for a menu built for the whole
+/// paragraph ([`View::context_menu_with_span`]).
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ContextMenuSpan {
+    /// Its place among the paragraph's spans, from 0, as they were given.
+    pub index: usize,
+    /// Where it links (`TextSpan::href`), if it does.
+    pub href: Option<std::sync::Arc<str>>,
+    /// Its text.
+    pub text: std::sync::Arc<str>,
+}
+
+/// What a menu is built for besides the point: the node the press or key
+/// reached first, the node whose menu it is, and where it is.
+pub(crate) struct MenuAt<'a> {
+    pub target: NodeId,
+    pub node: NodeId,
+    pub ui: &'a Ui,
+    pub environment: &'a Environment,
+}
+pub(crate) type ContextMenuBuilder =
+    Box<dyn for<'a> FnMut(&ContextMenuEvent, &MenuAt<'a>) -> Vec<View>>;
 
 impl View {
     /// Show a menu at the pointer on a secondary click (a control-click on
@@ -37,7 +60,37 @@ impl View {
         mut self,
         build: impl FnMut(&ContextMenuEvent) -> Vec<View> + 'static,
     ) -> Self {
-        self.rare_mut().context_menu = Some(Box::new(build));
+        let mut build = build;
+        let rare = self.rare_mut();
+        rare.context_menu = Some(Box::new(move |event, _| build(event)));
+        rare.context_menu_spans = false;
+        self
+    }
+    /// `context_menu`, told the run of the paragraph it was asked for on
+    /// (`None` off its runs, or on a view that isn't a paragraph of spans),
+    /// so one menu serves every run and link in it. A link span with no
+    /// menu of its own asks it too: none back shows its Open Link and Copy
+    /// Link.
+    pub fn context_menu_with_span(
+        mut self,
+        mut build: impl FnMut(&ContextMenuEvent, Option<&ContextMenuSpan>) -> Vec<View> + 'static,
+    ) -> Self {
+        let rare = self.rare_mut();
+        // The run, found as it is asked (`compose_rich::locate_for`): its
+        // paragraph keeps what finds it, and nothing else pays for it.
+        rare.context_menu = Some(Box::new(move |event, at| {
+            let span = crate::compose_rich::locate_for(at.ui, at.node, at.target, event.x, event.y);
+            let items = build(event, span.as_ref());
+            match span.and_then(|span| span.href) {
+                Some(url) if items.is_empty() => crate::compose_rich::link_items(
+                    url,
+                    at.environment.services.get(),
+                    at.environment.services.get(),
+                ),
+                _ => items,
+            }
+        }));
+        rare.context_menu_spans = true;
         self
     }
     /// Open the context menu under the view, aligned to its left edge, as a
@@ -64,6 +117,7 @@ impl Open {
         if let (Some(node), Some(mut ui)) = (self.node.take(), self.ui.upgrade())
             && ui.scene.borrow().contains(node)
         {
+            ui.remove_portal(node);
             ui.remove(node);
         }
     }
@@ -127,21 +181,43 @@ pub(crate) fn mount(
         let Some(mut ui) = weak.upgrade() else {
             return;
         };
-        let origin = ui.scene.borrow().bounds(node);
+        // Hung in the window, where the box shows.
+        let origin = ui.scene.borrow().transformed_bounds(node);
+        let (local_x, local_y) = ui.scene.borrow().local_point(node, x, y);
         let event = ContextMenuEvent {
             x,
             y,
-            local_x: x - origin.x,
-            local_y: y - origin.y,
+            local_x,
+            local_y,
         };
-        let items = build(&event);
+        let at = MenuAt {
+            target: cx.target,
+            node,
+            ui: &ui,
+            environment: &environment,
+        };
+        let items = build(&event, &at);
         if items.is_empty() {
             return;
         }
         cx.prevent_default();
         cx.stop_propagation();
+        // A context click focuses what it lands on, as any button's press
+        // does in a browser (a field's caret goes there): the menu gives
+        // focus back to it as it closes.
+        let pressed = matches!(cx.event, InputEvent::PointerDown { .. });
+        let within = ui.input.focused().is_some_and(|focused| {
+            let scene = ui.scene.borrow();
+            focused == node
+                || (scene.contains(focused) && scene.ancestors(focused).any(|a| a == node))
+        });
+        if pressed && !within && ui.input.options(node).is_some_and(|o| o.focusable) {
+            ui.input.focus(&ui.scene, Some(node));
+        }
         current.close();
         let shown = ui.runtime.signal(true);
+        // An editor it takes the focus from keeps its selection drawn.
+        ui.set_context_menu(shown.clone());
         let anchor = if below {
             div().w(origin.width).h(origin.height)
         } else {
@@ -166,6 +242,8 @@ pub(crate) fn mount(
         };
         let root = ui.root();
         let mounted = crate::compose::mount(&mut ui, root, view, environment.clone());
+        // Mounted at the root, it is its element's: devtools find it there.
+        ui.add_portal(node, mounted);
         current.node.set(Some(mounted));
     });
     ui.retain(node, binding);

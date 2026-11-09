@@ -165,6 +165,25 @@ struct Evaluator<'a> {
     /// 0 not yet, 1 being evaluated (a reference cycle), 2 done.
     state: Vec<u8>,
 }
+/// A value of another kind than token `id`'s (`kind`), as it evaluates: a
+/// family's name given where the token's kind wasn't known (a script's
+/// `theme = { ["font.sans"] = "Inter" }`, `ui.theme.tokens`,
+/// `TokenInput::parse`) is read as a theme file reads a font token's word, a
+/// CSS font-family list (quotes and all); anything else is no value. Apart:
+/// a token of the kind it is given pays nothing for it.
+#[cold]
+#[inline(never)]
+fn mistyped(id: TokenId, kind: tokens::TokenKind, value: TokenValue) -> TokenValue {
+    match value {
+        TokenValue::Text(text) if kind == tokens::TokenKind::Font => {
+            TokenValue::Font(super::value::font_family(&text))
+        }
+        value => {
+            warn(&format!("token `{id}` is a {kind:?} token, not {value}"));
+            TokenValue::Unset
+        }
+    }
+}
 impl Evaluator<'_> {
     fn eval(&mut self, id: TokenId) -> TokenValue {
         let i = id.index();
@@ -185,10 +204,7 @@ impl Evaluator<'_> {
             None => TokenValue::Unset,
         };
         let value = match tokens::standard_kind(id) {
-            Some(kind) if value.kind().is_some_and(|k| k != kind) => {
-                warn(&format!("token `{id}` is a {kind:?} token, not {value}"));
-                TokenValue::Unset
-            }
+            Some(kind) if value.kind().is_some_and(|k| k != kind) => mistyped(id, kind, value),
             _ => value,
         };
         self.state[i] = 2;
@@ -220,6 +236,17 @@ fn scale_text(values: &mut [TokenValue], scale: f32) {
         if let Some(TokenValue::Number(n)) = values.get_mut(token.0.index()) {
             *n *= scale;
         }
+    }
+    // A control holds a line of body text and its padding, as a field does
+    // (6 above and below): grown to fit it, as iOS's hit targets grow with
+    // Dynamic Type, never shrunk below the theme's.
+    let size = match values.get(tok::FONT_SIZE_MD.0.index()) {
+        Some(TokenValue::Number(size)) => *size,
+        _ => return,
+    };
+    let line = crate::text_layout::LineHeight::NORMAL.resolve(size) + 12.;
+    if let Some(TokenValue::Number(height)) = values.get_mut(tok::CONTROL_HEIGHT.0.index()) {
+        *height = height.max(line);
     }
 }
 fn evaluate(exprs: &[Option<Arc<Expr>>]) -> Vec<TokenValue> {
@@ -429,7 +456,7 @@ impl ThemeScope {
         }
         let runtime = self.shared.runtime.upgrade()?;
         let value = self.values.borrow().get(i).cloned().unwrap_or_default();
-        if value == TokenValue::Unset {
+        if value == TokenValue::Unset && !tokens::standard_unset(id) {
             warn_unknown(id);
         }
         let signal = runtime.signal(value);
@@ -508,8 +535,10 @@ impl ThemeScope {
             signal.with(|_| ());
         }
     }
-    /// Increases whenever a refresh changes any token's value here.
-    pub(crate) fn epoch(&self) -> u64 {
+    /// Increases whenever a refresh changes any token's value here (a
+    /// theme switched, a token overridden): what a cache of resolved tokens
+    /// compares to know it is stale.
+    pub fn revision(&self) -> u64 {
         self.epoch.get()
     }
     /// The token's value here, without subscribing to it.
@@ -673,6 +702,25 @@ impl Themes {
     /// Every registered theme's name, built-ins first.
     pub fn names(&self) -> Vec<String> {
         self.shared.state.borrow().order.clone()
+    }
+    /// Every token the applied theme gives a value, by name: zgx's
+    /// standard tokens, those the app declared (`declare`), and any the
+    /// theme adds.
+    pub fn token_names(&self) -> Vec<Arc<str>> {
+        self.root
+            .exprs
+            .borrow()
+            .iter()
+            .enumerate()
+            .filter(|(_, expr)| expr.is_some())
+            .map(|(i, _)| TokenId(i as u32).name())
+            .collect()
+    }
+    /// Moves whenever the applied tokens' values do (a theme applied,
+    /// registered or loaded again, a token declared): what keeps
+    /// `token_names` reads them again then.
+    pub fn revision(&self) -> u64 {
+        self.root.epoch.get()
     }
     /// Apply the theme `name`. This also stops following the system.
     pub fn set(&self, name: &str) -> Result<(), ThemeError> {

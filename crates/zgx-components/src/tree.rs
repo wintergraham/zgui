@@ -141,6 +141,9 @@ pub fn tree(
     let label = label.into();
     let (children, activate) = (Rc::new(children), Rc::new(activate));
     component(move |cx| {
+        // A label that changes (a translation, a state), where the caller
+        // gave one (`FollowedLabel::around`).
+        let followed = zgx::compose::FollowedLabel::take(cx);
         let runtime = cx.runtime();
         let shown = runtime.signal(Vec::<Row>::new());
         {
@@ -192,10 +195,14 @@ pub fn tree(
                 let Some(handle) = tree_node.borrow().clone() else {
                     return;
                 };
+                // Not laid out yet (a mount reads it again once it is): no
+                // view to bring the row into.
                 if let Some(i) = index
                     && let Some(scene) = handle.scene()
+                    && let height = scene.borrow().bounds(handle.node()).height
+                    && height > 0.
                 {
-                    let height = scene.borrow().bounds(handle.node()).height.max(ROW);
+                    let height = height.max(ROW);
                     let top = i as f32 * ROW;
                     let now = offset.with_untracked(|o| *o);
                     if top < now {
@@ -357,7 +364,7 @@ pub fn tree(
         let key_tree = tree_node.clone();
         div()
             .role(Role::Tree)
-            .accessible_label(label.clone())
+            .accessible_label_or(label.clone(), followed.as_ref())
             .focusable(true)
             .h_full()
             .on_mount(move |handle| *tree_node.borrow_mut() = Some(handle))

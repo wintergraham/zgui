@@ -10,6 +10,10 @@ mod composition_virtual_keyboard;
 mod editor_accessible_selection;
 #[path = "../editor_app_history.rs"]
 mod editor_app_history;
+#[path = "../editor_answer_history.rs"]
+mod editor_answer_history;
+#[path = "../editor_autocorrect.rs"]
+mod editor_autocorrect;
 #[path = "../editor_autoscroll.rs"]
 mod editor_autoscroll;
 #[path = "../editor_blur_selection.rs"]
@@ -22,14 +26,20 @@ mod editor_caret_width;
 mod editor_code;
 #[path = "../editor_context_menu.rs"]
 mod editor_context_menu;
+#[path = "../editor_external_edits.rs"]
+mod editor_external_edits;
 #[path = "../editor_hints.rs"]
 mod editor_hints;
 #[path = "../editor_ingress_normalization.rs"]
 mod editor_ingress_normalization;
+#[path = "../editor_input_mode.rs"]
+mod editor_input_mode;
 #[path = "../editor_long_documents.rs"]
 mod editor_long_documents;
 #[path = "../editor_model_normalization.rs"]
 mod editor_model_normalization;
+#[path = "../editor_native_caret.rs"]
+mod editor_native_caret;
 #[path = "../editor_paging.rs"]
 mod editor_paging;
 #[path = "../editor_pointer_selection.rs"]
@@ -42,10 +52,18 @@ mod editor_read_only;
 mod editor_selection_theme;
 #[path = "../editor_shape_reuse.rs"]
 mod editor_shape_reuse;
+#[path = "../editor_spans.rs"]
+mod editor_spans;
+#[path = "../editor_streamed_value.rs"]
+mod editor_streamed_value;
 #[path = "../editor_streaming_history.rs"]
 mod editor_streaming_history;
 #[path = "../editor_text_drag.rs"]
 mod editor_text_drag;
+#[path = "../editor_text_drag_windows.rs"]
+mod editor_text_drag_windows;
+#[path = "../editor_theme_marks.rs"]
+mod editor_theme_marks;
 #[path = "../editor_undo_keys.rs"]
 mod editor_undo_keys;
 #[path = "../editor_wrap_navigation.rs"]

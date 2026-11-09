@@ -1,5 +1,23 @@
 # Reproducible GUI comparison
 
+## Trackpad response
+
+`ZGX_PRESENT_LOG=1` also records `scroll-received` and `scroll-applied` on
+the presentation log's host clock. The received deltas are logical points;
+the applied records distinguish direct input, display refreshes, hidden-window
+flushes and gesture-end flushes. Refresh records include the sampling delay
+and display period in milliseconds. The received timestamp marks the desktop
+host handling the event, not its native hardware timestamp.
+
+Use one window and the same wheel tape for repeated comparisons. On macOS,
+compare `ZGX_PRESENT_DRAWABLE=0` and `ZGX_PRESENT_DRAWABLE=1` at both 60 Hz
+and 120 Hz. Correlate the input and application records with the renderer's
+hand-offs and actual presentation feedback or a synchronized screen capture;
+render completion alone does not establish visible input latency. Keep logs
+off while comparing CPU and memory, since per-event logging adds work.
+
+## Shared comparison workload
+
 The three adapters use the same `comparisons/workload` Rust crate. GPUI is pinned to crates.io **0.2.2**; QuickGUI is pinned to upstream commit **811d6e2816d5229711f59683c4c9dfbb6fc74133**. Their standalone Cargo workspaces isolate large platform dependency graphs from zgx core. Commit the generated Cargo.lock files to preserve transitive versions.
 
 The target UI is a 960×720 logical-pixel dark window. Header: “zgx performance lab”. Three controls append three items, perform two equal writes to the first item, and set done to 999. Count/title/duplicate count match the provided service example. The list initially has capacity four and count zero; append preserves successful earlier writes if the fourth-slot limit is reached, reporting done=-1; the virtual dataset is independently 100,000 synthetic rows. Streaming pane: (20,110), 920×160. List: (20,290), 920×400. Rows: 28px. Font: DejaVu Sans, 14px; header 20px. OS window decorations are outside the content coordinates.
@@ -43,7 +61,7 @@ open, search and archive, the dashboard's feed tick, sort and filter,
 Sketch's drag, pan and zoom among 500 shapes, and the code editor's
 keystroke, scroll and find-all keystroke on 100,000 lines; CI's instruction
 gate counts each app as a scene, small and undrawn, run by `list_state_bench`
-(`APP` set) so that it links no binary of its own. Off, its phase boundaries cost nothing measurable: an A/B
+(`APP` set) so that it links no binary of its own. It counts 3D frames too, by zgx-3d's `world_bench`: a generated world drawn through wgpu's no-op backend, so the count holds zgx-3d and wgpu's validation, not a driver's. `3d-textured` is meshes with a map and nothing else, what a feature costs those not using it; `3d-mixed` has skinned, morphing, double-sided cut-out and placed ones among them. Neither has an environment, whose prefiltering takes two thirds of a cell and moves its count. zgx-3d is built apart from the other benches: one build would turn the no-op backend on in all of them. Off, its phase boundaries cost nothing measurable: an A/B
 of all scenes, five runs each, showed every scene within its spread. Time
 Profiler helpers and their use are in `scripts/perf/README.md`. The
 windowed comparison below stays the evidence for time, GPU and memory.
@@ -74,8 +92,8 @@ Its protocol (`run_macos_comparison.py --suite`) is shorter than the full one:
 | | Suite | Full |
 | --- | --- | --- |
 | a trial | 5 s warm-up, 10 s sampled | 5 s warm-up, 15 s sampled |
-| repeats | 3, alternating order; 1 more for a cell whose CPU or GPU power spreads over 10% of its median | 3 |
-| idle | heavy only, 2 launches sampled 20–30 s after launch | every scene, 5 launches, 20–35 s |
+| repeats | 6, alternating order, each round with the desktop alone; WindowServer shown less its round's desktop (it falls into per-launch levels); 1 more for a cell whose CPU or GPU power spreads over 10% of its median | 3 |
+| idle | heavy only, 6 launches sampled 20–30 s after launch, each round with the desktop alone; WindowServer shown less its round's desktop (it reads one of a few levels launch to launch, the desktop alone included) | every scene, 5 launches, 20–35 s |
 | frame pacing | 3 captures of 8 s per cell (of two, one bad capture moved a median: lab scroll on 2026-10-25 read 30.0 and 17.8 ms, and ten more captures of the same build 18.0) | 8 |
 | blank rows | vlist, scroll and jump: one 8 s capture of the window at 10 Hz per cell | none |
 
@@ -147,6 +165,45 @@ animate the widest (zgx 114.7–121.2 mW, MyGo 117.0–122.3, GPUI Fast
 127.8–145.6). In animate zgx and MyGo are within each other's range (zgx's
 median 1% above), so the site says it is not a clear lead; the page lists
 every cell where zgx's range reaches a rival's.
+
+### Frame pacing: a capture changes it
+
+The suite's frame times and frames shown (`framepace`) watch the window
+through ScreenCaptureKit, and the capture itself makes macOS skip frames it
+would otherwise show, by an amount that depends on the Mac and on how the app
+presents. On 2026-10-27 one zgx build (branch present-drawable, `e3f971ea`,
+animate at 120 Hz, macOS 26) ran with frameseq capturing its window and with
+nothing attached, in alternating launches. Frames were counted by the system
+itself: a presented frame's presented time, 0 when the window server skipped
+it (`addPresentedHandler` of a `CAMetalLayer` drawable; for tiles, a 1×1
+drawable presented in each tile flip's transaction). Frames skipped, median
+[range]:
+
+| | M1 Max, captured | M1 Max, not | M5, captured | M5, not |
+| --- | --- | --- | --- | --- |
+| launches | 6 | 6 | 3 | 3 |
+| tiles (shipped) | 12.19% [10.45–13.80] | 0.16% [0.06–0.35] | 3.69% [1.25–3.76] | 0.25% [0.21–0.35] |
+| `CAMetalLayer` drawables | 0.14% [0.07–0.35] | 0.07% [0.07–0.07] | 6.18% [1.25–8.44] | 0.08% [0.07–0.08] |
+
+With nothing attached both paths show nearly every frame on both Macs (the
+presented intervals' p99 8.33 ms: every refresh). Captured, the M1 Max drops
+one tile frame in eight and almost no drawables; the M5 drops both, drawables
+more. The M1 Max's tiles losing to GPUI Fast at 120 Hz (p99 15.0 ms against
+11.5, 105 changes a second against 114, 2026-10-26) was the capture's doing.
+
+So:
+
+- A captured frame time says how a window paces while it is captured
+  (screen sharing, a recording), not otherwise. Frameworks compared on it are
+  compared under a capture, which perturbs each present path differently:
+  GPUI Fast's, MyGo's and Rune's figures are captured too.
+- For an app's own pacing, use the system's feedback: presented times
+  (with drawables, `ZGX_PRESENT_LOG=1` prints them as shown and skipped
+  frames and presented-interval percentiles). Instruments' Animation Hitches
+  reported no hitch in any run, captured or not, so it does not tell them
+  apart.
+- CPU, GPU power, memory and WindowServer CPU come from the timed trials,
+  which run with nothing attached; the capture does not touch them.
 
 Blank rows (`scripts/blankprobe.swift`): during a capture of the window, a
 run down the rows' left padding that is closer to the window's background
@@ -351,6 +408,29 @@ still shows: report the median and the range). Each idle trial keeps the
 and `idle-5-20s.json` summarizes them: runs before 2026-10-24 sampled idle
 that way, once.
 
+### The driver floor comes with any frame drawn
+
+The floor is the Metal driver's, per command queue, not zgx's. It comes back
+with the first frame submitted after an idle spell and goes about 10 s after
+the last; every Metal app pays it while drawing (GPUI Fast alike, above).
+Measured on 2026-10-29 with `popup_memory` (an M5 Max, a release build,
+`footprint` 13 s idle and then 3 s and 14 s after one change):
+
+| what changed | idle | after 3 s | after 14 s |
+|---|---|---|---|
+| a menu shown in a popup window | 1.8 MB | 178 MB | 1.8 MB |
+| the same menu inside the window (`ZGX_POPUP_WINDOWS=0`) | 1.8 MB | 178 MB | 1.9 MB |
+| a box's colour, no texture written | 1.8 MB | 178 MB | 1.8 MB |
+
+So a popover past the window's edge, or a page transition animating, holds
+it only while it draws, as any change does; a popup window's own cost is its
+surface (0.7 MB of IOSurface), and popup windows share their window's queue.
+zgx keeps an idle window at about 2 MB by submitting nothing while nothing
+changes; the caret is a Core Animation layer for this reason, as its blink
+would otherwise keep the floor (`ZGX_NATIVE_CARET=0` draws it the old way). Releasing the queue
+after an idle spell gives the memory back sooner, but cost about 6 ms of
+CPU on the next frame, and was declined.
+
 Both start with a preflight (`scripts/perf/preflight.py`): they wait while
 anything heavy runs (compilers and linkers of any agent, VMs, Instruments,
 Spotlight indexing, Time Machine, software updates) or the rest of the
@@ -360,7 +440,28 @@ Zeron's windows for the run. `audit.json` records what the preflight found
 and the machine's state: displays (count, resolution, refresh), a live
 wallpaper, power mode, macOS build and uptime, beside the desktop-alone
 baseline each repeat measures. Those explain a shift between days in the
-desktop's own cost.
+desktop's own cost. With Zeron hidden, a window server above 2% of a core stops
+the run (`desktop_still`): a live wallpaper left drawing voids every
+WindowServer and GPU number, and only a person can decide to quit it.
+
+A looping animation would hold the floor for as long as it plays, at any
+rate (2 fps held it all, 2026-10-30). So a small declared loop (`anime.animate`
+with `loop = true` and a `frameRate`, on `opacity` or `shaderTime`) is drawn
+once into a sheet and played by Core Animation (`crates/zgx-gpu/src/loops.rs`):
+no frame is submitted while it plays. Measured on an M5 Max, 6 launches a
+cell, against the same round's desktop (window 42, 2026-10-30, the zeron-zgx
+gallery's statuses and App shell pages; app + WindowServer CPU, then MiB):
+
+| | 120 Hz | 60 Hz | footprint |
+|---|---|---|---|
+| drawn each tick | 8.35–8.43 | 8.76–8.93 | 291–346 |
+| baked | 6.46–6.57 | 7.06–7.26 | 131–170 |
+
+Lower in all 24 rounds, GPU level, frame gaps no worse (the render server's
+frame counter). The window server itself gains 0.6–0.7 points at 120 Hz and
+is level to slightly lower at 60 Hz. Loops still drawn: a drifting field with
+no short period, transform loops, and anything a layer over the frames
+couldn't show exactly.
 
 ## Validation environment
 
@@ -407,7 +508,7 @@ Measured again in October 2026 (dist builds, instructions retired, the lab windo
 
 `scripts/run_windows_suite.py` is the macOS suite on Windows: its scenes, frameworks (zgx and zgx through Luau in the list, GPUI Fast, MyGo, Rune) and protocol (15 s trials sampled 5–15 s after the window is ready, 3 of each cell in rotating order and one more where CPU cycles or app GPU time spread past 10%, idle twice in the dashboard at 20–30 s, 3 pacing captures of 8 s, a desktop baseline each round), into `docs/results/suite-windows-<date>-<commit>/<scene>/` in the macOS suite's files, plus `startup/` (the lab scene's binaries in the suite's font, `windows_startup_probe.py`, 10 launches each, `startup.json` in the macOS startup run's shape with cycles for instructions). `python scripts/build_site.py --platform windows <run> --startup <run>/startup/startup.json` publishes it to `site/windows/`. What differs is what Windows can read:
 - **GPU:** Windows reads no system GPU power. The GPU figures are the app's own GPU time on the 3D engines (`gpu_ms_per_second`; every engine's is kept too) and the compositor's (`dwm_gpu_ms_per_second`), from the GPU engine counters. The NVIDIA board's energy is read at each sample's two ends (NVML, no polling: `gpu_board_watts`); the page shows it only with `--board-power`, for a run where it held still across repeats.
-- **CPU:** the process's cycles (`QueryProcessCycleTime`), a second (`mcycles_per_second`) and per update or frame drawn (`mcycles_per_frame`). Windows counts CPU time in 15.6 ms scheduler ticks, too coarse for these loads: zgx's animation read 0.94% and 0.31% of a core in two trials of 1.59 and 1.50 M cycles a frame. CPU time stays in the raw data (`cpu_percent_one_core`). The compositor's CPU (`dwm_cpu_percent`) is read through performance counters, in ticks too (its cycles need administrator rights), over thousands of its frames.
+- **CPU:** the process's cycles (`QueryProcessCycleTime`), a second (`mcycles_per_second`) and per update or frame drawn (`mcycles_per_frame`). Windows counts CPU time in 15.6 ms scheduler ticks, too coarse for these loads: zgx's animation read 0.94% and 0.31% of a core in two trials of 1.59 and 1.50 M cycles a frame. CPU time stays in the raw data (`cpu_percent_one_core`). The compositor's CPU is its cycles too (`dwm_mcycles_per_second`). They are read from the system's process list (`SystemProcessInformation`, `windows_pdh.cycles_of`), which needs no administrator rights, whereas `QueryProcessCycleTime` needs a handle `dwm.exe` gives no other user. Its tick-counted CPU time stays in the raw data (`dwm_cpu_percent`); runs before 2026-10-27 have only that.
 - **Memory:** private bytes (`mean_private_bytes`) and working set; each trial records the graphics API the app loaded (`graphics_modules`), since the driver's floor differs between Direct3D 11 and 12.
 - **Frame pacing:** Desktop Duplication (`framepace`, a zgx-gpu example, through `scripts/windows_framepace.py`): each frame the compositor put on screen in which the window's pixels changed, timed by its present time.
 - **No unfilled-row captures** in the list scene (macOS's `blankprobe` has no Windows counterpart yet).

@@ -1,6 +1,6 @@
 # Web views, terminals, commands: webview, web, terminal, term, command
 
-Native content laid out as nodes, and the app's menu commands. A web view is a WebKit page (macOS) or a WebView2 page (Windows, the desktop host's `webview2` feature; Linux has none yet, see [the Linux notes](../linux.md#web-views)), and a terminal a Ghostty surface (macOS, the `ghostty` feature); each is placed, sized, rounded and clipped like any node, and zgx draws over it (a frosted popover over a page works). Without a native host (headless, other platforms) each shows a labelled placeholder box and its controller still answers. Pages and sessions belong to the host, not to a run, so a reload keeps them.
+Native content laid out as nodes, and the app's menu commands. A web view is a WebKit page (macOS), a WebView2 page (Windows, the desktop host's `webview2` feature) or a WebKitGTK page drawn as an image (Linux, the `webkitgtk` feature, which `zgx-run` has; see [the Linux notes](../linux.md#web-views)), and a terminal is drawn by zgx (every platform, the desktop host's `terminal` feature, which zgx-run turns on) or is a Ghostty surface (macOS, the `ghostty` feature, which wins there); each is placed, sized, rounded and clipped like any node, and zgx draws over it (a frosted popover over a page works). Without a native host (headless, other platforms) each shows a labelled placeholder box and its controller still answers. Pages and sessions belong to the host, not to a run, so a reload keeps them.
 
 ```luau
 ui.webview(props: WebViewProps) -> Node
@@ -21,7 +21,7 @@ ui.command(opts: CommandOptions) -> ()
 
 ## Web view options
 
-`ui.webview` takes these, `ui.web` the first six, and any [property](properties.md) and [event](events.md):
+`ui.webview` takes these, `ui.web` the first seven, and any [property](properties.md) and [event](events.md):
 
 | Option | Type | Default | |
 | --- | --- | --- | --- |
@@ -31,6 +31,7 @@ ui.command(opts: CommandOptions) -> ()
 | `user_agent` | `string` | WebKit's | |
 | `messages` | `boolean` | `true` | the page's `window.zgx.postMessage(value)` reaches `on_message` |
 | `new_windows` | `boolean` | `true` | `window.open` and `target=_blank` reach `on_new_window` (and open nothing) |
+| `accelerated` | `boolean` | `true` | Linux only (macOS and Windows ignore it): `false` paints the page on the CPU and uploads only what each frame changed, far cheaper for a page that animates a little, but draws no `backdrop-filter` and flattens 3D transforms ([what it saves](../native-surfaces.md#what-a-linux-page-frame-costs)) |
 | `web` | `Web` | a page for the node | a controller, so the page outlives the node (a tab switched away and back) |
 | `src` | `Reactive<string>` | none | the URL; the page navigates when it changes |
 | `html`, `base_url` | `string`, `string?` | none | a page from markup, loaded once |
@@ -40,8 +41,9 @@ ui.command(opts: CommandOptions) -> ()
 | `on_message` | `(value: any, origin: string, main_frame: boolean) -> ()` | none | what the page posted, as Luau data, and who posted it: the sending frame's origin (`https://example.com`) and whether it is the top frame. Any page the view shows, and any iframe in it, can post: check `origin` before acting on a message |
 | `on_error` | `(url: string, err: string) -> ()` | none | a navigation failed, or the page's process ended (`url` empty) |
 | `on_new_window` | `(url: string) -> ()` | none | |
+| `on_download` | `(d: Download) -> ()` | none | a download the page started (a `download` link, an attachment): `d.url`, `d.name` (as the page or its server suggests it) and `d.mime`; save it with `d:save_to(file, opts?)` (a file the user picked, from `ui.save_file`) or `d:ask(opts?)` (the save dialog suggesting `d.name`: a promise of the file saved to, or nil), or `d:cancel()`. `opts` takes `on_progress(received, total)` and `on_finish(ok, err)`. Both need the Files grant. Without `on_download`, and for a `d` never answered, nothing is saved: a page never starts a download into the user's folders without the app deciding |
 
-A `Web` controller's `url`, `title`, `loading`, `progress`, `can_go_back`, `can_go_forward`, `focused`, `error` and `pointer` (`{ x, y }` in points while the pointer is over the page, else nil) are tracked like state: a text or computed reading them follows the page. Its methods: `load(url)`, `html(html, base_url?)`, `back()`, `forward()`, `reload()`, `stop()`, `focus()`, `blur()`, `devtools()`, `zoom(z)`, `run(js)`, `eval(js, function(value, err) … end)` (the script's value as Luau data, or nil and the error), and `close()`.
+A `Web` controller's `url`, `title`, `loading`, `progress`, `can_go_back`, `can_go_forward`, `focused`, `error`, `full_screen` (an element of the page is full screen: on macOS in WebKit's window over the screen, on Windows and Linux filling the node, which an app grows to show it so) and `pointer` (`{ x, y }` in points while the pointer is over the page, else nil) are tracked like state: a text or computed reading them follows the page. Its methods: `load(url)`, `html(html, base_url?)`, `back()`, `forward()`, `reload()`, `stop()`, `focus()`, `blur()`, `devtools()`, `exit_full_screen()`, `zoom(z)`, `run(js)`, `eval(js, function(value, err) … end)` (the script's value as Luau data, or nil and the error), and `close()`.
 
 ## Terminal options
 
@@ -53,7 +55,7 @@ A `Web` controller's `url`, `title`, `loading`, `progress`, `can_go_back`, `can_
 | `command` | `string` | the login shell | a command line |
 | `cwd` | `string` | home | where it starts; `"~"` is home |
 | `env` | `{ [string]: string }` | none | added to the environment |
-| `font_size` | `number` | Ghostty's | points |
+| `font_size` | `number` | 13 (Ghostty's own, under Ghostty) | points |
 | `on_title` | `(title: string) -> ()` | none | the program set its title (OSC 0/2) |
 | `on_pwd` | `(pwd: string) -> ()` | none | the shell reported its directory (OSC 7) |
 | `on_process` | `(name: string) -> ()` | none | the foreground program changed |
@@ -62,8 +64,11 @@ A `Web` controller's `url`, `title`, `loading`, `progress`, `can_go_back`, `can_
 | `on_bell` | `() -> ()` | none | |
 | `on_command` | `(exit_code: number?, duration_ms: number) -> ()` | none | a command finished (shell integration) |
 | `on_notify` | `(title: string, body: string) -> ()` | none | the program asked for a notification |
+| `on_clipboard_read` | `(request: ClipboardReadRequest) -> ()` | none | the program asked to read the clipboard (OSC 52): `request:allow()` gives it the clipboard's text, `request:deny()` (or letting the request go) nothing; answer at once or after asking the user. Without it, Ghostty asks with a dialog of its own and the engine-drawn terminal denies |
 
 A `Term`'s `id`, `title`, `pwd`, `process`, `pid`, `focused`, `bell` (it rang since it last had focus), `progress` (OSC 9;4: 0 to 1, negative while indeterminate, nil when none), `exited` (the exit code, once it ended), `columns`, `rows` and `pointer` are tracked like state. Its methods: `focus()`, `blur()`, `input(text)` (as typed: `"ls\r"` runs ls), `paste(text)`, `binding(action)` (a Ghostty binding action: `"copy_to_clipboard"`, `"clear_screen"`, `"increase_font_size:1"`), `needs_confirm()` (whether closing would end something other than an idle shell), `snapshot(max_width?)` (a picture of what it shows now, at most `max_width` pixels wide, 480 if not given: the `src` of a `ui.image` showing it, as `"host:…"`, replaced by each call and forgotten as it closes; nil before it shows or where the platform takes none, macOS taking it from Ghostty's last frame) and `close()`.
+
+A terminal's colours come from the theme where it shows, through the tokens `$terminal.foreground`, `$terminal.background`, `$terminal.cursor`, `$terminal.cursor_text` (text under a block cursor), `$terminal.selection_background`, `$terminal.selection_foreground` and `$terminal.ansi.0` to `$terminal.ansi.15` (the ANSI colours by number; 8 to 15 are the bright ones). No built-in theme sets them, and an unset one keeps the terminal's own colour. Under Ghostty that is the user's Ghostty configuration (`foreground`, `background`, `cursor-color`, `cursor-text`, `selection-background`, `selection-foreground`, `palette`), which the tokens set go over. In the engine-drawn terminal it is its built-in palette. A theme switch, a followed system appearance or a `theme` over the node recolours what the terminal shows live, scrollback included, without restarting the program: `ui.terminal { term = term, theme = { ["terminal.foreground"] = "#202124", ["terminal.ansi.1"] = "#b00020" } }`. Ghostty's colours are opaque, so a token's alpha is dropped there. A VS Code theme sets these tokens from its `terminal.*` colours.
 
 ## Command options
 
@@ -82,6 +87,7 @@ Commands are the app's menu bar, and their keys are its menu items' shortcuts: `
 
 ```luau
 ui.window(opts: WindowOptions) -> ()
+ui.windows(list: State<{ any }>, build: (item: any) -> ItemWindow, opts: { key: ((any) -> string | number)?, on_close: ((any) -> ())? }?) -> ()
 ```
 
 `ui.window { id, open = state, node }` declares a window of the app's own, a settings window say: it is open while `open` is true, closing it sets `open` false, and its node is its content. Declared at a script's top level, as commands are, each load declares them again; what a window shows follows reloads. The windows share the app's state: a switch in the settings window changes what the main window shows (and `ui.theme.set` restyles every window). `zgx-run` opens them, and a Rust host opens them from `ScriptHost::windows()` with `ScriptHost::window_view(id)` (`zgx_run::follow_windows` does both).
@@ -94,6 +100,9 @@ ui.window(opts: WindowOptions) -> ()
 | `width`, `height` | `number` | `480`, `360` | points |
 | `frame_autosave` | `string` | none | its frame saved under this name as it moves and resizes, and reopened where it was left (macOS, Windows, X11; on Wayland its size and maximized state) |
 | `tabbing` | `"automatic"`, `"preferred"`, `"disallowed"` | `"automatic"` | AppKit's window tabs (macOS): as the user's setting says, always, or never (a window with tabs of its own) |
+| `under_pointer` | `{ number }` | none | where it opens: its top-left this far up and left of the pointer, as `on_drag_outside`'s `{ e.grab_x, e.grab_y }`, so a tab torn off stays under the grab (macOS, Windows, X11) |
+| `min_width`, `min_height`, `max_width`, `max_height` | `number` | none | its smallest and largest size in points, each width with its height; the same for both makes a window of fixed size that window managers (Raycast, Rectangle) can still move, which they refuse for one that isn't resizable |
+| `visible` | `boolean` or `State<boolean>` | shown | false: made hidden, its content laid out and drawn meanwhile, and shown whole the moment it turns true (on Wayland, where a window appears as it first draws, its first frame is drawn as it shows: whole, with no blank frame, a frame's time later; on X11 its theme's background shows for the few milliseconds from its mapping to its first frame) |
 | `[1]` | `Node` | required | its content |
 
 ```lua
@@ -117,6 +126,42 @@ ui.window {
 }
 return ui.button { on_click = ui.set(settings, true), "Settings…" }
 ```
+
+### A window an item
+
+`ui.windows(list, build, { key, on_close })` is a window an item of a list, as `ui.each` is a row an item: a detail window per photo, a tab torn off into a window of its own. An item's window opens as the item appears in the list and closes as it leaves. `build(item)` gives its options, `ui.window`'s without `id` and `open`, and its content, once, as the item first appears; what the content reads follows state as any node does. `key(item)` names an item (its `id` field by default): an item that keeps its key keeps its window. A person closing a window calls `on_close(item)`, for the app to let the item go; until it does, the window stays closed. Declared at the top level, as `ui.window` is, and a reload keeps the windows whose items are still in the list.
+
+```lua
+local details = ui.persist("details", {} :: { { id: string, name: string } })
+ui.windows(details, function(photo)
+	return {
+		title = photo.name,
+		width = 480,
+		height = 360,
+		frame_autosave = `detail:{photo.id}`,
+		ui.column { p = 16, ui.text { photo.name, literal = true } },
+	}
+end, {
+	on_close = function(photo)
+		details:update(function(list)
+			local kept = {}
+			for _, d in list do
+				if d.id ~= photo.id then
+					table.insert(kept, d)
+				end
+			end
+			return kept
+		end)
+	end,
+})
+return ui.button { on_click = function() details:push({ id = "p1", name = "Harbour" }) end, "Open Harbour" }
+```
+
+A list in `ui.persist` reopens its windows on the next launch, each where `frame_autosave` left it.
+
+### A window's own state
+
+`ui.window.active`, `shown` and `size` are the app's main window's. A window of its own reads its own through `win`: `build(item, win)` for `ui.windows`, and content given as `function(win)` for `ui.window` (`ui.window { id, open, function(win) return … end }`). `win.active`, `win.shown` and `win.size` are read-only states, kept as the system says: a detail window dims its toolbar while another is in front, and a command acts on the window whose `win.active` is true. A `build` that takes no `win`, and plain content, make none.
 
 ### The title bar
 
@@ -145,6 +190,38 @@ return ui.row {
 }
 ```
 
+### Full screen
+
+```luau
+ui.window.full_screen: State<boolean>
+ui.window.full_screen_transition: State<{ phase: "entering" | "leaving", duration: number }?>
+ui.window.maximized: State<boolean>
+```
+
+`ui.window.maximized` is whether the window is maximized, read-only and followed, for what a window draws at its edges only while it floats.
+
+`ui.window.full_screen` is whether the window is in full screen, however it went in or out: the green button, Ctrl+Cmd+F, the View menu, Mission Control, or a script. On macOS it turns as the window begins going in or out. `ui.window.full_screen_transition` is the transition while one runs (macOS animates it, `set_fullscreen`'s too): `phase` is `"entering"` or `"leaving"`, and `duration` is about how many seconds it takes (AppKit doesn't say: as long as the last one that way took, about 0.55 at first). It begins just before `full_screen` turns, and is nil once the window is there. It is nil always on Linux and Windows, where `full_screen` changes at once. Both are read-only.
+
+In full screen macOS hides the traffic lights, and `ui.window.controls` is nil. Through a transition `controls` and `titlebar_area` already say where they end up: nil from the moment the window begins going in, and their place out of full screen from the moment it begins coming out. A title bar laid out around them can slide over as they go:
+
+```lua
+return ui.row {
+	h = 44,
+	window_drag = true,
+	items = "center",
+	-- Clear of the traffic lights, flush once full screen hides them,
+	-- eased about as long as AppKit's animation.
+	pl = ui.tween(ui.window.full_screen, { duration = 500, from = 84, to = 12 }),
+	ui.text { "Title" },
+}
+```
+
+Something timed by hand (an `anime` animation) can read the transition's own `duration` as it begins.
+
+AppKit animates a snapshot of the window through the transition, and shows the window itself again as it ends. What is drawn meanwhile keeps the content current, but is not on the screen: a tween runs behind the snapshot, and the window shows it finished. `ui.window.shown` stays true through the transition; a window still covered once it is over counts as covered then.
+
+`zgx run` keeps both; a Rust host passes its window's with `ScriptHost::window_full_screen` (`WindowInfo::fullscreen` and `WindowContext::full_screen_transition`).
+
 ### Zoom
 
 ```luau
@@ -153,6 +230,86 @@ ui.window.zoomable: State<boolean>
 ```
 
 The app's window zooms as a browser's page does: Cmd+= or Cmd++ zooms in, Cmd+- out and Cmd+0 back to 100% (Ctrl elsewhere), through Chrome's levels from 25% to 500%, and its content reflows in the smaller or larger viewport, text and paths drawn crisply. `ui.window.zoom` is the zoom (1 at 100%): it follows the keys and the View menu's items, and setting it zooms the window (`ui.window.zoom:set(1.25)`). `ui.window.zoomable:set(false)` turns the keys off; a `ui.command` with one of the keys keeps it either way. `zgx run` keeps both; a Rust host passes its window with `ScriptHost::window_zoom`.
+
+### Visible
+
+```luau
+ui.window.visible: State<boolean>
+```
+
+Whether the app's window shows. zgx.json's `"visible": false` opens it hidden, for an app that plays an intro of its own first: meanwhile its script runs, its state stays current and its content is laid out and drawn once, and then it draws nothing more until `ui.window.visible:set(true)` shows it, whole, with what changed since drawn before it appears. A Rust host passes its window with `ScriptHost::window_visible`.
+
+### Size
+
+```luau
+ui.window.size: State<{ width: number, height: number }>
+```
+
+The app's window's size in points, read-only, followed as the window resizes, zooms or moves between displays, as the web's `innerWidth` and `innerHeight` are. It is for decisions layout can't make: a sidebar collapsing to icons below a width, a menu taking the place of tabs. Sizes themselves are layout's (percentages, `grow`, `min_w` and `max_w`), which follows a resize without the script, and `zgx lint` reports an element's size computed from it (`window-size-layout`). A ref's `width` gives the room one element has. A plugin reads it too, with no grant (a picture fitted to the window), and of `ui.window` reads it alone. `zgx run` keeps it; a Rust host passes its window's `WindowContext::viewport` with `ScriptHost::window_size`.
+
+```lua
+local narrow = ui.computed(function()
+	return ui.window.size:get().width < 700
+end)
+return ui.row {
+	ui.column {
+		w = function()
+			return if narrow:get() then 48 else 240
+		end,
+		ui.text { "Sidebar" },
+	},
+	ui.column { grow = 1, ui.text { "Content" } },
+}
+```
+
+### Notifications and badges
+
+```luau
+ui.window.active: State<boolean>
+ui.window.shown: State<boolean>
+ui.notify(opts: { title: string, body: string?, tag: string?, on_click: (() -> ())? }) -> Promise<nil>
+ui.badge(count: number | string | nil) -> boolean
+```
+
+`ui.window.active` says whether the app's window is the active one, its keys going to it; `ui.window.shown`, whether it shows (not hidden, minimized or covered), as the web's `document.hasFocus()` and `document.visibilityState` do. Both are read-only and follow the window. `zgx run` keeps them; a Rust host passes its window with `ScriptHost::window_state`. What arrives while either is false is worth telling the person of:
+- `ui.notify { title, body, tag }` shows a system notification, as the web's `Notification` does. The promise settles once the system has it, or rejects with a `UiError` saying why not: `kind` `"unsupported"` where this system shows none for the app, `"denied"` where the person has not allowed them. One with the same `tag` replaces the last (a conversation's newest message, not one for each). `on_click` runs when the person clicks it, the app's window brought forward first: open the conversation it is about. A click is heard while the app runs.
+- `ui.badge(n)` puts a count on the app's icon, as `navigator.setAppBadge` does; `0` or `nil` takes it off. It returns whether the system shows one.
+
+Each platform shows them its own way, and needs the app to say who it is:
+
+| | Notifications | Badge |
+| --- | --- | --- |
+| macOS | The Notification Center, for an app run from its bundle (an `Info.plist` with a `CFBundleIdentifier`). The first one asks the person whether the app may notify; the answer is the system's to keep, changed in System Settings › Notifications. A binary run outside a bundle (`cargo run`) gets `"unsupported"`. | The Dock tile's label. |
+| Windows | A toast, for the app's AppUserModelID: its `application_id` (`Application::application_id`, `zgx.json`'s `application_id`). Without one, `"unsupported"`. The first notification sets it as the process's AppUserModelID and registers it for the user, as an unpackaged app's toasts need: the key `HKEY_CURRENT_USER\Software\Classes\AppUserModelId\<application_id>` with a `DisplayName` value, the executable's name, which the toast shows as its sender. Nothing else is written, and nothing needs administrator rights. | An overlay on the taskbar button (`ITaskbarList3::SetOverlayIcon`): a red disc with the count (`9+` past 99), a plain disc for text, described to screen readers as "3 unread" (or the text). |
+| Linux | The desktop's notification server (`org.freedesktop.Notifications` on the session bus); none running gets `"unsupported"`. | The count docks read from a launcher entry (Dash to Dock, KDE's task manager, Plank), matched to the app's desktop file (`Application::desktop_id`, else `application_id`). |
+
+A plugin can do neither: they are the app's.
+
+```lua
+local unread = ui.state("unread", 0)
+local function arrived(from: string, text: string)
+	if ui.window.active:peek() then
+		return
+	end
+	unread:set(unread:peek() + 1)
+	ui.badge(unread:peek())
+	ui.notify({ title = from, body = text, tag = from }):after(nil, function(err: UiError)
+		print(`no notification: {err}`)
+	end)
+end
+ui.effect(function()
+	if ui.window.active:get() then
+		unread:set(0)
+		ui.badge(0)
+	end
+end)
+return ui.button {
+	"Pretend a message",
+	on_click = function()
+		arrived("Ada", "Lunch?")
+	end,
+}
+```
 
 ## Example
 
@@ -235,7 +392,8 @@ return ui.row {
 - Sessions outlive reloads and the nodes that show them: a reload keeps every shell running, and moving the `terminal` node (another split, another tab) moves the terminal with its process. End one with `term:close()`, usually from `on_close`.
 - `ui.term` rejects an unknown option. The `on_*` options are a session's events, not a node's: give them to `ui.term`, not `ui.terminal`.
 - A page from `ui.web(id)` is kept until `web:close()`; `ui.web(opts)` and a `webview` without `web` make a page for the run (a reload makes a new one).
-- Over a page or a terminal that takes input, zgx's nodes hear no pointer moves (they had their leave): follow `web.pointer` or `term.pointer` instead. The terminal reads its own keyboard, IME and mouse; app shortcuts reach the app through its commands, whose keys work wherever focus is.
+- Over a page or a Ghostty terminal that takes input, zgx's nodes hear no pointer moves (they had their leave): follow `web.pointer` or `term.pointer` instead (an engine-drawn terminal reports `pointer` too).
+- The engine-drawn terminal's fidelity, keys and limits (the kitty keyboard protocol included; no images; clipboard reads unanswered) are in [native surfaces](../native-surfaces.md#terminals). The terminal reads its own keyboard, IME and mouse; app shortcuts reach the app through its commands, whose keys work wherever focus is.
 - Terminals hand the right clicks their program does not use to the node, so a `context_menu` on the `terminal` node opens over it.
 - Each successful load declares its commands afresh, replacing the last; a failed reload keeps them. Declaring an id twice in one run is an error.
 - `on_message` and `eval` get the page's JSON as Luau data, typed `any`: check its shape before using it.

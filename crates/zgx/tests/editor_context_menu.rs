@@ -322,6 +322,44 @@ fn turning_spellcheck_off_clears_the_marks_and_on_checks_again() {
     assert_eq!(marks(&ui).len(), 2, "on: the whole text checked");
 }
 
+#[test]
+fn spelling_marks_follow_the_danger_colour() {
+    use zgx::{
+        scene::{Color, NodeKind},
+        theme::{Theme, ThemeKind, tok},
+    };
+    let (red, green) = (Color(255, 0, 0, 255), Color(0, 255, 0, 255));
+    let mut ui = Ui::new(400., 200.);
+    ui.theme()
+        .register(Theme::new("a", ThemeKind::Dark).with(tok::DANGER, red));
+    ui.theme()
+        .register(Theme::new("b", ThemeKind::Dark).with(tok::DANGER, green));
+    ui.theme().set("a").unwrap();
+    let value = ui.signal("fix teh bug".to_owned());
+    ui.mount(provide(
+        zgx::platform::PlatformService(Rc::new(Speller::default())),
+        column()
+            .size(400., 200.)
+            .child(text_area("Notes", value).spellcheck(true).w(300.).h(80.)),
+    ));
+    ui.prepare_frame();
+    let colours = |ui: &Ui| -> Vec<Color> {
+        let scene = ui.scene.borrow();
+        scene
+            .paint_items()
+            .filter_map(|item| match scene.kind(item.id) {
+                NodeKind::Quad(quad) if quad.decoration.is_some() => Some(quad.border_color),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(marks(&ui).len(), 1);
+    assert_eq!(colours(&ui), [red]);
+    ui.theme().set("b").unwrap();
+    ui.prepare_frame();
+    assert_eq!(colours(&ui), [green]);
+}
+
 /// A platform that looks words up (macOS's dictionary), recording what it
 /// was asked.
 #[derive(Default)]
@@ -354,6 +392,140 @@ impl zgx::platform::Platform for Dictionary {
     ) -> zgx::platform::Pending<Result<Option<std::path::PathBuf>, String>> {
         Box::pin(async { Ok(None) })
     }
+}
+
+/// The colour the selection inside `node` is drawn in, if it draws one.
+fn drawn_selection(ui: &Ui, node: zgx::scene::NodeId) -> Option<zgx::scene::Color> {
+    let scene = ui.scene.borrow();
+    let mut stack = vec![node];
+    while let Some(id) = stack.pop() {
+        if let Some(highlight) = scene.text_highlight(id).filter(|h| !h.rects.is_empty()) {
+            return Some(highlight.color);
+        }
+        stack.extend(scene.children(id).iter().copied());
+    }
+    None
+}
+
+/// A context menu, the editor's own or the app's, takes the focus as it
+/// opens; the selection it was opened on stays drawn (in the colour of a
+/// selection in the back) while it shows, as AppKit's does, and is drawn as
+/// before once it closes and the focus comes back.
+#[test]
+fn a_context_menu_keeps_the_selection_it_opened_on_drawn_while_it_shows() {
+    for apps in [false, true] {
+        let mut ui = Ui::new(400., 200.);
+        let value = ui.signal("alpha serendipity".to_owned());
+        let field = text_input("Name", value).text_size(14.);
+        let field = if apps {
+            field.context_menu(|_| vec![menu_item("Define").id("define")])
+        } else {
+            field
+        };
+        let (view, _) = mount(&mut ui, field);
+        let node = view.find("field").unwrap();
+        ui.input.focus(&ui.scene, Some(node));
+        ui.prepare_frame();
+        let editor = ui.editor(node).unwrap();
+        editor.set_selection(6, 17);
+        ui.prepare_frame();
+        let active = drawn_selection(&ui, node).expect("drawn while focused");
+        let at = ui.scene.borrow().bounds(node);
+        context_click(&mut ui, at.x + 60., at.y + at.height / 2.);
+        assert!(
+            view.find(if apps { "define" } else { "editor-copy" })
+                .is_some()
+        );
+        assert_ne!(ui.input.focused(), Some(node), "the menu has the focus");
+        let held = drawn_selection(&ui, node);
+        assert!(held.is_some(), "drawn while its menu shows (apps: {apps})");
+        assert_ne!(
+            held,
+            Some(active),
+            "as a selection in the back (apps: {apps})"
+        );
+        assert_eq!(editor.selection(), (6, 17), "the selection it opened on");
+        // Closed: the focus back, and the selection drawn as it was.
+        ui.dispatch(InputEvent::KeyDown {
+            key: zgx::input::Key::Escape,
+            modifiers: Default::default(),
+            repeat: false,
+        });
+        ui.prepare_frame();
+        assert_eq!(ui.input.focused(), Some(node));
+        assert_eq!(drawn_selection(&ui, node), Some(active), "apps: {apps}");
+    }
+}
+
+/// A menu that took no editor's focus (a row's, around a field that didn't
+/// have it) draws no selection the field kept from before.
+#[test]
+fn a_menu_opened_elsewhere_draws_no_kept_selection() {
+    let mut ui = Ui::new(400., 200.);
+    let value = ui.signal("alpha serendipity".to_owned());
+    let view = ui.mount(
+        column()
+            .size(400., 200.)
+            .child(
+                row()
+                    .id("row")
+                    .w(400.)
+                    .h(60.)
+                    .context_menu(|_| vec![menu_item("Row").id("row-item")])
+                    .child(text_input("Name", value).id("field").w(200.).h(32.)),
+            )
+            .child(button().id("other").size(80., 30.).child(text("Other"))),
+    );
+    ui.prepare_frame();
+    let (field, other) = (view.find("field").unwrap(), view.find("other").unwrap());
+    ui.input.focus(&ui.scene, Some(field));
+    ui.prepare_frame();
+    ui.editor(field).unwrap().set_selection(6, 17);
+    ui.prepare_frame();
+    ui.input.focus(&ui.scene, Some(other));
+    ui.prepare_frame();
+    assert_eq!(drawn_selection(&ui, field), None, "not focused");
+    // The row's menu, from beside the field.
+    context_click(&mut ui, 300., 30.);
+    assert!(view.find("row-item").is_some());
+    assert_eq!(
+        drawn_selection(&ui, field),
+        None,
+        "its menu took no focus from it"
+    );
+}
+
+/// An editor shown a line at a time (a text area's lines) looks up the
+/// selection at its baseline, on the line holding it: its text is laid out
+/// in its lines' nodes, not its own.
+#[test]
+fn a_text_area_shown_a_line_at_a_time_looks_the_selection_up() {
+    let mut ui = Ui::new(400., 200.);
+    let dictionary = Rc::new(Dictionary::default());
+    let text = "alpha\nbeta serendipity\ngamma";
+    let value = ui.signal(text.to_owned());
+    let view = ui.mount(
+        text_area("Notes", value)
+            .id("notes")
+            .w(300.)
+            .h(120.)
+            .text_size(10.)
+            .line_height(20.),
+    );
+    ui.prepare_frame();
+    let editor = ui.editor(view.find("notes").unwrap()).unwrap();
+    let start = text.find("serendipity").unwrap();
+    editor.set_selection(start, start + "serendipity".len());
+    ui.prepare_frame();
+    let platform = zgx::platform::PlatformService(dictionary.clone());
+    assert!(editor.look_up(&platform), "looked up");
+    let asked = dictionary.0.borrow().clone();
+    let (looked, (_, y), size) = &asked[0];
+    assert_eq!(looked, "serendipity");
+    assert_eq!(*size, 10.);
+    // On its line, the second, not the first.
+    let line = editor.text_area(start..start + 1).unwrap();
+    assert!(*y > line.y && *y <= line.y + line.height, "{y} on {line:?}");
 }
 
 /// Where the platform looks words up, an editor's menu, and a selectable
@@ -451,4 +623,57 @@ fn context_menus_look_the_selection_up_where_the_platform_does() {
         "{:?} in {shown:?}",
         asked[1]
     );
+}
+
+/// Large type in a short field (its line taller than the box inside its
+/// padding): a misspelling's marks stay inside the field, where its clip
+/// shows them.
+#[test]
+fn a_line_taller_than_its_field_keeps_its_misspelling_marks() {
+    let mut ui = Ui::new(640., 200.);
+    let speller = Rc::new(Speller::default());
+    let value = ui.signal("fix teh bug".to_owned());
+    let view = ui.mount(provide(
+        zgx::platform::PlatformService(speller.clone()),
+        column().size(640., 200.).child(
+            text_input("Name", value.clone())
+                .id("field")
+                .spellcheck(true)
+                .size(560., 44.)
+                .p(10.)
+                .text_size(22.),
+        ),
+    ));
+    ui.prepare_frame();
+    let field = ui.scene.borrow().bounds(view.find("field").unwrap());
+    let marks = marks(&ui);
+    assert_eq!(marks.len(), 1, "teh is marked");
+    assert!(marks[0].y + marks[0].height <= field.y + field.height - 10. + 0.01);
+}
+
+/// An editor hearing pastes may take one with no text in it (an image), so
+/// its menu's Paste stays enabled, and goes through the hook.
+#[test]
+fn an_editor_hearing_pastes_keeps_paste_enabled_on_an_empty_clipboard() {
+    let mut ui = Ui::new(400., 200.);
+    let value = ui.signal(String::new());
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let told = heard.clone();
+    let field = text_input("Name", value.clone()).on_paste(move |text| {
+        told.borrow_mut().push(text.map(str::to_owned));
+        text.is_none()
+    });
+    let (view, clipboard) = mount(&mut ui, field);
+    let bounds = ui.scene.borrow().bounds(view.find("field").unwrap());
+    let inside = (bounds.x + 4., bounds.y + bounds.height / 2.);
+    context_click(&mut ui, inside.0, inside.1);
+    assert!(enabled(&ui, &view, "editor-paste"));
+    choose(&mut ui, &view, "editor-paste");
+    assert_eq!(*heard.borrow(), [None]);
+    assert_eq!(value.get(), "");
+    *clipboard.0.borrow_mut() = Some("typed".into());
+    context_click(&mut ui, inside.0, inside.1);
+    choose(&mut ui, &view, "editor-paste");
+    assert_eq!(*heard.borrow(), [None, Some("typed".to_owned())]);
+    assert_eq!(value.get(), "typed", "not taken, it goes in");
 }

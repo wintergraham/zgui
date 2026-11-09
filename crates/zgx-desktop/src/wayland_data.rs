@@ -104,6 +104,10 @@ enum Command {
     LoadImage {
         reply: mpsc::Sender<Result<Loaded, String>>,
     },
+    /// The clipboard's `text/uri-list`: the files a file manager copied.
+    LoadFiles {
+        reply: mpsc::Sender<Result<Loaded, String>>,
+    },
     /// Raise `window` with an activation token; held here until done, so
     /// its surface lives as long.
     Activate {
@@ -228,6 +232,21 @@ impl WaylandClipboard {
             .map_err(|_| "Wayland data worker stopped".to_string())?;
         Ok(read_loaded(answer)?.0)
     }
+    pub fn load_files(&self) -> Result<Vec<std::path::PathBuf>, String> {
+        let (reply, answer) = mpsc::channel();
+        self.0
+            .send(Command::LoadFiles { reply })
+            .map_err(|_| "Wayland data worker stopped".to_string())?;
+        Ok(uri_list(&String::from_utf8_lossy(&read_loaded(answer)?.0)))
+    }
+}
+/// The files in a `text/uri-list`: a `file:` URI a line, `#` lines comments.
+fn uri_list(text: &str) -> Vec<std::path::PathBuf> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(crate::portal_dialog::file_uri)
+        .collect()
 }
 /// What the selection's owner writes to the stream the worker `answer`s
 /// with, up to `LOAD_LIMIT` within `LOAD_TIMEOUT`; and whether it is text
@@ -310,6 +329,7 @@ impl NativeData {
                     compositor: None,
                     shm: None,
                     outgoing: None,
+                    finishing: Vec::new(),
                     drag: None,
                     text: None,
                     completion: None,
@@ -344,6 +364,9 @@ impl NativeData {
                             }
                             Command::LoadImage { reply } => {
                                 let _ = reply.send(state.load_image());
+                            }
+                            Command::LoadFiles { reply } => {
+                                let _ = reply.send(state.load_files());
                             }
                             Command::Activate { token, window } => state.activate(&token, &window),
                             Command::Drag {
@@ -440,6 +463,9 @@ struct Offer {
     text: Option<usize>,
     /// Whether it offers `image/png`.
     png: bool,
+    /// The compositor's action for it, as last said. Hyprland says it once,
+    /// as it makes the offer: before the enter that names it.
+    action: Option<DndAction>,
 }
 struct Seat {
     name: u32,
@@ -505,7 +531,8 @@ struct Drag {
     read: Option<Transfer>,
     paths: Option<Arc<[PathBuf]>>,
     dropped: bool,
-    copy: bool,
+    /// The compositor's action for it (`wl_data_offer.action`), if said.
+    action: Option<DndAction>,
     left: bool,
 }
 /// The app's own drag, the compositor's now.
@@ -530,6 +557,20 @@ struct Outgoing {
     offer: Option<wl_data_offer::WlDataOffer>,
     /// The target took the drop (`dnd_drop_performed`).
     performed: bool,
+}
+impl Outgoing {
+    /// Its host hears `how`, and its source, offer and icon go.
+    fn end(self, how: crate::native_drag::NativeDrag) {
+        (self.send)(how);
+        if let Some(offer) = self.offer {
+            offer.destroy();
+        }
+        self.source.destroy();
+        if let Some((surface, buffer)) = self.icon {
+            surface.destroy();
+            buffer.destroy();
+        }
+    }
 }
 struct Completion {
     offer: wl_data_offer::WlDataOffer,
@@ -568,6 +609,10 @@ struct State {
     shm: Option<wl_shm::WlShm>,
     /// The app's own drag, handed to the compositor (`start_drag`).
     outgoing: Option<Outgoing>,
+    /// Its earlier drags whose drops are performed and whose targets are
+    /// still finishing with them, a newer drag having begun meanwhile: each
+    /// serves its data and goes as its target finishes.
+    finishing: Vec<Outgoing>,
     drag: Option<Drag>,
     text: Option<TextDrag>,
     completion: Option<Completion>,
@@ -626,7 +671,15 @@ impl State {
     ) {
         use crate::native_drag::NativeDrag;
         use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        self.end_outgoing(false);
+        // A drop performed, its target finishing, is kept to serve its data
+        // and hear its end (`finishing`); a drag still under way ends.
+        match self.outgoing.take() {
+            Some(previous) if previous.performed => self.finishing.push(previous),
+            previous => {
+                self.outgoing = previous;
+                self.end_outgoing(false);
+            }
+        }
         let ended = |send: &dyn Fn(NativeDrag)| {
             send(NativeDrag::Ended {
                 x: point.0,
@@ -774,15 +827,7 @@ impl State {
         let Some(outgoing) = self.outgoing.take() else {
             return;
         };
-        (outgoing.send)(how);
-        if let Some(offer) = outgoing.offer {
-            offer.destroy();
-        }
-        outgoing.source.destroy();
-        if let Some((surface, buffer)) = outgoing.icon {
-            surface.destroy();
-            buffer.destroy();
-        }
+        outgoing.end(how);
     }
     fn store(&mut self, primary: bool, text: String, html: Option<String>) -> Result<(), String> {
         let (seat, serial) = self.serial.ok_or("no input has reached this client yet")?;
@@ -845,6 +890,16 @@ impl State {
             return Err("the clipboard holds no PNG image".into());
         }
         offer.proxy.receive("image/png".into(), write.as_fd());
+        drop(write);
+        Ok(Loaded(read, false))
+    }
+    fn load_files(&mut self) -> Result<Loaded, String> {
+        let (read, write) = UnixStream::pair().map_err(|e| e.to_string())?;
+        let offer = self.selection.as_ref().ok_or("the clipboard is empty")?;
+        if !offer.uris {
+            return Err("the clipboard holds no files".into());
+        }
+        offer.proxy.receive("text/uri-list".into(), write.as_fd());
         drop(write);
         Ok(Loaded(read, false))
     }
@@ -1022,7 +1077,7 @@ impl State {
             return;
         }
         let drag = self.drag.take().unwrap();
-        if drag.copy {
+        if takes_drop(drag.offer.version(), drag.action) {
             let (accepted, reply) = std::sync::mpsc::channel();
             (self.handler)(
                 drag.token,
@@ -1042,6 +1097,11 @@ impl State {
                 deadline: Instant::now() + Duration::from_secs(3),
             });
         } else {
+            // Not taken: the window hears the files go, as it heard them
+            // come (it would show them over it for good otherwise).
+            if !drag.left {
+                (self.handler)(drag.token, FileEvent::Leave);
+            }
             drag.offer.destroy();
         }
     }
@@ -1196,7 +1256,33 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        let finishing = state
+            .finishing
+            .iter()
+            .position(|finishing| finishing.source == *source);
         match event {
+            // An earlier drag of the app's, dropped, its target finishing.
+            wl_data_source::Event::Send { mime_type, fd } if finishing.is_some() => {
+                let finishing = &state.finishing[finishing.expect("checked above")];
+                if let Some((_, bytes)) = finishing.data.iter().find(|(kind, _)| *kind == mime_type)
+                {
+                    write_bytes(fd, bytes.clone());
+                }
+            }
+            wl_data_source::Event::DndFinished | wl_data_source::Event::Cancelled
+                if finishing.is_some() =>
+            {
+                let done = state.finishing.remove(finishing.expect("checked above"));
+                let (x, y) = done.point;
+                zgx_gpu::present_log::log(|| "native drag end".into());
+                // Its host's newer hand-off hears none of it
+                // (`Handoff::events`).
+                done.end(crate::native_drag::NativeDrag::Ended {
+                    x,
+                    y,
+                    accepted: true,
+                });
+            }
             // The app's own drag.
             wl_data_source::Event::Send { mime_type, fd }
                 if state
@@ -1215,6 +1301,10 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for State {
                     && outgoing.source == *source
                 {
                     outgoing.performed = true;
+                    // The pointer is the window's again: its next drag may
+                    // go to the compositor before this one's target finishes.
+                    let (x, y) = outgoing.point;
+                    (outgoing.send)(crate::native_drag::NativeDrag::Performed { x, y });
                 }
             }
             wl_data_source::Event::DndFinished => {
@@ -1425,10 +1515,14 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for State {
                 }
             }
             wl_data_offer::Event::Action { dnd_action } => {
+                let action = dnd_action.into_result().ok();
+                if let Some(saved) = state.offers.get_mut(&offer.id().protocol_id()) {
+                    saved.action = action;
+                }
                 if let Some(drag) = &mut state.drag
                     && drag.offer == *offer
                 {
-                    drag.copy = dnd_action.into_result().is_ok_and(|a| a == DndAction::Copy);
+                    drag.action = action;
                 }
             }
             _ => {}
@@ -1459,6 +1553,7 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for State {
                         uris: false,
                         text: None,
                         png: false,
+                        action: None,
                     },
                 );
             }
@@ -1557,7 +1652,6 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for State {
                 }
                 offer.proxy.receive("text/uri-list".into(), write.as_fd());
                 drop(write);
-                let copy = offer.proxy.version() < 3;
                 state.drag = Some(Drag {
                     offer: offer.proxy,
                     token,
@@ -1570,7 +1664,7 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for State {
                     }),
                     paths: None,
                     dropped: false,
-                    copy,
+                    action: offer.action,
                     left: false,
                 });
                 let _ = connection.flush();
@@ -1709,6 +1803,21 @@ impl Transfer {
         }
     }
 }
+/// Whether a drop the compositor delivered is taken (read, and finished).
+/// Before version 3 there are no actions. A copy is what was asked for
+/// (`set_actions(copy, copy)`); a move too, as Hyprland chooses move for
+/// any source that allows it and never answers `set_actions`: the files
+/// are only read, and refusing left its drag under way, the window showing
+/// the files over it and the next client the pointer reached taking them.
+/// None said (Hyprland, for a source naming no actions) takes it as
+/// version 2 did; only an action that can't be finished (none, ask) is
+/// refused.
+fn takes_drop(version: u32, action: Option<DndAction>) -> bool {
+    version < 3
+        || action.is_none_or(|action| {
+            action.contains(DndAction::Copy) || action.contains(DndAction::Move)
+        })
+}
 fn decode_uris(bytes: &[u8]) -> Result<Vec<PathBuf>, zgx::input::FileDropError> {
     use zgx::input::FileDropError;
     let text = std::str::from_utf8(bytes).map_err(|_| FileDropError::InvalidData)?;
@@ -1733,6 +1842,28 @@ fn decode_uris(bytes: &[u8]) -> Result<Vec<PathBuf>, zgx::input::FileDropError> 
 mod tests {
     use super::*;
     use zgx::input::FileDropError;
+    #[test]
+    fn a_drop_is_taken_unless_its_action_cannot_finish() {
+        assert!(takes_drop(2, None));
+        assert!(takes_drop(3, Some(DndAction::Copy)));
+        // Hyprland's choice for any source allowing a move.
+        assert!(takes_drop(3, Some(DndAction::Move)));
+        // Said before the enter (Hyprland), or never.
+        assert!(takes_drop(3, None));
+        assert!(!takes_drop(3, Some(DndAction::empty())));
+        assert!(!takes_drop(3, Some(DndAction::Ask)));
+    }
+    #[test]
+    fn a_uri_list_gives_its_files() {
+        assert_eq!(
+            uri_list("# a comment\r\nfile:///tmp/a%20b.txt\r\nfile:///tmp/c\r\nhttps://x.y/\r\n"),
+            [
+                std::path::PathBuf::from("/tmp/a b.txt"),
+                std::path::PathBuf::from("/tmp/c")
+            ]
+        );
+    }
+
     #[test]
     fn uri_list_is_bounded_and_all_or_nothing() {
         assert_eq!(

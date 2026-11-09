@@ -53,11 +53,52 @@ use zgx::{
 pub struct FakeDesktop {
     clipboard: RefCell<String>,
     image: RefCell<Option<std::sync::Arc<zgx::image::ImageData>>>,
+    files: RefCell<Vec<std::path::PathBuf>>,
     opens: RefCell<std::collections::VecDeque<Vec<std::path::PathBuf>>>,
     saves: RefCell<std::collections::VecDeque<std::path::PathBuf>>,
+    folders: RefCell<std::collections::VecDeque<std::path::PathBuf>>,
     asked: RefCell<Vec<zgx::platform::FilePicker>>,
+    notifications: RefCell<Vec<zgx::platform::Notification>>,
+    badge: RefCell<Option<String>>,
+    deny: std::cell::Cell<bool>,
+    clicks: Clicks,
+    /// The links opened (`Platform::open_url`), in order.
+    opened: RefCell<Vec<String>>,
 }
+/// Notifications clicked, not yet heard, and who waits for the next.
+type Clicks = std::sync::Arc<
+    std::sync::Mutex<(std::collections::VecDeque<String>, Option<std::task::Waker>)>,
+>;
+// A fake desktop is Send and unwind-safe, as published releases' was: losing
+// either breaks a test that moves or catches across one.
+const _: () = {
+    const fn holds<T: Send + std::panic::UnwindSafe>() {}
+    holds::<FakeDesktop>();
+};
 impl FakeDesktop {
+    /// The notifications shown so far, in order.
+    pub fn notifications(&self) -> Vec<zgx::platform::Notification> {
+        self.notifications.borrow().clone()
+    }
+    /// The app icon's badge, if it has one.
+    pub fn badge(&self) -> Option<String> {
+        self.badge.borrow().clone()
+    }
+    /// Refuse notifications from now on, as a person who turned them off.
+    pub fn deny_notifications(&self) {
+        self.deny.set(true);
+    }
+    /// Click the notification tagged `tag`, as the person would.
+    pub fn click_notification(&self, tag: &str) {
+        let waker = {
+            let mut clicks = self.clicks.lock().unwrap();
+            clicks.0.push_back(tag.to_string());
+            clicks.1.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
     /// The next open dialog picks `files`.
     pub fn pick(&self, files: impl IntoIterator<Item = impl Into<std::path::PathBuf>>) {
         let files = files.into_iter().map(Into::into).collect();
@@ -67,13 +108,25 @@ impl FakeDesktop {
     pub fn save_to(&self, path: impl Into<std::path::PathBuf>) {
         self.saves.borrow_mut().push_back(path.into());
     }
+    /// The next folder dialog picks `path`.
+    pub fn pick_folder(&self, path: impl Into<std::path::PathBuf>) {
+        self.folders.borrow_mut().push_back(path.into());
+    }
     /// What the dialogs shown so far were asked to show, in order.
     pub fn asked(&self) -> Vec<zgx::platform::FilePicker> {
         self.asked.borrow().clone()
     }
+    /// The links opened so far (a link's `href`, Open Link), in order.
+    pub fn opened(&self) -> Vec<String> {
+        self.opened.borrow().clone()
+    }
     /// The clipboard's text.
     pub fn clipboard(&self) -> String {
         self.clipboard.borrow().clone()
+    }
+    /// Put `text` on the clipboard, as another app copies it.
+    pub fn copy(&self, text: impl Into<String>) {
+        *self.clipboard.borrow_mut() = text.into();
     }
     /// The clipboard's image: its width, height and RGBA pixels.
     pub fn clipboard_image(&self) -> Option<(u32, u32, Vec<u8>)> {
@@ -87,8 +140,19 @@ impl FakeDesktop {
         let image = zgx::image::ImageData::new(width, height, pixels).expect("a valid image");
         *self.image.borrow_mut() = Some(std::sync::Arc::new(image));
     }
+    /// Put `files` on the clipboard, as a file manager copies them.
+    pub fn copy_files(&self, files: Vec<std::path::PathBuf>) {
+        *self.files.borrow_mut() = files;
+    }
 }
 impl zgx::platform::Platform for FakeDesktop {
+    fn open_url(&self, url: &str) -> bool {
+        self.opened.borrow_mut().push(url.to_string());
+        true
+    }
+    fn clipboard_files(&self) -> Vec<std::path::PathBuf> {
+        self.files.borrow().clone()
+    }
     fn clipboard_text(&self) -> Option<String> {
         Some(self.clipboard.borrow().clone())
     }
@@ -125,6 +189,45 @@ impl zgx::platform::Platform for FakeDesktop {
         let path = self.saves.borrow_mut().pop_front();
         Box::pin(async move { Ok(path) })
     }
+    fn open_folder(
+        &self,
+        picker: zgx::platform::FilePicker,
+    ) -> zgx::platform::Pending<Result<Option<std::path::PathBuf>, String>> {
+        self.asked.borrow_mut().push(picker);
+        let path = self.folders.borrow_mut().pop_front();
+        Box::pin(async move { Ok(path) })
+    }
+    fn notify(
+        &self,
+        notification: zgx::platform::Notification,
+    ) -> zgx::platform::Pending<Result<(), zgx::platform::NotifyError>> {
+        if self.deny.get() {
+            return Box::pin(async {
+                Err(zgx::platform::NotifyError::Denied(
+                    "notifications are off for this app".into(),
+                ))
+            });
+        }
+        self.notifications.borrow_mut().push(notification);
+        Box::pin(async { Ok(()) })
+    }
+    fn set_badge(&self, badge: Option<&str>) -> bool {
+        *self.badge.borrow_mut() = badge.map(str::to_string);
+        true
+    }
+    fn next_notification_click(&self) -> zgx::platform::Pending<Option<String>> {
+        let clicks = self.clicks.clone();
+        Box::pin(std::future::poll_fn(move |cx| {
+            let mut clicks = clicks.lock().unwrap();
+            match clicks.0.pop_front() {
+                Some(tag) => std::task::Poll::Ready(Some(tag)),
+                None => {
+                    clicks.1 = Some(cx.waker().clone());
+                    std::task::Poll::Pending
+                }
+            }
+        }))
+    }
 }
 
 /// A target that is an id alone, as tests have always named nodes.
@@ -134,6 +237,8 @@ fn is_plain_id(target: &str) -> bool {
             .chars()
             .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'))
         && !target.starts_with("role:")
+        // `.name` is a class (targets' syntax), not an id.
+        && !target.starts_with('.')
 }
 
 /// A scripted app mounted headless, 400 by 300 points.
@@ -150,6 +255,9 @@ pub struct TestApp {
     pub clock: FrameClock,
     /// Display frames delivered so far.
     pub frame: Cell<u64>,
+    /// The refresh interval its frames report, if not their 60 Hz spacing
+    /// (`report_interval`).
+    reported: Cell<Option<Duration>>,
     /// When it started, the time frames count from.
     pub start: Instant,
     /// Native views (web pages, terminals) the script placed: headless, they
@@ -173,11 +281,15 @@ impl TestApp {
     /// `ui.open_files`, `ui.save_file`, `ui.read_file` and `ui.write_file`
     /// work as in a window, the dialogs answering as the test queues.
     pub fn with_desktop(host: impl FnOnce(&Runtime) -> ScriptHost) -> Self {
+        Self::try_with_desktop(host).unwrap_or_else(|error| panic!("{error}"))
+    }
+    /// [`TestApp::with_desktop`], or the script's error when it fails to load.
+    pub fn try_with_desktop(host: impl FnOnce(&Runtime) -> ScriptHost) -> Result<Self, String> {
         let desktop = Rc::new(FakeDesktop::default());
         let service = zgx::platform::PlatformService(desktop.clone());
-        let mut app = Self::wrapped(host, move |view| provide(service, view));
+        let mut app = Self::try_wrapped(host, move |view| provide(service, view))?;
         app.desktop = Some(desktop);
-        app
+        Ok(app)
     }
     /// With the window's layout inspector, as a desktop window provides it.
     pub fn inspected(
@@ -193,11 +305,35 @@ impl TestApp {
         host: impl FnOnce(&Runtime) -> ScriptHost,
         wrap: impl FnOnce(View) -> View,
     ) -> Self {
+        Self::try_wrapped(host, wrap).unwrap_or_else(|error| panic!("{error}"))
+    }
+    /// [`TestApp::new`], or the script's error when it fails to load.
+    pub fn try_new(host: impl FnOnce(&Runtime) -> ScriptHost) -> Result<Self, String> {
+        Self::try_wrapped(host, |view| view)
+    }
+    /// [`TestApp::wrapped`], or the script's error when it fails to load.
+    pub fn try_wrapped(
+        host: impl FnOnce(&Runtime) -> ScriptHost,
+        wrap: impl FnOnce(View) -> View,
+    ) -> Result<Self, String> {
         let mut ui = Ui::new(400., 300.);
+        // A layout that doesn't settle is the app's error, as a window
+        // shows it, its last layout kept: a test sees it (`error`), and
+        // goes on.
+        ui.contain_layout_feedback();
         let host = host(&ui.runtime);
-        if let Err(error) = host.reload() {
-            panic!("{error}");
-        }
+        let error = host.error();
+        host.on_issue(move |kind, issue| {
+            if kind == zgx::issues::IssueKind::Degraded && issue.contains("did not settle") {
+                error.set(Some(issue.to_string()));
+            }
+        });
+        // Timers keep the test's time: its frames advance it.
+        host.0.timers.use_test_clock();
+        host.expose_classes();
+        // A lint finding never lies over what a test clicks.
+        host.lint_strip(false);
+        host.reload().map_err(|error| error.to_string())?;
         let executor = Rc::new(RefCell::new(LocalExecutor::new()));
         let clock = FrameClock::new();
         let natives = zgx::native_view::NativeViews::new();
@@ -215,15 +351,88 @@ impl TestApp {
             executor,
             clock,
             frame: Cell::new(0),
+            reported: Cell::new(None),
             start: Instant::now(),
             natives,
             desktop: None,
         };
         app.settle();
         // A window lays out before its first frame.
-        app.ui.prepare_frame();
+        app.lay_out();
         app.settle();
-        app
+        Ok(app)
+    }
+
+    /// Window `id` the script declares (`ui.window`, or one of
+    /// `ui.windows`), mounted headless at its size on this app's runtime,
+    /// tasks, frames and desktop, as a desktop app's other windows share its
+    /// own; None while it is closed. Each call mounts its content anew, as a
+    /// window opening does.
+    pub fn window(&self, id: &str) -> Option<TestApp> {
+        let id = self.window_id(id).ok().flatten()?;
+        let window = self
+            .host
+            .windows()
+            .with_untracked(|list| list.iter().find(|w| w.id == id).cloned())?;
+        if !window.open.with_untracked(crate::Value::truthy) {
+            return None;
+        }
+        let mut ui = Ui::with_runtime(
+            self.ui.runtime.clone(),
+            window.width as f32,
+            window.height as f32,
+        );
+        let view = self.host.window_view(&id);
+        let view = match &self.desktop {
+            Some(desktop) => provide(zgx::platform::PlatformService(desktop.clone()), view),
+            None => view,
+        };
+        let natives = zgx::native_view::NativeViews::new();
+        let handle = ui.mount(provide(
+            natives.clone(),
+            provide(
+                TaskRunner::from_executor(self.executor.clone()),
+                provide(self.clock.clone(), view),
+            ),
+        ));
+        let app = Self {
+            ui,
+            host: self.host.clone(),
+            handle,
+            executor: self.executor.clone(),
+            clock: self.clock.clone(),
+            frame: Cell::new(self.frame.get()),
+            reported: Cell::new(self.reported.get()),
+            start: self.start,
+            natives,
+            desktop: self.desktop.clone(),
+        };
+        app.settle();
+        app.lay_out();
+        app.settle();
+        Some(app)
+    }
+
+    /// The window `name` names: a `ui.window`'s id, or an item's key in
+    /// `ui.windows` (its window's id is its group's and the key, which a
+    /// test can't know). None if none does; why not if two groups hold it.
+    pub(crate) fn window_id(&self, name: &str) -> Result<Option<String>, String> {
+        self.host.windows().with_untracked(|list| {
+            if list.iter().any(|w| w.id == name) {
+                return Ok(Some(name.to_owned()));
+            }
+            let mut items = list.iter().filter(|w| {
+                w.id.split_once(':')
+                    .is_some_and(|(group, key)| group.starts_with("windows") && key == name)
+            });
+            match (items.next(), items.next()) {
+                (Some(one), None) => Ok(Some(one.id.clone())),
+                (Some(_), Some(_)) => Err(format!(
+                    "two lists' windows hold an item `{name}`: give their keys apart"
+                )),
+                (None, _) => Ok(None),
+            }
+        })
     }
 
     /// Run what is ready (handlers' tasks, settled host calls) until
@@ -231,21 +440,62 @@ impl TestApp {
     pub fn settle(&self) {
         while self.executor.borrow_mut().tick() > 0 {}
     }
-    /// Deliver one 60 Hz display frame and lay out, as a window does.
+    /// Deliver one 60 Hz display frame and lay out, as a window does. The
+    /// timers due by its time fire first: a test's time moves only here
+    /// (and in `wait_until`), never on the wall clock mid-step.
     pub fn frame(&self) {
-        let index = self.frame.get() + 1;
+        // After the last frame delivered, by this app or a window sharing
+        // its clock.
+        let last = self.clock.last().map_or(0, |frame| frame.index);
+        let index = self.frame.get().max(last) + 1;
         self.frame.set(index);
         let interval = Duration::from_secs_f64(1. / 60.);
+        // A frame's time on from where the test's is (a wait may have moved
+        // it further than frames).
+        self.run_timers(self.host.0.timers.test_now() + interval);
         self.clock.deliver(Frame {
             index,
             time: self.start + interval * index as u32,
-            interval,
+            interval: self.reported.get().unwrap_or(interval),
         });
         self.settle();
-        self.ui.prepare_frame();
-        self.settle();
+        self.lay_out();
         // The frame is done, as a renderer's present ends one.
         zgx::profile::frame();
+    }
+    /// Lay out, as a frame does before it is drawn: then what that made
+    /// due at once (`ui.after(0)` from `on_resize`) runs, and it lays out
+    /// again, as a window's timer of a millisecond runs before its next
+    /// frame (a few rounds at most). Every read lays out so.
+    pub(crate) fn lay_out(&self) {
+        self.ui.prepare_frame();
+        self.settle();
+        for _ in 0..4 {
+            if !self.host.0.timers.test_due_now() {
+                break;
+            }
+            self.run_timers(self.host.0.timers.test_now());
+            self.ui.prepare_frame();
+            self.settle();
+        }
+    }
+    /// Advance the timers' time to `to` since the start, firing each timer
+    /// due by then at its own time, in order, as a window's would between
+    /// two frames.
+    fn run_timers(&self, to: Duration) {
+        self.host.0.timers.run_test_timers(to, || self.settle());
+    }
+    /// Have frames report `interval` as the display's refresh, while still
+    /// coming 1/60 s apart: a display that says one rate and draws another.
+    pub fn report_interval(&self, interval: Duration) {
+        self.reported.set(Some(interval));
+    }
+    /// Let `n` frames' time pass with none delivered, as a late frame or a
+    /// hidden window does: the next frame comes that much later.
+    pub fn skip_frames(&self, n: u64) {
+        let interval = Duration::from_secs_f64(1. / 60.);
+        self.frame.set(self.frame.get() + n);
+        self.run_timers(self.host.0.timers.test_now() + interval * n as u32);
     }
     /// `n` frames: an animation's worth.
     pub fn frames(&self, n: usize) {
@@ -254,12 +504,24 @@ impl TestApp {
         }
     }
     /// Settle and lay out until `done` holds, or five seconds pass (host
-    /// calls, fetches and timers run in real time); whether it held.
+    /// calls and fetches run in real time); whether it held. Meanwhile,
+    /// as a window waits, a frame comes when one is asked for (an
+    /// animation, `ui.after(0)`), and else the test's time moves on by
+    /// the time that passes, from wherever its frames left it.
     pub fn wait_until(&mut self, mut done: impl FnMut(&mut Self) -> bool) -> bool {
         let deadline = Instant::now() + Duration::from_secs(5);
+        let mut last = Instant::now();
         loop {
-            self.settle();
-            self.ui.prepare_frame();
+            // As a window waits: a frame when one is asked for (an animation,
+            // `ui.after(0)`), else the test's time on by the time that passed.
+            let passed = std::mem::replace(&mut last, Instant::now()).elapsed();
+            if self.clock.wants_frame() {
+                self.frame();
+            } else {
+                self.run_timers(self.host.0.timers.test_now() + passed);
+                self.settle();
+                self.lay_out();
+            }
             if done(self) {
                 return true;
             }
@@ -275,7 +537,7 @@ impl TestApp {
     /// `"role:button \"Send\""`, `"#list row 3"`, `"@12"`; see
     /// [`crate::driver`]). None if nothing, or more than one, matches.
     pub fn find(&mut self, target: &str) -> Option<NodeId> {
-        self.ui.prepare_frame();
+        self.lay_out();
         if is_plain_id(target) {
             return self.handle.find(target);
         }
@@ -284,7 +546,7 @@ impl TestApp {
     /// [`TestApp::find`], or why it found none: nothing matched, or several
     /// did (each described).
     pub fn target(&mut self, target: &str) -> Result<NodeId, String> {
-        self.ui.prepare_frame();
+        self.lay_out();
         if is_plain_id(target) {
             return self
                 .handle
@@ -295,10 +557,10 @@ impl TestApp {
     }
     /// The interface as `zgx inspect tree` shows it: a node a line.
     pub fn tree(&mut self) -> String {
-        self.ui.prepare_frame();
+        self.lay_out();
         let (lines, hidden) =
-            crate::driver::tree(&self.ui, &self.handle, None, &Default::default());
-        crate::driver::tree_text(&lines, hidden)
+            crate::driver::tree_lines(&self.ui, &self.handle, None, &Default::default());
+        crate::driver::tree_lines_text(&lines, hidden)
     }
     fn node(&mut self, target: &str) -> NodeId {
         self.target(target).unwrap_or_else(|e| panic!("{e}"))
@@ -307,6 +569,14 @@ impl TestApp {
     pub fn bounds(&mut self, id: &str) -> Rect {
         let node = self.node(id);
         self.ui.scene.borrow().bounds(node)
+    }
+    /// Where node `id` shows in the window: `bounds`, through whatever
+    /// transforms and zooms it lies under, as a pointer reaches it.
+    fn on_screen(&mut self, id: &str) -> Rect {
+        let node = self.node(id);
+        // Where it takes clicks: where an animation is taking it, with
+        // `hit = "target"`.
+        self.ui.scene.borrow().hit_bounds(node)
     }
     /// The text of node `id`, or of the first text inside it.
     pub fn text(&mut self, id: &str) -> String {
@@ -338,17 +608,25 @@ impl TestApp {
     fn text_in(&self, node: NodeId) -> String {
         let scene = self.ui.scene.borrow();
         let mut stack = vec![node];
+        let mut empty = false;
         while let Some(n) = stack.pop() {
             if let NodeKind::Text { text, .. } = scene.kind(n) {
-                return text.to_string();
+                // An editor's selection lies in an empty text of its own.
+                if !text.is_empty() {
+                    return text.to_string();
+                }
+                empty = true;
             }
             stack.extend(scene.children(n).iter().rev());
+        }
+        if empty {
+            return String::new();
         }
         panic!("no text in {node:?}: {:?}", scene.kind(node))
     }
     /// Every text the app shows, in tree order.
     pub fn texts(&mut self) -> Vec<String> {
-        self.ui.prepare_frame();
+        self.lay_out();
         let scene = self.ui.scene.borrow();
         let mut out = Vec::new();
         let mut stack = vec![scene.root()];
@@ -382,17 +660,54 @@ impl TestApp {
 
     /// Press and release the primary button at node `id`'s middle.
     pub fn click(&mut self, id: &str) {
-        let b = self.bounds(id);
+        let b = self.on_screen(id);
         self.click_at(b);
     }
     fn click_at(&mut self, b: Rect) {
         crate::driver::click_at(&mut self.ui, b);
         self.settle();
     }
+    /// Press and release the primary button twice at node `id`'s middle.
+    pub fn double_click(&mut self, id: &str) {
+        let b = self.bounds(id);
+        crate::driver::double_click_at(&mut self.ui, b);
+        self.settle();
+    }
     /// Click field `id` (giving it focus) and type `text` into it.
     pub fn type_text(&mut self, id: &str, text: &str) {
         self.click(id);
         self.ui.dispatch(InputEvent::Text(text.into()));
+        self.settle();
+    }
+    /// Click field `id` and replace its whole text with `text`, as a person
+    /// selecting all and typing does.
+    pub fn fill(&mut self, id: &str, text: &str) {
+        self.click(id);
+        self.keys("cmd+a");
+        self.key(Key::Backspace);
+        self.ui.dispatch(InputEvent::Text(text.into()));
+        self.settle();
+    }
+    /// Move the pointer to node `id`'s middle, as a mouse does: what it
+    /// leaves hears it go, and a tooltip waits its delay.
+    pub fn hover(&mut self, id: &str) {
+        let b = self.on_screen(id);
+        crate::driver::hover_at(&mut self.ui, (b.x + b.width / 2., b.y + b.height / 2.));
+        self.settle();
+    }
+    /// Scroll the viewport under node `id`'s middle by `dy` points (down is
+    /// positive), as a wheel or a trackpad does.
+    pub fn scroll(&mut self, id: &str, dy: f32) {
+        let node = self.node(id);
+        crate::driver::scroll(&mut self.ui, node, dy);
+        self.settle();
+    }
+    /// Drag node `from` onto node `to` with the primary button: pressed
+    /// near `from`'s top left, past the drag threshold, then released over
+    /// `to`'s middle (its upper half: a reorderable row drops above it).
+    pub fn drag(&mut self, from: &str, to: &str) {
+        let (a, b) = (self.on_screen(from), self.on_screen(to));
+        crate::driver::drag(&mut self.ui, a, b);
         self.settle();
     }
     /// Press and release `key`, with `modifiers`, wherever focus is.

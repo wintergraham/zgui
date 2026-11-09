@@ -16,7 +16,10 @@ use std::{
 };
 use zgx::{
     reactive::{Effect, Runtime, Signal},
-    terminal::{Terminal, TerminalEvent, TerminalOptions, TerminalState, TerminalSubscription},
+    terminal::{
+        ClipboardRead, Terminal, TerminalEvent, TerminalOptions, TerminalState,
+        TerminalSubscription,
+    },
 };
 
 /// What a session's events call: the latest run's handlers.
@@ -31,8 +34,9 @@ struct Handlers {
     bell: Option<Function>,
     command: Option<Function>,
     notify: Option<Function>,
+    clipboard_read: Option<Function>,
 }
-const HANDLERS: [&str; 8] = [
+const HANDLERS: [&str; 9] = [
     "on_title",
     "on_pwd",
     "on_process",
@@ -41,6 +45,7 @@ const HANDLERS: [&str; 8] = [
     "on_bell",
     "on_command",
     "on_notify",
+    "on_clipboard_read",
 ];
 
 struct Entry {
@@ -100,6 +105,17 @@ impl Terms {
         id: &str,
         opts: Option<&Table>,
     ) -> mlua::Result<(Terminal, Rc<Fields>)> {
+        // Before anything is made: what it asks of the guard is what would
+        // run, as given here or as the session was made.
+        let given = opts
+            .map(|opts| opts.get::<Option<String>>("command"))
+            .transpose()?
+            .flatten();
+        let running = self.entries.borrow().get(id).and_then(|entry| {
+            let started = entry.term.options().command;
+            (!entry.term.is_closed()).then_some(started).flatten()
+        });
+        crate::rules::guard_term(lua, given.as_deref().or(running.as_deref()))?;
         let env = env(lua)?;
         let mut handlers = Handlers {
             vm: env.vm.clone(),
@@ -115,6 +131,7 @@ impl Terms {
             handlers.bell = get("on_bell")?;
             handlers.command = get("on_command")?;
             handlers.notify = get("on_notify")?;
+            handlers.clipboard_read = get("on_clipboard_read")?;
         }
         let mut entries = self.entries.borrow_mut();
         if let Some(entry) = entries.get(id)
@@ -124,7 +141,9 @@ impl Terms {
             // and say how it starts if nothing has shown it yet (a lookup
             // made it first, as a list reading every pane's state does).
             if let Some(opts) = opts {
+                let reads = handlers.clipboard_read.is_some();
                 *entry.handlers.borrow_mut() = handlers;
+                read_clipboard_with(&entry.term, &entry.handlers, reads);
                 entry.term.set_options(options(opts)?);
             }
             return Ok((entry.term.clone(), entry.fields.clone()));
@@ -134,7 +153,9 @@ impl Terms {
             None => TerminalOptions::default(),
         };
         let term = Terminal::new(&env.runtime, options);
+        let reads = handlers.clipboard_read.is_some();
         let handlers = Rc::new(RefCell::new(handlers));
+        read_clipboard_with(&term, &handlers, reads);
         let fields = Rc::new(Fields::default());
         let subscription = {
             let handlers = Rc::downgrade(&handlers);
@@ -190,6 +211,55 @@ fn options(opts: &Table) -> mlua::Result<TerminalOptions> {
         env,
         font_size: opts.get::<Option<f32>>("font_size")?,
     })
+}
+
+/// The run's `on_clipboard_read` answers programs reading the clipboard
+/// (OSC 52) when it gives one; else the platform terminal does.
+fn read_clipboard_with(term: &Terminal, handlers: &Rc<RefCell<Handlers>>, reads: bool) {
+    if !reads {
+        term.on_clipboard_read(None::<fn(ClipboardRead)>);
+        return;
+    }
+    let handlers = Rc::downgrade(handlers);
+    term.on_clipboard_read(Some(move |request: ClipboardRead| {
+        let Some(handlers) = handlers.upgrade() else {
+            return;
+        };
+        let handlers = handlers.borrow();
+        let (Some(vm), Some(handler)) = (handlers.vm.upgrade(), handlers.clipboard_read.clone())
+        else {
+            return;
+        };
+        let request = ClipboardReadUd(RefCell::new(Some(request)));
+        let result = vm
+            .runtime
+            .clone()
+            .batch(|| vm.call::<()>(&handler, request));
+        if let Err(error) = result {
+            vm.report(error);
+        }
+    }));
+}
+
+/// A program's request to read the clipboard, as `on_clipboard_read` gets
+/// it: `request:allow()` gives the program the clipboard's text,
+/// `request:deny()` (or letting it go) nothing. It answers once.
+struct ClipboardReadUd(RefCell<Option<ClipboardRead>>);
+impl UserData for ClipboardReadUd {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("allow", |_, request, ()| {
+            if let Some(request) = request.0.borrow_mut().take() {
+                request.allow();
+            }
+            Ok(())
+        });
+        methods.add_method("deny", |_, request, ()| {
+            if let Some(request) = request.0.borrow_mut().take() {
+                request.deny();
+            }
+            Ok(())
+        });
+    }
 }
 
 fn dispatch(handlers: &Handlers, event: &TerminalEvent) {
@@ -340,16 +410,19 @@ impl UserData for TermUd {
             t.term.blur();
             Ok(())
         });
-        methods.add_method("input", |_, t, text: String| {
+        methods.add_method("input", |lua, t, text: String| {
+            crate::rules::guard(lua, crate::GuardKind::TermInput, &t.id)?;
             t.term.input(text);
             Ok(())
         });
-        methods.add_method("paste", |_, t, text: String| {
+        methods.add_method("paste", |lua, t, text: String| {
+            crate::rules::guard(lua, crate::GuardKind::TermInput, &t.id)?;
             t.term.paste(text);
             Ok(())
         });
         // A Ghostty binding action: "copy_to_clipboard", "clear_screen", ...
-        methods.add_method("binding", |_, t, action: String| {
+        methods.add_method("binding", |lua, t, action: String| {
+            crate::rules::guard(lua, crate::GuardKind::TermInput, &t.id)?;
             t.term.binding(action);
             Ok(())
         });

@@ -11,7 +11,12 @@
 //! settles. A rejection nothing handles is reported as a script error.
 //! Everything a promise calls back runs on the script's budget; a script
 //! that has reloaded since hears nothing.
-use crate::{Vm, node::env, value::Value};
+use crate::{
+    Vm,
+    errors::{Failure, Kind, UiError},
+    node::env,
+    value::Value,
+};
 use mlua::{
     Function, IntoLuaMulti, Lua, MetaMethod, MultiValue, Table, Thread, UserData, UserDataFields,
     UserDataMethods,
@@ -58,11 +63,20 @@ pub struct Response {
 pub struct Body(Rc<BodyInner>);
 /// What hears each piece of a body: the script's handlers.
 type Sink = Box<dyn FnMut(&[u8])>;
+/// What hears a request's body go out: `on_progress(sent, total)`.
+type Progress = Box<dyn FnMut(u64, u64)>;
 struct BodyInner {
     /// What hears each piece. None: kept whole.
     sink: RefCell<Option<Sink>>,
     kept: RefCell<Vec<u8>>,
     open: Cell<bool>,
+    /// What hears the request's body going out (`on_progress`), and
+    /// whether the transport has told it.
+    progress: RefCell<Option<Progress>>,
+    told: Cell<bool>,
+    /// The plugin that asked (`caller`), and the app's policy then.
+    caller: std::cell::OnceCell<Rc<str>>,
+    policy: std::cell::OnceCell<std::sync::Arc<dyn crate::fetch_policy::FetchPolicy>>,
 }
 impl Body {
     fn new(sink: Option<Sink>) -> Self {
@@ -70,7 +84,30 @@ impl Body {
             sink: RefCell::new(sink),
             kept: RefCell::default(),
             open: Cell::new(true),
+            progress: RefCell::default(),
+            told: Cell::new(false),
+            caller: std::cell::OnceCell::new(),
+            policy: std::cell::OnceCell::new(),
         }))
+    }
+    /// The request is `lua`'s script's, under `policy`.
+    pub(crate) fn asked_by(&self, lua: &mlua::Lua, policy: &crate::fetch_policy::SharedPolicy) {
+        if let Some(caller) = crate::fetch_policy::caller_of(lua) {
+            let _ = self.0.caller.set(caller);
+        }
+        if let Some(policy) = policy.borrow().clone() {
+            let _ = self.0.policy.set(policy);
+        }
+    }
+    /// The plugin that made this request (its name), `None` for the app's
+    /// own scripts: what a transport tells `FetchPolicy` it is asking for.
+    pub fn caller(&self) -> Option<&str> {
+        self.0.caller.get().map(|caller| &**caller)
+    }
+    /// The app's policy as this request was made
+    /// (`ScriptHost::fetch_policy`), for a transport to ask.
+    pub fn fetch_policy(&self) -> Option<std::sync::Arc<dyn crate::fetch_policy::FetchPolicy>> {
+        self.0.policy.get().cloned()
     }
     /// A body kept whole, for the response's `body`.
     pub(crate) fn kept() -> Self {
@@ -92,6 +129,23 @@ impl Body {
                 }
             }
             None => self.0.kept.borrow_mut().extend_from_slice(bytes),
+        }
+    }
+    /// How much of the request's body has gone out: `sent` of `total`
+    /// bytes, for the script's `on_progress` (an upload's bar). A
+    /// transport tells it as it writes; one that never does is taken to
+    /// have sent it all once it answers.
+    pub fn sent(&self, sent: u64, total: u64) {
+        if !self.is_open() {
+            return;
+        }
+        self.0.told.set(true);
+        let taken = self.0.progress.borrow_mut().take();
+        if let Some(mut progress) = taken {
+            progress(sent, total);
+            if self.is_open() {
+                *self.0.progress.borrow_mut() = Some(progress);
+            }
         }
     }
     /// Whether the script still listens: false once it cancelled the
@@ -128,7 +182,7 @@ pub(crate) type AsyncActions = Rc<RefCell<HashMap<String, AsyncAction>>>;
 enum Settled {
     Pending,
     Value(Value),
-    Error(String),
+    Error(Rc<Failure>),
 }
 
 /// Who hears a promise settle.
@@ -193,7 +247,7 @@ pub(crate) struct Promise {
 pub(crate) struct PromiseUd(pub(crate) Rc<Promise>);
 
 impl Promise {
-    fn settle(self: &Rc<Self>, result: Result<Value, String>) {
+    fn settle(self: &Rc<Self>, result: Result<Value, Failure>) {
         // Cancelled first, a late answer changes nothing.
         if self.state.with_untracked(|s| *s != Settled::Pending) {
             return;
@@ -201,7 +255,7 @@ impl Promise {
         self.abort.borrow_mut().take();
         let settled = match result {
             Ok(value) => Settled::Value(value),
-            Err(error) => Settled::Error(error),
+            Err(error) => Settled::Error(Rc::new(error)),
         };
         self.state.set(settled.clone());
         let waiters = std::mem::take(&mut *self.waiters.borrow_mut());
@@ -211,8 +265,8 @@ impl Promise {
             && let Some(vm) = self.caller.upgrade()
         {
             vm.report(mlua::Error::runtime(format!(
-                "ui.call(\"{}\"): {error} (nothing handled it: `:after(_, on_error)`, `.error` or `:await()` in a pcall)",
-                self.name
+                "ui.call(\"{}\"): {} (nothing handled it: `:after(_, on_error)`, `.error` or `:await()` in a pcall)",
+                self.name, error.message
             )));
         }
         for waiter in waiters {
@@ -253,7 +307,11 @@ fn hear(waiter: Waiter, settled: &Settled) {
             let Some(vm) = vm.upgrade() else { return };
             let result = match settled {
                 Settled::Value(value) => on_value.map(|f| vm.call::<()>(&f, value.clone())),
-                Settled::Error(error) => on_error.map(|f| vm.call::<()>(&f, error.clone())),
+                Settled::Error(error) => on_error.map(|f| {
+                    vm.lua
+                        .create_userdata(UiError::of(error.clone()))
+                        .and_then(|error| vm.call::<()>(&f, error))
+                }),
                 Settled::Pending => None,
             };
             if let Some(Err(error)) = result {
@@ -266,18 +324,23 @@ fn hear(waiter: Waiter, settled: &Settled) {
                 return;
             }
             let resumed = match settled {
-                Settled::Value(value) => (true, value.clone()),
-                Settled::Error(error) => (false, Value::Str(error.as_str().into())),
+                Settled::Value(value) => (true, value.clone()).into_lua_multi(&vm.lua),
+                Settled::Error(error) => {
+                    (false, UiError::of(error.clone())).into_lua_multi(&vm.lua)
+                }
                 Settled::Pending => return,
             };
-            drive(&vm, thread, resumed, &task);
+            match resumed {
+                Ok(resumed) => drive(&vm, thread, resumed, &task),
+                Err(error) => vm.report(error),
+            }
         }
     }
 }
 
 /// Run task `thread` from where it is until it ends, awaits a promise
 /// still pending, or `task` is cancelled.
-fn drive(vm: &Rc<Vm>, thread: Thread, args: impl IntoLuaMulti, task: &Rc<TaskState>) {
+pub(crate) fn drive(vm: &Rc<Vm>, thread: Thread, args: impl IntoLuaMulti, task: &Rc<TaskState>) {
     let mut args = Some(args.into_lua_multi(&vm.lua));
     loop {
         if task.cancelled.get() {
@@ -318,7 +381,7 @@ fn drive(vm: &Rc<Vm>, thread: Thread, args: impl IntoLuaMulti, task: &Rc<TaskSta
             }
             Settled::Value(value) => args = Some((true, value).into_lua_multi(&vm.lua)),
             Settled::Error(error) => {
-                args = Some((false, Value::Str(error.as_str().into())).into_lua_multi(&vm.lua))
+                args = Some((false, UiError::of(error.clone())).into_lua_multi(&vm.lua))
             }
         }
     }
@@ -341,7 +404,7 @@ impl UserData for PromiseUd {
         fields.add_field_method_get("error", |_, p| {
             p.0.handled.set(true);
             Ok(p.0.state.with(|s| match s {
-                Settled::Error(error) => Some(error.clone()),
+                Settled::Error(error) => Some(UiError::of(error.clone())),
                 _ => None,
             }))
         });
@@ -371,7 +434,7 @@ impl UserData for PromiseUd {
             p.0.handled.set(true);
             p.0.abort();
             let runtime = env(lua)?.runtime.clone();
-            batch(&runtime, || p.0.settle(Err("cancelled".into())));
+            batch(&runtime, || p.0.settle(Err(Failure::cancelled())));
             Ok(())
         });
         // `await` is Luau (it yields its coroutine): found through `__index`.
@@ -390,19 +453,19 @@ const AWAIT: &str = "zgx.await";
 /// `(ok, value)` when it settles.
 ///
 /// The same chunk (one made for every script) gives `ui.try(f, ...)`:
-/// `f(...)`'s value and nil, or nil and what it raised as a person reads
-/// it (an error object's text, without its traceback). Luau, so a task's
-/// await inside `f` yields through it as through `pcall`.
+/// `f(...)`'s value and nil, or nil and what it raised as a `UiError`
+/// (`ui.__error`, `errors::raised`: made the first time one is, so a script
+/// that never fails makes none). Luau, so a task's await inside `f` yields
+/// through it as through `pcall`. Kept short: it is compiled once a process.
 const AWAIT_SOURCE: &str = r#"
-local yield, yieldable = coroutine.yield, coroutine.isyieldable
-local pcall, tostring, type = pcall, tostring, type
+local ui = ...
+local yield, yieldable, pcall = coroutine.yield, coroutine.isyieldable, pcall
 local function await(promise)
     if not yieldable() then
         error("await runs inside ui.task(function() ... end)", 2)
     end
     local ok, value = yield(promise)
     if not ok then
-        -- The host's message as it wrote it.
         error(value, 0)
     end
     return value
@@ -412,18 +475,7 @@ local function try(f, ...)
     if ok then
         return value, nil
     end
-    if type(value) == "string" then
-        return nil, value
-    end
-    local text = tostring(value)
-    local cut = text:find("\nstack traceback:", 1, true)
-    if cut then
-        text = text:sub(1, cut - 1)
-    end
-    if text:sub(1, 15) == "runtime error: " then
-        text = text:sub(16)
-    end
-    return nil, text
+    return nil, ui.__error(value)
 end
 return await, try
 "#;
@@ -444,7 +496,32 @@ pub(crate) fn pending(lua: &Lua, name: String) -> mlua::Result<Rc<Promise>> {
 pub(crate) fn settle_with(
     lua: &Lua,
     promise: &Rc<Promise>,
+    kind: Kind,
     future: impl Future<Output = Result<Value, String>> + 'static,
+) -> mlua::Result<()> {
+    // Cancelled (`p:cancel()`), the host's future is dropped where it
+    // waits: a dialog's request (Linux's portal closes its picker; macOS's
+    // sheet and Windows's dialog stay up, their answer unheard), a read no
+    // longer waited on (its thread finishes on its own). An action goes on,
+    // its answer unheard: what it changes elsewhere isn't left half done.
+    if kind == Kind::Action || promise.abort.borrow().is_some() {
+        return settle_failing(lua, promise, async move {
+            future.await.map_err(|message| Failure::new(kind, message))
+        });
+    }
+    let stop = Rc::new(Stop::default());
+    *promise.abort.borrow_mut() = Some(Box::new({
+        let stop = stop.clone();
+        move || stop.stop()
+    }));
+    settle_failing(lua, promise, stop.or_stopped(kind, future))
+}
+/// As `settle_with`, for a future that tells its failures apart (a fetch:
+/// the transport, a cancel, a status).
+pub(crate) fn settle_failing(
+    lua: &Lua,
+    promise: &Rc<Promise>,
+    future: impl Future<Output = Result<Value, Failure>> + 'static,
 ) -> mlua::Result<()> {
     let env = env(lua)?;
     let (settling, runtime) = (promise.clone(), env.runtime.clone());
@@ -495,6 +572,205 @@ fn request(lua: &Lua, url: String, opts: Option<Table>) -> mlua::Result<Request>
     }
     Ok(request)
 }
+/// What a request's body is read from: a file, or a form's fields.
+enum Upload {
+    File(std::path::PathBuf),
+    /// `multipart = { name = value }`: text, or a `File`, in name order.
+    Multipart(Vec<(String, Part)>),
+}
+enum Part {
+    Text(String),
+    File(std::path::PathBuf),
+}
+
+/// `file`, `multipart` and `on_progress` of `ui.fetch`'s options.
+fn uploading(opts: &Table, files: bool) -> mlua::Result<(Option<Upload>, Option<Function>)> {
+    let path_of = |value: mlua::Value, what: &str| -> mlua::Result<std::path::PathBuf> {
+        match value {
+            mlua::Value::Table(file) => Ok(file.get::<String>("path")?.into()),
+            mlua::Value::String(path) => Ok(path.to_str()?.to_string().into()),
+            _ => Err(mlua::Error::runtime(format!(
+                "ui.fetch: `{what}` is a file (`{{ path, … }}`, as ui.open_files gives)"
+            ))),
+        }
+    };
+    let file = opts.get::<mlua::Value>("file")?;
+    let multipart = opts.get::<Option<Table>>("multipart")?;
+    let upload = match (file, multipart) {
+        (mlua::Value::Nil, None) => None,
+        (file, None) => Some(Upload::File(path_of(file, "file")?)),
+        (mlua::Value::Nil, Some(fields)) => {
+            let mut parts = Vec::new();
+            for pair in fields.pairs::<String, mlua::Value>() {
+                let (name, value) = pair?;
+                let part = match value {
+                    mlua::Value::String(text) => Part::Text(text.to_str()?.to_string()),
+                    mlua::Value::Number(n) => Part::Text(n.to_string()),
+                    mlua::Value::Integer(n) => Part::Text(n.to_string()),
+                    mlua::Value::Boolean(b) => Part::Text(b.to_string()),
+                    other => Part::File(path_of(other, &format!("multipart.{name}"))?),
+                };
+                parts.push((name, part));
+            }
+            parts.sort_by(|a, b| a.0.cmp(&b.0));
+            Some(Upload::Multipart(parts))
+        }
+        _ => {
+            return Err(mlua::Error::runtime(
+                "ui.fetch: a body is one of `body`, `file` and `multipart`",
+            ));
+        }
+    };
+    if upload.is_some() && !files {
+        return Err(mlua::Error::runtime(
+            "ui.fetch: a plugin sends files only if the host grants it \
+             (`ScriptHost::grant(plugin, Capability::Files)`)",
+        ));
+    }
+    Ok((upload, opts.get("on_progress")?))
+}
+
+/// The bytes and content type of `upload`, read on a thread of their own:
+/// a large file never holds up the window.
+fn read_upload(upload: Upload) -> impl Future<Output = Result<(Vec<u8>, String), String>> {
+    use std::sync::{Arc, Mutex};
+    type Read = Option<Result<(Vec<u8>, String), String>>;
+    let shared: Arc<Mutex<(Read, Option<std::task::Waker>)>> = Arc::default();
+    let done = shared.clone();
+    let read = move || -> Result<(Vec<u8>, String), String> {
+        let read = |path: &std::path::Path| {
+            std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))
+        };
+        match upload {
+            Upload::File(path) => {
+                let kind = match crate::io::media_type(&path) {
+                    "" => "application/octet-stream",
+                    kind => kind,
+                };
+                Ok((read(&path)?, kind.to_string()))
+            }
+            Upload::Multipart(parts) => {
+                let boundary = format!("zgx-{:016x}{:016x}", nonce(), nonce());
+                let mut body = Vec::new();
+                for (name, part) in parts {
+                    let name = name.replace('"', "%22");
+                    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+                    match part {
+                        Part::Text(text) => {
+                            body.extend_from_slice(
+                                format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n")
+                                    .as_bytes(),
+                            );
+                            body.extend_from_slice(text.as_bytes());
+                        }
+                        Part::File(path) => {
+                            let file_name = path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().replace('"', "%22"))
+                                .unwrap_or_default();
+                            let kind = match crate::io::media_type(&path) {
+                                "" => "application/octet-stream",
+                                kind => kind,
+                            };
+                            body.extend_from_slice(
+                                format!(
+                                    "Content-Disposition: form-data; name=\"{name}\"; \
+                                     filename=\"{file_name}\"\r\nContent-Type: {kind}\r\n\r\n"
+                                )
+                                .as_bytes(),
+                            );
+                            body.extend_from_slice(&read(&path)?);
+                        }
+                    }
+                    body.extend_from_slice(b"\r\n");
+                }
+                body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+                Ok((body, format!("multipart/form-data; boundary={boundary}")))
+            }
+        }
+    };
+    let spawned = std::thread::Builder::new()
+        .name("zgx-script upload".into())
+        .spawn(move || {
+            let result = read();
+            let waker = {
+                let mut done = done.lock().unwrap();
+                done.0 = Some(result);
+                done.1.take()
+            };
+            if let Some(waker) = waker {
+                waker.wake();
+            }
+        });
+    let failed = spawned.err().map(|e| e.to_string());
+    std::future::poll_fn(move |cx| {
+        if let Some(e) = &failed {
+            return std::task::Poll::Ready(Err(e.clone()));
+        }
+        let mut state = shared.lock().unwrap();
+        match state.0.take() {
+            Some(result) => std::task::Poll::Ready(result),
+            None => {
+                state.1 = Some(cx.waker().clone());
+                std::task::Poll::Pending
+            }
+        }
+    })
+}
+
+/// A number different each call (a multipart boundary's).
+fn nonce() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u64(0);
+    hasher.finish()
+}
+
+/// A request whose body is read from files first, or that tells
+/// `on_progress`: the transport's `Body::sent`, or all of it once the
+/// answer comes from a transport that never says.
+fn sending(
+    lua: &Lua,
+    mut request: Request,
+    upload: Option<Upload>,
+    on_progress: Option<Function>,
+    fetch: Fetcher,
+    body: Body,
+) -> mlua::Result<Fetch> {
+    if let Some(on_progress) = on_progress {
+        let vm = env(lua)?.vm.clone();
+        *body.0.progress.borrow_mut() = Some(Box::new(move |sent, total| {
+            if let Some(vm) = vm.upgrade()
+                && let Err(e) = vm.call::<()>(&on_progress, (sent as f64, total as f64))
+            {
+                vm.report(e);
+            }
+        }));
+    }
+    Ok(Box::pin(async move {
+        if let Some(upload) = upload {
+            let (bytes, kind) = read_upload(upload).await?;
+            if !request
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+            {
+                request.headers.push(("content-type".into(), kind));
+            }
+            if request.method == "GET" {
+                request.method = "POST".into();
+            }
+            request.body = Some(bytes);
+        }
+        let total = request.body.as_ref().map_or(0, |b| b.len() as u64);
+        let response = fetch(request, body.clone()).await?;
+        if !body.0.told.get() {
+            body.sent(total, total);
+        }
+        Ok(response)
+    }))
+}
+
 /// A response as a script reads it: `status`, `ok` (2xx), `headers`
 /// (lower-case names), `body` (text) and `json` (when it is JSON).
 fn response_value(response: Response) -> Value {
@@ -550,17 +826,23 @@ impl Stop {
             waker.wake();
         }
     }
+    /// `future`, unless stopped first: then cancelled, the future dropped.
+    /// What it says failed is a failure of `kind`.
     async fn or_stopped<T>(
         self: Rc<Self>,
+        kind: Kind,
         future: impl Future<Output = Result<T, String>>,
-    ) -> Result<T, String> {
+    ) -> Result<T, Failure> {
         let mut future = std::pin::pin!(future);
         std::future::poll_fn(move |cx| {
             if self.stopped.get() {
-                return std::task::Poll::Ready(Err("cancelled".into()));
+                return std::task::Poll::Ready(Err(Failure::cancelled()));
             }
             *self.waker.borrow_mut() = Some(cx.waker().clone());
-            future.as_mut().poll(cx)
+            future
+                .as_mut()
+                .poll(cx)
+                .map(|done| done.map_err(|message| Failure::new(kind, message)))
         })
         .await
     }
@@ -618,13 +900,35 @@ impl Listener {
                 .extend_from_slice(&bytes[..bytes.len().min(room)]);
         }
         self.partial.extend_from_slice(bytes);
-        // Up to a character still to come; bytes that are no UTF-8 at all
-        // become U+FFFD.
-        let whole = match std::str::from_utf8(&self.partial) {
-            Err(e) if e.error_len().is_none() => e.valid_up_to(),
-            _ => self.partial.len(),
-        };
-        let text = String::from_utf8_lossy(&self.partial[..whole]).into_owned();
+        // Up to a character still to come, which waits for the next piece;
+        // bytes that are no UTF-8 at all become U+FFFD, as lossy decoding of
+        // the whole body makes them, and decoding goes on past them.
+        let mut text = String::new();
+        let mut rest = &self.partial[..];
+        loop {
+            match std::str::from_utf8(rest) {
+                Ok(valid) => {
+                    text.push_str(valid);
+                    rest = &[];
+                    break;
+                }
+                Err(e) => {
+                    let (valid, after) = rest.split_at(e.valid_up_to());
+                    text.push_str(std::str::from_utf8(valid).unwrap_or_default());
+                    match e.error_len() {
+                        Some(bad) => {
+                            text.push(char::REPLACEMENT_CHARACTER);
+                            rest = &after[bad..];
+                        }
+                        None => {
+                            rest = after;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        let whole = self.partial.len() - rest.len();
         self.partial.drain(..whole);
         self.tell(&text);
     }
@@ -681,11 +985,20 @@ struct Events {
     /// The last piece ended in a carriage return: a line feed starting the
     /// next ends no second line.
     after_cr: bool,
+    /// Some text has come: a byte order mark the stream starts with is
+    /// behind it.
+    started: bool,
 }
 impl Events {
     fn feed(&mut self, text: &str) -> Vec<Value> {
         let mut out = Vec::new();
         let mut text = text;
+        // One byte order mark the stream starts with is no part of its
+        // first field, as the HTML standard's parser drops it.
+        if !self.started && !text.is_empty() {
+            self.started = true;
+            text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        }
         if self.after_cr {
             text = text.strip_prefix('\n').unwrap_or(text);
             self.after_cr = false;
@@ -757,11 +1070,21 @@ pub(crate) fn install(
     ui: &Table,
     actions: AsyncActions,
     fetcher: Option<SharedFetcher>,
+    policy: crate::fetch_policy::SharedPolicy,
+    // Whether it may read files for a body (`file`, `multipart`).
+    files: bool,
 ) -> mlua::Result<()> {
     let (await_fn, try_fn): (Function, Function) =
-        lua.load(AWAIT_SOURCE).set_name("=await").eval()?;
+        crate::lazy::builtin(lua, "=await", AWAIT_SOURCE)?.call(ui.clone())?;
     lua.set_named_registry_value(AWAIT, await_fn)?;
     ui.set("try", try_fn)?;
+    // `ui.try`'s error maker, made on the first error (`errors::raised`):
+    // registered here, so only a VM that names these pays even that.
+    if let Some(lazy) = lua.app_data_ref::<crate::lazy::Lazy>() {
+        lazy.ui(&["__error"], |lua, ui| {
+            ui.set("__error", crate::errors::raised(lua)?)
+        });
+    }
     ui.set(
         "call",
         lua.create_function(move |lua, (name, arg): (String, Option<Value>)| {
@@ -773,8 +1096,13 @@ pub(crate) fn install(
             let promise = pending(lua, name.clone())?;
             let action = actions.borrow().get(&name).cloned();
             let plain = env(lua)?.actions.borrow().get(&name).cloned();
+            let kind = match action.is_some() {
+                true => crate::GuardKind::AsyncAction,
+                false => crate::GuardKind::Action,
+            };
+            crate::rules::guard(lua, kind, &name)?;
             if let Some(action) = action {
-                settle_with(lua, &promise, action(arg))?;
+                settle_with(lua, &promise, Kind::Action, action(arg))?;
             } else if let Some(action) = plain {
                 action(arg);
                 promise.state.set(Settled::Value(Value::Nil));
@@ -789,6 +1117,15 @@ pub(crate) fn install(
     ui.set(
         "fetch",
         lua.create_function(move |lua, (url, opts): (String, Option<Table>)| {
+            // Refused, its promise rejects, as a request the network refused:
+            // what handles those says so, and a top level isn't failed.
+            if let Err(error) = crate::rules::guard(lua, crate::GuardKind::Fetch, &url) {
+                let promise = pending(lua, format!("fetch {url}"))?;
+                settle_with(lua, &promise, Kind::Network, async move {
+                    Err(error.to_string())
+                })?;
+                return Ok(PromiseUd(promise));
+            }
             let Some(fetcher) = &fetcher else {
                 return Err(mlua::Error::runtime(
                     "ui.fetch: a plugin reaches the network only if the host grants it \
@@ -805,6 +1142,18 @@ pub(crate) fn install(
                 Some(opts) => Listener::of(lua, opts, &promise)?,
                 None => None,
             };
+            // `raise = true`: a status outside 2xx rejects, as an `http`
+            // error with its status and body (else it resolves, `ok` false).
+            let raise = match &opts {
+                Some(opts) => opts.get::<Option<bool>>("raise")?.unwrap_or(false),
+                None => false,
+            };
+            // `file` or `multipart`: a body read from files, off the
+            // window's thread; `on_progress(sent, total)` as it goes out.
+            let (upload, on_progress) = match &opts {
+                Some(opts) => uploading(opts, files)?,
+                None => (None, None),
+            };
             let request = request(lua, url.clone(), opts)?;
             let body = match &listener {
                 Some(listener) => {
@@ -815,7 +1164,13 @@ pub(crate) fn install(
                 }
                 None => Body::kept(),
             };
-            let future = fetch(request, body.clone());
+            body.asked_by(lua, &policy);
+            let future = match (upload, on_progress) {
+                (None, None) => fetch(request, body.clone()),
+                (upload, on_progress) => {
+                    sending(lua, request, upload, on_progress, fetch, body.clone())?
+                }
+            };
             let stop = Rc::new(Stop::default());
             *promise.abort.borrow_mut() = Some(Box::new({
                 let (stop, body) = (stop.clone(), body.clone());
@@ -824,8 +1179,9 @@ pub(crate) fn install(
                     stop.stop();
                 }
             }));
-            settle_with(lua, &promise, async move {
-                let mut response = stop.or_stopped(future).await?;
+            settle_failing(lua, &promise, async move {
+                // What the transport says failed: no answer came.
+                let mut response = stop.or_stopped(Kind::Network, future).await?;
                 response.body = match listener {
                     // Heard in pieces: the body only to tell a failure.
                     Some(listener) => {
@@ -839,7 +1195,21 @@ pub(crate) fn install(
                     }
                     None => body.whole(response.body),
                 };
-                Ok(response_value(response))
+                let status = response.status;
+                let value = response_value(response);
+                if raise && !(200..300).contains(&status) {
+                    let body = match value.field("json") {
+                        Some(json) if *json != Value::Nil => json.clone(),
+                        _ => value.field("body").cloned().unwrap_or(Value::Nil),
+                    };
+                    return Err(Failure {
+                        kind: Kind::Http,
+                        message: format!("HTTP {status}").into(),
+                        status: Some(status),
+                        body,
+                    });
+                }
+                Ok(value)
             })?;
             Ok(PromiseUd(promise))
         })?,
@@ -848,6 +1218,7 @@ pub(crate) fn install(
     ui.set(
         "task",
         lua.create_function(|lua, (f, args): (Function, MultiValue)| {
+            crate::reloads::top_level(lua, "ui.task");
             let vm = env(lua)?
                 .vm
                 .upgrade()
@@ -887,7 +1258,7 @@ fn resource(lua: &Lua, (load, opts): (Function, Option<Table>)) -> mlua::Result<
     let wrap: Function = match lua.named_registry_value::<Function>(RESOURCE) {
         Ok(wrap) => wrap,
         Err(_) => {
-            let wrap: Function = lua.load(RESOURCE_SOURCE).set_name("=resource").eval()?;
+            let wrap: Function = crate::lazy::builtin(lua, "=resource", RESOURCE_SOURCE)?.eval()?;
             lua.set_named_registry_value(RESOURCE, wrap.clone())?;
             wrap
         }
@@ -933,6 +1304,9 @@ fn resource(lua: &Lua, (load, opts): (Function, Option<Table>)) -> mlua::Result<
                     } else {
                         Err(mlua::Error::runtime(match &value {
                             mlua::Value::String(s) => s.to_string_lossy(),
+                            mlua::Value::UserData(ud) if ud.is::<UiError>() => {
+                                ud.borrow::<UiError>()?.message().to_string()
+                            }
                             other => format!("{other:?}"),
                         }))
                     };

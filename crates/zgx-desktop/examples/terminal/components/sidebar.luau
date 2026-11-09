@@ -12,11 +12,18 @@ local kit = require("./kit")
 local M = {}
 
 local WIDTH = 240
--- Where the toggle sits: past the traffic lights, centred in the titlebar.
--- The titlebar keeps this much room before its tabs while the sidebar is
--- closed (tabs.luau).
-M.TOGGLE_LEFT = 83
+-- Where the toggle sits: this far past the traffic lights (where the window
+-- reports them, `ui.window.controls`: zoomed, they keep their size while
+-- this gap zooms with the rest), centred in the titlebar. The titlebar keeps
+-- room to its right edge before its tabs while the sidebar is closed
+-- (tabs.luau).
+local TOGGLE_GAP = 11
 M.TOGGLE_SIZE = 28
+function M.toggle_left(): number
+	local buttons = ui.window.controls:get()
+	-- Not reported (a standard title bar, fullscreen): where they sit at 100%.
+	return if buttons then buttons.x + buttons.width + TOGGLE_GAP else 83
+end
 -- The sidebar's motion, for what moves with it.
 M.EASE = "cubicBezier(.22, 1, .36, 1)"
 M.DURATION = 280
@@ -92,9 +99,11 @@ end
 -- (app.luau), so it never moves while the sidebar opens or closes.
 function M.Toggle(): Node
 	return ui.button {
+		id = "sidebar_toggle",
+		label = "Toggle Sidebar",
 		variants = kit.button { tone = "ghost", size = "icon" },
 		absolute = true,
-		left = M.TOGGLE_LEFT,
+		left = M.toggle_left,
 		top = (theme.titlebar - M.TOGGLE_SIZE) / 2,
 		on_click = function()
 			sidebar:set(not sidebar:peek())

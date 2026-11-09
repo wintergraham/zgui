@@ -614,7 +614,7 @@ function M.Titlebar(): Node
 		-- toggle rather than under it.
 		controls.drag_space {
 			w = function()
-				return if state.sidebar:get() then 6 else sidebar.TOGGLE_LEFT + sidebar.TOGGLE_SIZE
+				return if state.sidebar:get() then 6 else sidebar.toggle_left() + sidebar.TOGGLE_SIZE
 			end,
 			layout = "width",
 			layout_ease = sidebar.EASE,

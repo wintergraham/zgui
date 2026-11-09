@@ -19,6 +19,7 @@ use zgx::{
 use zgx_components::*;
 
 /// A component of the library, as a node of the interface.
+#[derive(Clone)]
 pub(crate) enum Library {
     /// `ui.tabs { items = state, value = state, panel = fn(id), … }`.
     Tabs {
@@ -26,6 +27,10 @@ pub(crate) enum Library {
         items: Signal<Value>,
         value: Signal<Value>,
         reorderable: bool,
+        keep: bool,
+        group: Option<String>,
+        on_move: Option<Function>,
+        on_tear_off: Option<Function>,
         on_close: Option<Function>,
         panel: Function,
     },
@@ -33,8 +38,7 @@ pub(crate) enum Library {
     Select {
         label: String,
         value: Signal<Value>,
-        /// Each option's value, what it shows, and whether it is disabled.
-        options: Vec<(Value, String, bool)>,
+        options: SelectOptions,
         placeholder: String,
     },
     /// `ui.combobox { text = state, items = state, value?, loading?, … }`.
@@ -169,15 +173,54 @@ pub(crate) fn section(kind: &Kind) -> Option<(&Value, &String)> {
     }
 }
 
+/// A select's options: a table read as it is built, or a state (a computed
+/// relabelling them in the locale) followed.
+#[derive(Clone)]
+pub(crate) enum SelectOptions {
+    /// Each option's value, what it shows, and whether it is disabled.
+    Fixed(Vec<(Value, String, bool)>),
+    Live(Signal<Value>),
+}
+
+/// An option of a select given as data: `{ label, value?, disabled? }`, or
+/// its value alone.
+fn select_option(option: &Value) -> (Value, String, bool) {
+    match option {
+        Value::Map(_) => {
+            let shown = option
+                .field("label")
+                .map(Value::to_string)
+                .unwrap_or_default();
+            let value = match option.field("value") {
+                None | Some(Value::Nil) => Value::Str(shown.as_str().into()),
+                Some(v) => v.clone(),
+            };
+            let disabled = matches!(option.field("disabled"), Some(Value::Bool(true)));
+            (value, shown, disabled)
+        }
+        other => (other.clone(), other.to_string(), false),
+    }
+}
+
 /// Add the library's functions to `ui`.
+/// A combobox's `items`: a state, or a list that never changes.
+fn items_of(lua: &Lua, items: &mlua::Value) -> mlua::Result<Signal<Value>> {
+    match (crate::node::state_of(items), items) {
+        (Some(items), _) => Ok(items),
+        (None, mlua::Value::Table(_)) => Ok(crate::node::env(lua)?
+            .runtime
+            .signal(mlua::FromLua::from_lua(items.clone(), lua)?)),
+        _ => expect_state(items, "ui.combobox's `items`"),
+    }
+}
+
 pub(crate) fn register(lua: &Lua, ui: &Table) -> mlua::Result<()> {
     // `ui.<widget> { label?, value = state, … }`.
     let widget = |build: fn(String, Signal<Value>, &Table) -> mlua::Result<Kind>| {
         lua.create_function(move |lua, table: Table| {
             crate::form::apply_field(lua, &table, false)?;
-            let label: Option<String> = table.get("label")?;
-            let value = expect_state(&table.get("value")?, "`value`")?;
-            let kind = build(label.unwrap_or_default(), value, &table)?;
+            let value = crate::node::control_value(lua, &table)?;
+            let kind = build(label(&table)?, value, &table)?;
             node_ud(lua, fill(lua, Node::new(owner(lua)?, kind), Some(&table))?)
         })
     };
@@ -205,6 +248,10 @@ pub(crate) fn register(lua: &Lua, ui: &Table) -> mlua::Result<()> {
                 items,
                 value,
                 reorderable: table.get::<Option<bool>>("reorderable")?.unwrap_or(false),
+                keep: table.get::<Option<bool>>("keep")?.unwrap_or(false),
+                group: table.get("group")?,
+                on_move: table.get("on_move")?,
+                on_tear_off: table.get("on_tear_off")?,
                 on_close: table.get("on_close")?,
                 panel,
             }));
@@ -214,9 +261,20 @@ pub(crate) fn register(lua: &Lua, ui: &Table) -> mlua::Result<()> {
     ui.set(
         "select",
         widget(|label, value, t| {
-            let list: Table = t
-                .get("options")
-                .map_err(|_| mlua::Error::runtime("ui.select needs `options`"))?;
+            let given: mlua::Value = t.get("options")?;
+            if let Some(state) = crate::node::state_of(&given) {
+                return Ok(Kind::Library(Box::new(Library::Select {
+                    label,
+                    value,
+                    options: SelectOptions::Live(state),
+                    placeholder: t.get::<Option<String>>("placeholder")?.unwrap_or_default(),
+                })));
+            }
+            let mlua::Value::Table(list) = given else {
+                return Err(mlua::Error::runtime(
+                    "ui.select needs `options`, a table or a state",
+                ));
+            };
             let mut options = Vec::new();
             for option in list.sequence_values::<mlua::Value>() {
                 options.push(match option? {
@@ -239,7 +297,7 @@ pub(crate) fn register(lua: &Lua, ui: &Table) -> mlua::Result<()> {
             Ok(Kind::Library(Box::new(Library::Select {
                 label,
                 value,
-                options,
+                options: SelectOptions::Fixed(options),
                 placeholder: t.get::<Option<String>>("placeholder")?.unwrap_or_default(),
             })))
         })?,
@@ -298,7 +356,7 @@ pub(crate) fn register(lua: &Lua, ui: &Table) -> mlua::Result<()> {
             lua.create_function(move |lua, table: Table| {
                 let kind = Kind::Library(Box::new(Library::Calendar {
                     label: label(&table)?,
-                    value: expect_state(&table.get("value")?, &format!("ui.{name}'s `value`"))?,
+                    value: crate::node::control_value(lua, &table)?,
                     picker,
                     min: table.get("min")?,
                     max: table.get("max")?,
@@ -315,7 +373,7 @@ pub(crate) fn register(lua: &Lua, ui: &Table) -> mlua::Result<()> {
         lua.create_function(|lua, table: Table| {
             let kind = Kind::Library(Box::new(Library::TimeField {
                 label: label(&table)?,
-                value: expect_state(&table.get("value")?, "ui.time_field's `value`")?,
+                value: crate::node::control_value(lua, &table)?,
                 hour12: table.get::<Option<bool>>("hour12")?.unwrap_or(false),
                 minute_step: table
                     .get::<Option<u8>>("minute_step")?
@@ -339,7 +397,7 @@ pub(crate) fn register(lua: &Lua, ui: &Table) -> mlua::Result<()> {
                 label: label(&table)?,
                 text: expect_state(&table.get("text")?, "ui.combobox's `text`")?,
                 value: optional_state("value")?,
-                items: expect_state(&table.get("items")?, "ui.combobox's `items`")?,
+                items: items_of(lua, &table.get("items")?)?,
                 loading: optional_state("loading")?,
                 empty: table.get("empty")?,
             }));
@@ -520,6 +578,21 @@ pub(crate) fn register(lua: &Lua, ui: &Table) -> mlua::Result<()> {
 }
 
 /// The view `library`, a node of the interface, lowers to.
+/// Whether the component `library` lowers to names an inner node with its
+/// label (`zgx::compose::FollowedLabel`).
+pub(crate) fn follows_label(library: &Library) -> bool {
+    matches!(
+        library,
+        Library::Tree { .. }
+            | Library::DataGrid { .. }
+            | Library::Calendar { .. }
+            | Library::TimeField { .. }
+            | Library::Combobox { .. }
+            | Library::Tabs { .. }
+            | Library::Select { .. }
+    )
+}
+
 pub(crate) fn view(
     library: &Library,
     node: &Rc<Node>,
@@ -1137,6 +1210,10 @@ pub(crate) fn view(
             items,
             value,
             reorderable,
+            keep,
+            group,
+            on_move,
+            on_tear_off,
             on_close,
             panel,
         } => {
@@ -1160,14 +1237,19 @@ pub(crate) fn view(
                 let old = source.with_untracked(Clone::clone);
                 let kept: Vec<Value> = tabs
                     .iter()
-                    .filter_map(|tab| {
-                        old.list()
-                            .iter()
-                            .find(|item| {
-                                item.field("id").map(Value::to_string).as_deref()
-                                    == Some(tab.id.as_str())
-                            })
-                            .cloned()
+                    .map(|tab| {
+                        let known = old.list().iter().find(|item| {
+                            item.field("id").map(Value::to_string).as_deref()
+                                == Some(tab.id.as_str())
+                        });
+                        // A tab from another strip of the group: what it is.
+                        known.cloned().unwrap_or_else(|| {
+                            Value::record([
+                                ("id", Value::from(tab.id.as_str())),
+                                ("label", Value::from(tab.label.as_str())),
+                                ("closable", Value::Bool(tab.closable)),
+                            ])
+                        })
                     })
                     .collect();
                 Value::List(kept.into())
@@ -1192,12 +1274,47 @@ pub(crate) fn view(
                 reorderable: *reorderable,
                 on_close,
             };
+            let mut more = TabsMore::default();
+            more.keep = *keep;
+            more.group = group.clone();
+            more.on_move = on_move.clone().map(|f| {
+                let vm = vm.clone();
+                let told: MoveTab = Rc::new(move |id: &str, to: &str| {
+                    if let Err(error) = vm.call::<()>(&f, (id, to)) {
+                        vm.report(error);
+                    }
+                });
+                told
+            });
+            // Told with where, as `on_drag_outside` is.
+            more.on_tear_off = on_tear_off.clone().map(|f| {
+                let vm = vm.clone();
+                let told: TearOffTab = Rc::new(move |id: &str, event| {
+                    let at = vm.lua.create_table().and_then(|at| {
+                        at.set("x", event.x)?;
+                        at.set("y", event.y)?;
+                        at.set("grab_x", event.grab_x)?;
+                        at.set("grab_y", event.grab_y)?;
+                        Ok(at)
+                    });
+                    // `false` keeps the tab: anything else tears it off.
+                    match at.and_then(|at| vm.call::<mlua::Value>(&f, (id, at))) {
+                        Ok(said) => !matches!(said, mlua::Value::Boolean(false)),
+                        Err(error) => {
+                            vm.report(error);
+                            false
+                        }
+                    }
+                });
+                told
+            });
             let (panel, vm, low) = (panel.clone(), vm.clone(), low.clone());
-            tabs(
+            tabs_with(
                 label.clone(),
                 tabs_signal,
                 selected,
                 options,
+                more,
                 move |id, _| match vm.call::<mlua::Value>(&panel, id) {
                     Ok(mlua::Value::UserData(ud)) if ud.is::<crate::node::NodeUd>() => {
                         match ud.borrow::<crate::node::NodeUd>() {
@@ -1216,7 +1333,53 @@ pub(crate) fn view(
         Library::Select {
             label,
             value,
-            options,
+            options: SelectOptions::Live(options),
+            placeholder,
+        } => {
+            // Options read from the state as it changes, the value written
+            // back as the option's own (by its text) among those now.
+            let cx = need(&mut cx);
+            fn read(options: &Value) -> (Vec<Value>, Vec<SelectOption>) {
+                options
+                    .list()
+                    .iter()
+                    .map(|option| {
+                        let (value, shown, disabled) = select_option(option);
+                        let option = SelectOption::new(value.to_string(), shown);
+                        (value, if disabled { option.disabled() } else { option })
+                    })
+                    .unzip()
+            }
+            let (values, list) = options.with_untracked(read);
+            let (values, list) = (cx.state(values), cx.state(list));
+            {
+                let (options, values, list) = (options.clone(), values.clone(), list.clone());
+                cx.retain(cx.runtime().effect(move || {
+                    let (v, l) = options.with(read);
+                    values.set(v);
+                    list.set(l);
+                }));
+            }
+            let chosen = bridge_with(
+                cx,
+                value,
+                |v| v.to_string(),
+                move |text: String| {
+                    values.with_untracked(|values| {
+                        values
+                            .iter()
+                            .find(|v| v.to_string() == text)
+                            .cloned()
+                            .unwrap_or_default()
+                    })
+                },
+            );
+            select_live(label.clone(), chosen, list, placeholder.clone())
+        }
+        Library::Select {
+            label,
+            value,
+            options: SelectOptions::Fixed(options),
             placeholder,
         } => {
             // Options by their value's text; written back as the value itself.
@@ -1342,10 +1505,13 @@ fn toast(lua: &Lua, table: Table) -> mlua::Result<u64> {
     drop(env);
     let mut toast = Toast::new(
         table
-            .get::<String>("title")
-            .map_err(|_| mlua::Error::runtime("ui.toast needs a `title`"))?,
+            .get::<crate::errors::Text>("title")
+            .map_err(|_| mlua::Error::runtime("ui.toast needs a `title`"))?
+            .0,
     );
-    toast.body = table.get("body")?;
+    toast.body = table
+        .get::<Option<crate::errors::Text>>("body")?
+        .map(|text| text.0);
     toast.kind = match table.get::<Option<String>>("kind")?.as_deref() {
         None | Some("info") => ToastKind::Info,
         Some("success") => ToastKind::Success,
@@ -1359,7 +1525,8 @@ fn toast(lua: &Lua, table: Table) -> mlua::Result<u64> {
     };
     toast.duration = table
         .get::<Option<f64>>("duration")?
-        .map(|ms| std::time::Duration::from_secs_f64(ms.max(0.) / 1000.));
+        .map(|ms| crate::duration_ms("ui.toast's duration", ms))
+        .transpose()?;
     if let Some(action) = table.get::<Option<Table>>("action")? {
         let label: String = action.get("label")?;
         let run: mlua::Function = action.get("run")?;
@@ -1375,6 +1542,7 @@ fn toast(lua: &Lua, table: Table) -> mlua::Result<u64> {
 }
 
 /// What a disclosure's summary shows: text, or a node of the app's.
+#[derive(Clone)]
 pub(crate) enum Summary {
     Text(String),
     Node(Rc<Node>),

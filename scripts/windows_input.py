@@ -7,10 +7,15 @@ capture it as PNG. Coordinates are physical client pixels: the script is
 per-monitor DPI aware, like the app.
 """
 import ctypes
+import os
+import re
 import struct
+import subprocess
 import time
 import zlib
 from ctypes import wintypes
+
+import windows_guard
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
@@ -90,6 +95,7 @@ MOUSEEVENTF_WHEEL, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_VIRTUALDESK = 0x800, 0x8000
 
 VK = {
     "ctrl": 0x11, "control": 0x11, "shift": 0x10, "alt": 0x12, "win": 0x5B, "super": 0x5B,
+    "hangul": 0x15, "hanja": 0x19, "convert": 0x1C,
     "backspace": 0x08, "tab": 0x09, "enter": 0x0D, "return": 0x0D, "escape": 0x1B, "esc": 0x1B,
     "space": 0x20, "pageup": 0x21, "pagedown": 0x22, "end": 0x23, "home": 0x24,
     "left": 0x25, "up": 0x26, "right": 0x27, "down": 0x28, "insert": 0x2D, "delete": 0x2E,
@@ -101,9 +107,14 @@ EXTENDED = {0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E, 0x5B}
 
 # The window `activate` last brought to the front: input goes nowhere else.
 _target = None
+# Run before every input sent once `guard_windows` set it: it raises, and
+# nothing is sent, when a window the probe didn't expect is showing.
+_window_guard = None
 
 
 def _send(*inputs, guard=True):
+    if guard and _window_guard is not None:
+        _window_guard()
     if guard and _target is not None:
         require_foreground(_target)
     array = (INPUT * len(inputs))(*inputs)
@@ -184,6 +195,458 @@ def popups_of(pid):
     return [hwnd for hwnd in windows_of(pid) if popup(hwnd)]
 
 
+def visible_windows():
+    """Every visible top-level window with an area, of any process: (hwnd,
+    pid, class, title, (width, height))."""
+    found = []
+    name = ctypes.create_unicode_buffer(256)
+    text = ctypes.create_unicode_buffer(256)
+
+    def visit(hwnd, _):
+        rect = wintypes.RECT()
+        if user32.IsWindowVisible(hwnd) and user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            size = (rect.right - rect.left, rect.bottom - rect.top)
+            if size[0] > 0 and size[1] > 0:
+                owner = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+                user32.GetClassNameW(hwnd, name, 256)
+                user32.GetWindowTextW(hwnd, text, 256)
+                found.append((hwnd, owner.value, name.value, text.value, size))
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(visit), 0)
+    return found
+
+
+class PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD), ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", wintypes.LONG), ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260)]
+
+
+def processes():
+    """{pid: (parent pid, exe name)} of every process now (`windows_guard`)."""
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    if not snapshot or snapshot == H(-1).value:
+        raise OSError(ctypes.get_last_error(), "CreateToolhelp32Snapshot")
+    entry = PROCESSENTRY32W()
+    entry.dwSize = ctypes.sizeof(entry)
+    found = {}
+    try:
+        ok = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while ok:
+            found[entry.th32ProcessID] = (entry.th32ParentProcessID, entry.szExeFile)
+            ok = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
+    return found
+
+
+WM_INPUTLANGCHANGEREQUEST = 0x0050
+
+
+def loaded_layout(language):
+    """The loaded keyboard layout (HKL) of `language` (0x0804, 0x0411), if
+    the user has it."""
+    user32.GetKeyboardLayoutList.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)]
+    count = user32.GetKeyboardLayoutList(0, None)
+    layouts = (ctypes.c_void_p * count)()
+    user32.GetKeyboardLayoutList(count, layouts)
+    return next((h for h in layouts if h and h & 0xFFFF == language), None)
+
+
+def layout_of(hwnd):
+    """The keyboard layout (HKL) window `hwnd`'s thread types with."""
+    user32.GetKeyboardLayout.argtypes = [ctypes.c_uint32]
+    user32.GetKeyboardLayout.restype = ctypes.c_void_p
+    return user32.GetKeyboardLayout(user32.GetWindowThreadProcessId(hwnd, None)) or 0
+
+
+def input_path_args(parser, imm32=True):
+    """`--imm32` (winit's IMM32 path, the opt-out) and `--force-tsf`: which
+    input path the probe's app takes. Without either, the app's default."""
+    group = parser.add_mutually_exclusive_group()
+    if imm32:
+        group.add_argument("--imm32", action="store_true",
+                           help="through winit's IMM32 path (ZGX_TSF=0), not the default")
+    group.add_argument("--force-tsf", action="store_true",
+                       help="the Text Services Framework forced (ZGX_TSF=1), not the default")
+
+
+def input_path(env, mode):
+    """Set the app's ZGX_TSF in `env` for `mode` ("default", "imm32" or
+    "force-tsf") and print which ran. The default leaves it unset, removed
+    if the probe's own environment has it (or its old name), so the run
+    tests what an app gets with nothing set."""
+    for name in ("ZGX_TSF", "ZGUI_TSF"):  # rename-to-zgx: keep
+        env.pop(name, None)
+    if mode == "imm32":
+        env["ZGX_TSF"] = "0"
+        said = "IMM32 (ZGX_TSF=0, the opt-out)"
+    elif mode == "force-tsf":
+        env["ZGX_TSF"] = "1"
+        said = "the Text Services Framework, forced (ZGX_TSF=1)"
+    else:
+        said = "the default (ZGX_TSF unset): the Text Services Framework"
+    print(f"MODE: {said}", flush=True)
+    return said
+
+
+def mode_of(args):
+    """The mode `input_path_args`' flags name."""
+    if getattr(args, "imm32", False):
+        return "imm32"
+    if getattr(args, "force_tsf", False):
+        return "force-tsf"
+    return "default"
+
+
+def use_layout(hwnd, layout, timeout=3.0):
+    """Ask Windows for keyboard layout `layout` in window `hwnd` alone, as
+    the language bar does for the window in front: the user's languages are
+    not touched, and the window's own layout comes back with `use_layout` of
+    what `layout_of` said before."""
+    user32.PostMessageW(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, layout)
+    deadline = time.monotonic() + timeout
+    while (layout_of(hwnd) & 0xFFFF) != (layout & 0xFFFF):
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"window {hwnd:#x} did not take keyboard layout {layout:#x}")
+        time.sleep(0.05)
+
+
+# Input methods' candidate lists, which a probe composing expects to show.
+# Their text services run in the app's process, so their windows are the
+# app's: whose window it is says nothing; its class says what it is.
+CANDIDATE_CLASSES = {
+    "Microsoft.IME.UIManager.CandidateWindow.Host",
+    "Microsoft.IME.CandidateWindow.View",
+    "IME",
+    "MSCTFIME UI",
+}
+
+
+class UnexpectedWindow(RuntimeError):
+    pass
+
+
+# What a candidate list may not hold: an offer or a prompt shows inside the
+# candidate host itself (Pinyin's Bing offer did), as a control or its text.
+OFFER_CONTROLS = {
+    "ControlType.Button", "ControlType.Hyperlink", "ControlType.CheckBox",
+    "ControlType.RadioButton", "ControlType.ComboBox", "ControlType.MenuItem",
+    "ControlType.SplitButton", "ControlType.ToggleButton",
+}
+OFFER_WORDS = ("bing", "turn on", "cloud", "privacy", "consent", "learn more",
+               "必应", "开启", "打开", "云", "隐私", "クラウド", "オンにする", "プライバシー")
+OFFER_CLASSES = {"Button", "SysLink"}
+
+# Input methods' preferences (under HKEY_CURRENT_USER) a probe leaves as
+# they were: Microsoft Pinyin's, the Japanese IME's.
+IME_SETTINGS = (
+    r"Software\Microsoft\InputMethod\Settings\CHS",
+    r"Software\Microsoft\InputMethod\Settings\JPN",
+    r"Software\Microsoft\IME\15.0\IMEJP",
+)
+
+
+def ime_settings(paths=IME_SETTINGS):
+    """Every value under `paths` (HKEY_CURRENT_USER, with their subkeys):
+    {(key, name): (data, type)}. A key not there has none."""
+    import winreg
+
+    found = {}
+
+    def walk(path):
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, path)
+        except OSError:
+            return
+        with key:
+            index = 0
+            while True:
+                try:
+                    name, data, kind = winreg.EnumValue(key, index)
+                except OSError:
+                    break
+                found[(path, name)] = (data, kind)
+                index += 1
+            index = 0
+            subkeys = []
+            while True:
+                try:
+                    subkeys.append(winreg.EnumKey(key, index))
+                except OSError:
+                    break
+                index += 1
+        for sub in subkeys:
+            walk(path + "\\" + sub)
+
+    for path in paths:
+        walk(path)
+    return found
+
+
+def restore_ime_settings(before, now):
+    """Put back what `before` (`ime_settings`) held: values changed or gone
+    are written again, values that appeared are removed."""
+    import winreg
+
+    for (path, name), (data, kind) in before.items():
+        if now.get((path, name)) != (data, kind):
+            with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.SetValueEx(key, name, 0, kind, data)
+    for path, name in now.keys() - before.keys():
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, name)
+
+
+def window_contents(hwnds, timeout=10.0):
+    """What windows `hwnds` hold: each child window's class and text, then
+    each element of their UI Automation trees, as (kind, name) pairs. Raises
+    when it can't tell (a probe then stops rather than guess)."""
+    found = []
+    name = ctypes.create_unicode_buffer(256)
+    text = ctypes.create_unicode_buffer(256)
+
+    def child(hwnd, _):
+        user32.GetClassNameW(hwnd, name, 256)
+        user32.GetWindowTextW(hwnd, text, 256)
+        found.append(("window " + name.value, text.value))
+        return True
+
+    for hwnd in hwnds:
+        user32.EnumChildWindows(hwnd, WNDENUMPROC(child), 0)
+    handles = ", ".join(str(int(h)) for h in hwnds)
+    script = f"""
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+foreach ($h in @({handles})) {{
+  $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$h)
+  $all = $root.FindAll([System.Windows.Automation.TreeScope]::Subtree, [System.Windows.Automation.Condition]::TrueCondition)
+  foreach ($e in $all) {{ "{{0}}`t{{1}}" -f $e.Current.ControlType.ProgrammaticName, ($e.Current.Name -replace "`r?`n", " ") }}
+}}
+"done"
+"""
+    done = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                          capture_output=True, text=True, encoding="utf-8", timeout=timeout)
+    rows = done.stdout.strip().splitlines()
+    if done.returncode != 0 or not rows or rows[-1] != "done":
+        raise RuntimeError(f"UI Automation didn't read them: {done.stderr.strip()[:300]}")
+    found += [tuple(row.split("\t", 1)) if "\t" in row else (row, "") for row in rows[:-1]]
+    return found
+
+
+# Windows 11's candidate list, as UI Automation reads the host found under
+# the composition: what it may hold, by control type and name. Anything else
+# in it (another button, a link, a check box, an offer's text, an element
+# not listed) stops a probe. Names are the English UI's; an IME showing its
+# UI in another language adds its names beside them.
+CANDIDATE_HOST = "Windows Input Experience"
+CANDIDATE_UI = {
+    ("ControlType.Window", CANDIDATE_HOST),
+    ("ControlType.Menu", "Microsoft Candidate UI"),
+    ("ControlType.List", "Candidate Item Panel"),
+    ("ControlType.Button", "Previous Page"),
+    ("ControlType.Button", "Next Page"),
+    ("ControlType.Button", "Emoji and Symbol"),
+    ("ControlType.Button", "Search Suggestion"),
+    # The Japanese IME's pager: "Page 1", "Page 2"… buttons under it.
+    ("ControlType.Menu", "Pager"),
+}
+PAGER = ("ControlType.Menu", "Pager")
+# The candidate list: its items (and their text) are allowed whatever they say.
+CANDIDATE_ITEMS = ("ControlType.List", "Candidate Item Panel")
+
+
+def candidate_ui():
+    """`CANDIDATE_UI` less the names in ZGX_GUARD_WITHOUT (comma-separated):
+    the guard's own check, that an element it no longer allows stops a probe."""
+    without = {n.strip() for n in os.environ.get("ZGX_GUARD_WITHOUT", "").split(",") if n.strip()}
+    return {(kind, name) for kind, name in CANDIDATE_UI if name not in without}
+
+
+def host_at(points):
+    """The candidate host under any of `points` (screen pixels): Windows 11's
+    "Windows Input Experience" window, which window enumeration doesn't list
+    and only a hit-test finds ("host"), or a classic candidate window
+    ("classic"). None when the points show neither (the app, the desktop)."""
+    user32.WindowFromPoint.argtypes = [wintypes.POINT]
+    user32.WindowFromPoint.restype = wintypes.HWND
+    user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetAncestor.restype = wintypes.HWND
+    name = ctypes.create_unicode_buffer(256)
+    text = ctypes.create_unicode_buffer(256)
+    for x, y in points:
+        hwnd = user32.WindowFromPoint(wintypes.POINT(int(x), int(y)))
+        while hwnd:
+            user32.GetClassNameW(hwnd, name, 256)
+            user32.GetWindowTextW(hwnd, text, 256)
+            if name.value == "Windows.UI.Core.CoreWindow" and text.value == CANDIDATE_HOST:
+                return ("host", hwnd)
+            if name.value in CANDIDATE_CLASSES:
+                return ("classic", hwnd)
+            hwnd = user32.GetAncestor(hwnd, 1)  # GA_PARENT
+    return None
+
+
+def ui_tree(hwnd, timeout=10.0):
+    """Window `hwnd`'s UI Automation tree (its control view), depth first:
+    (depth, control type, name). Raises when it can't be read."""
+    script = f"""
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+$walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+function Walk($e, $d) {{
+  "{{0}}`t{{1}}`t{{2}}" -f $d, $e.Current.ControlType.ProgrammaticName, ($e.Current.Name -replace "`r?`n", " ")
+  $c = $walker.GetFirstChild($e)
+  while ($c -ne $null) {{ Walk $c ($d + 1); $c = $walker.GetNextSibling($c) }}
+}}
+Walk ([System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]{int(hwnd)})) 0
+"done"
+"""
+    done = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                          capture_output=True, text=True, encoding="utf-8", timeout=timeout)
+    rows = done.stdout.strip().splitlines()
+    if done.returncode != 0 or not rows or rows[-1] != "done":
+        raise RuntimeError(f"UI Automation didn't read it: {done.stderr.strip()[:300]}")
+    tree = []
+    for row in rows[:-1]:
+        depth, kind, label = (row.split("\t", 2) + ["", ""])[:3]
+        tree.append((int(depth), kind, label))
+    return tree
+
+
+def not_candidates(tree, allowed):
+    """What in a candidate host's `tree` isn't its candidate UI: not
+    `allowed` by type and name, not an item (or an item's text) of its
+    candidate list, not a numbered page of its pager, and not an unnamed
+    Pane. An unnamed Pane lays the rest
+    out and passes only as what it holds does: every element under it is
+    judged on its own, so a Pane holding an offer's button still stops a
+    probe, at any depth."""
+    found = []
+    ancestors = []
+    for depth, kind, label in tree:
+        del ancestors[depth:]
+        in_list = CANDIDATE_ITEMS in ancestors and CANDIDATE_ITEMS in allowed
+        item = in_list and kind in ("ControlType.ListItem", "ControlType.Text")
+        layout = kind == "ControlType.Pane" and not label.strip()
+        # A page of the pager's, by number: "Page 2", not "Page 2 of Bing".
+        page = (kind == "ControlType.Button" and PAGER in ancestors and PAGER in allowed
+                and re.fullmatch(r"Page [0-9]+", label) is not None)
+        if (kind, label) not in allowed and not item and not layout and not page:
+            found.append((depth, kind, label))
+        ancestors.append((kind, label))
+    return found
+
+
+def below_caret(hwnd, lines, field="first"):
+    """A function giving screen points just below the caret of `field` in
+    window `hwnd`, as the example's last `CARET <field> Rect {..}` line in
+    `lines` (its output) places it: where an input method shows its
+    candidates. Points from the window's top-left before it reports one."""
+    import re
+
+    def points():
+        rect = None
+        for line in reversed(lines):
+            if line.startswith(f"CARET {field} "):
+                rect = [float(v) for v in re.findall(r"(?:x|y|width|height): ([\d.]+)", line)]
+                break
+        scale = dpi(hwnd) / 96
+        x, y, _, height = rect if rect and len(rect) == 4 else (0.0, 0.0, 0.0, 0.0)
+        return [to_screen(hwnd, (x + dx) * scale, (y + height + dy) * scale)
+                for dx, dy in ((4, 12), (4, 36), (40, 24), (120, 24))]
+
+    return points
+
+
+def guard_windows(shots, allowed=CANDIDATE_CLASSES, settings=IME_SETTINGS, where=None, app=None, own=None):
+    """Fail closed from now on: before every input sent (and when the
+    returned check is called, after the last), the probe stops with a
+    screenshot in directory `shots`, sending nothing, when
+    - an input method's preferences (`settings`) changed: they are put back
+      as they were first, and the keystroke that changed them is the last;
+    - a visible top-level window that wasn't showing now isn't a classic
+      candidate list (`allowed` classes), or such a list holds anything but
+      candidates: a button, a link, a check box, an offer's text
+      (`OFFER_*`), or can't be read;
+    - with `where` (a function giving screen points just below the
+      composition, where candidates show): the candidate host hit-tested
+      there, Windows 11's "Windows Input Experience" window that window
+      enumeration doesn't list, holds anything but its candidate UI
+      (`CANDIDATE_UI` and its list's items), or the hit-test or its UI
+      Automation read fails.
+    With `app`, (pid, title) of the app the probe launched, its own new
+    windows are passed, each checked once as it appears (`windows_guard`):
+    a `ZgxPopup` or Win32 menu (`#32768`, the system menu) of its
+    process, and its WebView2 surface (a
+    msedgewebview2.exe child of it bearing its title); any other window
+    still stops the run. With `own`, (pid, class), the probe's windows of
+    that class are passed too (`windows_guard.is_own`).
+    An offer or a consent prompt is never answered or closed."""
+    baseline = {window[0] for window in visible_windows()}
+    trusted = set()
+    before = ime_settings(settings)
+    stops = 0
+
+    def stop(reason):
+        nonlocal stops
+        stops += 1
+        shots.mkdir(parents=True, exist_ok=True)
+        path = shots / f"stopped-{stops}.png"
+        metrics = [user32.GetSystemMetrics(i) for i in (76, 77, 78, 79)]
+        save_png(capture_rect(*metrics), str(path))
+        raise UnexpectedWindow(f"{reason}; no input sent and nothing dismissed. Screenshot: {path}")
+
+    def check():
+        now = ime_settings(settings)
+        if now != before:
+            changed = sorted(f"{k[0]}\\{k[1]}" for k in now.keys() | before.keys() if now.get(k) != before.get(k))
+            restore_ime_settings(before, now)
+            stop(f"an input method's settings changed ({', '.join(changed)}); put back as they were")
+        new = [w for w in visible_windows() if w[0] not in baseline and w[0] not in trusted
+               and not windows_guard.is_own(w, own)]
+        if app is not None and any(w[2] not in allowed for w in new):
+            # Read as they appear: a PID is only the app's while it runs.
+            running = processes()
+            for w in new:
+                if w[2] not in allowed and windows_guard.is_ours(w, app, running):
+                    trusted.add(w[0])
+            new = [w for w in new if w[0] not in trusted]
+        unknown = [w for w in new if w[2] not in allowed]
+        if unknown:
+            found = "; ".join(f"class {c!r} title {t!r} {w}x{h} pid {pid}" for _, pid, c, t, (w, h) in unknown)
+            stop(f"a window the probe didn't expect is showing ({found})")
+        candidates = [w[0] for w in new]
+        if candidates:
+            try:
+                held = window_contents(candidates)
+            except Exception as error:
+                stop(f"couldn't read what a candidate list holds ({error})")
+            offers = [(kind, text) for kind, text in held
+                      if kind in OFFER_CONTROLS or kind.removeprefix("window ") in OFFER_CLASSES
+                      or any(word in text.lower() for word in OFFER_WORDS)]
+            if offers:
+                stop(f"a candidate list holds more than candidates: {offers}")
+        if where is not None:
+            try:
+                found = host_at(where())
+                if found and found[0] == "host":
+                    extra = not_candidates(ui_tree(found[1]), candidate_ui())
+                    if extra:
+                        stop(f"Windows 11's candidate host holds more than its candidate UI: {extra}")
+            except UnexpectedWindow:
+                raise
+            except Exception as error:
+                stop(f"couldn't hit-test or read the candidate host ({error})")
+
+    global _window_guard
+    _window_guard = check
+    return check
+
+
 def wait_window(proc, timeout=15.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -218,7 +681,10 @@ def activate(hwnd):
     for _ in range(20):
         # A key event from this process lifts the foreground lock for it.
         # F24, which nothing binds: a tap of Alt put dialogs in their
-        # mnemonic mode, which took the next key typed.
+        # mnemonic mode, which took the next key typed. Not to the foreground
+        # `_target` (this changes it), but still past the window guard.
+        if _window_guard is not None:
+            _window_guard()
         _send(_vk(VK["f24"]), _vk(VK["f24"], up=True), guard=False)
         user32.SetForegroundWindow(hwnd)
         if is_foreground(hwnd):
@@ -245,6 +711,62 @@ def to_screen(hwnd, x, y):
     point = wintypes.POINT(round(x), round(y))
     user32.ClientToScreen(hwnd, ctypes.byref(point))
     return point.x, point.y
+
+
+def text_rects(hwnd, *words, timeout=10.0):
+    """Where each of `words` shows in `hwnd`'s text, as UI Automation's
+    text pattern places it (the first match in the first text that has
+    them all): {word: (left, top, right, bottom)} in client pixels. A probe
+    finds text where it is laid out now, not at coordinates that go stale
+    as an example's layout changes. Each word's range is moved to by
+    characters from the document's start (AccessKit's text pattern has no
+    FindText). The tree is built when first asked for, so this asks again
+    until `timeout`."""
+    quoted = ", ".join("'" + w.replace("'", "''") + "'" for w in words)
+    script = f"""
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+$root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]{int(hwnd)})
+$texts = $root.FindAll([System.Windows.Automation.TreeScope]::Subtree, [System.Windows.Automation.Condition]::TrueCondition)
+$start = [System.Windows.Automation.Text.TextPatternRangeEndpoint]::Start
+$end = [System.Windows.Automation.Text.TextPatternRangeEndpoint]::End
+$character = [System.Windows.Automation.Text.TextUnit]::Character
+foreach ($element in $texts) {{
+  $pattern = $null
+  if (-not $element.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern, [ref]$pattern)) {{ continue }}
+  $document = $pattern.DocumentRange
+  $all = $document.GetText(-1)
+  $found = @()
+  foreach ($word in @({quoted})) {{
+    $at = $all.IndexOf($word)
+    if ($at -lt 0) {{ $found = $null; break }}
+    $range = $document.Clone()
+    $range.MoveEndpointByRange($end, $range, $start)
+    [void]$range.MoveEndpointByUnit($end, $character, $at + $word.Length)
+    [void]$range.MoveEndpointByUnit($start, $character, $at)
+    $r = $range.GetBoundingRectangles()
+    if ($r.Count -eq 0) {{ $found = $null; break }}
+    $found += "{{0}} {{1}} {{2}} {{3}}" -f $r[0].Left, $r[0].Top, $r[0].Right, $r[0].Bottom
+  }}
+  if ($found) {{ $found -join ";"; break }}
+}}
+"""
+    deadline = time.monotonic() + timeout
+    while True:
+        done = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                              capture_output=True, text=True)
+        out = done.stdout.strip()
+        if out:
+            rects = {}
+            for word, rect in zip(words, out.split(";")):
+                left, top, right, bottom = (float(v) for v in rect.split())
+                l, t = to_client(hwnd, left, top)
+                r, b = to_client(hwnd, right, bottom)
+                rects[word] = (l, t, r, b)
+            return rects
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"no text in the window shows {words!r} to UI Automation: {done.stderr.strip()[-800:]}")
+        time.sleep(0.5)
 
 
 def to_client(hwnd, x, y):
@@ -415,6 +937,8 @@ for name, res, args in [
     ("CreateToolhelp32Snapshot", H, [wintypes.DWORD, wintypes.DWORD]),
     ("Thread32First", wintypes.BOOL, [H, ctypes.POINTER(THREADENTRY32)]),
     ("Thread32Next", wintypes.BOOL, [H, ctypes.POINTER(THREADENTRY32)]),
+    ("Process32FirstW", wintypes.BOOL, [H, ctypes.POINTER(PROCESSENTRY32W)]),
+    ("Process32NextW", wintypes.BOOL, [H, ctypes.POINTER(PROCESSENTRY32W)]),
     ("OpenThread", H, [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]),
     ("QueryThreadCycleTime", wintypes.BOOL, [H, ctypes.POINTER(ctypes.c_uint64)]),
     ("GetThreadDescription", ctypes.HRESULT, [H, ctypes.POINTER(wintypes.LPWSTR)]),

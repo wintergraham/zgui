@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exercise real text-input-v3 composition in an owned Sway/Fcitx5 session."""
-from sway_host import wait_for_openbox
+from sway_host import wait_for_openbox, sway_config
 import argparse
 import json
 import os
@@ -19,6 +19,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('binary', type=pathlib.Path)
     parser.add_argument('--output', type=pathlib.Path, required=True)
+    parser.add_argument('--burst', action='store_true',
+                        help="Pinyin typed as fast as a person types it (30 ms a key, nothing awaited between): "
+                             "every preedit reaches the editor and each word commits")
+    parser.add_argument('--input-modes', action='store_true',
+                        help="native_ime --input-modes: each field's input mode reaches the input method as its "
+                             "content purpose (email, then digits)")
     args = parser.parse_args()
     for name in ('Xvfb', 'openbox', 'sway', 'swaymsg', 'dbus-daemon', 'fcitx5', 'fcitx5-remote', 'xdotool', 'xwininfo', 'grim'):
         if not shutil.which(name):
@@ -36,7 +42,7 @@ def main():
         profile.parent.mkdir(parents=True)
         profile.write_text('[Groups/0]\nName=Default\nDefault Layout=us\nDefaultIM=pinyin\n\n[Groups/0/Items/0]\nName=keyboard-us\nLayout=\n\n[Groups/0/Items/1]\nName=pinyin\nLayout=\n\n[GroupOrder]\n0=Default\n')
         config = pathlib.Path(private, 'sway.conf')
-        config.write_text('xwayland disable\nseat seat0 fallback true\noutput * mode 1200x800\ndefault_border none\nfor_window [title="zgx native IME"] fullscreen enable\n')
+        sway_config(config, 'xwayland disable\nseat seat0 fallback true\noutput * mode 1200x800\ndefault_border none\nfor_window [title="zgx native IME"] fullscreen enable\n')
         (args.output/'profile').write_text(profile.read_text())
         (args.output/'sway.conf').write_text(config.read_text())
         bus_config = pathlib.Path(private, 'dbus.conf')
@@ -48,7 +54,7 @@ def main():
                 return subprocess.Popen(command, env=process_env, stderr=log, stdout=kwargs.pop('stdout', log), **kwargs)
         try:
             xvfb = launch('xvfb', ['Xvfb','-r','-noreset','-displayfd','1','-screen','0','1400x1000x24','-ac'], stdout=subprocess.PIPE, text=True)
-            if not select.select([xvfb.stdout], [], [], 10)[0]: raise RuntimeError('Xvfb timeout')
+            if not select.select([xvfb.stdout], [], [], 30)[0]: raise RuntimeError('Xvfb timeout')
             env['DISPLAY'] = ':'+xvfb.stdout.readline().strip()
             bus = launch('dbus', ['dbus-daemon','--config-file='+str(bus_config),'--nofork','--print-address=1'], stdout=subprocess.PIPE, text=True, start_new_session=True)
             if not select.select([bus.stdout], [], [], 10)[0]: raise RuntimeError('D-Bus timeout')
@@ -83,7 +89,8 @@ def main():
                 if time.monotonic()>deadline or ime.poll() is not None: raise RuntimeError('Fcitx startup failed')
                 time.sleep(.1)
             with (args.output/'protocol.log').open('w') as protocol, (args.output/'application.log').open('w') as log:
-                app = subprocess.Popen([str(args.binary.resolve())], env=native, stdout=log, stderr=protocol)
+                command = [str(args.binary.resolve())] + (['--input-modes'] if args.input_modes else [])
+                app = subprocess.Popen(command, env=native, stdout=log, stderr=protocol)
                 deadline = time.monotonic()+10
                 while 'MODEL ' not in (args.output/'application.log').read_text():
                     if time.monotonic()>deadline or app.poll() is not None: raise RuntimeError('IME fixture failed')
@@ -131,6 +138,29 @@ def main():
                     snapshots.append(sample)
                     (args.output/'snapshots.json').write_text(json.dumps(snapshots,indent=2)+'\n')
                     subprocess.run(['grim',str((args.output/f'ime-{stage}.png').resolve())],env=env,check=True)
+                if args.input_modes:
+                    # text-input-v3's content types, as the app sends them
+                    # with each enable: (hint, purpose), email 6, digits 2.
+                    sent = []
+                    for y, purpose in ((82, 6), (174, 2)):
+                        offset = len((args.output/'protocol.log').read_text())
+                        click(100, y)
+                        deadline = time.monotonic()+6
+                        while True:
+                            found = re.findall(r'zwp_text_input_v3[#@]\d+\.set_content_type\((\d+), (\d+)\)',
+                                               (args.output/'protocol.log').read_text()[offset:])
+                            if found or time.monotonic()>deadline or app.poll() is not None: break
+                            time.sleep(.05)
+                        sent.append((y, purpose, found))
+                        if not found or int(found[-1][1]) != purpose:
+                            raise AssertionError(f'the field at y={y} sent content types {found}, not purpose {purpose}')
+                    subprocess.run(['swaymsg',f'[pid={app.pid}] kill'],env=env,capture_output=True)
+                    app.wait(timeout=25)
+                    result=dict(result='pass', backend='native Wayland text-input-v3 / Sway / Fcitx5',
+                                checks=['email content purpose','digits content purpose'], sent=sent)
+                    (args.output/'result.json').write_text(json.dumps(result,indent=2)+'\n')
+                    print('PASS: '+', '.join(result['checks']))
+                    return
                 click(100,82)
                 # Fcitx answers before its Pinyin engine has loaded: switch
                 # once it can.
@@ -142,6 +172,37 @@ def main():
                 time.sleep(.3)
                 engine = subprocess.check_output(['fcitx5-remote','-n'],env=env,text=True).strip()
                 assert engine == 'pinyin', engine
+                if args.burst:
+                    # Each round all at once: the input method's updates
+                    # come while the editor is still answering the last
+                    # (a new caret area mid-burst used to make them stale).
+                    def displayed(first, shown, timeout=8):
+                        deadline=time.monotonic()+timeout
+                        while True:
+                            trace=(args.output/'application.log').read_text()
+                            tick=trace[trace.rfind('MODEL '):]
+                            model=re.search(r'MODEL \d+ first=(".*?") second=',tick)
+                            shown_now=re.search(r'DISPLAY first (".*?") Rect',tick)
+                            now=(json.loads(model[1]) if model else None, json.loads(shown_now[1]) if shown_now else None)
+                            if now == (first, shown): return now
+                            if time.monotonic()>deadline or app.poll() is not None:
+                                raise AssertionError(f'burst: expected model {first!r} showing {shown!r}, observed {now!r}')
+                            time.sleep(.05)
+                    rounds=[]
+                    for round in range(1, 4):
+                        xdo('type','--clearmodifiers','--delay',30,'nihao')
+                        rounds.append(displayed('你好'*(round-1), '你好'*(round-1)+'ni hao'))
+                        key('space')
+                        rounds.append(displayed('你好'*round, '你好'*round))
+                    subprocess.run(['swaymsg',f'[pid={app.pid}] kill'],env=env,capture_output=True)
+                    app.wait(timeout=25)
+                    protocol=(args.output/'protocol.log').read_text()
+                    result=dict(result='pass', backend='native Wayland text-input-v3 / Sway / Fcitx5 Pinyin',
+                                checks=['burst preedit delivered','burst commits'], rounds=rounds,
+                                cursor_rectangles=protocol.count('.set_cursor_rectangle('))
+                    (args.output/'result.json').write_text(json.dumps(result,indent=2)+'\n')
+                    print('PASS: '+', '.join(result['checks']))
+                    return
                 type_text('nihao')
                 capture(1)
                 key('space'); capture(2)

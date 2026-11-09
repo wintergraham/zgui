@@ -794,3 +794,168 @@ fn virtual_keyboard_navigation_exports_offscreen_row_position_with_bounded_work(
     );
     consumer.update_and_process_changes(update, &mut Changes::default());
 }
+/// The name assistive technology is given for `ui`'s first node.
+fn projected_name(ui: &Ui) -> String {
+    let update = AccessibilityTree::new().update(
+        &ui.scene.borrow(),
+        &ui.semantics.borrow(),
+        None,
+        "test",
+        1.,
+    );
+    let tree = Tree::new(update, true);
+    tree.state()
+        .root()
+        .children()
+        .next()
+        .unwrap()
+        .label()
+        .unwrap()
+}
+#[test]
+fn overridden_button_role_tracks_child_text() {
+    use zgx::compose::prelude::*;
+    let mut ui = Ui::new(100., 100.);
+    ui.set_assistive_technology(true);
+    let label = ui.signal(String::from("before"));
+    let read = label.clone();
+    ui.mount(
+        button()
+            .role(Role::RadioButton)
+            .child(text_signal(move || read.get())),
+    );
+    ui.prepare_frame();
+    label.set(String::from("after"));
+    ui.prepare_frame();
+    let actual = projected_name(&ui);
+    let mut fresh = Ui::new(100., 100.);
+    fresh.set_assistive_technology(true);
+    fresh.mount(button().role(Role::RadioButton).child(text("after")));
+    fresh.prepare_frame();
+    assert_eq!(actual, projected_name(&fresh));
+    assert_eq!(actual, "after");
+}
+#[test]
+fn overridden_button_role_names_itself_once_a_reader_listens() {
+    use zgx::compose::prelude::*;
+    // Labels wait for a reader (lazy): the radio's too.
+    let mut ui = Ui::new(100., 100.);
+    let label = ui.signal(String::from("before"));
+    let read = label.clone();
+    ui.mount(
+        button()
+            .role(Role::RadioButton)
+            .child(text_signal(move || read.get())),
+    );
+    ui.prepare_frame();
+    label.set(String::from("after"));
+    ui.prepare_frame();
+    ui.set_assistive_technology(true);
+    ui.prepare_frame();
+    assert_eq!(projected_name(&ui), "after");
+}
+
+/// An unnamed popover is named by its trigger (`aria-labelledby`), as the
+/// platform reads it, and follows the trigger's name; a named one keeps
+/// its own.
+#[test]
+fn an_unnamed_popover_is_named_by_its_trigger() {
+    use zgx::compose::prelude::*;
+    let name = |label: &str| {
+        let mut ui = Ui::new(400., 300.);
+        let open = ui.signal(true);
+        let trigger = ui.signal(String::from("Filters"));
+        let shown = trigger.clone();
+        ui.mount(
+            column().w(400.).h(300.).child(
+                popover(
+                    label,
+                    open,
+                    button()
+                        .w(80.)
+                        .h(30.)
+                        .child(text_signal(move || shown.get())),
+                )
+                .w(120.)
+                .h(60.),
+            ),
+        );
+        ui.prepare_frame();
+        let mut adapter = AccessibilityTree::new();
+        let update = adapter.update(&ui.scene.borrow(), &ui.semantics.borrow(), None, "App", 1.);
+        fn find(node: Node<'_>) -> Option<Option<String>> {
+            if node.role() == NativeRole::Dialog {
+                return Some(node.label());
+            }
+            node.children().find_map(find)
+        }
+        let dialog = |tree: &Tree| find(tree.state().root()).flatten();
+        let mut consumer = Tree::new(update, true);
+        let first = dialog(&consumer);
+        trigger.set("Sort".into());
+        ui.prepare_frame();
+        let update = adapter.update(&ui.scene.borrow(), &ui.semantics.borrow(), None, "App", 1.);
+        consumer.update_and_process_changes(update, &mut Changes::default());
+        (first, dialog(&consumer))
+    };
+    assert_eq!(name(""), (Some("Filters".into()), Some("Sort".into())));
+    assert_eq!(
+        name("Options"),
+        (Some("Options".into()), Some("Options".into()))
+    );
+}
+
+/// What names an unnamed popover goes when the popover does.
+#[test]
+fn an_unmounted_popover_leaves_no_name_behind() {
+    use zgx::compose::prelude::*;
+    let mut ui = Ui::new(400., 300.);
+    let open = ui.signal(true);
+    let view = ui.mount(
+        column().w(400.).h(300.).child(
+            popover("", open, button().w(80.).h(30.).child(text("Filters")))
+                .w(120.)
+                .h(60.),
+        ),
+    );
+    ui.prepare_frame();
+    let panel = ui
+        .semantics
+        .borrow()
+        .iter()
+        .find(|(_, s)| s.role == Role::Dialog)
+        .map(|(id, _)| id)
+        .unwrap();
+    assert!(ui.semantics.borrow().labelled_by(panel).is_some());
+    view.unmount();
+    ui.prepare_frame();
+    assert_eq!(ui.semantics.borrow().labelled_by(panel), None);
+}
+
+#[test]
+fn an_accessible_modal_view_reaches_assistive_technology_as_modal() {
+    use zgx::compose::prelude::*;
+    let mut ui = Ui::new(500., 400.);
+    let mounted = ui.mount(
+        column().children([
+            text("Behind"),
+            column()
+                .role(Role::Dialog)
+                .accessible_modal()
+                .children([text("Options")]),
+            column().role(Role::Dialog).children([text("Panel")]),
+        ]),
+    );
+    let _ = mounted.node();
+    ui.prepare_frame();
+    let mut adapter = AccessibilityTree::new();
+    let update = adapter.update(&ui.scene.borrow(), &ui.semantics.borrow(), None, "App", 1.);
+    let dialogs: Vec<bool> = update
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.role() == NativeRole::Dialog)
+        .map(|(_, node)| node.is_modal())
+        .collect();
+    // The one that says so is modal (aria-modal); a dialog that doesn't is not.
+    assert_eq!(dialogs, vec![true, false], "{dialogs:?}");
+}

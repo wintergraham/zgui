@@ -18,8 +18,12 @@ mod composition_layer_effects;
 mod composition_local_transform;
 #[path = "../composition_transform_normalization.rs"]
 mod composition_transform_normalization;
+#[path = "../damage_grid_limits.rs"]
+mod damage_grid_limits;
 #[path = "../decorations.rs"]
 mod decorations;
+#[path = "../gpu_views.rs"]
+mod gpu_views;
 #[path = "../hidden_blur_damage.rs"]
 mod hidden_blur_damage;
 #[path = "../image_cache.rs"]

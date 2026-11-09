@@ -171,7 +171,10 @@ those not mounted by their `row_text`, else by building the row's description
 without mounting it), case and accents ignored as Chrome's and Safari's do
 ("cafe" finds "Café", composed and decomposed forms alike, curly quotes as
 straight ones). Each match is marked behind its text (`find.match`), the
-current one apart (`find.current`) and scrolled into view; Enter and
+current one apart (`find.current`), each drawn as a selection is: one shape
+over the lines it runs on, rounded by `mark.radius` (by default the selection's
+radius), as an editor's decorations are too. The current one is scrolled
+into view; Enter and
 Command-G (Control-G, F3) go to the next, with Shift the one before,
 wrapping; Escape closes it, the match selected where the text is selectable
 (a field's match is scrolled to but its selection left until then). On
@@ -209,10 +212,16 @@ pasted from a PNG where one is there, else from the DIB another app copied
 The highlight is styled as CSS's `::selection` is. Its background is the
 theme's `selection` token (`selection.inactive` while the window is at the
 back). The glyphs inside it repaint in `selection.text` (`selection.text.inactive`),
-which is transparent by default, so they keep their own colours. Its rects
-round by `selection.radius` (0). Override them for a subtree with
+which is transparent by default, so they keep their own colours. Lines that
+touch draw as one shape, in selectable text and in editors alike: outer corners
+round by `selection.radius` (3, at most half a line), the corners between a line
+and a longer one curve the other way, and a translucent colour stays even across
+them. An empty line in the selection shows as a sliver, as in an editor. A radius
+of 0 draws plain rectangles; so does the software renderer for a selection over
+lines, which rounds a selection on one line alone. Override them for a subtree with
 `theme_scope(ThemeOverride::new().with(tok::SELECTION_TEXT, color), view)`,
-or on one region with `.selection_color(color)` and `.selected_text_color(color)`
+or on one region with `.selection_color(color)`, `.selected_text_color(color)` and
+`.selection_radius(radius)`
 (`_when` variants follow reactive reads), which hold in either window state. A
 glyph recolours when its centre lies in a highlight rect, from the glyphs
 already laid out on the GPU and software paths: changing a colour or the
@@ -237,7 +246,9 @@ contrast makes `border.subtle` and `border` as strong as `text.secondary`,
 `border.strong` as `text.primary`, and `text.tertiary` as `text.secondary`.
 Reduce transparency makes `glass.tint` the raised surface and `glass.blur` zero,
 and any view with a backdrop blur paints its background opaque without the blur
-(a clear one gets the raised surface). The host follows changes as they happen
+(a clear one gets the raised surface). On X11 with no compositor zgx reports it
+too, as nothing can show through a window there, re-read as a window is
+activated. The host follows changes as they happen
 (`NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification`). Windows reports
 its animation and contrast settings with the tokens it already sets.
 
@@ -266,6 +277,8 @@ drags, into fields and other apps ([dragging text](drag-drop.md#dragging-text)).
 `text_input(label, value)` and `text_area(label, value)` mount the same retained editor used by the native host. The first argument is its accessible name, and the `Signal<String>` is synchronized in both directions. `text_input_value` and `text_area_value` take a `Signal<TextValue>` instead: a `TextValue` (`zgx::text`) holds a long document (over 64 KiB) in shared chunks: the editor, its layout, its accessibility value and the signal then hold one copy of it, an edit's new value shares every chunk the edit did not touch, and a document set on the signal is taken as it is rather than copied. Use it for documents; a `String` is as cheap for short text. IME preedit remains local until committed. Selection, undo, clipboard, and native IME placement use the mounted editor's lifecycle.
 
 The focused editor's caret blinks as the system's carets do (`Ui::set_caret_blink`, which the desktop host sets from the system): Windows' blink rate each way, stopping after its caret timeout (5 s by default); macOS's insertion point blink periods; GTK's `cursor-blink-time` (two thirds shown, one hidden), stopping after `cursor-blink-timeout` (10 s), and Qt's flash time on KDE. It shows solid while the user types, selects or moves it, and blinks only while its editor has the focus in a window that presents (not while the window is at the back, hidden or covered). Each blink recolours the caret's rectangle alone, so it costs one small frame a phase, woken by a deadline (`Ui::next_interaction_deadline`), and a caret that has stopped costs nothing. Without a host's setting (headless documents, tests) the caret is solid.
+
+On macOS the caret is a Core Animation layer over the window's frames, shown and hidden each blink phase with no frame drawn (two small wakes a second, none while the field is unfocused or the window unseen): a focused field left alone does no GPU work, so its window's footprint falls back to an idle window's (30 MB against 210 for the probe's field: the Metal driver holds about 176 MB for a command queue for some 8 s after any frame, so a caret blinking through frames kept it for as long as the field had the focus). It lands on the pixels the editor's caret would fill, and is the editor's whenever it can't be exactly that: while the field composes marked text or shows a selection, under anything painted over it (a popover, a scrim), inside a scaled, rotated, zoomed, faded, filtered or blended ancestor or a rounded clip's corner, in a popup's window, beside native views, and with a blink that stops after a timeout. `ZGX_NATIVE_CARET=0` keeps the editor's. Typing or moving the caret restarts its blink; a move that changes nothing else draws no frame (a fully transparent node damages nothing as it moves).
 
 Input methods (Japanese, Chinese, Korean) compose as a native field shows it: the marked text has a thin accent underline, the clause being converted (the composition's cursor range) a thick one, and the candidate window opens at that clause (`EditorHandle::composition_area`), else at the caret. A known gap: reconversion (macOS's double-press of the input-source key, or ⌃⇧R, that turns committed text back into a composition) is not offered. winit's text input client reports no committed text around the caret to the input method, so it has nothing to reconvert; it needs that client extended.
 
@@ -300,6 +313,31 @@ in whole word/line units and reverses around the original unit's opposite edge.
 Shift takes precedence over the click count. Selection remains available in
 read-only editors and cancels preedit without editing the committed model.
 
+Chinese, Japanese and Thai put no spaces between words, so Unicode's
+boundaries alone take each character for a word. With zgx's `cjk-thai-words`
+feature, on by default, a double click there selects the word ICU4X's
+dictionaries find, as Chrome's ICU does: 北京 in 我们在北京大学, สวัสดี in
+สวัสดีครับ. Only the run of those scripts around the click is segmented, when
+it is clicked. The dictionaries are static data in the binary: about 2.2 MB of
+a release build (2.0 MB Chinese and Japanese, 0.13 MB Thai), paged in only
+when first read. They add no startup work or memory, and nothing per frame.
+An app that doesn't need them turns the feature off in every zgx crate it
+depends on (`zgx`, `zgx-desktop`, `zgx-script`, with `default-features =
+false` and the defaults it keeps); those scripts then select a character at a
+time. Lao, Khmer and Burmese, which also need dictionaries, select by Unicode's
+boundaries either way.
+
+A list is a view with `Role::List` (Luau `role = "list"`) whose items have
+`Role::ListItem` (`"listitem"`). An item's marker ("•", "3.") is text that
+leads the item, hidden from assistive technology (`accessible_hidden()`, Luau
+`aria_hidden = true`), as markdown draws its lists. The list owns the marker,
+as a browser draws an `<li>`'s: a selection takes no part of it and its plain
+text leaves it out. Copied as HTML, the list is a `<ul>`, or an `<ol>` (with
+`start`) when its first copied item's marker reads as a number, each item an
+`<li>`, lists in items nested. Screen readers hear each item's place ("2 of
+5") unless the app sets `position_in_set` itself, and no marker. `zgx lint`'s
+`list-marker-hidden` finds a marker left as text.
+
 Holding a captured selection pointer outside an editor autoscrolls the document
 and extends the selection even without further pointer movement. Single-line
 fields scroll horizontally; multiline fields also scroll vertically, with
@@ -320,8 +358,8 @@ captured gestures when a host becomes inactive. The fallible advance method
 returns whether a tick ran. Idle editors schedule no interaction wakeups.
 
 The native host forwards pointer modifiers and tracks clicks per target and
-button within the system's double-click time and distance, cycling
-through counts 1, 2, 3, then 1. The distance is Windows' double-click box
+button within the system's double-click time and distance, counting
+1, 2, 3 and on (presses past the third select as a triple's, as Chrome's do). The distance is Windows' double-click box
 (`SM_CXDOUBLECLK` by `SM_CYDOUBLECLK`, centred on the last press, 4 by 4 by
 default, `InputDispatcher::set_double_click_area`), and elsewhere four logical
 pixels in any direction. The time is the person's setting, as native
@@ -354,6 +392,12 @@ guesses (choosing one replaces the word), then Learn Spelling and Ignore Spellin
 (Ignore lasts for the session). It is off by default and never applies to a password
 field; without it, nothing is checked or stored.
 
+`.input_mode(InputMode::Email)` says what kind of text an editor takes, as HTML's
+`inputmode` does: `Text` (the default), `Decimal`, `Numeric`, `Tel`, `Search`, `Email`,
+`Url`, or `None` for a field with its own keypad. It is a hint to the platform's input
+(Windows' touch keyboard and input scope), never a check: anything can still be typed.
+`None` shows no touch keyboard; a physical keyboard types as usual.
+
 Use `.read_only(true)` for selectable output or `.read_only_when(move || locked.get())` for a reactive editing policy. Read-only editors remain focusable and support selection, navigation, scrolling and copy. Typing, paste, deletion, undo/redo, IME composition and accessibility value replacement cannot change their text; cut copies the selection without deleting it. External model updates remain permitted. Entering read-only mode cancels existing preedit while retaining focus, selection and history. The native host disables IME for the read-only editor, and accessibility exposes its read-only state while retaining selection actions. These options apply to editor roots, including components that return an editor; they do not propagate from containers. Direct access to the low-level `TextEditor` remains an application mutation API.
 
 Committed editor text uses LF line endings: CRLF and lone CR become LF, then `text_input` removes line breaks. This applies to initial values, external model updates, typing, paste, accessibility replacements, and IME commits. The bound signal receives the canonical text. Tabs remain intact; ordinary text events still reject other control characters as a whole. Native preedit stays unmodified so its cursor offsets remain valid. Canonical-equivalent model updates preserve selection, preedit, and history, and initial normalization does not create an undo entry.
@@ -379,6 +423,10 @@ External model replacements record a single changed UTF-8 span after removing th
 Selection and read-only refreshes retain unchanged paint text and semantic value storage. The semantic text-input update reuses its string capacity when committed text changes. These avoid document copies in the core refresh path; cold text shaping and native accessibility projection have separate allocation costs.
 
 Editors accept the ordinary dimension, padding, decoration, typography, focus, and disabled styles. Their internals remain stable when layout reallocates their width. `text_area` preserves explicit line breaks and scrolls horizontally for long lines by default. Add `.text_wrap(true)` to wrap at the allocated content width. This inherited style also supports reactive changes; visual wrapping never inserts model newlines. Single-line `text_input` stays unwrapped. Both editor constructors are leaves and reject child views. Unmounting releases input handlers and model subscriptions. Custom headless hosts should call `Ui::prepare_frame()` before flushing or rendering the scene so editor viewports follow allocated layout.
+
+`.read_only_when(f)` keeps a field selectable and focusable and refuses the person's edits while `f` says so. `.input_mode(InputMode::Email)`, HTML's `inputmode`, says what kind of text a field takes. `.caret_color(color)` (or `.caret_color_when(f)`) and `.caret_width(points)` set a field's own caret, and `EditorHandle::set_caret_style` changes it later. `.span_highlighter(f)` styles a text area's lines with `SpanStyle`s (`SpanStyle::default().weight(600).italic()`): weights and italics are shaped, so carets and clicks follow them, and strikes and washes sit on top. `EditorHandle::set_span_highlighter` replaces it.
+
+`.at_caret()` places a popover at the caret of the field in its anchor, following it as text is typed, a line wraps, the field scrolls and an input method composes: a mention's or a slash command's suggestions. It takes no focus, so the field's keys move through them, and `.active_descendant(f)`, HTML's `aria-activedescendant`, tells assistive technology the one it is on.
 
 ### Virtual lists
 
@@ -516,7 +564,7 @@ still report the bounded layout feedback error described below.
 
 ## Allocation feedback errors
 
-A size-dependent row constructor or disposal callback can repeatedly change its own viewport. `Ui::try_prepare_frame` returns `LayoutFeedbackError` after at most 64 stabilization passes instead of hanging. Reentrant preparation defers notifications to the outer call. Correct the model dependency before retrying; application mutations are not rolled back. `try_dispatch` also reports this error without delivering input against unstable geometry. The convenience `prepare_frame` and `dispatch` methods panic with the same diagnostic, while native drawing and input propagate it through `Application::run`.
+A size-dependent row constructor or disposal callback can repeatedly change its own viewport. `Ui::try_prepare_frame` returns `LayoutFeedbackError` after at most 64 stabilization passes instead of hanging. Reentrant preparation defers notifications to the outer call. Correct the model dependency before retrying; application mutations are not rolled back. Window hosts call `Ui::contain_layout_feedback`, so in a window this is reported through `zgx::issues::on_issue` and the app goes on with the layout it reached ([what an app keeps running through](application.md#when-something-fails)). `try_dispatch` also reports this error without delivering input against unstable geometry. The convenience `prepare_frame` and `dispatch` methods panic with the same diagnostic, while native drawing and input propagate it through `Application::run`.
 
 ```rust
 use zgx::{widgets::Ui, input::InputEvent};
@@ -663,10 +711,10 @@ Trackpads' pixel deltas pass as they are.
 
 `Ui::set_elastic_scrolling(true)`, which the macOS host turns on, gives scroll views
 macOS's and Safari's rubber band. A trackpad gesture pushed past an edge stretches
-the view: its content moves on, ever less for each further pixel (AppKit's curve),
+the view: its content moves on a twentieth of the push, in a straight line (AppKit's),
 while the offset an app reads stays in range. Pulling back unwinds the stretch
-before the content scrolls, and lifting the fingers springs it back, critically
-damped, in about 0.4 s. A flick's momentum that reaches an edge bounces. It
+before the content scrolls, as far as the hand moves, and lifting the fingers springs
+it back in about 0.4 s. A flick's momentum that reaches an edge bounces. It
 stretches the view the gesture is latched to; otherwise, as a page bounces rather
 than a box in it, the outermost view under the pointer that scrolls along that
 axis. The host reports the gesture's phases as `InputEvent::ScrollGesture`. A mouse
@@ -919,8 +967,14 @@ full APG conformance.
 ## Accessibility
 
 Controls report their role, name and state to assistive technology
-themselves (AccessKit: VoiceOver, Narrator, Orca). These say what a plain view
-means, as ARIA's attributes do in HTML; a view that sets none pays nothing:
+themselves (AccessKit: VoiceOver, Narrator, Orca). While no screen reader runs
+(on macOS, neither VoiceOver nor Switch Control; on Windows, none has set
+`SPI_GETSCREENREADER`), anything else reading the tree (a launcher, a window
+manager, Voice Control, Zoom, which follow focus and act on what is there) has
+it paced: focus at once, names, values and selection at most 100 ms late.
+
+These say what a plain view means, as ARIA's attributes do in HTML; a view that
+sets none pays nothing:
 
 - `.accessible_label(name)`: the name read for it (`aria-label`);
   `.accessible_label_when(|| …)` follows one, for a recycled row's name.
@@ -937,10 +991,17 @@ means, as ARIA's attributes do in HTML; a view that sets none pays nothing:
 - `.selected_when(|| …)`: whether an option, tab or item is chosen
   (`aria-selected`), followed.
 - `.live(Live::Polite)` or `Live::Assertive`: announce changes to the text in
-  it (`aria-live`). `Role::Status` is polite by default.
+  it (`aria-live`). `Role::Status` is polite by default and `Role::Alert`
+  assertive, as ARIA's are.
 - `.accessible_description(text)`: read after the name (`aria-description`).
 - `.accessible_hidden()`: left out with its subtree (`aria-hidden`), for
   decoration.
+  An unnamed image inside a button, check box, switch, radio button, tab,
+  menu item, option, slider or progress bar is left out without asking: the
+  control's name says what it is (ARIA's presentational children).
+- A popover or menu with no name (`popover("", …)`, a Luau `ui.popover`
+  without `label`) is named by its trigger, as it reads now
+  (`aria-labelledby`).
 - `.focus_group(FocusGroup::Vertical)` (or `Horizontal`, `Both`): one Tab stop
   for the focusable views inside, as ARIA's composite widgets are. Tab lands on
   the one last focused there (else the selected one, else the first), and the
@@ -964,6 +1025,17 @@ means, as ARIA's attributes do in HTML; a view that sets none pays nothing:
   which a screen reader would announce.
 - Escape in a text field (with no composition to cancel) goes on to the dialog
   or menu around it, which closes and gives focus back.
+
+`zgx_desktop::accessibility::audit::audit(&mut ui)` checks what a reader
+gets of a mounted interface, headless, and walks Tab through it (Control-Tab
+out of a field that indents, Escape out of a dialog or popover).
+`Report::to_json()` is one line, each finding a `rule` (`no-role`, `no-name`,
+`no-action`, `no-state`, `focus-unreachable`, `focus-trap`,
+`not-announced`), the node (`@number`, as `zgx inspect` names it), its role,
+name and what is missing. It turns assistive technology on for that `Ui`; an
+app no reader reads runs none of it. `tests/accessibility_audit.rs` audits
+the gallery and the Luau examples (with their toasts, menus, popovers,
+dialogs and field errors open) and fails on any finding.
 
 ```rust
 use zgx::{compose::prelude::*, semantics::Role};

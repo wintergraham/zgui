@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Replace a model during real text-input-v3 composition and verify recovery."""
-from sway_host import wait_for_openbox
+from sway_host import wait_for_openbox, sway_config
 import argparse
 import json
 import os
@@ -37,7 +37,7 @@ def main():
         profile.parent.mkdir(parents=True)
         profile.write_text('[Groups/0]\nName=Default\nDefault Layout=us\nDefaultIM=pinyin\n\n[Groups/0/Items/0]\nName=keyboard-us\nLayout=\n\n[Groups/0/Items/1]\nName=pinyin\nLayout=\n\n[GroupOrder]\n0=Default\n')
         config = pathlib.Path(private, 'sway.conf')
-        config.write_text('xwayland disable\nseat seat0 fallback true\noutput * mode 1200x800\ndefault_border none\nfor_window [title="zgx external IME model"] fullscreen enable\n')
+        sway_config(config, 'xwayland disable\nseat seat0 fallback true\noutput * mode 1200x800\ndefault_border none\nfor_window [title="zgx external IME model"] fullscreen enable\n')
         (args.output/'profile').write_text(profile.read_text())
         (args.output/'sway.conf').write_text(config.read_text())
         bus_config = pathlib.Path(private, 'dbus.conf')
@@ -49,7 +49,7 @@ def main():
                 return subprocess.Popen(command, env=process_env, stderr=log, stdout=kwargs.pop('stdout', log), **kwargs)
         try:
             xvfb = launch('xvfb', ['Xvfb','-r','-noreset','-displayfd','1','-screen','0','1400x1000x24','-ac'], stdout=subprocess.PIPE, text=True)
-            if not select.select([xvfb.stdout], [], [], 10)[0]: raise RuntimeError('Xvfb timeout')
+            if not select.select([xvfb.stdout], [], [], 30)[0]: raise RuntimeError('Xvfb timeout')
             env['DISPLAY'] = ':'+xvfb.stdout.readline().strip()
             bus = launch('dbus', ['dbus-daemon','--config-file='+str(bus_config),'--nofork','--print-address=1'], stdout=subprocess.PIPE, text=True, start_new_session=True)
             if not select.select([bus.stdout], [], [], 10)[0]: raise RuntimeError('D-Bus timeout')

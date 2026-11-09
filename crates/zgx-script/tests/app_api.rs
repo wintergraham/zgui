@@ -47,6 +47,88 @@ fn commands_are_published_after_a_load_and_run_by_id() {
 }
 
 #[test]
+fn a_shortcut_following_a_state_is_rebound_without_a_reload() {
+    // Settings' Shortcuts: rebinding applies at once, everywhere.
+    let mut h = Harness::inline(
+        r##"local keymap = ui.state("keymap", { run = "cmd+j" })
+        local count = ui.state("count", 0)
+        local find_key = ui.state("find_key", "")
+        ui.command { id = "run", title = "Run", key = function() return keymap:get().run end,
+            run = function() count:add(1) end }
+        ui.command { id = "copy", title = "Copy", key = "cmd+c", run = function() end }
+        ui.command { id = "find", title = "Find", key = find_key, run = function() end }
+        return ui.column {
+            ui.button { id = "to-l", w = 20, h = 20, on_click = function() keymap:set_key("run", "cmd+l") end },
+            ui.button { id = "to-c", w = 20, h = 20, on_click = function() keymap:set_key("run", "cmd+c") end },
+            ui.button { id = "find-f", w = 20, h = 20, on_click = function() find_key:set("cmd+f") end },
+            ui.text { id = "owner", function()
+                keymap:get()
+                return `{ui.shortcut_owner("cmd+l") or "none"} {ui.shortcut_owner("Shift+Cmd+J") or "none"}`
+            end },
+        }"##,
+    );
+    let key = |h: &Harness, id: &str| {
+        h.host
+            .commands()
+            .get()
+            .iter()
+            .find(|c| c.id == id)
+            .and_then(|c| c.key.clone())
+    };
+    assert_eq!(key(&h, "run").as_deref(), Some("cmd+j"));
+    assert_eq!(key(&h, "find"), None);
+    h.click("to-l");
+    h.settle();
+    // Published again: the menu's key equivalent follows, no reload.
+    assert_eq!(key(&h, "run").as_deref(), Some("cmd+l"));
+    assert_eq!(h.text("owner"), "run none");
+    assert!(h.host.run_command("run"));
+    // A state for a key, too.
+    h.click("find-f");
+    h.settle();
+    assert_eq!(key(&h, "find").as_deref(), Some("cmd+f"));
+    // Onto another command's key: the earlier keeps it, and the menu bar
+    // never has it twice; the drop is reported.
+    h.click("to-c");
+    h.settle();
+    assert_eq!(key(&h, "run").as_deref(), Some("cmd+c"));
+    assert_eq!(key(&h, "copy"), None);
+    let dropped = h.host.dropped_shortcuts();
+    assert_eq!(dropped.len(), 1, "{dropped:?}");
+    assert_eq!(
+        (
+            dropped[0].command.as_str(),
+            dropped[0].holder.as_str(),
+            dropped[0].plugin.as_str()
+        ),
+        ("copy", "run", "")
+    );
+    assert_eq!(h.error(), None);
+}
+
+#[test]
+fn a_recorder_with_capture_keys_takes_every_key_while_focused() {
+    // Settings' Shortcuts: a field records the next combination, ⌘J
+    // included, instead of a menu running its command.
+    let mut h = Harness::inline(
+        r##"local got = ui.state("got", "")
+        return ui.column {
+            ui.row { id = "recorder", focusable = true, capture_keys = true, w = 100, h = 30,
+                on_key = function(e) got:set(e.key) return true end },
+            ui.row { id = "other", focusable = true, w = 100, h = 30 },
+            ui.text { id = "got", "{got}" },
+        }"##,
+    );
+    h.click("recorder");
+    assert!(h.ui.input.captures_keys(&h.ui.scene.borrow()));
+    h.keys("cmd+j");
+    assert_eq!(h.text("got"), "j");
+    h.click("other");
+    assert!(!h.ui.input.captures_keys(&h.ui.scene.borrow()));
+    assert_eq!(h.error(), None);
+}
+
+#[test]
 fn a_failed_load_keeps_the_published_commands() {
     let runtime = zgx::reactive::Runtime::new();
     let dir = std::env::temp_dir().join(format!("zgx-commands-{}", std::process::id()));
@@ -174,6 +256,39 @@ fn reading_a_terminal_field_follows_that_field_alone() {
     term.update_state(|state| state.title = "vim".into());
     h.settle();
     assert_ne!(h.text("runs"), before, "a title change reruns it");
+}
+#[test]
+fn a_script_answers_a_programs_clipboard_read() {
+    // `on_clipboard_read` gets the request; a press allows it later, as a
+    // prompt the app shows would.
+    let mut h = Harness::inline(
+        r##"local pending = nil
+        local asked = ui.state("asked", 0)
+        local term = ui.term("p1", {
+            command = "zsh",
+            on_clipboard_read = function(request)
+                pending = request
+                asked:set(asked:peek() + 1)
+            end,
+        })
+        return ui.column {
+            ui.terminal { term = term, w = 200, h = 100 },
+            ui.text { id = "asked", "{asked}" },
+            ui.button { id = "allow", w = 20, h = 20, on_click = function() pending:allow() end },
+        }"##,
+    );
+    let term = terminal(&mut h);
+    let answer = std::rc::Rc::new(std::cell::Cell::new(None));
+    let told = answer.clone();
+    let unanswered = term.request_clipboard_read(zgx::terminal::ClipboardRead::new(move |allow| {
+        told.set(Some(allow))
+    }));
+    assert!(unanswered.is_none(), "the script's handler takes it");
+    h.settle();
+    assert_eq!(h.text("asked"), "1");
+    assert_eq!(answer.get(), None, "not answered yet");
+    h.click("allow");
+    assert_eq!(answer.get(), Some(true));
 }
 struct NoBackend;
 impl zgx::terminal::TerminalBackend for NoBackend {
@@ -981,4 +1096,22 @@ fn an_images_shader_params_reach_its_node_and_animate_its_reveal() {
         "the front moved: {params:?}"
     );
     assert_eq!(params[0][1], 0.25, "the band kept");
+}
+
+#[test]
+fn reserved_commands_publish_their_shortcuts() {
+    let h = Harness::inline(
+        r##"ui.command { id = "tab", title = "New Tab", menu = "Shell", key = "cmd+t", reserved = true, run = function() end }
+        ui.command { id = "find", title = "Find", menu = "Edit", key = "cmd+f", run = function() end }
+        ui.command { id = "close", title = "Close", menu = "Shell", key = "cmd+w", reserved = true, run = function() end }
+        ui.command { id = "keyless", title = "No key", menu = "Shell", reserved = true, run = function() end }
+        return ui.column {}"##,
+    );
+    assert_eq!(h.host.error().get(), None);
+    assert_eq!(h.host.reserved_keys().get(), ["cmd+t", "cmd+w"]);
+    assert_eq!(
+        h.host.commands().get().len(),
+        4,
+        "reserved commands are menu items too"
+    );
 }

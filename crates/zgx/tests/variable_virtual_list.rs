@@ -443,7 +443,19 @@ fn interactive_descendants_keep_editor_and_button_keyboard_behavior() {
     );
     ui.prepare_frame();
     ui.input.focus(&ui.scene, view.find("editor"));
-    key(&mut ui, Key::Home);
+    // To the line's start: ⌘← on macOS, where Home scrolls instead.
+    ui.dispatch(InputEvent::KeyDown {
+        key: if cfg!(target_os = "macos") {
+            Key::ArrowLeft
+        } else {
+            Key::Home
+        },
+        modifiers: Modifiers {
+            meta: cfg!(target_os = "macos"),
+            ..Modifiers::default()
+        },
+        repeat: false,
+    });
     ui.dispatch(InputEvent::Text("x".into()));
     assert_eq!(value.get(), "xabc");
     for input in [Key::ArrowDown, Key::PageDown, Key::End] {
@@ -606,4 +618,83 @@ fn explicit_scroll_request_from_key_callback_is_not_overwritten() {
     assert_eq!(offset.get(), 200.);
     assert!(view.find("row-10").is_some());
     assert!(view.find("row-0").is_none());
+}
+
+/// An end-anchored list's offset once it holds ten 20-point rows in a
+/// 60-point view: `initial` rows first, cleared first or not, measured or
+/// with known heights, anchored at its end or not.
+fn grown(initial: usize, clear_first: bool, measured: bool, end: bool) -> f32 {
+    let mut ui = Ui::new(200., 100.);
+    let offset = ui.signal(0.);
+    let heights = VariableHeights::new(&ui.runtime, initial, 20.);
+    let heights = if end { heights.anchor_end() } else { heights };
+    let list = if measured {
+        measured_virtual_list(
+            offset.clone(),
+            heights.clone(),
+            0,
+            |i| i,
+            |_, _, _| div().h(20.),
+        )
+    } else {
+        variable_virtual_list(
+            offset.clone(),
+            heights.clone(),
+            0,
+            |i| i,
+            |_, _, _| div().h(20.),
+        )
+    };
+    let _view = ui.mount(list.size(160., 60.));
+    ui.try_prepare_frame().unwrap();
+    if clear_first {
+        heights.resize(0).unwrap();
+        ui.try_prepare_frame().unwrap();
+    }
+    assert_eq!(offset.get(), 0.);
+    heights.resize(10).unwrap();
+    ui.try_prepare_frame().unwrap();
+    offset.get()
+}
+/// A chat transcript empty at first, or cleared and filled again, sticks
+/// to its last rows as they come: an empty list stays at its end.
+#[test]
+fn an_end_anchored_list_follows_its_first_rows_after_being_empty() {
+    assert_eq!(grown(0, false, false, true), 140.);
+    assert_eq!(grown(1, true, false, true), 140.);
+    assert_eq!(grown(0, false, true, true), 140.);
+    assert_eq!(grown(1, true, true, true), 140.);
+    // As before: one with rows follows, one not anchored stays at its top.
+    assert_eq!(grown(1, false, false, true), 140.);
+    assert_eq!(grown(1, false, true, true), 140.);
+    assert_eq!(grown(0, false, false, false), 0.);
+}
+
+/// Rows thin from the start, folded away, are never built: a thousand under
+/// a hundredth of a point build none, only the rows that show.
+#[test]
+fn rows_folded_to_nothing_are_never_built() {
+    let mut ui = Ui::new(240., 160.);
+    let heights = VariableHeights::new(&ui.runtime, 1000, 20.);
+    heights
+        .replace((0..1000).map(|i| if i < 3 { 20. } else { 0.001 }))
+        .unwrap();
+    let builds = Rc::new(Cell::new(0));
+    let created = builds.clone();
+    let view = ui.mount(
+        variable_virtual_list(
+            ui.signal(0.),
+            heights.clone(),
+            0,
+            |index| index,
+            move |_, index, _| {
+                created.set(created.get() + 1);
+                text(index.to_string())
+            },
+        )
+        .size(200., 120.),
+    );
+    ui.prepare_frame();
+    assert_eq!(builds.get(), 3, "folded away, never built");
+    view.unmount();
 }

@@ -13,3 +13,111 @@ The reference CPU rasterizer omits native surfaces; it does not silently read th
 The [macOS continuation packet](platform-validation/macos-continuation/README.md) records execution on macOS 26.4 / Apple M5 Max: the complete Metal suite passed, including `metal_imports_native_bgra_and_nv12_reuses_frames_and_releases_on_teardown` and the retained component fitting/binding test. The native `native_surfaces --smoke-test` window also alternated four BGRA/NV12 frames successfully. These establish real imported pixels, frame reuse and ownership/teardown behavior; they are not inferred from the earlier ARM cross-check or Linux WGSL validation. They do not establish video playback throughput, presentation cadence or hardware performance rankings.
 
 The Mac validation bundle runs the complete GPU rendering suite, including native surfaces, before native window probes. Its interactive checklist also covers layout/media painting, clipboard exchange, editing and three separate native IME scenarios. The IME fixture has a 20-second lifetime per launch. Each operator case keeps a separate log; FAIL exits unsuccessfully, while skipped or unrecognized answers remain pending. CI runs the automated subset and preserves the pending manual checklist.
+
+# Web views by platform
+
+A web view (`zgx::web_view`, `ui.webview`) is the platform's own page, laid out as a node. How each platform shows it, and what that leaves out:
+
+| | macOS | Windows | Linux |
+| --- | --- | --- | --- |
+| Engine | WKWebView | WebView2 (`webview2` feature) | WebKitGTK 4.1 (`webkitgtk` feature; zgx-run has it) |
+| Shown as | a native view between zgx's base and overlay planes, one Core Animation transaction | a DirectComposition visual between the planes, one commit | an image: drawn offscreen (`GtkOffscreenWindow`), uploaded into a GPU view's texture, composited with zgx's paint |
+| Clip, rounded corners, opacity, transforms | yes | yes | yes |
+| zgx content over the page | overlay plane | overlay plane | ordinary paint |
+| Glass over the page | blurs the page | tint only | blurs the page |
+| Pixels per frame | none copied | none copied | three CPU copies of what changed: the whole page while WebKit composites (the default), only the changed parts with `accelerated: false` ([below](#what-a-linux-page-frame-costs)) |
+| Keys, reserved shortcuts, fall-through | yes | yes | yes |
+| Input method | AppKit's | the Text Services Framework | the window's (XIM, text-input-v3), through a WebKit input method context of zgx's |
+| `<select>` popups | WebKit's | WebView2's | a zgx menu |
+| Video and audio | the platform's | the platform's | WebKit's GStreamer (WebM and Ogg as packaged; H.264 with `gstreamer1.0-libav`) |
+| Clipboard | the system's | the system's | X11 the system's; Wayland through zgx's: text, with its HTML, and images a page copies (WebKitGTK pastes no image into a page, on X11 either) |
+| Cursor | the page's | the page's | the page's: CSS's named cursors as the theme's, `url()` images as themselves |
+| Page accessibility | the platform's | the platform's | in the window's tree: the page's own (AT-SPI), under its box |
+| Drags out of the page | the platform's | the platform's | zgx's: links, images (their bytes) and text, to zgx's targets and other apps |
+| Files dropped on it, drags within it | the platform's | the platform's | the page's `dragover` and `drop`: its own drags' data, zgx's text, other apps' files as `File`s |
+| Downloads (`WebView::set_download_handler`, Luau `on_download`) | the app's: saved where it says (`WKDownload`), else none | the app's: saved where it says, WebView2's download bar hidden, else none | the app's: saved where it says (`WebKitDownload`), else none |
+| Context menu (a right click) | WebKit's | WebView2's | WebKit's items for what's clicked (a link, an image, media, a selection, a field, the page) as a zgx menu where the click was; spelling, font and media-control items left out |
+| Script dialogs (`alert`, `confirm`, `prompt`) | alert sheets on the window, the page's origin under the message | WebView2's dialogs | WebKit's, drawn in the page |
+| Full screen (`requestFullscreen`) | WebKit's window over the screen | the element fills the node | the element fills the node |
+| File inputs (`<input type=file>`) | the window's file dialog, a sheet | WebView2's picker | the window's file dialog (the desktop portal's, or zenity's) |
+| Printing (`WebView::print`, the page's `window.print()`) | the print panel, a sheet on the window | WebView2's print preview | GTK's print dialog, transient for the window on X11 |
+| Find in page (`WebView::find`) | WebKit's, without a count of matches | WebView2's, counting matches; its own find bar and browser keys off | WebKit's, counting matches (up to 1,000) |
+| Missing engine | — | placeholder | placeholder (the library is opened as the first page shows) |
+
+A page never saves a file into the person's folders unless the app decides it. Each download it starts (a `download` link, an attachment, a response the page can't show) goes to the app's handler with its URL, suggested name and type; the app saves it at a file the person chose (its save dialog: Luau's `d:ask()`, through the window's file dialogs, so a sandboxed macOS app saves where the person picked) or not. With no handler, or a responder dropped unanswered, it's cancelled. How a saved one goes (bytes received, the end, a failure) reaches the handler's status callback on every platform.
+
+Linux's choice: Wayland cannot embed another client's surface, an X11 child window can't be faded or rounded smoothly or covered by translucent zgx content, and WPE WebKit isn't packaged on Ubuntu 24.04; drawing offscreen behaves the same on X11 and Wayland. See [the Linux notes](linux.md#web-views).
+
+## What a Linux page frame costs
+
+Each page frame takes three copies of its damaged parts on the CPU:
+
+1. WebKit paints its buffer into zgx's cairo image surface (`gtk_widget_draw`, on GTK's thread).
+2. zgx copies the surface's rows into the frame it shares with the UI thread.
+3. The UI thread hands them to wgpu (`write_texture`), which copies them into its staging memory before the GPU's upload.
+
+Measured October 2026 on a WebGL page with full damage, at 1076 × 700 pixels (3.0 MB). The release `web_view` example ran in the zgx-linux container (arm64, 6 cores, no GPU), with WebKit drawing about 37 frames a second:
+
+| Copy | Thread | Per page frame |
+| --- | --- | --- |
+| WebKit's paint into the surface | GTK | 457–832 µs |
+| Into the shared frame | GTK | about 75 µs |
+| `write_texture` | UI | 108–129 µs |
+
+zgx's own copies (2 and 3) come to about 0.2 ms a frame at that size, roughly 0.6% of a core at 30 frames a second. That's a fifth or less of the path's cost. The rest is WebKit's paint, which GTK 3's public API cannot skip. So cutting them was left out:
+
+- Painting into the shared buffer directly needs two buffers. On a partial update, WebKit then repaints the previous frame's damage too, at about six times a copy's cost per pixel.
+- Painting into a mapped wgpu staging buffer would save copy 3 alone, for a ring of buffers passed between the threads.
+
+On a machine with a GPU, WebKit 2.52 renders into dma-bufs, and GTK 3's offscreen window reads them back (on GTK's thread) before copy 2. That readback is what zero-copy would remove, and only a Linux machine with a GPU can measure it; the container and CI's runners have none. The routes, as packaged on Ubuntu 24.04:
+
+- **WebKitGTK 4.1 on GTK 3 (today's):** the offscreen window gives zgx a cairo drawing and nothing else. WebKit's dma-bufs stay inside its private backing store.
+- **WebKitGTK 6.0 on GTK 4.14 (packaged):** WebKit hands GTK its frames as dma-buf textures. Whether GTK 4.14 lets an embedder read a texture's file descriptors still needs checking. GTK 4 has no offscreen window, so pages would need another host.
+- **WPE WebKit:** its `wpe_view_backend_exportable_fdo` API hands an embedder each frame as a dma-buf or EGLImage, the direct route into a wgpu texture. It isn't packaged on Ubuntu 24.04.
+
+Idle stays free: a static page costs no CPU once drawn (0.0% over 20 s). Memory (PSS) on that page: the app 177 MB, WebKit's web process 202 MB, its network process 23 MB.
+
+### Composited or painted: `accelerated`
+
+WebKitGTK 4.1 composites pages by default: WebKit's compositor (its GPU path) draws each frame, and GTK 3's side of it then reports the **whole page** changed, whatever moved. A page animating a 40 × 40 spinner is painted, copied and uploaded whole on every frame. WebKit's feature flags for damage (`UseDamagingInformationForCompositing`, `UnifyDamagedRegions`) change nothing at that side, and its on-demand policy is no longer honoured (it reads back as always).
+
+`WebViewOptions::accelerated` (Luau `accelerated`), on by default, chooses that. Off, WebKit paints the page on the CPU (its `NEVER` policy) and reports what each frame changed. zgx keeps the changed parts as up to four rectangles (those close together become one), and paints, copies and uploads only those. macOS and Windows ignore the option: their pages are the platform's own views and copy nothing.
+
+Measured November 2026 in the same container (release `web_view`, page 1076 × 700, 753,200 pixels; WebKitGTK 2.52.6; no GPU, so WebKit's compositor runs on llvmpipe), two runs of 14 s each, CPU as a share of one core:
+
+| Page | Composited (default): pixels per upload | WebKit's web process | `accelerated: false`: pixels per upload | WebKit's web process |
+| --- | --- | --- | --- | --- |
+| 40 × 40 spinner | 753,200 | 40–52% | 3,296 | 3–9% |
+| two spinners, opposite corners | 753,200 | 47–58% | 10,871, in 2.35 parts | 8–9% |
+| 3D-rotating square | 753,200 | 39–67% | 4,591 | 2–4% |
+| scrolled by script | 753,200 | 47–59% | 753,200 (all of it moves) | 5–6% |
+| WebGL triangle | 753,200 | 100–160% | 753,200 | 134–142% |
+
+Composited, a frame costs what it did before the parts: one part, the whole page. Painted, zgx's own copies (2 and 3) take tens of microseconds for a spinner instead of about 0.6 ms. WebGL still runs painted, as fast as composited. What a page loses painted: `backdrop-filter` draws nothing, and 3D transforms flatten (no perspective). `filter`, `box-shadow`, 2D transforms and animations draw as composited. Turn it off for an app's own pages that animate small parts (spinners, progress, a caret) and use neither.
+
+Neither choice changes idle (no frames, no CPU). Painted, the app holds about 10 MB more (PSS 188–198 MB, against 177–186 MB composited). In the container, zgx's own frame of the window for each page frame (its renderer on llvmpipe) is the larger cost either way; on a GPU it's the GPU's.
+
+# Terminals
+
+`zgx::terminal::terminal(&term)` (Luau `ui.terminal`) shows a `Terminal` controller's session in a node laid out like any other. Two backends draw it; the desktop host picks by its features:
+
+| Feature | Platforms | Draws it | Needs to build |
+| --- | --- | --- | --- |
+| `ghostty` | macOS | a Ghostty surface, a native view over the window (as a web page is) | Zig 0.16 (Ghostty is built from a pinned source) |
+| `terminal` | macOS, Linux, Windows | zgx itself, in the window's own text (`zgx-terminal`) | Rust alone |
+
+With both on macOS, Ghostty draws. zgx-run turns `terminal` on, so Luau apps have terminals on every platform; a Rust app opts in with `zgx-desktop/terminal`. Without either a node shows a labelled placeholder and its controller still answers.
+
+**The engine-drawn terminal** (`zgx-terminal`, built on `alacritty_terminal` 0.26):
+
+- *The session*: a pseudoterminal (openpty, and `setsid`, on Linux and macOS; ConPTY on Windows) running the login shell (`$SHELL -l`; PowerShell on Windows) or `command` (`/bin/sh -c` on Unix, as written on Windows), with `TERM=xterm-256color`, `COLORTERM=truecolor` and `TERM_PROGRAM=zgx`. Its I/O runs on a thread of its own that sleeps in `poll` until the program writes or the app does; it parses output into the screen and wakes the UI once until the UI has read it, so a flood of output costs one update a frame and an idle shell nothing (no timers, no frames). 10,000 lines of scrollback.
+- *Drawing*: each row of the grid is a canvas: backgrounds, the selection, the cursor and strikes are filled rectangles the GPU draws without rasterizing, and so are underlines a program asks for in a style (double, dotted, dashed: SGR 4:2, 4:4, 4:5) or a colour of its own (SGR 58), a curly one (4:3) a stroked wave a cell long, as editors mark diagnostics (a plain underline in the text's colour is the text's own); text is runs of cells in one style, shaped in the platform's monospaced font with ligatures off, on the grid of cells (`LetterSpacing::cells`: each character's glyph takes its cells, centred, whichever font draws it, so a braille spinner from a fallback font moves nothing after it); a wide character (CJK, emoji) or one whose glyph may come from another font (symbols, private-use icons) is placed alone, centred on its cells, so the grid never drifts. Only rows the screen model marks damaged are worked out again, and only those that differ draw again. When output scrolls the screen, the rows still on it move up with it (their container is moved, without layout) and only the new lines draw: a build log's line a frame repaints one row, not the screen. Output is read at most once a refresh: a program printing faster (ConPTY hands it over in small chunks, a thousand times a second) has all of it read and drawn at the next refresh, and output after a pause (a key's echo) is read as it arrives.
+- *Fidelity*: 16 colours, 256 and true colour, bold, italic, dim, inverse, hidden, underline (single, double, curly, dotted and dashed, in the text's colour or one of its own), strikethrough, wide and emoji cells, grapheme clusters as Ghostty has them (DEC mode 2027, on until a program resets it: an emoji ZWJ sequence, a flag or a skin tone is one character in two cells, VS16 makes an emoji two wide and VS15 one; reset, each character takes its own width, as `wcwidth` counts, so a line editor's cursor keeps in step), cursor shapes (block, bar, underline; a hollow block unfocused), the alternate screen, bracketed paste, focus reporting, mouse reporting (X10, normal, button and any-motion tracking, UTF-8 and SGR encodings; Shift selects over it), the wheel scrolling scrollback or, on the alternate screen, sending arrows, DEC 2026 synchronized output, OSC 8 hyperlinks (⌘-click, Ctrl-click elsewhere, opens one), OSC 52 copy and, as the app answers (`Terminal::on_clipboard_read`, Luau `on_clipboard_read`), reads; colour queries (OSC 4, 10, 11) and device attributes.
+- *Keys*: xterm's encodings (cursor and keypad application modes, modifiers as `CSI 1;m`), Ctrl chords as control characters, Alt as an Escape prefix (Option types its own characters on macOS). A program asking for the kitty keyboard protocol (`CSI > flags u`, as Neovim and coding agents do) gets it: disambiguated escapes (`CSI 99;5u` for Ctrl+C), event types (repeats and releases), alternate keys (the shifted key, and the US layout's base key), every key as an escape and its associated text; its flags answer `CSI ? u`. Modifier keys alone aren't reported. ⌘C and ⌘V on macOS, Ctrl+Shift+C and Ctrl+Shift+V elsewhere, copy the selection and paste; on Linux a selection made is the primary selection and a middle click pastes it (`Platform::primary_text`); other ⌘ chords are the app's. Input methods compose in a hidden editor kept at the cursor, which assistive technology doesn't see: TSF, XIM, Wayland's text input and AppKit place their candidates there, the composition shows at the cursor, and what they commit goes to the program.
+- *State*: title (OSC 0/2), working directory (OSC 7), bell, progress (OSC 9;4), finished commands with their duration (OSC 133 C/D), notifications (OSC 9, OSC 777), the exit code, the grid's size, and the foreground process: the pty's foreground process group on Unix, the shell's newest descendant on Windows, or what `zgx_desktop::resolve_terminal_processes` says is behind it (a session server's client), with its Program Status (OSC 7501).
+- *Accessibility*: the terminal is a document named Terminal; each row is a text label with what it shows, so a screen reader can read the screen line by line; the latest output is a polite live region of its own, saying the lines output brought or what a line gained, not the whole screen, and not the shell's echo of what was typed, whole or a character at a time. It goes out with the frame's accessibility update, saying everything read since the last, so output read in two parts before a frame (a command's output, then the prompt) is heard whole. Checked with Orca over AT-SPI on X11 (`terminal_smoke.py --orca`) and with macOS's AX API (rows are `AXStaticText`, the output an `AXApplicationStatus` group). The hidden editor keys go through isn't in the tree.
+- *Bindings* (`Terminal::binding`) take Ghostty's names for what they share: `copy_to_clipboard`, `paste_from_clipboard`, `select_all`, `clear_screen`, `scroll_to_top`, `scroll_to_bottom`, `scroll_page_up`, `scroll_page_down`, `scroll_page_lines:N`, `scroll_page_fractional:F`, `increase_font_size:N`, `decrease_font_size:N`, `reset_font_size`, `text:…`, `csi:…`, `esc:…`.
+
+What it can't do yet, and how it differs from Ghostty: no images (kitty graphics, sixel); the cursor doesn't blink; no Ghostty configuration or shaders (its colours are the theme's `terminal.*` tokens, `follow_theme_colors` and `Terminal::set_colors`, the default background the node's own); `snapshot` is the node as the window last drew it.
+
+Measured on an M5 Max (macOS 26.4), each in a 900×600 window, three runs each: catting 290 MB of coloured text took the engine-drawn terminal 4.1–5.8 s of the app's CPU against Ghostty's 6.8–8.3 s; idle after, it spent nothing in 5 s, Ghostty 0.02–0.03 s; its process kept 147–154 MB resident against Ghostty's 171–175 MB. Streaming output, its frames took about 1 ms of CPU. A terminal whose 10,000 lines of scrollback are full adds 13–17 MB.

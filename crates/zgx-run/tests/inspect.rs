@@ -20,6 +20,10 @@ return ui.column {
 }
 "##;
 
+/// Held by tests that read or size the frame log (`keep`): it is the
+/// process's, and another test keeping two frames would cut theirs short.
+static FRAME_LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn app() -> (TestApp, Session) {
     let app = TestApp::new(|runtime| ScriptHost::inline(runtime, "app", APP));
     let session = Session::new(&app.ui, app.handle.clone(), &app.host, None);
@@ -283,6 +287,7 @@ fn a_snapshot_is_a_png_of_the_node_only_its_user_reads() {
 
 #[test]
 fn a_tape_records_and_replays_through_the_host_saying_how_frames_were_paced() {
+    let _log = FRAME_LOG.lock().unwrap_or_else(|e| e.into_inner());
     let (mut app, session) = app();
     // Without a host's recorder, it says why.
     let refused = error(&ask(&app, &session, r#"{"cmd":"record"}"#));
@@ -445,6 +450,7 @@ fn tape_host(
 
 #[test]
 fn frames_read_since_a_mark_with_the_runs_asked_for_the_gpu_and_the_engines_notes() {
+    let _log = FRAME_LOG.lock().unwrap_or_else(|e| e.into_inner());
     let (mut app, session) = app();
     text(&ask(&app, &session, r##"{"cmd":"click","target":"#add"}"##));
     let marked = ask(&app, &session, r#"{"cmd":"mark","name":"here"}"#);
@@ -512,6 +518,237 @@ fn frames_read_since_a_mark_with_the_runs_asked_for_the_gpu_and_the_engines_note
     assert!(kept.field("data").unwrap().list().len() <= 2);
     text(&ask(&app, &session, r#"{"cmd":"frames","keep":480}"#));
     assert_eq!(zgx::trace::kept(), 480);
+}
+
+/// An interaction between two marks, as a whole: its frames, the input
+/// events they took and what each cost, the work's percentiles and each
+/// phase's; frames after the second mark left out.
+#[test]
+fn frames_sum_up_an_interaction_between_two_marks() {
+    let _log = FRAME_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut app, session) = app();
+    app.frame();
+    text(&ask(&app, &session, r#"{"cmd":"mark","name":"start"}"#));
+    for _ in 0..3 {
+        app.click("add");
+        app.frame();
+    }
+    text(&ask(&app, &session, r#"{"cmd":"mark","name":"end"}"#));
+    let summary = ask(
+        &app,
+        &session,
+        r#"{"cmd":"frames","since":"start","until":"end","summary":true}"#,
+    );
+    let said = text(&summary);
+    assert!(said.contains("input events: each"), "{said}");
+    assert!(said.contains("phases at p95:"), "{said}");
+    let data = summary.field("data").unwrap();
+    let number = |key: &str| data.field(key).and_then(Value::as_f64).unwrap();
+    assert!(number("frames") >= 3., "{said}");
+    // A click is a press and a release.
+    assert!(number("events") >= 6., "{said}");
+    let work = data.field("work_ms").unwrap();
+    let ms = |of: &Value, key: &str| of.field(key).and_then(Value::as_f64).unwrap();
+    assert!(ms(work, "p50") <= ms(work, "p95") && ms(work, "p95") <= ms(work, "max"));
+    let per_event = data.field("per_event_ms").unwrap();
+    assert!(ms(per_event, "max") <= ms(work, "max") + 1e-9);
+    assert!(!data.field("phases").unwrap().list().is_empty());
+    // Each frame says what input it took.
+    let listed = ask(
+        &app,
+        &session,
+        r#"{"cmd":"frames","since":"start","until":"end"}"#,
+    );
+    let frames = listed.field("data").unwrap().list();
+    let events: f64 = frames
+        .iter()
+        .map(|f| f.field("events").and_then(Value::as_f64).unwrap())
+        .sum();
+    assert_eq!(events, number("events"));
+    // What follows the second mark stays out.
+    app.click("add");
+    app.frame();
+    let again = ask(
+        &app,
+        &session,
+        r#"{"cmd":"frames","since":"start","until":"end","summary":true}"#,
+    );
+    assert_eq!(
+        again
+            .field("data")
+            .unwrap()
+            .field("events")
+            .and_then(Value::as_f64),
+        Some(number("events"))
+    );
+}
+
+/// Layout's fresh measures, frame by frame and over an interaction: how
+/// many, and the subtrees whose own measuring cost most, named as the
+/// script made them.
+#[test]
+fn frames_attribute_layout_to_the_subtrees_measured_afresh() {
+    let _log = FRAME_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut app, session) = app();
+    app.frame();
+    text(&ask(&app, &session, r#"{"cmd":"mark","name":"before"}"#));
+    // The second click shows "Many": new nodes, measured afresh.
+    for _ in 0..2 {
+        app.click("add");
+        app.frame();
+    }
+    text(&ask(&app, &session, r#"{"cmd":"mark","name":"after"}"#));
+    let listed = ask(
+        &app,
+        &session,
+        r#"{"cmd":"frames","since":"before","until":"after"}"#,
+    );
+    let said = text(&listed);
+    assert!(said.contains("measured afresh"), "{said}");
+    let frames = listed.field("data").unwrap().list();
+    let measuring: Vec<&Value> = frames
+        .iter()
+        .filter_map(|f| f.field("layout"))
+        .filter(|l| l.field("measured").and_then(Value::as_f64).unwrap() > 0.)
+        .collect();
+    assert!(!measuring.is_empty(), "{said}");
+    for layout in &measuring {
+        let top = layout.field("top").unwrap().list();
+        assert!(!top.is_empty());
+        for m in top.iter() {
+            let what = m.field("what").map(Value::to_string).unwrap();
+            assert!(what.starts_with('@'), "{what}");
+            let own = m.field("self_micros").and_then(Value::as_f64).unwrap();
+            assert!(own <= m.field("micros").and_then(Value::as_f64).unwrap());
+        }
+    }
+    let summary = ask(
+        &app,
+        &session,
+        r#"{"cmd":"frames","since":"before","until":"after","summary":true}"#,
+    );
+    let layout = summary.field("data").unwrap().field("layout").unwrap();
+    let total: f64 = measuring
+        .iter()
+        .map(|l| l.field("measured").and_then(Value::as_f64).unwrap())
+        .sum();
+    assert_eq!(
+        layout.field("measured").and_then(Value::as_f64),
+        Some(total)
+    );
+    assert!(!layout.field("top").unwrap().list().is_empty());
+}
+
+#[test]
+fn memory_says_what_holds_it_a_line_each() {
+    let (app, session) = app();
+    let answer = ask(&app, &session, r#"{"cmd":"memory"}"#);
+    let table = text(&answer);
+    assert!(table.contains("scene nodes mounted"), "{table}");
+    let line = |area: &str, name: &str| {
+        answer
+            .field("data")
+            .unwrap()
+            .list()
+            .iter()
+            .find(|l| {
+                l.field("area").map(Value::to_string).as_deref() == Some(area)
+                    && l.field("name")
+                        .is_some_and(|n| n.to_string().starts_with(name))
+            })
+            .unwrap_or_else(|| panic!("no {area} {name}: {}", answer.to_json()))
+            .clone()
+    };
+    let number = |line: Value, field: &str| line.field(field).and_then(Value::as_f64).unwrap();
+    assert_eq!(
+        number(line("scene", "nodes mounted"), "n") as usize,
+        app.ui.scene.borrow().len()
+    );
+    assert!(number(line("scene", "slots"), "bytes") > 0.);
+    assert!(number(line("luau", "app"), "bytes") > 100_000.);
+    // Nothing shown, nothing cached.
+    assert_eq!(number(line("images", "decoded shown"), "n"), 0.);
+    assert_eq!(number(line("images", "decoded cached"), "bytes"), 0.);
+    // Frames kept for `frames`, here where devtools are.
+    line("devtools", "frame log");
+}
+
+#[test]
+fn hover_right_click_and_drag_act_as_a_hand_does() {
+    const APP: &str = r##"
+local hovered = ui.state("hovered", false)
+local dropped = ui.state("dropped", "")
+local over = ui.state("over", 0)
+return ui.column {
+    ui.div { id = "row", w = 100, h = 20, on_hover = function(inside) hovered:set(inside) end,
+        context_menu = function() return { ui.menu_item { "Rename", id = "rename" } } end },
+    ui.div { id = "away", w = 100, h = 20 },
+    ui.div { id = "card", w = 100, h = 40, on_drag = function() return "the card" end },
+    ui.div { id = "lane", w = 100, h = 40,
+        on_drag_over = function() over:update(function(n) return n + 1 end) end,
+        on_drop = function(payload) dropped:set(payload) end },
+    ui.div { id = "end", w = 100, h = 40 },
+}
+"##;
+    let app = TestApp::new(|runtime| ScriptHost::inline(runtime, "app", APP));
+    let session = Session::new(&app.ui, app.handle.clone(), &app.host, None);
+    let state = |name: &str| {
+        let answer = ask(
+            &app,
+            &session,
+            &format!(r#"{{"cmd":"state","name":"{name}"}}"#),
+        );
+        text(&answer)
+    };
+    text(&ask(&app, &session, r##"{"cmd":"hover","target":"#row"}"##));
+    assert!(state("hovered").contains("true"));
+    // A point works as a target does.
+    text(&ask(&app, &session, r#"{"cmd":"hover","target":"50,30"}"#));
+    assert!(state("hovered").contains("false"));
+    text(&ask(
+        &app,
+        &session,
+        r##"{"cmd":"right-click","target":"#row"}"##,
+    ));
+    ask(&app, &session, r#"{"cmd":"sleep","ms":20}"#);
+    // It opened, and devtools see it, though it mounts outside the view.
+    let menu = text(&ask(
+        &app,
+        &session,
+        r##"{"cmd":"find","target":"#rename"}"##,
+    ));
+    assert!(menu.contains("Rename"), "{menu}");
+    text(&ask(&app, &session, r#"{"cmd":"key","keys":"Escape"}"#));
+    let answer = ask(
+        &app,
+        &session,
+        r##"{"cmd":"drag","target":"#card","to":"#lane"}"##,
+    );
+    assert!(text(&answer).contains("dragged"));
+    assert!(
+        state("dropped").contains("the card"),
+        "{}",
+        state("dropped")
+    );
+    assert!(!state("over").contains(" 0"), "{}", state("over"));
+    // To a point past it: it was only passed over.
+    ask(
+        &app,
+        &session,
+        r#"{"cmd":"set","name":"dropped","value":"\"\""}"#,
+    );
+    text(&ask(
+        &app,
+        &session,
+        r##"{"cmd":"drag","target":"#card","to":"50,130"}"##,
+    ));
+    assert!(
+        !state("dropped").contains("the card"),
+        "{}",
+        state("dropped")
+    );
+    let bad = error(&ask(&app, &session, r##"{"cmd":"drag","target":"#card"}"##));
+    assert!(bad.contains("`to`"), "{bad}");
 }
 
 #[test]
@@ -652,4 +889,143 @@ return ui.column {
     let found = text(&ask(&app, &session, r#"{"cmd":"find","target":"\"Go\""}"#));
     assert_eq!(found.lines().count(), 2, "{found}");
     assert_eq!(found.matches(" hidden").count(), 1, "{found}");
+}
+
+#[test]
+fn an_action_names_the_clip_or_the_node_in_its_way() {
+    let app = TestApp::new(|runtime| {
+        ScriptHost::inline(
+            runtime,
+            "app",
+            r##"
+local said = ui.state("said", "")
+return ui.column {
+    ui.scroll { id = "list", h = 100, w = 200,
+        ui.button { id = "near", h = 40, "Near", on_click = function() said:set("near") end },
+        ui.div { h = 300 },
+        ui.button { id = "far", h = 40, "Far", on_click = function() said:set("far") end },
+    },
+    ui.overlay { w = 200, h = 40,
+        ui.button { id = "under", "Under", on_click = function() said:set("under") end },
+        ui.div { id = "lid", w = 200, h = 40, bg = "#000", on_click = function() end },
+    },
+}
+"##,
+        )
+    });
+    let session = Session::new(&app.ui, app.handle.clone(), &app.host, None);
+    let clipped = error(&ask(&app, &session, r##"{"cmd":"click","target":"#far"}"##));
+    assert!(clipped.contains("in #list's clip"), "{clipped}");
+    assert!(clipped.contains("clip"), "{clipped}");
+    let covered = error(&ask(
+        &app,
+        &session,
+        r##"{"cmd":"hover","target":"#under"}"##,
+    ));
+    assert!(covered.contains("covered"), "{covered}");
+    assert!(covered.contains("#lid"), "{covered}");
+    text(&ask(
+        &app,
+        &session,
+        r##"{"cmd":"click","target":"#near"}"##,
+    ));
+    assert_eq!(
+        text(&ask(&app, &session, r#"{"cmd":"state","name":"said"}"#)),
+        "said = \"near\""
+    );
+}
+
+/// Devtools reach every window: `windows` lists the app's, with their sizes
+/// and popups, and any request with `window` (an id, or an item's key in
+/// `ui.windows`) answers for that one, as a host registers each it opens.
+#[test]
+fn every_window_is_listed_and_any_request_can_target_one() {
+    let app = TestApp::new(|runtime| {
+        ScriptHost::inline(
+            runtime,
+            "app",
+            r##"
+local photos = ui.state("photos", { { id = "p1" } })
+local said = ui.state("said", "")
+ui.windows(photos, function(p)
+    return { title = "Photo " .. p.id, width = 240, height = 160, ui.column {
+        ui.text { id = "title", "Photo " .. p.id },
+        ui.button { id = "like", "Like", on_click = function() said:set("liked " .. p.id) end },
+    } }
+end)
+return ui.text { id = "main", "main" }
+"##,
+        )
+    });
+    let session = Session::new(&app.ui, app.handle.clone(), &app.host, None);
+    let id = app.host.windows().with_untracked(|list| list[0].id.clone());
+    let photo = app.window(&id).expect("its window");
+    zgx_script::inspect::register_window(
+        &id,
+        "Photo p1",
+        Session::new(&photo.ui, photo.handle.clone(), &app.host, None),
+    );
+    let listed = text(&ask(&app, &session, r#"{"cmd":"windows"}"#));
+    assert!(listed.starts_with("main  "), "{listed}");
+    assert!(
+        listed.contains(&format!("{id}  240x160  \"Photo p1\"")),
+        "{listed}"
+    );
+    // By its key, and by its id.
+    let found = text(&ask(
+        &app,
+        &session,
+        r##"{"cmd":"find","target":"#title","window":"p1"}"##,
+    ));
+    assert!(found.contains("Photo p1"), "{found}");
+    let request = format!(r##"{{"cmd":"click","target":"#like","window":"{id}"}}"##);
+    text(&ask(&app, &session, &request));
+    photo.settle();
+    assert_eq!(
+        text(&ask(&app, &session, r#"{"cmd":"state","name":"said"}"#)),
+        "said = \"liked p1\""
+    );
+    // The main window's own nodes aren't the photo's.
+    assert!(
+        error(&ask(
+            &app,
+            &session,
+            r##"{"cmd":"find","target":"#main","window":"p1"}"##
+        ))
+        .contains("main")
+    );
+    let missing = error(&ask(&app, &session, r#"{"cmd":"tree","window":"nowhere"}"#));
+    assert!(missing.contains("no window `nowhere` open"), "{missing}");
+    zgx_script::inspect::forget_window(&id);
+    let listed = text(&ask(&app, &session, r#"{"cmd":"windows"}"#));
+    assert!(!listed.contains(&id), "{listed}");
+}
+
+/// `key` with modifiers alone taps them, as a window reports a tap: what
+/// watches them (an Alt-to-show menu bar) sees them held, then let go. Any
+/// other key, and a name that is neither, are as they were.
+#[test]
+fn key_with_modifiers_alone_taps_them() {
+    const APP: &str = r##"
+local seen = ui.state("seen", "")
+ui.effect(function()
+    local held = ui.modifiers.alt:get()
+    seen:set(seen:peek() .. (if held then "held " else "up "))
+end)
+return ui.column { ui.text { id = "seen", "{seen}" } }
+"##;
+    let app = TestApp::new(|runtime| ScriptHost::inline(runtime, "app", APP));
+    let session = Session::new(&app.ui, app.handle.clone(), &app.host, None);
+    let seen = || text(&ask(&app, &session, r#"{"cmd":"state","name":"seen"}"#));
+    assert!(seen().contains("up"), "{}", seen());
+    let tapped = text(&ask(&app, &session, r#"{"cmd":"key","keys":"alt"}"#));
+    assert!(tapped.contains("alone"), "{tapped}");
+    assert!(seen().contains("up held up"), "{}", seen());
+    // A key with a modifier still presses that key: no tap.
+    text(&ask(&app, &session, r#"{"cmd":"key","keys":"alt+x"}"#));
+    assert!(seen().contains("up held up"), "{}", seen());
+    assert!(!seen().contains("up held up held"), "{}", seen());
+    // And a name that is neither is still an error.
+    let wrong = ask(&app, &session, r#"{"cmd":"key","keys":"altt"}"#);
+    assert!(!wrong.field("ok").is_some_and(Value::truthy));
 }

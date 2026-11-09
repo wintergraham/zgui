@@ -90,10 +90,49 @@ pub struct Frame {
     /// How long the GPU itself ran the frame, in microseconds, where the
     /// renderer measures it ([`gpu`]; macOS's direct Metal frames).
     pub gpu_micros: Option<f32>,
+    /// Input events dispatched in it ([`input`]): a pointer's moves, keys,
+    /// wheel steps. What an interaction costs per event reads from these.
+    pub events: u32,
+    /// Nodes layout measured afresh in it (not taken from a measurement it
+    /// kept), and those whose own measuring took longest ([`Measured`]).
+    pub layout: Layout,
+}
+
+/// A frame's layout work: how many nodes were measured afresh, their time,
+/// and the costliest of them by their own time (their children's apart).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Layout {
+    /// How many nodes were measured afresh.
+    pub measured: u32,
+    /// The outermost measures' time together, in microseconds.
+    pub micros: f32,
+    /// The costliest by their own time, the costliest first ([`TOP`]).
+    pub top: Vec<Measured>,
+}
+/// A node measured afresh (`Scene::measured` without a kept result).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Measured {
+    /// Its number (`NodeId::number`).
+    pub node: u32,
+    /// Its measuring's time, what it measured inside it included, in
+    /// microseconds.
+    pub micros: f32,
+    /// Its own part of that: less its children's measuring.
+    pub self_micros: f32,
+}
+/// How many of a frame's measures it keeps by their own time.
+pub const TOP: usize = 12;
+
+/// A measure in progress: when it began, and its children's time so far.
+struct Open {
+    began: Instant,
+    children: f32,
 }
 
 #[derive(Default)]
 struct Log {
+    /// The measures in progress, outermost first.
+    measuring: Vec<Open>,
     /// When tracing began: frames' times count from it.
     began: Option<Instant>,
     index: u64,
@@ -106,6 +145,34 @@ thread_local! {
     static LOG: RefCell<Log> = RefCell::default();
 }
 
+/// The frame log's lines of a memory report: its frames, and the names of
+/// the effects it can tell apart.
+pub fn memory(report: &mut crate::memory::Report) {
+    LOG.with_borrow(|log| {
+        let frame = |f: &Frame| {
+            size_of::<Frame>()
+                + f.writes.capacity() * size_of::<(usize, u32)>()
+                + f.runs.capacity() * size_of::<Run>()
+                + f.phases.capacity() * size_of::<(&'static str, u64, f32)>()
+                + f.notes.capacity() * size_of::<Rc<str>>()
+        };
+        let frames: usize = log.frames.iter().map(frame).sum();
+        report.add(
+            "devtools",
+            "frame log",
+            Some(log.frames.len()),
+            Some(frames),
+        );
+        let names = log.names.values().map(|name| name.len() + 16).sum();
+        report.add(
+            "devtools",
+            "effect names",
+            Some(log.names.len()),
+            Some(names),
+        );
+    });
+}
+
 /// Name effect `effect` for traces (`@12 binding`, `app.luau:30 effect`).
 pub fn name(effect: u64, name: impl Into<Rc<str>>) {
     if enabled() {
@@ -113,6 +180,17 @@ pub fn name(effect: u64, name: impl Into<Rc<str>>) {
             log.names.insert(effect, name.into());
         });
     }
+}
+/// Effect `effect` is gone: its name, and the cause of a run it was queued
+/// for and never made, go too (each mount names its effects anew).
+pub(crate) fn forget(effect: u64) {
+    // Dropped as the thread ends, the log may be gone already.
+    let _ = LOG.try_with(|log| {
+        if let Ok(mut log) = log.try_borrow_mut() {
+            log.names.remove(&effect);
+            log.causes.remove(&effect);
+        }
+    });
 }
 /// Signal `signal` was written, queueing `queued`.
 pub(crate) fn wrote(signal: usize, queued: &[u64]) {
@@ -156,6 +234,59 @@ pub fn gpu(time: std::time::Duration) {
         log.current.gpu_micros = Some(time.as_secs_f32() * 1e6);
     });
 }
+/// An input event was dispatched (`Ui::dispatch`): counted in the frame
+/// being traced.
+#[inline]
+pub fn input() {
+    if enabled() {
+        counted_input();
+    }
+}
+#[cold]
+#[inline(never)]
+fn counted_input() {
+    LOG.with_borrow_mut(|log| log.current.events += 1);
+}
+/// A node begins to be measured afresh (`zgx::profile::layout_span`).
+pub fn measure_begin() {
+    LOG.with_borrow_mut(|log| {
+        log.measuring.push(Open {
+            began: Instant::now(),
+            children: 0.,
+        })
+    });
+}
+/// Node `node`'s fresh measure is done: counted, timed, and kept if it is
+/// among the frame's costliest by its own time.
+pub fn measure_end(node: u32) {
+    LOG.with_borrow_mut(|log| {
+        let Some(open) = log.measuring.pop() else {
+            return;
+        };
+        let micros = open.began.elapsed().as_secs_f32() * 1e6;
+        let self_micros = (micros - open.children).max(0.);
+        match log.measuring.last_mut() {
+            Some(parent) => parent.children += micros,
+            None => log.current.layout.micros += micros,
+        }
+        let layout = &mut log.current.layout;
+        layout.measured += 1;
+        let at = layout
+            .top
+            .partition_point(|kept| kept.self_micros >= self_micros);
+        if at < TOP {
+            layout.top.insert(
+                at,
+                Measured {
+                    node,
+                    micros,
+                    self_micros,
+                },
+            );
+            layout.top.truncate(TOP);
+        }
+    });
+}
 /// The frame being traced is done (`zgx::profile::frame`, as a renderer
 /// presents it), its phases' split given: kept if anything happened in it.
 pub fn end_frame(phases: Vec<(&'static str, u64, f32)>) {
@@ -167,6 +298,8 @@ pub fn end_frame(phases: Vec<(&'static str, u64, f32)>) {
         if log.current.writes.is_empty()
             && log.current.runs.is_empty()
             && log.current.notes.is_empty()
+            && log.current.events == 0
+            && log.current.layout.measured == 0
             && phases.is_empty()
         {
             return;
@@ -204,4 +337,49 @@ pub fn frames(n: usize) -> Vec<Frame> {
         let skip = log.frames.len().saturating_sub(n);
         log.frames.iter().skip(skip).cloned().collect()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{compose::prelude::*, widgets::Ui};
+
+    fn sizes() -> (usize, usize) {
+        super::LOG.with_borrow(|log| (log.names.len(), log.causes.len()))
+    }
+
+    #[test]
+    fn remounting_while_tracing_keeps_its_names_bounded() {
+        super::set_enabled(true);
+        let mut ui = Ui::new(200., 200.);
+        let count = ui.signal(0u32);
+        let shown = ui.signal(true);
+        let (read, show) = (count.clone(), shown.clone());
+        ui.mount(column().child(switch(
+            move || show.get(),
+            move |on, _| {
+                let read = read.clone();
+                column().children((0..if on { 20 } else { 0 }).map(move |i| {
+                    let read = read.clone();
+                    text_signal(move || format!("{i}: {}", read.get()))
+                }))
+            },
+        )));
+        ui.prepare_frame();
+        let once = sizes();
+        for round in 0..30 {
+            // Queued, then taken away before it runs: its cause goes too.
+            count.set(round + 1);
+            shown.set(false);
+            ui.prepare_frame();
+            shown.set(true);
+            ui.prepare_frame();
+        }
+        let after = sizes();
+        super::set_enabled(false);
+        assert!(once.0 > 0, "the mount named its effects");
+        assert!(
+            after.0 <= once.0 + 4 && after.1 <= once.1 + 4,
+            "names and causes stay as many as the mounted effects: {once:?} then {after:?}"
+        );
+    }
 }

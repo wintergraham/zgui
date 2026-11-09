@@ -474,6 +474,66 @@ fn a_plugin_fetches_only_if_granted() {
 }
 
 #[test]
+fn a_transport_hears_who_asked_and_the_hosts_policy() {
+    struct Open;
+    impl zgx_script::FetchPolicy for Open {}
+
+    type Asked = (String, Option<String>, bool);
+    let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Asked>::new()));
+    let log = asked.clone();
+    let h = Harness::new(move |runtime| {
+        let host = ScriptHost::inline(
+            runtime,
+            "app",
+            r#"
+            ui.fetch("https://api.test/app")
+            return ui.column {
+                ui.image { src = "https://img.test/app.png", w = 20, h = 20 },
+                ui.slot("bar"),
+            }
+            "#,
+        )
+        .plugin(
+            "fetcher.luau",
+            r#"
+            ui.fetch("https://api.test/plugin")
+            ui.contribute("bar", ui.image { src = "https://img.test/plugin.png", w = 20, h = 20 })
+            "#,
+        )
+        .grant("fetcher.luau", zgx_script::Capability::Fetch);
+        host.fetch_policy(Open);
+        let log = log.clone();
+        host.streaming_fetcher(move |request, body| {
+            log.borrow_mut().push((
+                request.url,
+                body.caller().map(str::to_owned),
+                body.fetch_policy().is_some(),
+            ));
+            async { Err("nothing here".to_string()) }
+        });
+        host
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while asked.borrow().len() < 4 && Instant::now() < deadline {
+        h.settle();
+        h.ui.prepare_frame();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let mut asked = asked.borrow().clone();
+    asked.sort();
+    let plugin = Some("fetcher.luau".to_string());
+    assert_eq!(
+        asked,
+        [
+            ("https://api.test/app".to_string(), None, true),
+            ("https://api.test/plugin".to_string(), plugin.clone(), true),
+            ("https://img.test/app.png".to_string(), None, true),
+            ("https://img.test/plugin.png".to_string(), plugin, true),
+        ]
+    );
+}
+
+#[test]
 fn a_broken_plugin_is_left_out_and_the_rest_loads() {
     let mut h = Harness::new(|runtime| {
         ScriptHost::inline(runtime, "app", PLUGIN_APP)
@@ -611,6 +671,210 @@ fn remote_images_show_their_fallback_until_they_come_and_if_they_fail() {
         h.host.error().get(),
         None,
         "a failed picture is no script error"
+    );
+}
+
+/// A remote picture that failed is asked for again by itself once the
+/// backoff passes, while a node shows it: nothing else need ask.
+#[test]
+fn a_failed_remote_image_is_asked_for_again_while_it_is_shown() {
+    let fetched = std::rc::Rc::new(std::cell::Cell::new(0));
+    let count = fetched.clone();
+    let mut h = Harness::new(move |runtime| {
+        let host = ScriptHost::inline(
+            runtime,
+            "app",
+            r#"return ui.column {
+                ui.image { src = "https://img.test/busy.png", w = 20, h = 20,
+                    fallback = ui.text { "WL", id = "initials" } },
+            }"#,
+        );
+        host.fetcher(move |_| {
+            count.set(count.get() + 1);
+            let first = count.get() == 1;
+            async move {
+                zgx::timer::sleep(Duration::from_millis(2)).await;
+                Ok(zgx_script::Response {
+                    status: if first { 503 } else { 200 },
+                    headers: vec![],
+                    body: PNG.to_vec(),
+                })
+            }
+        });
+        host
+    });
+    for _ in 0..30 {
+        h.settle();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(fetched.get(), 1);
+    assert!(h.find("initials").is_some(), "the fallback when it failed");
+    // Past the first backoff (5 s), with nothing shown again or changed.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while h.find("initials").is_some() && Instant::now() < deadline {
+        h.settle();
+        h.ui.prepare_frame();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(h.find("initials").is_none(), "the picture, asked for again");
+    assert_eq!(fetched.get(), 2);
+    assert_eq!(h.host.error().get(), None);
+}
+
+/// A remote picture tells `on_load` its size once it has arrived, or
+/// `on_error` why it didn't.
+#[test]
+fn remote_images_tell_whether_they_came() {
+    let mut h = Harness::new(|runtime| {
+        let host = ScriptHost::inline(
+            runtime,
+            "app",
+            r#"local heard = ui.state("heard", "")
+            return ui.column {
+                ui.image { src = "https://img.test/ok.png", w = 20, h = 20,
+                    on_load = function(size) heard:append(`load {size.w}x{size.h};`) end },
+                ui.image { src = "https://img.test/gone.png", w = 20, h = 20,
+                    on_error = function(why: string) heard:append(`error {why};`) end,
+                    fallback = ui.text { "WL" } },
+                ui.text { heard, id = "heard" },
+            }"#,
+        );
+        host.fetcher(move |request: zgx_script::Request| async move {
+            zgx::timer::sleep(Duration::from_millis(2)).await;
+            Ok(zgx_script::Response {
+                status: if request.url.ends_with("gone.png") {
+                    503
+                } else {
+                    200
+                },
+                headers: vec![],
+                body: PNG.to_vec(),
+            })
+        });
+        host
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while h.text("heard").matches(';').count() < 2 && Instant::now() < deadline {
+        h.settle();
+        h.ui.prepare_frame();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let heard = h.text("heard");
+    assert!(heard.contains("load 2x2;"), "{heard}");
+    assert!(
+        heard.contains("error https://img.test/gone.png didn't load: HTTP 503;"),
+        "{heard}"
+    );
+    assert_eq!(h.host.error().get(), None);
+}
+
+/// An app showing a picture, once `show` is clicked or from the start, and
+/// a plugin showing the same one; a transport refusing the plugin's request
+/// after `refused_after`, each ask's caller in the log.
+fn refused_plugin_image(
+    shown: bool,
+    refused_after: Duration,
+    asked: std::rc::Rc<std::cell::RefCell<Vec<Option<String>>>>,
+) -> Harness {
+    Harness::new(move |runtime| {
+        let host = ScriptHost::inline(
+            runtime,
+            "app",
+            format!(
+                r#"local shown = ui.state("shown", {shown})
+                local loaded = ui.state("loaded", "")
+                return ui.column {{
+                    ui.button {{ id = "show", on_click = function() shown:set(true) end, "s" }},
+                    ui.slot("bar"),
+                    ui.show(shown, ui.image {{ src = "https://img.test/shared.png", w = 20, h = 20,
+                        on_load = function(size) loaded:set(`{{size.w}}`) end }}),
+                    ui.text {{ id = "loaded", function() return loaded:get() end }},
+                }}"#
+            ),
+        )
+        .plugin(
+            "pics.luau",
+            r#"local why = ui.state("why", "")
+            ui.contribute("bar", ui.column {
+                ui.image { src = "https://img.test/shared.png", w = 20, h = 20,
+                    on_error = function(e) why:set(e) end },
+                ui.text { id = "why", function() return why:get() end },
+            })"#,
+        )
+        .grant("pics.luau", zgx_script::Capability::Fetch);
+        host.streaming_fetcher(move |_, body| {
+            let caller = body.caller().map(str::to_owned);
+            asked.borrow_mut().push(caller.clone());
+            async move {
+                if caller.is_some() {
+                    zgx::timer::sleep(refused_after).await;
+                    return Err("not for plugins".to_string());
+                }
+                zgx::timer::sleep(Duration::from_millis(2)).await;
+                Ok(zgx_script::Response {
+                    status: 200,
+                    headers: vec![],
+                    body: PNG.to_vec(),
+                })
+            }
+        });
+        host
+    })
+}
+
+/// Settle until `done`, for less than the five seconds of a failure's backoff.
+fn within_a_backoff(h: &mut Harness, done: impl Fn(&mut Harness) -> bool) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !done(h) && Instant::now() < deadline {
+        h.settle();
+        h.ui.prepare_frame();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    done(h)
+}
+
+#[test]
+fn a_plugins_refused_image_leaves_the_app_loading_it_at_once() {
+    let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let mut h = refused_plugin_image(false, Duration::from_millis(2), asked.clone());
+    assert!(within_a_backoff(&mut h, |h| !h.text("why").is_empty()));
+    // The refusal is the plugin's, and says why.
+    assert!(
+        h.text("why").contains("not for plugins"),
+        "{}",
+        h.text("why")
+    );
+    let plugin = Some("pics.luau".to_string());
+    assert_eq!(*asked.borrow(), std::slice::from_ref(&plugin));
+
+    // The app shows the same URL: asked at once, not held to the plugin's backoff.
+    h.click("show");
+    h.settle();
+    assert_eq!(*asked.borrow(), [plugin.clone(), None]);
+    assert!(
+        within_a_backoff(&mut h, |h| h.text("loaded") == "2"),
+        "the app's picture: {:?}",
+        h.text("loaded")
+    );
+    assert_eq!(*asked.borrow(), [plugin, None], "no one else asks again");
+}
+
+#[test]
+fn a_plugins_request_on_its_way_does_not_hold_up_the_apps() {
+    let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    // Refused long after the app's picture has come, whichever asked first.
+    let mut h = refused_plugin_image(true, Duration::from_secs(30), asked.clone());
+    assert!(
+        within_a_backoff(&mut h, |h| h.text("loaded") == "2"),
+        "the app's picture: {:?}",
+        h.text("loaded")
+    );
+    let mut asked = asked.borrow().clone();
+    asked.sort();
+    assert_eq!(
+        asked,
+        [None, Some("pics.luau".to_string())],
+        "each asks for itself: the policy hears the plugin's request"
     );
 }
 
@@ -936,6 +1200,42 @@ return ui.column {
     ui.button { id = "stop", w = 40, h = 20, "x", on_click = form.cancel },
 }
 "#;
+
+#[test]
+fn an_action_runs_to_its_end_when_its_task_is_cancelled() {
+    // What an action changes elsewhere isn't left half done: its future
+    // isn't dropped, only its answer goes unheard.
+    let finished = std::rc::Rc::new(std::cell::Cell::new(false));
+    let mut h = Harness::new({
+        let finished = finished.clone();
+        move |runtime| {
+            let host = ScriptHost::inline(runtime, "app", CANCEL_APP);
+            host.async_action("slow", move |arg| {
+                let finished = finished.clone();
+                async move {
+                    zgx::timer::sleep(Duration::from_millis(20)).await;
+                    if arg == Value::Num(1.) {
+                        finished.set(true);
+                    }
+                    Ok(Value::Str(format!("answer {arg}").into()))
+                }
+            });
+            host
+        }
+    });
+    wait_for(&mut h, "shown", "0 1 answer 1 false ");
+    finished.set(false);
+    h.click("start");
+    h.click("cancel");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !finished.get() && Instant::now() < deadline {
+        h.settle();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(finished.get(), "the cancelled task's action ran to its end");
+    h.frames(3);
+    assert_eq!(h.text("shown"), "0 1 answer 1 false ", "its answer unheard");
+}
 
 #[test]
 fn a_cancelled_task_stops_at_its_await() {

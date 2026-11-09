@@ -38,6 +38,7 @@ from PIL import Image, ImageChops, ImageGrab
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from platform_smoke import release_mounts, stop, wait_for_wm  # noqa: E402
 from wayland_pointer import VirtualPointer  # noqa: E402
+from sway_host import sway_config
 
 APP = pathlib.Path(__file__).parent / "luau_views"
 BOARD_BG, GRID, RED, GREEN = (16, 16, 16), (255, 0, 255), (255, 0, 0), (0, 255, 0)
@@ -283,7 +284,7 @@ def main():
                                      "-ac"], stdout=subprocess.PIPE, stderr=(args.output / "xvfb.log").open("w"),
                                     text=True)
             processes.append(xvfb)
-            if not select.select([xvfb.stdout], [], [], 10)[0]:
+            if not select.select([xvfb.stdout], [], [], 30)[0]:
                 raise RuntimeError("Xvfb startup timed out")
             display = ":" + xvfb.stdout.readline().strip()
             x11 = dict(base, DISPLAY=display)
@@ -335,7 +336,7 @@ def main():
             # driven by a virtual pointer and captured by grim.
             sway_env = dict(base, WLR_BACKENDS="headless", WLR_RENDERER="pixman", WLR_LIBINPUT_NO_DEVICES="1")
             config = pathlib.Path(private, "sway.conf")
-            config.write_text("output * mode 1280x960\ndefault_border none\n"
+            sway_config(config, "output * mode 1280x960\ndefault_border none\n"
                               "for_window [app_id=\".*\"] floating enable, move position 0 0\n")
             sway, _ = launch("sway", ["sway", "--unsupported-gpu", "-c", str(config)], sway_env)
             sockets = lambda: [p for p in pathlib.Path(private).glob("wayland-*") if p.suffix != ".lock"]
@@ -361,8 +362,11 @@ def main():
                 # Two fingers up, then left: the view moves down and right.
                 # (One axis a swipe: sway asserts on a frame scrolling both
                 # from a virtual pointer, the second axis left sourceless.)
-                pointer.swipe(dy=-3., frames=4)
-                pointer.swipe(dx=-3., frames=4)
+                # The fingers rest before lifting: no coast, so the pan
+                # stops where the fingers did (12 points each way), whatever
+                # the runner's timing.
+                pointer.swipe(dy=-3., frames=4, rest=.25)
+                pointer.swipe(dx=-3., frames=4, rest=.25)
                 park()
 
             def sway_click(x, y):

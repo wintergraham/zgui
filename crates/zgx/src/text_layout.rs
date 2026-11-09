@@ -67,21 +67,62 @@ impl LineHeight {
 /// shaper; the fallback uses grapheme cells. Nonfinite values and signed zero
 /// normalize to zero; finite values saturate at ±1,000,000 logical pixels to
 /// keep native geometry practical and typography cache keys consistent.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+///
+/// Or a grid of cells (`cells`, a terminal's): each character takes its
+/// cells exactly, whichever font draws it. The grid is kept in the same bits,
+/// as a negative subnormal (which `px` never makes: it flushes them to zero),
+/// so a font style is no bigger, and hashes and compares no slower, for it;
+/// read as tracking (`pixels`), a grid is less than 1e-38 of a pixel, which
+/// adds nothing to any width, so no reader needs to tell it apart.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct LetterSpacing(u32);
+impl std::fmt::Debug for LetterSpacing {
+    /// Decoded: `cells(7.83)` for a grid, `px(2)` for tracking (never a
+    /// NaN or the raw bits).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.cell() {
+            Some(cell) => write!(f, "LetterSpacing::cells({cell})"),
+            None => write!(f, "LetterSpacing::px({})", self.pixels()),
+        }
+    }
+}
+/// A grid's bits: a negative subnormal, its mantissa the cell width in
+/// 1/1024 logical pixels.
+const GRID: u32 = 0x8000_0000;
+const GRID_UNITS: u32 = 0x007f_ffff;
 impl LetterSpacing {
+    /// A grid of cells `width` logical pixels wide (up to 8,192; none at
+    /// zero or below): each cluster takes its characters' cells (their
+    /// widths, as unicode-width tells them), its glyphs centred in them, so a
+    /// fallback font's glyph a little wider or narrower than the grid's (a
+    /// braille pattern) moves nothing after it. No tracking.
+    pub fn cells(width: f32) -> Self {
+        let units = (width * 1024.).round();
+        if units.is_nan() || units < 1. {
+            return Self::ZERO;
+        }
+        Self(GRID | (units.min(GRID_UNITS as f32) as u32))
+    }
+    /// The grid's cell width in logical pixels, if it is one.
+    pub fn cell(self) -> Option<f32> {
+        (self.0 & !GRID_UNITS == GRID && self.0 & GRID_UNITS != 0)
+            .then(|| (self.0 & GRID_UNITS) as f32 / 1024.)
+    }
     /// No extra spacing.
     pub const ZERO: Self = Self(0);
     /// `value` logical pixels between characters, normalized as the type
     /// says.
     pub fn px(value: f32) -> Self {
-        if value.is_finite() && value != 0. {
+        // (A subnormal, less than 1e-38 of a pixel, is none: its bits are a
+        // grid's.)
+        if value.is_finite() && value.abs() >= f32::MIN_POSITIVE {
             Self(value.clamp(-1_000_000., 1_000_000.).to_bits())
         } else {
             Self::ZERO
         }
     }
-    /// The spacing in logical pixels.
+    /// The tracking in logical pixels (a grid's reads as less than 1e-38,
+    /// none to any width).
     pub fn pixels(self) -> f32 {
         f32::from_bits(self.0)
     }
@@ -153,6 +194,146 @@ impl FontFeatures {
     /// The settings, sorted by tag.
     pub fn settings(&self) -> &[([u8; 4], u32)] {
         self.0.as_deref().unwrap_or(&[])
+    }
+    /// zgx's own tag for hyphenation (`_hyp`: no font's feature can have it,
+    /// registered tags being lowercase letters and digits and font vendors'
+    /// private ones uppercase letters, OpenType's two tag spaces, neither
+    /// with punctuation). Words break at their hyphenation
+    /// points, a hyphen ending the line (CSS's `hyphens: auto`), in the
+    /// system's language. It rides with the features, inherited as they are,
+    /// and is never given to a font; it takes zgx's `hyphens` feature
+    /// (`HYPHENATION`). Luau's `font_features = "hyphens"` sets it.
+    pub const HYPHENS: [u8; 4] = *b"_hyp";
+    /// Whether words break at their hyphenation points (`HYPHENS`).
+    pub fn hyphens(&self) -> bool {
+        self.settings()
+            .iter()
+            .any(|(tag, value)| *tag == Self::HYPHENS && *value != 0)
+    }
+    /// These features, with words breaking at their hyphenation points or not.
+    pub fn with_hyphens(&self, hyphens: bool) -> Self {
+        if self.hyphens() == hyphens {
+            return self.clone();
+        }
+        let others = self.settings().iter().copied();
+        let others = others.filter(|(tag, _)| *tag != Self::HYPHENS);
+        Self::new(others.chain(hyphens.then_some((Self::HYPHENS, 1))))
+    }
+    /// zgx's own tag for the language a text's Han characters are in
+    /// (`_han`, never given to a font, as `HYPHENS`): its `lang`'s
+    /// (`Styled::lang`), which the shaper takes their fallback fonts by.
+    /// 1 Japanese, 2 Korean, 3 another language (the app's fonts), 4
+    /// simplified Chinese, 5 traditional, 6 Hong Kong's (`han_of`).
+    pub const HAN: [u8; 4] = *b"_han";
+    /// What these say of Han characters' language (`HAN`): 0 for nothing.
+    pub fn han(&self) -> u32 {
+        self.settings()
+            .iter()
+            .find(|(tag, _)| *tag == Self::HAN)
+            .map_or(0, |(_, value)| *value)
+    }
+    /// These features, saying Han characters are in `han`'s language (0:
+    /// saying nothing).
+    pub fn with_han(&self, han: u32) -> Self {
+        if self.han() == han {
+            return self.clone();
+        }
+        let others = self.settings().iter().copied();
+        let others = others.filter(|(tag, _)| *tag != Self::HAN);
+        Self::new(others.chain((han != 0).then_some((Self::HAN, han))))
+    }
+    /// zgx's mark on a style's features that say only a language
+    /// (`Styled::lang`): they go over the inherited ones (`layered`), not
+    /// in their place. Never in a text's resolved features.
+    const INHERITS: [u8; 4] = *b"_inh";
+    /// Whether these go over the inherited features (`INHERITS`).
+    pub(crate) fn inherits(&self) -> bool {
+        self.settings()
+            .iter()
+            .any(|(tag, _)| *tag == Self::INHERITS)
+    }
+    /// A style's features saying only that Han characters are in `han`'s
+    /// language, over the inherited ones (`Styled::lang`).
+    pub(crate) fn language_only(han: u32) -> Self {
+        Self::new([(Self::HAN, han), (Self::INHERITS, 1)])
+    }
+    /// `over`, a style's own features, on these (its parent's, or a style
+    /// it goes over): a language alone keeps these features, and features
+    /// saying no language keep these' language, which is inherited apart
+    /// from them.
+    #[inline(never)]
+    pub(crate) fn layered(&self, over: &Self) -> Self {
+        if over.inherits() {
+            return self.with_han(over.han());
+        }
+        match self.han() {
+            0 => over.clone(),
+            han if over.han() == 0 => over.with_han(han),
+            _ => over.clone(),
+        }
+    }
+    /// zgx's mark on a text's features whose language (`HAN`) it takes from
+    /// what holds it (`Scene::set_language`), not from features of its own:
+    /// it takes it again when that changes. Never in a style's features.
+    const INHERITED: [u8; 4] = *b"_hin";
+    /// Whether their language is inherited (`INHERITED`), not their own.
+    pub(crate) fn inherited_han(&self) -> bool {
+        self.settings()
+            .iter()
+            .any(|(tag, _)| *tag == Self::INHERITED)
+    }
+    /// These, their language `han` inherited (`INHERITED`), or saying none
+    /// with 0.
+    pub(crate) fn with_inherited_han(&self, han: u32) -> Self {
+        let others = self.settings().iter().copied();
+        let others = others.filter(|(tag, _)| *tag != Self::HAN && *tag != Self::INHERITED);
+        let marks = (han != 0).then_some([(Self::HAN, han), (Self::INHERITED, 1)]);
+        Self::new(others.chain(marks.into_iter().flatten()))
+    }
+    /// These as a text's resolved features (`Scene::set_font`): without the
+    /// mark a style's language alone carries (`INHERITS`).
+    pub(crate) fn resolved(&self) -> Self {
+        if !self.inherits() {
+            return self.clone();
+        }
+        let others = self.settings().iter().copied();
+        Self::new(others.filter(|(tag, _)| *tag != Self::INHERITS))
+    }
+    /// What a text in `language` (a BCP 47 tag: "ja", "zh-Hant-TW") says of
+    /// its Han characters (`HAN`): which Chinese, Japanese or Korean, or
+    /// another language, its fonts the app's.
+    pub fn han_of(language: &str) -> u32 {
+        let mut parts = language.split(['-', '_']);
+        let primary = parts.next().unwrap_or_default();
+        let is = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
+        if is(primary, "ja") {
+            return 1;
+        }
+        if is(primary, "ko") {
+            return 2;
+        }
+        if is(primary, "yue") {
+            return 6;
+        }
+        if !is(primary, "zh") && !is(primary, "cmn") {
+            return 3;
+        }
+        // A region names one Chinese where a script does not (Hans or
+        // Hant): Hong Kong's or Macau's, Taiwan's, the mainland's.
+        let mut traditional = false;
+        for part in parts {
+            if is(part, "hk") || is(part, "mo") {
+                return 6;
+            }
+            if is(part, "tw") {
+                return 5;
+            }
+            if is(part, "hans") || is(part, "cn") || is(part, "sg") {
+                return 4;
+            }
+            traditional |= is(part, "hant");
+        }
+        if traditional { 5 } else { 4 }
     }
     /// The bytes the settings take, for cache accounting.
     pub fn storage_bytes(&self) -> usize {
@@ -242,6 +423,13 @@ impl FontStyle {
     }
 }
 /// Font-aware shaping callback. The legacy TextShaper remains available for default fonts.
+///
+/// Results are cached: this computation may be called any number of times,
+/// in any order. Its result must be a function of its inputs and the signals
+/// it reads; the invocation sequence and intermediate model states observed
+/// are not part of the contract. Reactive reads participate in the calling
+/// effect's dependency tracking.
+/// Writing signals from a measurement or shaping callback is unsupported.
 pub trait FontTextShaper {
     /// Shape `text` at `size` in `font`, wrapped at `width` if given.
     fn shape(
@@ -281,6 +469,81 @@ pub struct TextPosition {
     /// Which side of a shared boundary the caret sits on.
     pub affinity: TextAffinity,
 }
+/// How wide a selection shows an empty line of `line_height`: its line
+/// break, a sliver as in an editor.
+pub fn empty_line_width(line_height: f32) -> f32 {
+    line_height * 0.25
+}
+/// A layout drawn `dx` to the right of its own origin: balanced text that is
+/// centred or right-aligned in its box (`Scene::text_wrap`).
+pub(crate) struct Inset {
+    inner: Box<dyn TextLayout>,
+    dx: f32,
+}
+impl Inset {
+    /// `layout`, moved `dx` right; itself if not moved.
+    pub(crate) fn around(layout: Box<dyn TextLayout>, dx: f32) -> Box<dyn TextLayout> {
+        if dx == 0. {
+            layout
+        } else {
+            Box::new(Self { inner: layout, dx })
+        }
+    }
+    fn moved(&self, rect: Rect) -> Rect {
+        Rect::new(rect.x + self.dx, rect.y, rect.width, rect.height)
+    }
+}
+impl TextLayout for Inset {
+    fn cache_weight(&self) -> Option<usize> {
+        self.inner.cache_weight()
+    }
+    fn size(&self) -> (f32, f32) {
+        let (width, height) = self.inner.size();
+        (width + self.dx, height)
+    }
+    fn hit_test(&self, x: f32, y: f32) -> usize {
+        self.inner.hit_test(x - self.dx, y)
+    }
+    fn caret(&self, byte_offset: usize) -> Rect {
+        self.moved(self.inner.caret(byte_offset))
+    }
+    fn selection(&self, range: Range<usize>) -> Vec<Rect> {
+        let rects = self.inner.selection(range);
+        rects.into_iter().map(|rect| self.moved(rect)).collect()
+    }
+    fn selection_within(&self, range: Range<usize>, top: f32, bottom: f32) -> Vec<Rect> {
+        let rects = self.inner.selection_within(range, top, bottom);
+        rects.into_iter().map(|rect| self.moved(rect)).collect()
+    }
+    fn hit_position(&self, x: f32, y: f32) -> TextPosition {
+        self.inner.hit_position(x - self.dx, y)
+    }
+    fn caret_position(&self, position: TextPosition) -> Rect {
+        self.moved(self.inner.caret_position(position))
+    }
+    fn line_carets(&self, text: &str) -> Option<Vec<LineCarets>> {
+        let mut lines = self.inner.line_carets(text)?;
+        for line in &mut lines {
+            for x in &mut line.carets {
+                *x += self.dx;
+            }
+        }
+        Some(lines)
+    }
+    fn carets_x(&self, offsets: &[usize]) -> Vec<f32> {
+        let xs = self.inner.carets_x(offsets);
+        xs.into_iter().map(|x| x + self.dx).collect()
+    }
+    fn visual_line_range(&self, position: TextPosition) -> (TextPosition, TextPosition) {
+        self.inner.visual_line_range(position)
+    }
+    fn visual_line_edge(&self, position: TextPosition, end: bool) -> TextPosition {
+        self.inner.visual_line_edge(position, end)
+    }
+}
+/// Whether this build hyphenates (zgx's `hyphens` feature): without it,
+/// features with `FontFeatures::HYPHENS` break words as before.
+pub const HYPHENATION: bool = cfg!(feature = "hyphens");
 /// A visual line's carets (`TextLayout::line_carets`), in the layout's
 /// coordinates.
 #[derive(Clone, Debug, PartialEq)]
@@ -383,6 +646,13 @@ pub trait TextLayout {
     }
 }
 /// Shapes text in the default font (see [`FontTextShaper`] for others).
+///
+/// Results are cached: this computation may be called any number of times,
+/// in any order. Its result must be a function of its inputs and the signals
+/// it reads; the invocation sequence and intermediate model states observed
+/// are not part of the contract. Reactive reads participate in the calling
+/// effect's dependency tracking.
+/// Writing signals from a measurement or shaping callback is unsupported.
 pub trait TextShaper {
     /// Shape `text` at `font_size`, wrapped at `max_width` if given.
     fn shape(&self, text: &str, font_size: f32, max_width: Option<f32>) -> Box<dyn TextLayout>;
@@ -537,6 +807,149 @@ impl FallbackTextLayout {
         layout.align(max_width, font.align);
         layout
     }
+    /// `text` as `shaper` lays it out, with `font`'s letter spacing: the
+    /// shaper's own advances, the spacing added after each character as the
+    /// GPU shaper adds it after each glyph (the last one too), wrapped at
+    /// `max_width` by word (UAX #14, trailing spaces hanging), a word wider
+    /// than a line by grapheme, as it wraps. For a scene whose shaper takes
+    /// no font (`Scene::set_text_shaper`). Right-to-left text, whose carets
+    /// run the other way, keeps the grapheme cells of `with_font`.
+    pub fn spaced(
+        shaper: &dyn TextShaper,
+        text: &str,
+        size: f32,
+        max_width: Option<f32>,
+        font: &FontStyle,
+    ) -> Self {
+        let spacing = font.letter_spacing.pixels();
+        let normal = font.line_height == LineHeight::NORMAL;
+        // Each paragraph's newline, line height, and graphemes with their
+        // spaced advances, unwrapped.
+        type Paragraph = (Range<usize>, f32, Vec<(Range<usize>, f32)>);
+        let mut paragraphs: Vec<Paragraph> = Vec::new();
+        let mut start = 0;
+        for line in text
+            .split_inclusive('\n')
+            .chain((text.is_empty() || text.ends_with('\n')).then_some(""))
+        {
+            let body = line.trim_end_matches(['\n', '\r']);
+            let base = shaper.shape(body, size, None);
+            let height = if normal {
+                base.caret(0).height
+            } else {
+                font.line_height.resolve(size)
+            };
+            let mut cells = Vec::new();
+            let mut x = base.caret(0).x;
+            for (index, grapheme) in body.grapheme_indices(true) {
+                let next = base.caret(index + grapheme.len()).x;
+                if next < x {
+                    return Self::with_font(text, size, max_width, font);
+                }
+                let chars = grapheme.chars().count() as f32;
+                cells.push((
+                    start + index..start + index + grapheme.len(),
+                    (next - x + spacing * chars).max(0.),
+                ));
+                x = next;
+            }
+            paragraphs.push((start + body.len()..start + line.len(), height, cells));
+            start += line.len();
+        }
+        let wrap = max_width.filter(|w| w.is_finite() && *w > 0.);
+        let mut out: Vec<(Range<usize>, Rect)> = Vec::new();
+        let (mut y, mut width, mut end) = (0_f32, 0_f32, Rect::new(0., 0., 1., 0.));
+        for (paragraph, (newline, height, cells)) in paragraphs.iter().enumerate() {
+            let newline = newline.clone();
+            let mut x = 0_f32;
+            // Where the line's ink ends: of the spaces after it, a wrap
+            // counts only some in the line's width (below).
+            let mut ink_x = 0_f32;
+            let place = |out: &mut Vec<(Range<usize>, Rect)>,
+                         range: Range<usize>,
+                         advance: f32,
+                         x: &mut f32,
+                         y: f32| {
+                out.push((range, Rect::new(*x, y, advance, *height)));
+                *x = (*x + advance).min(f32::MAX);
+            };
+            // Words: up to each break opportunity, their trailing spaces
+            // apart (they hang past the edge).
+            let body_start = cells.first().map_or(newline.start, |c| c.0.start);
+            let body = &text[body_start..newline.start];
+            let mut at = 0;
+            for word_end in break_opportunities(body).map(|e| e + body_start) {
+                let word: Vec<_> = cells[at..]
+                    .iter()
+                    .take_while(|(r, _)| r.end <= word_end)
+                    .cloned()
+                    .collect();
+                at += word.len();
+                let ink = word
+                    .iter()
+                    .rposition(|(r, _)| !text[r.clone()].chars().all(char::is_whitespace))
+                    .map_or(0, |i| i + 1);
+                let ink_width: f32 = word[..ink].iter().map(|c| c.1).sum();
+                if let Some(w) = wrap
+                    && x > 0.
+                    && x + ink_width > w
+                {
+                    // The spaces ending the line, as the GPU shaper
+                    // wraps them: each one is kept while it starts by
+                    // the edge; one starting past it wraps the line and
+                    // takes the last kept with it; a word that fits a
+                    // line of its own drops the last; one broken by
+                    // grapheme keeps them all.
+                    let mut blanks: Vec<f32> = out
+                        .iter()
+                        .rev()
+                        .take_while(|(_, r)| r.y == y && r.x >= ink_x)
+                        .map(|(_, r)| r.x)
+                        .collect();
+                    blanks.reverse();
+                    let kept = blanks.iter().take_while(|s| **s <= w).count();
+                    let line = if kept < blanks.len() || ink_width <= w {
+                        kept.checked_sub(1).map_or(ink_x, |last| blanks[last])
+                    } else {
+                        x
+                    };
+                    width = width.max(line);
+                    x = 0.;
+                    y = (y + height).min(f32::MAX);
+                }
+                for (i, (range, advance)) in word.into_iter().enumerate() {
+                    // A word wider than the line breaks between graphemes.
+                    if let Some(w) = wrap
+                        && i < ink
+                        && x > 0.
+                        && x + advance > w
+                    {
+                        width = width.max(ink_x);
+                        x = 0.;
+                        y = (y + height).min(f32::MAX);
+                    }
+                    place(&mut out, range, advance, &mut x, y);
+                    if i < ink {
+                        ink_x = x;
+                    }
+                }
+            }
+            width = width.max(x);
+            end = Rect::new(x, y, 1., *height);
+            if paragraph + 1 < paragraphs.len() {
+                out.push((newline, Rect::new(x, y, 0., *height)));
+                y = (y + height).min(f32::MAX);
+            }
+        }
+        let size = (width, (y + end.height).min(f32::MAX));
+        let mut layout = Self {
+            cells: out,
+            end,
+            size,
+        };
+        layout.align(max_width, font.align);
+        layout
+    }
     fn align(&mut self, width: Option<f32>, alignment: TextAlign) {
         let Some(width) = width.filter(|w| w.is_finite() && *w > 0.) else {
             return;
@@ -613,30 +1026,101 @@ impl FallbackTextLayout {
         let mut x = 0.;
         let mut y = 0.;
         let mut width = 0_f32;
-        for (index, grapheme) in text.grapheme_indices(true) {
-            if grapheme.contains(['\n', '\r']) {
-                cell(index..index + grapheme.len(), Rect::new(x, y, 0., height));
+        // Each grapheme in turn: its byte range, and whether it breaks the line.
+        let mut each = |range: Range<usize>, newline: bool| {
+            if newline {
+                cell(range, Rect::new(x, y, 0., height));
                 width = width.max(x);
                 x = 0.;
                 y = (y + height).min(f32::MAX);
-                continue;
+                return;
             }
             if max_width.is_some_and(|w| w > 0. && x > 0. && x + advance > w) {
                 width = width.max(x);
                 x = 0.;
                 y = (y + height).min(f32::MAX)
             }
-            cell(
-                index..index + grapheme.len(),
-                Rect::new(x, y, advance, height),
-            );
+            cell(range, Rect::new(x, y, advance, height));
             x = (x + advance).min(f32::MAX);
+        };
+        if text.is_ascii() {
+            for range in AsciiClusters::new(text.as_bytes()) {
+                let newline = matches!(text.as_bytes()[range.start], b'\n' | b'\r');
+                each(range, newline);
+            }
+        } else {
+            for (index, grapheme) in text.grapheme_indices(true) {
+                each(
+                    index..index + grapheme.len(),
+                    grapheme.contains(['\n', '\r']),
+                );
+            }
         }
         width = width.max(x);
         (
             Rect::new(x, y, 1., height),
             (width, (y + height).min(f32::MAX)),
         )
+    }
+}
+/// `text`'s graphemes as byte ranges, in order: what
+/// `grapheme_indices(true)` gives (each `(start, grapheme)` as
+/// `start..start + grapheme.len()`), an ASCII text's read from its bytes
+/// (`AsciiClusters`), anything else segmented. For a walk over every
+/// grapheme of a text (carets, a screen reader's runs).
+pub fn grapheme_ranges(text: &str) -> GraphemeRanges<'_> {
+    if text.is_ascii() {
+        GraphemeRanges::Ascii(AsciiClusters::new(text.as_bytes()))
+    } else {
+        GraphemeRanges::Unicode(text.grapheme_indices(true))
+    }
+}
+/// `grapheme_ranges`' iterator.
+pub enum GraphemeRanges<'a> {
+    #[doc(hidden)]
+    Ascii(AsciiClusters<'a>),
+    #[doc(hidden)]
+    Unicode(unicode_segmentation::GraphemeIndices<'a>),
+}
+impl Iterator for GraphemeRanges<'_> {
+    type Item = Range<usize>;
+    #[inline]
+    fn next(&mut self) -> Option<Range<usize>> {
+        match self {
+            Self::Ascii(bytes) => bytes.next(),
+            Self::Unicode(graphemes) => graphemes
+                .next()
+                .map(|(start, grapheme)| start..start + grapheme.len()),
+        }
+    }
+}
+/// An ASCII text's graphemes, without Unicode's segmentation: each byte is
+/// one, but a carriage return before a line feed, which joins it (UAX #29
+/// GB3; every other ASCII character, controls included, breaks from its
+/// neighbours). `grapheme_indices` gives the same ranges, a table lookup and
+/// state machine step a character slower.
+#[doc(hidden)]
+pub struct AsciiClusters<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+impl<'a> AsciiClusters<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, at: 0 }
+    }
+}
+impl Iterator for AsciiClusters<'_> {
+    type Item = Range<usize>;
+    fn next(&mut self) -> Option<Range<usize>> {
+        let start = self.at;
+        let byte = *self.bytes.get(start)?;
+        let len = if byte == b'\r' && self.bytes.get(start + 1) == Some(&b'\n') {
+            2
+        } else {
+            1
+        };
+        self.at = start + len;
+        Some(start..self.at)
     }
 }
 impl TextLayout for FallbackTextLayout {
@@ -704,8 +1188,13 @@ impl TextLayout for FallbackTextLayout {
             return Vec::new();
         }
         let mut result: Vec<Rect> = Vec::new();
-        for (index, r) in &self.cells {
-            if index.start < end && index.end > start && r.width > 0. {
+        // Cells are in text order: from the first that reaches `start`.
+        let first = self.cells.partition_point(|(index, _)| index.end <= start);
+        for (i, (index, r)) in self.cells.iter().enumerate().skip(first) {
+            if index.start >= end {
+                break;
+            }
+            if r.width > 0. {
                 if let Some(last) = result.last_mut()
                     && last.y == r.y
                     && last.x + last.width >= r.x
@@ -714,6 +1203,10 @@ impl TextLayout for FallbackTextLayout {
                     continue;
                 }
                 result.push(*r);
+            } else if i == 0 || self.cells[i - 1].1.y != r.y {
+                // An empty line's break.
+                let width = empty_line_width(r.height);
+                result.push(Rect::new(r.x, r.y, width, r.height));
             }
         }
         result
@@ -721,6 +1214,69 @@ impl TextLayout for FallbackTextLayout {
 }
 #[cfg(test)]
 mod tests {
+    /// `grapheme_ranges` is `grapheme_indices`' ranges, ASCII or not.
+    #[test]
+    fn grapheme_ranges_are_grapheme_indices() {
+        use unicode_segmentation::UnicodeSegmentation;
+        for text in [
+            "",
+            "Row 12 at 345",
+            "a\r\nb\rc\nd",
+            "caf\u{e9} na\u{ef}ve",
+            "e\u{301}\u{302}x",
+            "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467} family",
+            "\u{1f1fa}\u{1f1f8}\u{1f1ec}\u{1f1e7}",
+            "\u{5e9}\u{5dc}\u{5d5}\u{5dd} hello",
+            "\u{915}\u{94d}\u{937} \r\n",
+        ] {
+            let ranges: Vec<_> = super::grapheme_ranges(text).collect();
+            let indices: Vec<_> = text
+                .grapheme_indices(true)
+                .map(|(at, grapheme)| at..at + grapheme.len())
+                .collect();
+            assert_eq!(ranges, indices, "{text:?}");
+        }
+    }
+
+    /// An ASCII text's graphemes are its bytes but CR LF, as Unicode's
+    /// segmentation finds them: every string of up to four bytes from an
+    /// alphabet of controls, line breaks, letters, digits and punctuation,
+    /// and longer mixed ones, give the same ranges either way.
+    #[test]
+    fn ascii_clusters_are_unicode_graphemes() {
+        use unicode_segmentation::UnicodeSegmentation;
+        let check = |text: &str| {
+            let fast: Vec<_> = super::AsciiClusters::new(text.as_bytes()).collect();
+            let slow: Vec<_> = text
+                .grapheme_indices(true)
+                .map(|(at, grapheme)| at..at + grapheme.len())
+                .collect();
+            assert_eq!(fast, slow, "{text:?}");
+        };
+        let alphabet = [
+            b'\r', b'\n', b'\t', 0, 1, 0x1b, 0x7f, b' ', b'a', b'Z', b'7', b'-', b'.', b'~',
+        ];
+        let mut text = Vec::new();
+        for len in 0..=4u32 {
+            for mut code in 0..alphabet.len().pow(len) {
+                text.clear();
+                for _ in 0..len {
+                    text.push(alphabet[code % alphabet.len()]);
+                    code /= alphabet.len();
+                }
+                check(std::str::from_utf8(&text).unwrap());
+            }
+        }
+        for text in [
+            "Row 12 at 345",
+            "line one\r\nline two\rthree\nfour\r\n\r\n",
+            "\r\r\n\n\r",
+            "tabs\tand\x00nulls\x7f",
+        ] {
+            check(text);
+        }
+    }
+
     use super::*;
     #[test]
     fn line_height_normalization_hashing_and_tight_pitch() {
@@ -883,6 +1439,72 @@ mod letter_spacing_tests {
         assert_eq!(LetterSpacing::px(-f32::MAX), LetterSpacing::px(-1_000_000.));
         assert_eq!(LetterSpacing::px(999_999.).pixels(), 999_999.);
         assert_eq!(LetterSpacing::px(-999_999.).pixels(), -999_999.);
+    }
+
+    #[test]
+    fn a_grid_is_kept_in_the_spacings_own_bits() {
+        let grid = LetterSpacing::cells(7.826_66);
+        assert!((grid.cell().unwrap() - 7.826_66).abs() <= 1. / 1024.);
+        // Read as tracking, less than 1e-38 of a pixel: nothing to a width.
+        assert!(grid.pixels() <= 0. && grid.pixels().abs() < f32::MIN_POSITIVE);
+        assert_eq!(10. + grid.pixels(), 10.);
+        // A subnormal tracking is none (its bits would be a grid's).
+        assert_eq!(LetterSpacing::px(-1e-39), LetterSpacing::ZERO);
+        assert_eq!(LetterSpacing::px(1e-39), LetterSpacing::ZERO);
+        assert_eq!(LetterSpacing::px(3.).cell(), None);
+        assert_eq!(LetterSpacing::ZERO.cell(), None);
+        assert_eq!(LetterSpacing::cells(0.), LetterSpacing::ZERO);
+        assert_eq!(LetterSpacing::cells(f32::NAN), LetterSpacing::ZERO);
+        assert_eq!(
+            LetterSpacing::cells(1e9).cell(),
+            Some(GRID_UNITS as f32 / 1024.)
+        );
+        // No tracking value is a grid, and a font style is no bigger.
+        for spacing in [
+            -1_000_000.,
+            -1.,
+            -0.5,
+            -f32::MIN_POSITIVE,
+            f32::MIN_POSITIVE,
+            0.5,
+            1.,
+            1_000_000.,
+        ] {
+            assert_eq!(LetterSpacing::px(spacing).cell(), None);
+        }
+        assert_eq!(std::mem::size_of::<LetterSpacing>(), 4);
+        assert_eq!(
+            format!("{:?}", LetterSpacing::cells(8.)),
+            "LetterSpacing::cells(8)"
+        );
+        assert_eq!(
+            format!("{:?}", LetterSpacing::px(2.)),
+            "LetterSpacing::px(2)"
+        );
+    }
+
+    /// Every reader of a font's spacing reads a grid as no tracking: the
+    /// fallback layout's estimate (0.6 em a cell, as a terminal measures
+    /// its cell without a shaper), its spaced and ellipsis advances, finite
+    /// and as without spacing.
+    #[test]
+    fn readers_read_a_grid_as_no_tracking() {
+        let grid = FontStyle {
+            letter_spacing: LetterSpacing::cells(7.),
+            ..FontStyle::default()
+        };
+        let plain = FontStyle::default();
+        for text in ["ab\ncd", "abc", "a\u{301}b"] {
+            assert_eq!(
+                FallbackTextLayout::with_font(text, 10., None, &grid).size(),
+                FallbackTextLayout::with_font(text, 10., None, &plain).size(),
+                "{text:?}"
+            );
+        }
+        assert_eq!(
+            FallbackTextLayout::measure_with_font("abc", 10., Some(15.), &grid),
+            FallbackTextLayout::measure_with_font("abc", 10., Some(15.), &plain)
+        );
     }
 
     #[test]

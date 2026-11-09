@@ -95,7 +95,7 @@ def main():
                 raise RuntimeError("the stand-in portal did not start")
             xvfb = launch("xvfb", ["Xvfb", "-r", "-noreset", "-displayfd", "1", "-screen", "0", "1280x900x24", "-ac"],
                           env, stdout=subprocess.PIPE, text=True)
-            if not select.select([xvfb.stdout], [], [], 10)[0]:
+            if not select.select([xvfb.stdout], [], [], 30)[0]:
                 raise RuntimeError("Xvfb startup timed out")
             env["DISPLAY"] = ":" + xvfb.stdout.readline().strip()
             launch("openbox", ["openbox"], env)
@@ -170,9 +170,9 @@ def main():
                     return list(picture.convert("RGB").getpixel((8, 248)))
             result["under Greybird, the background"] = background("light")
             # The same spot as primary_selection_smoke's double click.
-            xdo("mousemove", "--window", window, 110, 42, "click", 1)
-            time.sleep(.7)
-            xdo("click", 1)
+            # One xdotool for both presses: two take as long to start as a
+            # loaded runner likes, past the 1000 ms this needs them within.
+            xdo("mousemove", "--window", window, 110, 42, "click", 1, "sleep", .7, "click", 1)
 
             def primary():
                 read = subprocess.run(["xclip", "-o", "-selection", "primary"], env=env,

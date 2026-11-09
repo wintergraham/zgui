@@ -52,6 +52,16 @@ def check_pixels(picture, width, mode):
     return dict(mode=mode, window_width=width, fitted_size=[fitted_width, fitted_height], checked_pixels=tested, colors_visible=len(seen))
 
 
+def wait_for_clicks(log, count, timeout=10.):
+    """Wait until the app has logged `count` mode clicks."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if log.read_text().count("FIT ") >= count:
+            return
+        time.sleep(.02)
+    raise RuntimeError(f"the app took {log.read_text().count('FIT ')} of {count} clicks in {timeout:g} s")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=pathlib.Path)
@@ -64,7 +74,7 @@ def main():
         try:
             with (args.output / "xvfb.log").open("w") as log:
                 xvfb = subprocess.Popen(["Xvfb", "-r", "-noreset", "-displayfd", "1", "-screen", "0", "800x600x24", "-ac"], stdout=subprocess.PIPE, stderr=log, text=True)
-                if not select.select([xvfb.stdout], [], [], 8)[0]:
+                if not select.select([xvfb.stdout], [], [], 30)[0]:
                     raise RuntimeError("owned Xvfb startup timed out")
                 display = ":" + xvfb.stdout.readline().strip()
             env = dict(os.environ, DISPLAY=display, XDG_RUNTIME_DIR=runtime, WINIT_X11_SCALE_FACTOR="1", DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent", GSETTINGS_BACKEND="memory", XDG_CONFIG_HOME=str(pathlib.Path(runtime, "config")), XDG_CACHE_HOME=str(pathlib.Path(runtime, "cache")))
@@ -97,6 +107,11 @@ def main():
                         xdo("windowsize", "--sync", window, width, 320)
                         current_width = width
                     xdo("mousemove", "--window", window, 70, 72 + MODES.index(mode) * 38, "click", 1)
+                    # The app says each click as it takes it (`FIT <mode>`):
+                    # under load (CI runs eight smokes at once) a fixed
+                    # sleep captured the last mode's picture before this
+                    # click was handled. Wait for it, then for its frame.
+                    wait_for_clicks(args.output / "image-fit.log", index)
                     time.sleep(.25)
                     path = args.output / f"image-fit-{index}.png"
                     subprocess.run(["import", "-window", window, str(path)], env=env, check=True, timeout=10)

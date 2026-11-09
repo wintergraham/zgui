@@ -107,6 +107,34 @@ fn app_tokens_and_luau_themes() {
 }
 
 #[test]
+fn ui_tokens_name_every_token_as_fields() {
+    let mut h = Harness::inline(
+        r##"ui.theme.tokens { app = { card = "#20242c" } }
+        local before = ui.tokens.surface.raised
+        -- Declared after the first read: found all the same.
+        ui.theme.tokens { app = { late = "#ffffff" } }
+        local typo = select(2, pcall(function() return ui.tokens.app.crad end))
+        return ui.column {
+            ui.div { id = "card", w = 10, h = 10, bg = ui.tokens.app.card },
+            ui.div { id = "raised", w = 10, h = 10, bg = before, rounded = ui.tokens.radius.lg },
+            ui.div { id = "late", w = 10, h = 10, bg = ui.tokens.app.late },
+            ui.text { ui.tokens.accent.value .. " " .. ui.tokens.accent.hover .. " " .. ui.tokens.space[3], id = "names" },
+            ui.text { tostring(typo), id = "typo" },
+        }"##,
+    );
+    assert_eq!(h.fill("card"), Color(0x20, 0x24, 0x2c, 255));
+    assert_eq!(h.fill("raised"), DARK_RAISED);
+    assert_eq!(h.radius("raised"), 10.);
+    assert_eq!(h.fill("late"), WHITE);
+    assert_eq!(h.text("names"), "$accent $accent.hover $space.3");
+    assert!(
+        h.text("typo").contains("ui.tokens has no `app.crad`"),
+        "{}",
+        h.text("typo")
+    );
+}
+
+#[test]
 fn scoped_themes_restyle_their_subtrees() {
     let mut h = Harness::inline(
         r##"local light = ui.state("light", true)
@@ -340,4 +368,148 @@ fn ui_prefers_follows_the_systems_display_settings() {
     });
     h.frames(1);
     assert_eq!(h.text("p"), "true false true", "as the system changes");
+}
+
+/// A box's corner radii (top left, top right, bottom right, bottom left)
+/// and border widths (top, right, bottom, left) as painted.
+fn quad_of(h: &mut Harness, id: &str) -> ([f32; 4], [f32; 4]) {
+    let node = h.find(id).unwrap_or_else(|| panic!("no node `{id}`"));
+    match h.ui.scene.borrow().kind(node) {
+        NodeKind::Panel { quad, .. } | NodeKind::Quad(quad) => {
+            let d = quad.decoration.as_ref();
+            let corners = d.and_then(|d| d.corners).map_or([quad.radius; 4], |c| {
+                [c.top_left, c.top_right, c.bottom_right, c.bottom_left]
+            });
+            let borders = d
+                .and_then(|d| d.border_widths)
+                .map_or([quad.border_width; 4], |b| {
+                    [b.top, b.right, b.bottom, b.left]
+                });
+            (corners, borders)
+        }
+        other => panic!("`{id}` is not a box: {other:?}"),
+    }
+}
+
+const SHORTHANDS: &str = r##"
+ui.theme.tokens { app = { r = 24, s = 10, b = 3 } }
+local function box(p) p.w, p.h, p.bg = 160, 80, "#3a3a44"; return ui.div(p) end
+local function holder(p) p.bg = "#3a3a44"; p[1] = ui.div { id = p.id .. "-in", w = 20, h = 20 }; return ui.column(p) end
+return ui.column { gap = 4,
+    box { id = "r-token", rounded = "$app.r", rounded_tl = 0, rounded_tr = 0 },
+    box { id = "r-num", rounded = 24, rounded_tl = 0, rounded_tr = 0 },
+    box { id = "r-token-corners", rounded = "$app.r", corners = { 1, 2, 3, 4 } },
+    box { id = "b-token", border = "$app.b", border_color = "#ffffff", border_sides = { 0, 1, 0, 1 } },
+    box { id = "b-num", border = 3, border_color = "#ffffff", border_sides = { 0, 1, 0, 1 } },
+    holder { id = "p-token", p = "$app.s", pt = 0, pl = 2 },
+    holder { id = "p-num", p = 10, pt = 0, pl = 2 },
+    ui.row { id = "m-token-row", holder { id = "m-token", m = "$app.s", mt = 0, ml = 2 } },
+    ui.row { id = "m-num-row", holder { id = "m-num", m = 10, mt = 0, ml = 2 } },
+}"##;
+
+/// `rounded = "$app.r", rounded_tl = 0, rounded_tr = 0` rounds the
+/// bottom corners by the token, as `rounded = 24` does: the token resolves
+/// first and the single corners lie over it. `corners` replaces it whole.
+#[test]
+fn a_token_radius_takes_its_single_corners_as_a_number_does() {
+    let mut h = Harness::inline(SHORTHANDS);
+    assert_eq!(h.error(), None);
+    assert_eq!(quad_of(&mut h, "r-num").0, [0., 0., 24., 24.]);
+    assert_eq!(quad_of(&mut h, "r-token").0, [0., 0., 24., 24.]);
+    assert_eq!(quad_of(&mut h, "r-token-corners").0, [1., 2., 3., 4.]);
+}
+
+/// `border = "$app.b", border_sides = { … }` gives the sides, as
+/// `border = 3` does.
+#[test]
+fn a_token_border_takes_its_sides_as_a_number_does() {
+    let mut h = Harness::inline(SHORTHANDS);
+    assert_eq!(quad_of(&mut h, "b-num").1, [0., 1., 0., 1.]);
+    assert_eq!(quad_of(&mut h, "b-token").1, [0., 1., 0., 1.]);
+}
+
+/// Where a box's first child lies inside it: its padding at the left and
+/// top.
+fn inner(h: &mut Harness, id: &str) -> (f32, f32) {
+    let (outer, inner) = (h.bounds(id), h.bounds(&format!("{id}-in")));
+    (inner.x - outer.x, inner.y - outer.y)
+}
+
+/// `p = "$app.s", pt = 0, pl = 2` pads the top 0 and the left 2, as
+/// `p = 10` does.
+#[test]
+fn a_token_padding_takes_its_sides_as_a_number_does() {
+    let mut h = Harness::inline(SHORTHANDS);
+    assert_eq!(inner(&mut h, "p-num"), (2., 0.));
+    assert_eq!(inner(&mut h, "p-token"), (2., 0.));
+}
+
+/// `m = "$app.s", mt = 0, ml = 2` sets the top margin 0 and the left 2,
+/// as `m = 10` does.
+#[test]
+fn a_token_margin_takes_its_sides_as_a_number_does() {
+    let mut h = Harness::inline(SHORTHANDS);
+    let outer = |h: &mut Harness, id: &str| {
+        let (row, b) = (h.bounds(&format!("{id}-row")), h.bounds(id));
+        (b.x - row.x, b.y - row.y)
+    };
+    assert_eq!(outer(&mut h, "m-num"), (2., 0.));
+    assert_eq!(outer(&mut h, "m-token"), (2., 0.));
+}
+
+/// Text taking `$text.primary` or `$text.secondary` from the row around it
+/// follows every theme switch, not only the first: switched by the script
+/// (light, dark, light, dark) and by the system while the app follows it.
+/// (After the first, a text's paint-only style run resolved its inherited
+/// size and family again but not its colour, which stayed the first
+/// switch's.)
+#[test]
+fn inherited_token_text_colours_follow_every_theme_switch() {
+    use zgx::theme::{Appearance, tok};
+    let mut h = Harness::inline(
+        r##"ui.theme.current:set("zgx-dark")
+local function switch(id, name)
+    return ui.button { id = id, on_click = function() ui.theme.current:set(name) end, color = "#ff0000ff", "x" }
+end
+return ui.column {
+    switch("light", "zgx-light"), switch("dark", "zgx-dark"),
+    ui.row { id = "primary", color = "$text.primary", "Continue" },
+    ui.row { id = "secondary", color = "$text.secondary", "Later" },
+}"##,
+    );
+    h.frame();
+    // The theme's own colours, and which theme it is.
+    let check = |h: &mut Harness, when: &str, dark: bool| {
+        let scope = h.ui.theme_scope();
+        let primary = scope.color(tok::TEXT_PRIMARY);
+        let secondary = scope.color(tok::TEXT_SECONDARY);
+        let theme = if dark { DARK_TEXT } else { LIGHT_TEXT };
+        assert_eq!(primary, theme, "{when}: the theme");
+        assert_eq!(h.ink("primary"), primary, "{when}: text.primary");
+        assert_eq!(h.ink("secondary"), secondary, "{when}: text.secondary");
+    };
+    check(&mut h, "at first", true);
+    for (i, id) in ["light", "dark", "light", "dark"].into_iter().enumerate() {
+        h.click(id);
+        h.frame();
+        check(&mut h, &format!("switch {i} to {id}"), id == "dark");
+    }
+    // Following the system (dark, light), its appearance changing again
+    // and again.
+    h.ui.theme().follow_system(Some(("zgx-dark", "zgx-light")));
+    let appearances = [
+        Appearance::Light,
+        Appearance::Dark,
+        Appearance::Light,
+        Appearance::Dark,
+    ];
+    for (i, appearance) in appearances.into_iter().enumerate() {
+        h.ui.theme().set_system_appearance(appearance);
+        h.frame();
+        check(
+            &mut h,
+            &format!("system change {i}"),
+            appearance == Appearance::Dark,
+        );
+    }
 }
