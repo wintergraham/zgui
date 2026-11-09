@@ -176,3 +176,16 @@ forgotten when the font matches are (`db_mut`, or the cache's limit).
 keeps its code. zgx-gpu's `first_font` test shapes texts in turn under
 changing families, weights, sizes and scripts, with characters only another
 font has, to the same glyphs from the same fonts as each alone.
+
+## Colour emoji
+
+A grapheme that presents as emoji (`src/emoji.rs`: a default emoji, or a
+character with U+FE0F, a skin tone, a joiner or a keycap after it) is a run of
+its own and tries the platform's colour face first. Fonts covering "1" or "❤"
+otherwise kept it, in monochrome, and a joined sequence could be split among
+fonts. Its glyphs take the ascent and descent of the text's own font, so an
+emoji moves neither baseline nor line height, and its weight, optical size and
+fake italic are cleared: a bitmap has one image, so one atlas cell. Plain Latin
+words never reach this (they take the ASCII path through `ShapeWord::build`);
+other text reads one character's range per grapheme. `check/` compares with
+upstream, so it leaves emoji out of its texts.

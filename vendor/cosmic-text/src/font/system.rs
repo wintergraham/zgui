@@ -180,6 +180,9 @@ pub struct FontSystem {
     /// weight), read from its file the first time a match needs it.
     weight_axes: HashMap<fontdb::ID, Option<(f32, f32)>>,
 
+    /// zgx patch: the colour emoji face, once looked for (`emoji_font`).
+    emoji_face: Option<Option<fontdb::ID>>,
+
     /// Scratch buffer for shaping and laying out.
     pub(crate) shape_buffer: ShapeBuffer,
 
@@ -330,6 +333,7 @@ impl FontSystem {
             font_cache: HashMap::default(),
             font_matches_cache: HashMap::default(),
             first_font: Vec::new(),
+            emoji_face: None,
             weight_axes: HashMap::default(),
             font_codepoint_support_info_cache: HashMap::default(),
             monospace_fallbacks_buffer: BTreeSet::default(),
@@ -360,6 +364,7 @@ impl FontSystem {
     pub fn db_mut(&mut self) -> &mut fontdb::Database {
         self.font_matches_cache.clear();
         self.first_font.clear();
+        self.emoji_face = None;
         &mut self.db
     }
 
@@ -369,6 +374,20 @@ impl FontSystem {
     }
 
     /// Get a font by its ID and weight.
+    /// zgx patch: the platform's colour emoji font, if one is installed; its
+    /// face is searched for once.
+    pub(crate) fn emoji_font(&mut self) -> Option<Arc<Font>> {
+        let db = &self.db;
+        let id = *self.emoji_face.get_or_insert_with(|| {
+            crate::emoji::EMOJI_FAMILIES.iter().find_map(|name| {
+                db.faces()
+                    .find(|face| face.families.iter().any(|(family, _)| family == name))
+                    .map(|face| face.id)
+            })
+        });
+        self.get_font(id?, fontdb::Weight::NORMAL)
+    }
+
     pub fn get_font(&mut self, id: fontdb::ID, weight: fontdb::Weight) -> Option<Arc<Font>> {
         self.get_font_at(id, weight, 0)
     }
