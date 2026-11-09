@@ -662,6 +662,66 @@ fn copy_blocker(
     }
     None
 }
+/// What a copy of `scroll`'s pixels gets wrong where a rounded clip around
+/// the whole view (a card's corners) cuts it: those corners hold still as the
+/// content moves, so the copy carries them off with it (a border's arc
+/// stamped along the edge) and covers them with content. Each cut corner's
+/// square, where it is and where the copy puts it, to repaint; `None` for a
+/// feathered clip, whose fade runs along every edge.
+fn still_corners(scene: &Scene, scroll: &zgx::scene::ScrollMove) -> Option<Vec<Rect>> {
+    let clip = scroll.clip;
+    let holds = |outer: Rect| {
+        const E: f32 = 1e-3;
+        outer.x <= clip.x + E
+            && outer.y <= clip.y + E
+            && outer.x + outer.width >= clip.x + clip.width - E
+            && outer.y + outer.height >= clip.y + clip.height - E
+    };
+    let mut corners: Vec<Rect> = Vec::new();
+    let mut looked: Option<*const zgx::scene::PaintExtras> = None;
+    for item in scene.layer_items_within(None, Some(&[clip])) {
+        let Some(extras) = &item.extras else {
+            continue;
+        };
+        // (A subtree shares its extras: looked at once.)
+        if looked.is_some_and(|at| std::ptr::eq(at, &**extras))
+            || !scene.is_within(item.id, scroll.node)
+        {
+            continue;
+        }
+        looked = Some(&**extras);
+        // A rounded clip smaller than the view is the content's own (a
+        // row's corners) and moves with it.
+        for round in extras.rounded.iter().flatten().filter(|r| holds(r.rect)) {
+            if round.feather.points() > 0. {
+                return None;
+            }
+            let r = round.rect;
+            let [tl, tr, br, bl] = round.radii;
+            for (x, y, radius) in [
+                (r.x, r.y, tl),
+                (r.x + r.width - tr, r.y, tr),
+                (r.x + r.width - br, r.y + r.height - br, br),
+                (r.x, r.y + r.height - bl, bl),
+            ] {
+                if radius <= 0. {
+                    continue;
+                }
+                let square = Rect::new(x, y, radius, radius);
+                let moved = Rect::new(x + scroll.dx, y + scroll.dy, radius, radius);
+                for rect in [square, moved]
+                    .into_iter()
+                    .filter_map(|s| s.intersection(clip))
+                {
+                    if !corners.contains(&rect) {
+                        corners.push(rect);
+                    }
+                }
+            }
+        }
+    }
+    Some(corners)
+}
 /// Whether rectangles spanning `clip` side to side (or top to bottom) cover
 /// it, meeting on whole device pixels: no seam lets anything beneath show.
 fn spans_cover(clip: Rect, rects: impl Iterator<Item = Rect>, scale: f32) -> bool {
@@ -7175,12 +7235,25 @@ impl GpuRenderer {
             };
             match refused {
                 Ok(copy) => match copy_blocker(scene, scroll, damage, self.scale) {
-                    None => {
-                        zgx::profile::note(|| {
-                            format!("scroll @{} copied its pixels", scroll.node.number())
-                        });
-                        copies.push(copy);
-                    }
+                    None => match still_corners(scene, scroll) {
+                        Some(corners) => {
+                            zgx::profile::note(|| {
+                                format!("scroll @{} copied its pixels", scroll.node.number())
+                            });
+                            copies.push(copy);
+                            repaint.extend(corners);
+                        }
+                        None => {
+                            zgx::profile::note(|| {
+                                format!(
+                                    "scroll @{} repainted its view: a feathered clip fades \
+                                     around it",
+                                    scroll.node.number()
+                                )
+                            });
+                            repaint.push(scroll.clip);
+                        }
+                    },
                     Some(blocker) => {
                         zgx::profile::note(|| {
                             format!(
@@ -11703,6 +11776,58 @@ mod copy_blocker_tests {
                 );
             } else {
                 assert_eq!(blocker, None);
+            }
+        }
+    }
+
+    /// A list filling a card with rounded corners still copies, and the
+    /// card's corners, which hold still, repaint where they are and where
+    /// the copy puts them; a square card leaves nothing to repaint.
+    #[test]
+    fn a_rounded_card_around_a_scroll_view_repaints_its_corners() {
+        for radius in [0_f32, 12.] {
+            let mut ui = Ui::new(160., 120.);
+            let offset = ui.signal(0_f32);
+            let rows = virtual_list(
+                offset.clone(),
+                24.,
+                2,
+                || 1000,
+                |i| i,
+                |_, _, _| div().size(160., 24.).bg(rgb(0x223344)),
+            )
+            .w(160.)
+            .h(120.);
+            let card = div()
+                .w(160.)
+                .h(120.)
+                .bg(rgb(0x101820))
+                .rounded(radius)
+                .overflow_hidden()
+                .child(rows);
+            ui.mount(card);
+            ui.prepare_frame();
+            ui.scene.borrow_mut().flush();
+            offset.set(14.);
+            ui.prepare_frame();
+            let damage = ui.scene.borrow_mut().flush().damage;
+            let scene = ui.scene.borrow();
+            let scroll = scene.scroll_moves().last().expect("it moved").clone();
+            assert_eq!(copy_blocker(&scene, &scroll, &damage, 1.), None);
+            let corners = still_corners(&scene, &scroll).expect("not feathered");
+            if radius == 0. {
+                assert!(corners.is_empty(), "{corners:?}");
+                continue;
+            }
+            // The foot's right corner, and where moving up 14 puts it.
+            for (x, y) in [(148., 108.), (148., 94.)] {
+                assert!(
+                    corners.iter().any(|c| c.x <= x
+                        && c.y <= y
+                        && c.x + c.width >= x + 12.
+                        && c.y + c.height >= y + 12.),
+                    "({x}, {y}) in {corners:?}"
+                );
             }
         }
     }
