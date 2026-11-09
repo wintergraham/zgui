@@ -2470,6 +2470,10 @@ declare ui: {
 	-- Milliseconds since the epoch, to the microsecond (`os.time` counts
 	-- whole seconds). Not tracked.
 	now: () -> number,
+	-- What a trackpad scroll gesture is doing (tracked): "fingers" while
+	-- they are on it, "momentum" while it coasts after they lift, else nil.
+	-- macOS's trackpads report it; a mouse wheel never does.
+	trackpad: () -> ("fingers" | "momentum")?,
 	-- `t` (or a new table) marked a JSON object: empty, it sends `{}`, not
 	-- `[]` (a Lua table can't tell). An empty object from the host comes
 	-- marked, so it goes back as one.

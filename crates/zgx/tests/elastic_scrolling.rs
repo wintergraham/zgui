@@ -1,7 +1,11 @@
-use std::time::{Duration, Instant};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 use zgx::{
     compose::prelude::*,
-    input::{InputEvent, ScrollGesture},
+    input::{InputEvent, ScrollGesture, Trackpad},
     reactive::Signal,
     scene::NodeId,
     widgets::Ui,
@@ -232,4 +236,46 @@ fn a_spring_back_steps_every_refresh_of_the_display() {
     ui.advance_interactions(start).unwrap();
     let next = ui.next_interaction_deadline().expect("a step after");
     assert_eq!(next.duration_since(start), Duration::from_micros(8_333));
+}
+
+/// What the trackpad is doing follows its gestures' phases with elastic
+/// scrolling off, and what reads it runs again as it changes: an app snaps
+/// a scroll once the fingers lift.
+#[test]
+fn the_trackpads_phase_follows_its_gestures() {
+    let mut ui = Ui::new(300., 200.);
+    mount(&mut ui);
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let _reads = {
+        let (weak, seen) = (ui.downgrade(), seen.clone());
+        ui.runtime.effect(move || {
+            if let Some(ui) = weak.upgrade() {
+                seen.borrow_mut().push(ui.trackpad());
+            }
+        })
+    };
+    phase(&mut ui, ScrollGesture::Began);
+    scroll_by(&mut ui, 20.);
+    assert_eq!(ui.trackpad(), Some(Trackpad::Fingers));
+    assert_eq!(Trackpad::of(&ui.runtime), Some(Trackpad::Fingers));
+    for gesture in [
+        ScrollGesture::Ended,
+        ScrollGesture::MomentumBegan,
+        ScrollGesture::MomentumEnded,
+    ] {
+        phase(&mut ui, gesture);
+    }
+    let (fingers, momentum) = (Some(Trackpad::Fingers), Some(Trackpad::Momentum));
+    assert_eq!(*seen.borrow(), [None, fingers, None, momentum, None]);
+    // Fingers back down during momentum: its end leaves them down.
+    seen.borrow_mut().clear();
+    for gesture in [
+        ScrollGesture::MomentumBegan,
+        ScrollGesture::Began,
+        ScrollGesture::MomentumEnded,
+        ScrollGesture::Ended,
+    ] {
+        phase(&mut ui, gesture);
+    }
+    assert_eq!(*seen.borrow(), [momentum, fingers, None]);
 }

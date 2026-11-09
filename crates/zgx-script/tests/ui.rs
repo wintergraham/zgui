@@ -1141,6 +1141,32 @@ fn cleanups_run_when_a_component_unmounts() {
 }
 
 #[test]
+fn an_effect_reading_the_trackpad_runs_again_as_its_phase_changes() {
+    use zgx::input::ScrollGesture;
+    let mut h = Harness::inline(
+        r##"local seen = {}
+        local log = ui.state("log", "")
+        ui.effect(function()
+            table.insert(seen, ui.trackpad() or "nil")
+            log:set(table.concat(seen, " "))
+        end)
+        return ui.text { "{log}", id = "log" }"##,
+    );
+    h.frames(1);
+    for gesture in [
+        ScrollGesture::Began,
+        ScrollGesture::Ended,
+        ScrollGesture::MomentumBegan,
+        ScrollGesture::MomentumEnded,
+    ] {
+        h.ui.dispatch(InputEvent::ScrollGesture(gesture));
+    }
+    h.frames(1);
+    assert_eq!(h.text("log"), "nil fingers nil momentum nil");
+    assert_eq!(h.host.error().get(), None);
+}
+
+#[test]
 fn a_menu_taller_than_its_max_h_scrolls() {
     let mut h = Harness::inline(
         r##"local items = {}

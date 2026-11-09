@@ -4668,6 +4668,20 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
                 .map_or(0., |d| d.as_secs_f64() * 1000.))
         })?,
     )?;
+    // `ui.trackpad()`: "fingers" while a trackpad scroll gesture's fingers
+    // are down, "momentum" while it coasts after they lift, else nil.
+    // Tracked.
+    ui.set(
+        "trackpad",
+        lua.create_function(|lua, ()| {
+            use zgx::input::Trackpad;
+            Ok(match Trackpad::of(&env(lua)?.runtime) {
+                Some(Trackpad::Fingers) => Some("fingers"),
+                Some(Trackpad::Momentum) => Some("momentum"),
+                None => None,
+            })
+        })?,
+    )?;
     // `print` to stderr, a line at a time (stdout is buffered whole when an
     // app's output goes to a file, so prints never showed in its log).
     lua.globals().set(

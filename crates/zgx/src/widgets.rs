@@ -1040,6 +1040,9 @@ pub(crate) struct UiStorage {
     caret_blink: Rc<crate::caret_blink::Blink>,
     /// Assistive technology reads the semantics (`Ui::set_assistive_technology`).
     assistive: Signal<bool>,
+    /// What the trackpad is doing (`Ui::trackpad`): the runtime's, shared
+    /// with its other windows.
+    trackpad: Signal<Option<crate::input::Trackpad>>,
     /// Overlay scrollbars shown, to fade once their view stops scrolling.
     scrollbar_fades: RefCell<Vec<std::rc::Weak<crate::compose_scrollbar::Fade>>>,
     /// Input is being dispatched: what scrolls now, the user scrolled.
@@ -1203,6 +1206,7 @@ impl Ui {
             caret_width: Rc::new(Cell::new(1.)),
             caret_blink: Rc::default(),
             assistive: runtime.signal(true),
+            trackpad: crate::input::Trackpad::signal(&runtime),
             popup_screens: runtime.signal(Vec::new()),
             popup_limits: runtime.signal(Vec::new()),
             popup_flips: runtime.signal(Vec::new()),
@@ -2219,6 +2223,16 @@ impl Ui {
     pub fn set_elastic_scrolling(&self, elastic: bool) {
         self.storage.elastic.borrow_mut().enabled = elastic;
     }
+    /// What the trackpad is doing in a scroll gesture: its fingers on it,
+    /// its momentum after they lift, or nothing. Followed: read in an
+    /// effect, it runs again as the phase changes, so a scroll can come to
+    /// rest at a snap point once the fingers lift rather than while they
+    /// hold still. The host reports the phases (`InputEvent::ScrollGesture`;
+    /// macOS's trackpads); a mouse wheel has none, so it stays `None`. The
+    /// runtime's windows share it (`Trackpad::of`).
+    pub fn trackpad(&self) -> Option<crate::input::Trackpad> {
+        self.storage.trackpad.get()
+    }
     pub(crate) fn elastic_state(&self) -> &RefCell<crate::elastic::State> {
         &self.storage.elastic
     }
@@ -2801,6 +2815,9 @@ impl Ui {
                 if elastic {
                     crate::elastic::gesture(self, phase);
                 }
+                let trackpad = &self.storage.trackpad;
+                let now = trackpad.with_untracked(|now| *now);
+                trackpad.set(crate::input::Trackpad::after(now, phase));
                 return Default::default();
             }
             event @ InputEvent::Scroll { .. } if elastic && !crate::zoom::wheel_zooms() => {

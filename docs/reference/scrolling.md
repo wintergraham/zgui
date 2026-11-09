@@ -25,6 +25,8 @@ ui.list(props: ListProps) -> Node
 
 The content fills the viewport's width (`scroll`) or height (`scroll_x`) and is as long as its children make it.
 
+`ui.trackpad()` is what a trackpad scroll gesture is doing: `"fingers"` while they are on it, `"momentum"` while the scroll coasts after they lift, else nil. It is tracked, so an effect reading it runs again as the phase changes: snap a scroll to a resting point once the fingers lift (as iOS does), not while they hold still. Only macOS's trackpads report phases; a mouse wheel never does, and elsewhere it stays nil.
+
 ## list
 
 | Option | Type | Default | |

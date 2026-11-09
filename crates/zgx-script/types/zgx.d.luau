@@ -652,7 +652,7 @@ export type Resource<T> = {
 	reload: () -> (),
 }
 
--- A mounted node a script reaches: through `on_mount`, `on_resize`, a ref
+-- A mounted node a script reaches: through `on_mount`, `on_resize`, a ref (two handles on one node compare `==`)
 -- or an animation's function values.
 declare extern type Element with
 	id: string?
@@ -1586,6 +1586,8 @@ export type NodeProps = {
 	on_mount: ((element: Element) -> ...unknown)?,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: ((size: Size, element: Element) -> ...unknown)?,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: ((bounds: { x: number, y: number, w: number, h: number }, element: Element) -> ...unknown)?,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -1595,6 +1597,9 @@ export type NodeProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: (() -> any)?,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: ((at: { dx: number, dy: number }) -> boolean)?,
 	drag_preview: ((payload: any) -> Node)?,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -1917,6 +1922,8 @@ export type Props = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -1926,6 +1933,9 @@ export type Props = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -2155,8 +2165,10 @@ export type Props_on_wheel = (((e: WheelEvent) -> ...boolean?) | Action)?
 export type Props_on_pinch = (((e: PinchEvent) -> ...boolean?) | Action)?
 export type Props_on_mount = ((element: Element) -> ...unknown)?
 export type Props_on_resize = ((size: Size, element: Element) -> ...unknown)?
+export type Props_on_bounds = ((bounds: { x: number, y: number, w: number, h: number }, element: Element) -> ...unknown)?
 export type Props_on_visible = ((visible: boolean, element: Element) -> ...unknown)?
 export type Props_on_drag = (() -> any)?
+export type Props_drag_when = ((at: { dx: number, dy: number }) -> boolean)?
 export type Props_drag_preview = ((payload: any) -> Node)?
 export type Props_drag_preview_anchor = { number }?
 export type Props_drag_preview_offset = { number }?
@@ -2447,6 +2459,8 @@ export type ContainerProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -2456,6 +2470,9 @@ export type ContainerProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -2778,6 +2795,8 @@ export type ScrollProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -2787,6 +2806,9 @@ export type ScrollProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -3116,6 +3138,8 @@ export type TextProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -3125,6 +3149,9 @@ export type TextProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -3446,6 +3473,8 @@ export type MarkdownViewProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -3455,6 +3484,9 @@ export type MarkdownViewProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -3824,6 +3856,8 @@ export type RichProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -3833,6 +3867,9 @@ export type RichProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -4148,6 +4185,8 @@ export type ImageProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -4157,6 +4196,9 @@ export type ImageProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -4482,6 +4524,8 @@ export type SvgProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -4491,6 +4535,9 @@ export type SvgProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -4808,6 +4855,8 @@ export type CanvasProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -4817,6 +4866,9 @@ export type CanvasProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -5164,6 +5216,8 @@ export type CheckboxProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -5173,6 +5227,9 @@ export type CheckboxProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -5496,6 +5553,8 @@ export type InputProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -5505,6 +5564,9 @@ export type InputProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -5888,6 +5950,8 @@ export type ProgressProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -5897,6 +5961,9 @@ export type ProgressProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -6213,6 +6280,8 @@ export type SliderProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -6222,6 +6291,9 @@ export type SliderProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -6551,6 +6623,8 @@ export type SegmentedProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -6560,6 +6634,9 @@ export type SegmentedProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -6885,6 +6962,8 @@ export type StepperProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -6894,6 +6973,9 @@ export type StepperProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -7220,6 +7302,8 @@ export type DisclosureProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -7229,6 +7313,9 @@ export type DisclosureProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -7554,6 +7641,8 @@ export type AccordionProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -7563,6 +7652,9 @@ export type AccordionProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -7876,6 +7968,8 @@ export type SectionProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -7885,6 +7979,9 @@ export type SectionProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -8209,6 +8306,8 @@ export type SeparatorProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -8218,6 +8317,9 @@ export type SeparatorProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -8539,6 +8641,8 @@ export type TabsProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -8548,6 +8652,9 @@ export type TabsProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -8877,6 +8984,8 @@ export type TreeProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -8886,6 +8995,9 @@ export type TreeProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -9225,6 +9337,8 @@ export type DataGridProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -9234,6 +9348,9 @@ export type DataGridProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -9569,6 +9686,8 @@ export type CalendarProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -9578,6 +9697,9 @@ export type CalendarProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -9905,6 +10027,8 @@ export type DatePickerProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -9914,6 +10038,9 @@ export type DatePickerProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -10239,6 +10366,8 @@ export type TimeFieldProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -10248,6 +10377,9 @@ export type TimeFieldProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -10572,6 +10704,8 @@ export type ComboboxProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -10581,6 +10715,9 @@ export type ComboboxProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -10914,6 +11051,8 @@ export type CommandPaletteProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -10923,6 +11062,9 @@ export type CommandPaletteProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -11244,6 +11386,8 @@ export type SelectProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -11253,6 +11397,9 @@ export type SelectProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -11577,6 +11724,8 @@ export type SplitProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -11586,6 +11735,9 @@ export type SplitProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -11922,6 +12074,8 @@ export type ListProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -11931,6 +12085,9 @@ export type ListProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -12306,6 +12463,8 @@ export type LayerProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -12315,6 +12474,9 @@ export type LayerProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -12636,6 +12798,8 @@ export type ModalProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -12645,6 +12809,9 @@ export type ModalProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -12981,6 +13148,8 @@ export type PopoverProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -12990,6 +13159,9 @@ export type PopoverProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -13327,6 +13499,8 @@ export type MenuItemProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -13336,6 +13510,9 @@ export type MenuItemProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -13660,6 +13837,8 @@ export type SubmenuProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -13669,6 +13848,9 @@ export type SubmenuProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -13995,6 +14177,8 @@ export type NativeProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -14004,6 +14188,9 @@ export type NativeProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -14320,6 +14507,8 @@ export type WebViewProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -14329,6 +14518,9 @@ export type WebViewProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -14667,6 +14859,8 @@ export type TerminalProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -14676,6 +14870,9 @@ export type TerminalProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -14992,6 +15189,8 @@ export type SlotProps = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -15001,6 +15200,9 @@ export type SlotProps = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -15322,6 +15524,8 @@ export type EachOptions = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -15331,6 +15535,9 @@ export type EachOptions = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -15655,6 +15862,8 @@ export type PresenceOptions = {
 	on_mount: Props_on_mount,
 	-- When layout gives it a new size, and at its first layout.
 	on_resize: Props_on_resize,
+	-- When layout moves or resizes the node in the window, and at first layout.
+	on_bounds: Props_on_bounds,
 	-- When any of it comes into view or all of it leaves (inside every
 	-- clip and scroll viewport above it), and at its first layout: for
 	-- building what only matters on screen.
@@ -15664,6 +15873,9 @@ export type PresenceOptions = {
 	-- A source: `on_drag` returns the payload once the pointer moves 4
 	-- points; `drag_preview` builds what follows the pointer.
 	on_drag: Props_on_drag,
+	-- The drag starts only once this says so ({ dx, dy } from the press);
+	-- until then the press keeps the pointer (`on_pointer_move` sees it).
+	drag_when: Props_drag_when,
 	drag_preview: Props_drag_preview,
 	-- Where the preview goes: its point `drag_preview_anchor` (fractions
 	-- of its size, `{ 0.5, 0 }` its top middle) `drag_preview_offset`
@@ -15936,6 +16148,10 @@ declare ui: {
 	-- Milliseconds since the epoch, to the microsecond (`os.time` counts
 	-- whole seconds). Not tracked.
 	now: () -> number,
+	-- What a trackpad scroll gesture is doing (tracked): "fingers" while
+	-- they are on it, "momentum" while it coasts after they lift, else nil.
+	-- macOS's trackpads report it; a mouse wheel never does.
+	trackpad: () -> ("fingers" | "momentum")?,
 	-- `t` (or a new table) marked a JSON object: empty, it sends `{}`, not
 	-- `[]` (a Lua table can't tell). An empty object from the host comes
 	-- marked, so it goes back as one.

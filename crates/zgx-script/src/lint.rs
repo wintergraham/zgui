@@ -140,6 +140,7 @@ const NOT_ELEMENTS: &[&str] = &[
     "on_cleanup",
     "use_context",
     "now",
+    "trackpad",
     "object",
     "call_sync",
     "task",

@@ -117,6 +117,45 @@ pub enum ScrollGesture {
     /// Momentum scrolling ended.
     MomentumEnded,
 }
+/// What the trackpad is doing in a scroll gesture (`Ui::trackpad`), as its
+/// phases (`ScrollGesture`) say: the fingers on it, or the momentum after
+/// they lift.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trackpad {
+    /// The fingers are on it: from `Began` until `Ended`.
+    Fingers,
+    /// The scroll coasts on after the fingers lifted: from `MomentumBegan`
+    /// until `MomentumEnded`.
+    Momentum,
+}
+impl Trackpad {
+    /// What the trackpad is doing in `runtime`'s windows now, followed:
+    /// read in an effect, it runs again as the phase changes. Its windows
+    /// share it (they share one trackpad); a script host, which has the
+    /// runtime and no window, reads it here. `Ui::trackpad` is the same.
+    pub fn of(runtime: &Runtime) -> Option<Self> {
+        Self::signal(runtime).get()
+    }
+    /// The runtime's phase, which its windows' `ScrollGesture`s write.
+    pub(crate) fn signal(runtime: &Runtime) -> Signal<Option<Self>> {
+        struct Phase(Signal<Option<Trackpad>>);
+        runtime
+            .extension(|runtime| Phase(runtime.signal(None)))
+            .0
+            .clone()
+    }
+    /// The phase after `gesture`, from `now`: an end ends only its own
+    /// phase (fingers back down during momentum are fingers).
+    pub(crate) fn after(now: Option<Self>, gesture: ScrollGesture) -> Option<Self> {
+        match gesture {
+            ScrollGesture::Began => Some(Self::Fingers),
+            ScrollGesture::MomentumBegan => Some(Self::Momentum),
+            ScrollGesture::Ended if now == Some(Self::Fingers) => None,
+            ScrollGesture::MomentumEnded if now == Some(Self::Momentum) => None,
+            ScrollGesture::Ended | ScrollGesture::MomentumEnded => now,
+        }
+    }
+}
 /// An input event, routed to nodes by the [`InputDispatcher`]. Positions
 /// are in window points from the top left.
 #[derive(Clone, Debug, PartialEq)]
