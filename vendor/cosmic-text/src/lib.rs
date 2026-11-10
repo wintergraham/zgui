@@ -135,6 +135,7 @@ pub use self::render::*;
 mod render;
 
 pub use self::shape::*;
+mod emoji;
 mod shape;
 
 pub use self::shape_run_cache::*;

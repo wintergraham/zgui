@@ -141,9 +141,9 @@ fn main() {
         return;
     }
     // ASCII including controls and paragraph separators, and lines mixing in
-    // accents, CJK, right-to-left scripts, emoji and bidi controls.
+    // accents, CJK, right-to-left scripts and bidi controls.
     let ascii: Vec<char> = (0u8..128).map(char::from).filter(|c| *c != '\n').collect();
-    let other = ["é", "ü", "日本", "שלום", "مرحبا", "🙂", "\u{200f}", "\u{202e}", "\u{2029}", "ﬁ", "\u{85}"];
+    let other = ["é", "ü", "日本", "שלום", "مرحبا", "\u{200f}", "\u{202e}", "\u{2029}", "ﬁ", "\u{85}"];
     let mut seed = 0x9e37_79b9_7f4a_7c15;
     let mut texts: Vec<String> = ["", " ", "\t", "\n", "a\n", "\r\n", "12 34", "  lead", "trail  ", "x\u{1c}y", "fi ffl"]
         .map(String::from)

@@ -380,7 +380,25 @@ fn shape_run(
     }
 
     let glyph_start = glyphs.len();
-    let mut missing = {
+    // zgx: an emoji (a run of its own, `ShapeWord::build`) in the colour face
+    // first; anything that face lacks falls back as other text does.
+    let emoji = crate::emoji::presents_as_emoji(run)
+        && font_iter.font_system().emoji_font().is_some_and(|emoji| {
+            let scratch = font_iter.shape_caches();
+            let missing = shape_fallback(
+                scratch, glyphs, &emoji, line, attrs_list, start_run, end_run, span_rtl,
+            );
+            let drawn = missing.is_empty() && glyphs.len() > glyph_start;
+            if drawn {
+                emoji_glyphs(&mut glyphs[glyph_start..], &font);
+            } else {
+                glyphs.truncate(glyph_start);
+            }
+            drawn
+        });
+    let mut missing = if emoji {
+        Vec::new()
+    } else {
         let scratch = font_iter.shape_caches();
         shape_fallback(
             scratch, glyphs, &font, line, attrs_list, start_run, end_run, span_rtl,
@@ -493,6 +511,22 @@ fn shape_run(
 
     // Restore the scripts buffer.
     font_system.shape_buffer.scripts = scripts;
+}
+
+/// zgx: glyphs of the colour face sit on the line of the text's own font, so
+/// an emoji moves neither the baseline nor the line height. A bitmap has one
+/// image whatever the text's weight, slant or optical size: one atlas cell.
+fn emoji_glyphs(glyphs: &mut [ShapeGlyph], font: &Font) {
+    let scale = font.metrics().units_per_em as f32;
+    let ascent = font.metrics().ascent / scale;
+    let descent = -font.metrics().descent / scale;
+    for glyph in glyphs {
+        glyph.ascent = ascent;
+        glyph.descent = descent;
+        glyph.font_weight = fontdb::Weight::NORMAL;
+        glyph.font_optical = 0;
+        glyph.cache_key_flags.remove(crate::CacheKeyFlags::FAKE_ITALIC);
+    }
 }
 
 #[cfg(feature = "shape-run-cache")]
@@ -1035,10 +1069,17 @@ impl ShapeWord {
             // Complex text path: Full grapheme iteration and attribute processing
             let mut start_run = word_range.start;
             let mut attrs = attrs_list.defaults();
-            for (egc_i, _egc) in word.grapheme_indices(true) {
+            // zgx: each emoji is a run of its own: `shape_run` gives it the
+            // colour face, and a word holding two ("1️⃣2️⃣") or text beside one
+            // ("1️⃣2") shapes each part in its own font.
+            let mut after_emoji = false;
+            for (egc_i, egc) in word.grapheme_indices(true) {
                 let start_egc = word_range.start + egc_i;
                 let attrs_egc = attrs_list.get_span(start_egc);
-                if !attrs.compatible(&attrs_egc) {
+                let emoji = crate::emoji::presents_as_emoji(egc);
+                if !attrs.compatible(&attrs_egc)
+                    || ((emoji || after_emoji) && start_egc > start_run)
+                {
                     shaping.run(
                         &mut glyphs,
                         font_system,
@@ -1052,6 +1093,7 @@ impl ShapeWord {
                     start_run = start_egc;
                     attrs = attrs_egc;
                 }
+                after_emoji = emoji;
             }
             if start_run < word_range.end {
                 shaping.run(
