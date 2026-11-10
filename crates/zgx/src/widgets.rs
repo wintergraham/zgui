@@ -3386,16 +3386,19 @@ impl Ui {
         let scroll = Rc::new(RefCell::new((0f32, 0f32)));
         let selection_nodes = Rc::new(RefCell::new(Vec::new()));
         // A selection showing when the theme (or the system's accent)
-        // changes takes the new colour, as one drawn after it would.
+        // changes takes the new colour and radius, as one drawn after it would.
         {
             let (nodes, scene, theme) =
                 (selection_nodes.clone(), self.scene.clone(), theme.clone());
             self.bind(root, move || {
-                let color = theme.color(tok::SELECTION);
+                let mark = selection_mark(
+                    theme.color(tok::SELECTION),
+                    theme.number(tok::SELECTION_RADIUS),
+                );
                 let mut s = scene.borrow_mut();
                 for id in nodes.borrow().iter() {
                     if s.contains(*id) {
-                        s.set_kind(*id, NodeKind::Rect(color));
+                        s.set_kind(*id, mark.clone());
                     }
                 }
             });
@@ -3994,7 +3997,10 @@ impl Ui {
             while nodes.len() < rects.len() {
                 nodes.push(s.append(
                     selection_layer,
-                    NodeKind::Rect(theme.color_untracked(tok::SELECTION)),
+                    selection_mark(
+                        theme.color_untracked(tok::SELECTION),
+                        theme.number_untracked(tok::SELECTION_RADIUS),
+                    ),
                     Style::default(),
                 ));
             }
@@ -5523,6 +5529,19 @@ impl Ui {
                 }
             }
         });
+    }
+}
+/// One line of an input's selection: rounded by `$selection.radius`, each
+/// line apart, as selectable text's highlight is; square at 0.
+fn selection_mark(color: Color, radius: f32) -> NodeKind {
+    if radius > 0. {
+        NodeKind::Quad(crate::scene::QuadStyle {
+            fill: color,
+            radius,
+            ..Default::default()
+        })
+    } else {
+        NodeKind::Rect(color)
     }
 }
 /// A misspelled word's mark: a dotted line, as macOS draws one.

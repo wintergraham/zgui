@@ -40,7 +40,7 @@ A focusable box whose children lie in a row; `on_click` runs on a click, Enter (
 
 ## input and textarea
 
-A text editor bound to a string state: selection, undo, clipboard and IME included. `input` is one line (pasted line breaks are removed); `textarea` keeps them.
+A text editor bound to a string state: selection, undo, clipboard and IME included. `input` is one line (pasted line breaks are removed); `textarea` keeps them. The selection is drawn in `$selection` and, as selectable text's is, rounds each line by `$selection.radius` (0, square).
 
 | Option | Type | Default | |
 | --- | --- | --- | --- |
