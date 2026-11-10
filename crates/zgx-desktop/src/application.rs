@@ -3458,6 +3458,13 @@ impl Host {
                 self.native.pointer_left();
                 self.dispatch(InputEvent::PointerLeave)?
             }
+            // A drag of the app's own the platform carries (`native_drag`)
+            // is the host's to carry over its windows, not another app's
+            // files: winit hears it pass, as it hears Finder's.
+            WindowEvent::HoveredFile(_)
+            | WindowEvent::DroppedFile(_)
+            | WindowEvent::HoveredFileCancelled
+                if crate::native_drag::handed_off() => {}
             WindowEvent::HoveredFile(path) => self.dispatch(InputEvent::FileHover {
                 x: self.cursor.0,
                 y: self.cursor.1,
@@ -3805,8 +3812,21 @@ impl Host {
             self.popups.follow(window, &drag);
         }
     }
-    /// Its drag left the app's windows: carrying what other apps take
-    /// (`View::drag_export`), it becomes the platform's.
+    /// Whether its drag, in its own window, carries what other apps take
+    /// (`View::drag_export`) over a native view showing there.
+    fn over_native(&self, drag: &zgx::input::DragState) -> bool {
+        drag.export.as_ref().is_some_and(|items| !items.is_empty())
+            && self.native.active()
+            && self
+                .native
+                .natives
+                .split()
+                .native_at(&self.context.ui.scene.borrow(), drag.x, drag.y)
+                .is_some()
+    }
+    /// Its drag left the app's windows, or (macOS) went over a native view
+    /// in its own: carrying what other apps take (`View::drag_export`), it
+    /// becomes the platform's.
     fn hand_off_drag(&mut self, drag: &zgx::input::DragState) {
         let Some(window) = self.window.clone() else {
             return;
@@ -3837,6 +3857,9 @@ impl Host {
         let send = move |drag| {
             let _ = proxy.send_event(Event::NativeDrag(token, drag));
         };
+        // Handed off from the start: AppKit may ask where it can drop as
+        // it begins (`native_drag::handed_off`).
+        self.native_drag.begun();
         #[cfg(target_os = "linux")]
         let begun =
             crate::native_drag::begin(&window, items, image, (drag.x as f64, drag.y as f64), send);
@@ -3844,8 +3867,9 @@ impl Host {
         let begun = crate::native_drag::begin(&window, items, image, send);
         if begun {
             zgx_gpu::present_log::log(|| "native drag begin".into());
-            self.native_drag.begun();
             self.popups.show_preview(&window, drag, None);
+        } else {
+            self.native_drag.ended();
         }
     }
     /// A drag moving the window (`View::drag_moves_window`): the window
@@ -4879,7 +4903,10 @@ impl WindowManager {
             // destinations never hear it.
             let away = drag.moves_window || over.is_none_or(|(over, ..)| over != token);
             ui.input.set_drag_away(&ui.scene, away);
-            if over.is_none() && !drag.moves_window {
+            // Over a native view in its own window (a page), it is AppKit's
+            // too, so the view takes its drop as it would another app's.
+            let onto_native = cfg!(target_os = "macos") && !away && source.over_native(&drag);
+            if (over.is_none() && !drag.moves_window) || onto_native {
                 source.hand_off_drag(&drag);
             }
         }

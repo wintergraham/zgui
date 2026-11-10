@@ -1117,4 +1117,26 @@ impl PlaneSplit {
         }
         PointerRoute::Ui
     }
+    /// The native view shown at window point `(x, y)`: the front-most hit
+    /// in a native node, unless overlay paint is drawn there first. Unlike
+    /// `route`, content that paints nothing there (a scrim taking presses)
+    /// does not hide it: a drag over the window drops on what shows.
+    pub fn native_at(&self, scene: &Scene, x: f32, y: f32) -> Option<NodeId> {
+        if self.natives.is_empty() {
+            return None;
+        }
+        for hit in scene.hit_test_all(x, y) {
+            if self.overlay.contains_key(&hit) {
+                return None;
+            }
+            let mut node = Some(hit);
+            while let Some(id) = node {
+                if self.native_nodes.contains(&id) {
+                    return Some(id);
+                }
+                node = scene.parent(id);
+            }
+        }
+        None
+    }
 }

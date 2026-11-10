@@ -8,8 +8,11 @@
 //! once; the window server moves it). The session's moves and end come back
 //! to the host (`NativeDrag`) as the window's pointer: back over the window,
 //! its destinations hear it as before, and a release there drops on them
-//! (AppKit's own drop is refused inside the app). Another app taking it is
-//! the drag's acceptance; nothing taking it, the preview slides back.
+//! (AppKit's own drop is refused inside the app, but by a native view
+//! showing under the pointer: a page). Another app taking it is the drag's
+//! acceptance; nothing taking it, the preview slides back. A drag over a
+//! native view in its own window is handed off there too, so the view takes
+//! what it carries as it would another app's (a file dropped on a page).
 //!
 //! Windows hands it to `DoDragDrop` (`native_drag/win32.rs`): Shell's data
 //! object with the items in Windows' formats, the preview's last frame as
@@ -202,6 +205,7 @@ pub(crate) use macos::begin;
 #[cfg(target_os = "macos")]
 mod macos {
     use super::{DragImage, DragItem, NativeDrag};
+    use crate::native_host::native_view_at;
     use objc2::{
         AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
         rc::Retained,
@@ -209,8 +213,8 @@ mod macos {
     };
     use objc2_app_kit::{
         NSApplication, NSBitmapImageRep, NSDragOperation, NSDraggingContext, NSDraggingItem,
-        NSDraggingSession, NSDraggingSource, NSEventType, NSImage, NSPasteboardWriting, NSScreen,
-        NSView,
+        NSDraggingSession, NSDraggingSource, NSEvent, NSEventType, NSImage, NSPasteboardWriting,
+        NSScreen, NSView,
     };
     use objc2_foundation::{
         NSArray, NSData, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSURL,
@@ -239,8 +243,12 @@ mod macos {
                 context: NSDraggingContext,
             ) -> NSDragOperation {
                 // Inside the app, zgx's destinations take it (the host
-                // drops on them), not AppKit's (winit's file drops).
-                if context == NSDraggingContext::WithinApplication {
+                // drops on them), not AppKit's (winit's file drops); only a
+                // native view showing under the pointer (a page) takes it,
+                // as it would another app's.
+                if context == NSDraggingContext::WithinApplication
+                    && native_view_at(self.mtm(), NSEvent::mouseLocation()) != Some(true)
+                {
                     return NSDragOperation::None;
                 }
                 // Copied (never moved: Finder would delete the file), or a
@@ -259,12 +267,12 @@ mod macos {
                 point: NSPoint,
                 operation: NSDragOperation,
             ) {
+                // Taken over zgx's own content (by winit's file drop, were
+                // the operation mask passed over) is zgx's to drop.
+                let accepted = operation != NSDragOperation::None
+                    && native_view_at(self.mtm(), point) != Some(false);
                 let (x, y) = top_down(point);
-                (self.ivars().send)(NativeDrag::Ended {
-                    x,
-                    y,
-                    accepted: operation != NSDragOperation::None,
-                });
+                (self.ivars().send)(NativeDrag::Ended { x, y, accepted });
                 // Released once the event is done, not now: `SOURCE` may
                 // hold the last reference to `self`, which is borrowed until
                 // this method returns.

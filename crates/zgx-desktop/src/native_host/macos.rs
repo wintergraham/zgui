@@ -64,6 +64,38 @@ thread_local! {
     static ROUTERS: RefCell<Vec<(usize, Weak<Router>)>> = const { RefCell::new(Vec::new()) };
 }
 
+/// What AppKit's hit testing finds at screen point `point` (AppKit's, y
+/// up) in the front-most window there: `None` when that is no window of the
+/// app's, else whether it lands in a native view (a page). A drag of the
+/// app's handed to AppKit drops only on those inside the app
+/// (`native_drag`); its cut views hit test by what shows meanwhile.
+pub(crate) fn native_view_at(mtm: MainThreadMarker, point: NSPoint) -> Option<bool> {
+    let number =
+        objc2_app_kit::NSWindow::windowNumberAtPoint_belowWindowWithWindowNumber(point, 0, mtm);
+    let window =
+        objc2_app_kit::NSApplication::sharedApplication(mtm).windowWithWindowNumber(number)?;
+    let Some(content) = window.contentView() else {
+        return Some(false);
+    };
+    let local = window.convertPointFromScreen(point);
+    // hitTest: takes the point in the receiver's superview's space.
+    // SAFETY: a superview clears its subviews' back pointer as it lets them
+    // go, so one still set is alive (main thread).
+    let local = match unsafe { content.superview() } {
+        Some(superview) => superview.convertPoint_fromView(local, None),
+        None => local,
+    };
+    let mut view = content.hitTest(local);
+    while let Some(current) = view {
+        if current.isKindOfClass(CutView::class()) {
+            return Some(true);
+        }
+        // SAFETY: as above.
+        view = unsafe { current.superview() };
+    }
+    Some(false)
+}
+
 /// A secondary click a native view did not use (a terminal's right click
 /// with no program asking for the mouse): zgx gets it as its own, at the
 /// same point, so a context menu there opens.
@@ -290,6 +322,13 @@ impl Router {
         let route = self.route(x, y);
         self.pointer.moved(&self.natives, route, held, x, y)
     }
+    /// The native view shown at window point `(x, y)`, which a drag there
+    /// drops on (`PlaneSplit::native_at`); none mid-frame.
+    pub fn shown(&self, x: f32, y: f32) -> Option<NodeId> {
+        let scene = self.scene.upgrade()?;
+        let scene = scene.try_borrow().ok()?;
+        self.natives.split().native_at(&scene, x, y)
+    }
     fn route(&self, x: f32, y: f32) -> PointerRoute {
         let split = self.natives.split();
         let Some(scene) = self.scene.upgrade() else {
@@ -353,8 +392,15 @@ define_class!(
                 Role::Route => match (state.node.get(), &state.router) {
                     (Some(node), Some(router)) => {
                         let zoom = router.zoom.get();
-                        router.route(point.x as f32 / zoom, point.y as f32 / zoom)
-                            == PointerRoute::Native(node)
+                        let (x, y) = (point.x as f32 / zoom, point.y as f32 / zoom);
+                        // While AppKit carries a drag of the app's, it goes
+                        // to what shows there (a scrim taking presses does
+                        // not hide the page), as the host handed it off.
+                        if crate::native_drag::handed_off() {
+                            router.shown(x, y) == Some(node)
+                        } else {
+                            router.route(x, y) == PointerRoute::Native(node)
+                        }
                     }
                     _ => false,
                 },

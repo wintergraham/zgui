@@ -5,7 +5,7 @@ use std::{cell::RefCell, rc::Rc};
 use zgx::{
     compose::prelude::*,
     input::{InputEvent, PointerButton},
-    native_view::{NativePointer, NativeViews, PlaneSplit, PointerStep},
+    native_view::{NativePointer, NativeViews, PlaneSplit, PointerRoute, PointerStep},
     web_view::{WebView, WebViewOptions},
     widgets::Ui,
 };
@@ -194,4 +194,58 @@ fn leaving_the_window_clears_the_page() {
     assert_eq!(w.pointer.over(), None);
     // Back over the page: a leave again (zgx may have re-hovered meanwhile).
     assert!(matches!(w.move_to(100., 100.), PointerStep::Leave(_)));
+}
+
+/// What a drag over the window drops on (`PlaneSplit::native_at`): the page
+/// wherever it shows, even under a scrim taking presses (which routes the
+/// pointer to zgx), and not where zgx paints over it.
+#[test]
+fn a_drag_drops_on_the_page_wherever_it_shows() {
+    let mut ui = Ui::new(800., 600.);
+    let natives = NativeViews::new();
+    natives.set_supported(true);
+    let web = WebView::new(&ui.runtime, WebViewOptions::default());
+    // A page under a 40-point bar, a scrim over everything (as an open
+    // popover's), and the popover's panel over the page's top right.
+    ui.mount(provide(
+        natives.clone(),
+        overlay()
+            .w(800.)
+            .h(600.)
+            .child(
+                column()
+                    .w(600.)
+                    .h(500.)
+                    .child(div().w_full().h(40.).bg(rgb(0x303030)))
+                    .child(web_view(&web).w(600.).h(460.)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(0.)
+                    .top(0.)
+                    .size(800., 600.)
+                    .on_event(|_| {}),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(400.)
+                    .top(50.)
+                    .size(180., 200.)
+                    .bg(rgb(0x202020))
+                    .on_event(|_| {}),
+            ),
+    ));
+    ui.prepare_frame();
+    let scene = ui.scene.borrow();
+    let split = PlaneSplit::compute(&scene, &natives.nodes(), &PlaneSplit::default()).0;
+    let page = natives.nodes()[0];
+    // Pointer input there is the scrim's; a drop is the page's.
+    assert_eq!(split.route(&scene, &ui.input, 100., 300.), PointerRoute::Ui);
+    assert_eq!(split.native_at(&scene, 100., 300.), Some(page));
+    // Over the panel painted on the page, the bar, and past the page.
+    assert_eq!(split.native_at(&scene, 450., 100.), None);
+    assert_eq!(split.native_at(&scene, 100., 20.), None);
+    assert_eq!(split.native_at(&scene, 700., 300.), None);
 }
