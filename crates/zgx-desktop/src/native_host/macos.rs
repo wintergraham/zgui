@@ -14,7 +14,9 @@
 //!   composited layers under it (pages included: a within-window
 //!   `NSVisualEffectView` may use a cached image without them);
 //! - the overlay view, hosting the overlay plane's layer at the overlay
-//!   paint's box.
+//!   paint's box;
+//! - the drag shield (`DragShield`), the destination of a drag of the app's
+//!   AppKit carries, handing it on to a page only where the page shows.
 //!
 //! Only the outermost cut of each native view routes hit testing: it answers
 //! for its node where `PlaneSplit::route` sends input there, so zgx gets
@@ -30,11 +32,16 @@ use objc2::{
     ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
     rc::Retained,
     runtime::{AnyObject, NSObject},
+    sel,
 };
-use objc2_app_kit::{NSAutoresizingMaskOptions, NSView, NSWindowOrderingMode};
+use objc2_app_kit::{
+    NSAutoresizingMaskOptions, NSPasteboardTypeFileURL, NSPasteboardTypePNG,
+    NSPasteboardTypeString, NSPasteboardTypeTIFF, NSPasteboardTypeURL, NSView,
+    NSWindowOrderingMode,
+};
 use objc2_core_foundation::{CFRetained, CGFloat, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{CGColor, CGMutablePath};
-use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSArray, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSUInteger};
 use objc2_quartz_core::{CALayer, CAShapeLayer, CATransaction};
 use std::{
     cell::{Cell, RefCell},
@@ -64,6 +71,11 @@ thread_local! {
     static ROUTERS: RefCell<Vec<(usize, Weak<Router>)>> = const { RefCell::new(Vec::new()) };
 }
 
+thread_local! {
+    /// Each window's drag shield (`DragShield`).
+    static SHIELDS: RefCell<Vec<Retained<DragShield>>> = const { RefCell::new(Vec::new()) };
+}
+
 /// What AppKit's hit testing finds at screen point `point` (AppKit's, y
 /// up) in the front-most window there: `None` when that is no window of the
 /// app's, else whether it lands in a native view (a page). A drag of the
@@ -77,23 +89,49 @@ pub(crate) fn native_view_at(mtm: MainThreadMarker, point: NSPoint) -> Option<bo
     let Some(content) = window.contentView() else {
         return Some(false);
     };
-    let local = window.convertPointFromScreen(point);
-    // hitTest: takes the point in the receiver's superview's space.
-    // SAFETY: a superview clears its subviews' back pointer as it lets them
-    // go, so one still set is alive (main thread).
-    let local = match unsafe { content.superview() } {
-        Some(superview) => superview.convertPoint_fromView(local, None),
-        None => local,
-    };
-    let mut view = content.hitTest(local);
+    let local = content.convertPoint_fromView(window.convertPointFromScreen(point), None);
+    Some(page_hit(&content, local).is_some())
+}
+
+/// The view a native view holds at `point` (in `parent`'s space), where a
+/// cut answers for it: as `parent`'s hitTest: would find with no drag shield
+/// over the cuts.
+fn page_hit(parent: &NSView, point: NSPoint) -> Option<Retained<NSView>> {
+    // Front-most first, as hitTest: visits them.
+    let views = parent.subviews().to_vec();
+    views
+        .iter()
+        .rev()
+        .filter(|view| view.isKindOfClass(CutView::class()))
+        .find_map(|view| view.hitTest(point))
+}
+
+/// Where a drag of the app's AppKit carries drops at `point` (in `parent`'s
+/// space): the page's view that takes drags there, if a page shows there.
+fn page_destination(parent: &NSView, point: NSPoint) -> Option<Retained<NSView>> {
+    let mut view = page_hit(parent, point);
     while let Some(current) = view {
-        if current.isKindOfClass(CutView::class()) {
-            return Some(true);
+        if std::ptr::eq(&*current, parent) {
+            return None;
         }
-        // SAFETY: as above.
+        if current.registeredDraggedTypes().count() > 0 {
+            return Some(current);
+        }
+        // SAFETY: a superview clears its subviews' back pointer as it lets
+        // them go, so one still set is alive (main thread).
         view = unsafe { current.superview() };
     }
-    Some(false)
+    None
+}
+
+/// Shield the windows' pages while AppKit carries a drag of the app's
+/// (`native_drag`), or no longer.
+pub(crate) fn shield_drags(on: bool) {
+    SHIELDS.with(|shields| {
+        for shield in shields.borrow().iter() {
+            shield.set_shielding(on);
+        }
+    });
 }
 
 /// A secondary click a native view did not use (a terminal's right click
@@ -474,6 +512,190 @@ define_class!(
     }
 );
 
+/// `NSDragOperation` as `NSUInteger` (NSDraggingDestination's informal
+/// methods): none.
+const DRAG_NONE: NSUInteger = 0;
+
+#[derive(Default)]
+pub(crate) struct ShieldState {
+    /// The page's view the drag is over, and what it last answered.
+    over: RefCell<Option<Retained<NSView>>>,
+    answer: Cell<NSUInteger>,
+}
+// SAFETY: an NSView subclass, main-thread only as NSView is; its methods
+// have AppKit's signatures (`-(BOOL)isFlipped`, `-(NSView *)hitTest:`,
+// NSDraggingDestination's informal ones: `NSDragOperation` as `NSUInteger`,
+// `BOOL` as `bool`, the dragging info as an object).
+define_class!(
+    /// Over everything in a window while AppKit carries a drag of the app's
+    /// (`native_drag`), the destination AppKit finds there: AppKit picks
+    /// a drag's destination by the views registered for it under the
+    /// pointer, not by the cuts' hit testing, so a page under zgx's paint
+    /// (an open popover) would take the drop. The shield hands the drag to
+    /// the page only where it shows (`Router::shown`), and elsewhere drops
+    /// nothing. Registered for drags only meanwhile: other apps' drags reach
+    /// pages and winit as before.
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "ZgxDragShieldView"]
+    #[ivars = ShieldState]
+    pub(crate) struct DragShield;
+    impl DragShield {
+        #[unsafe(method(isFlipped))]
+        fn is_flipped(&self) -> bool {
+            true
+        }
+        #[unsafe(method(hitTest:))]
+        fn hit_test(&self, point: NSPoint) -> *mut NSView {
+            let frame = self.frame();
+            let inside = point.x >= frame.origin.x
+                && point.y >= frame.origin.y
+                && point.x < frame.origin.x + frame.size.width
+                && point.y < frame.origin.y + frame.size.height;
+            if crate::native_drag::handed_off() && inside {
+                self as *const Self as *mut NSView
+            } else {
+                std::ptr::null_mut()
+            }
+        }
+        #[unsafe(method(draggingEntered:))]
+        fn dragging_entered(&self, sender: &AnyObject) -> NSUInteger {
+            self.track(sender)
+        }
+        #[unsafe(method(draggingUpdated:))]
+        fn dragging_updated(&self, sender: &AnyObject) -> NSUInteger {
+            self.track(sender)
+        }
+        #[unsafe(method(draggingExited:))]
+        fn dragging_exited(&self, sender: Option<&AnyObject>) {
+            if let Some(page) = self.ivars().over.take() {
+                exited(&page, sender);
+            }
+        }
+        #[unsafe(method(prepareForDragOperation:))]
+        fn prepare_for_drag_operation(&self, sender: &AnyObject) -> bool {
+            self.prepare(sender)
+        }
+        #[unsafe(method(performDragOperation:))]
+        fn perform_drag_operation(&self, sender: &AnyObject) -> bool {
+            self.perform(sender)
+        }
+        #[unsafe(method(concludeDragOperation:))]
+        fn conclude_drag_operation(&self, sender: Option<&AnyObject>) {
+            if let Some(page) = self.ivars().over.take()
+                && page.respondsToSelector(sel!(concludeDragOperation:))
+            {
+                // SAFETY: NSDraggingDestination's, which the view answers.
+                let _: () = unsafe { msg_send![&*page, concludeDragOperation: sender] };
+            }
+        }
+    }
+);
+impl DragShield {
+    fn new(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
+        let this = mtm.alloc::<Self>().set_ivars(ShieldState::default());
+        // SAFETY: NSView's designated `- (instancetype)initWithFrame:(NSRect)`
+        // on a fresh allocation of this class, its ivars set.
+        let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
+        view.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable
+                | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        view
+    }
+    fn page(&self) -> Option<Retained<NSView>> {
+        self.ivars().over.borrow().clone()
+    }
+    /// Whether the drop goes ahead: only on a page, if it agrees.
+    fn prepare(&self, sender: &AnyObject) -> bool {
+        let Some(page) = self.page() else {
+            return false;
+        };
+        if !page.respondsToSelector(sel!(prepareForDragOperation:)) {
+            return true;
+        }
+        // SAFETY: NSDraggingDestination's, which the view answers.
+        unsafe { msg_send![&*page, prepareForDragOperation: sender] }
+    }
+    /// Drop on the page, if over one: whether it took it.
+    fn perform(&self, sender: &AnyObject) -> bool {
+        let Some(page) = self.page() else {
+            return false;
+        };
+        if !page.respondsToSelector(sel!(performDragOperation:)) {
+            return false;
+        }
+        // SAFETY: NSDraggingDestination's, which the view answers.
+        unsafe { msg_send![&*page, performDragOperation: sender] }
+    }
+    fn set_shielding(&self, on: bool) {
+        if on {
+            // What a drag of the app's carries (`native_drag::writer`).
+            // SAFETY: AppKit's constant type names, immutable statics.
+            let types = unsafe {
+                [
+                    NSPasteboardTypeFileURL,
+                    NSPasteboardTypeURL,
+                    NSPasteboardTypeString,
+                    NSPasteboardTypeTIFF,
+                    NSPasteboardTypePNG,
+                ]
+            };
+            self.registerForDraggedTypes(&NSArray::from_slice(&types));
+        } else {
+            self.unregisterDraggedTypes();
+            self.ivars().over.take();
+        }
+    }
+    /// The drag moved (or came in): the page shown under it hears it, as
+    /// it would from AppKit, and one it left hears it go.
+    fn track(&self, sender: &AnyObject) -> NSUInteger {
+        // SAFETY: NSDraggingInfo's `- (NSPoint)draggingLocation`, in the
+        // window's base space.
+        let location: NSPoint = unsafe { msg_send![sender, draggingLocation] };
+        // SAFETY: a superview clears its subviews' back pointer as it lets
+        // them go, so one still set is alive (main thread).
+        let page = unsafe { self.superview() }.and_then(|parent| {
+            let point = parent.convertPoint_fromView(location, None);
+            page_destination(&parent, point)
+        });
+        let left = self.ivars().over.replace(page.clone());
+        let same = match (&left, &page) {
+            (Some(left), Some(page)) => Retained::as_ptr(left) == Retained::as_ptr(page),
+            _ => false,
+        };
+        if !same && let Some(left) = left {
+            exited(&left, Some(sender));
+        }
+        let Some(page) = page else {
+            self.ivars().answer.set(DRAG_NONE);
+            return DRAG_NONE;
+        };
+        // SAFETY (both): NSDraggingDestination's, which the view answers.
+        let answer = if !same {
+            match page.respondsToSelector(sel!(draggingEntered:)) {
+                true => unsafe { msg_send![&*page, draggingEntered: sender] },
+                false => DRAG_NONE,
+            }
+        } else if page.respondsToSelector(sel!(draggingUpdated:)) {
+            unsafe { msg_send![&*page, draggingUpdated: sender] }
+        } else {
+            // One that does not follow its drag keeps its first answer.
+            self.ivars().answer.get()
+        };
+        self.ivars().answer.set(answer);
+        answer
+    }
+}
+
+/// Tell `page` the drag left it (NSDraggingDestination's, if it answers).
+fn exited(page: &NSView, sender: Option<&AnyObject>) {
+    if page.respondsToSelector(sel!(draggingExited:)) {
+        // SAFETY: NSDraggingDestination's, which the view answers.
+        let _: () = unsafe { msg_send![page, draggingExited: sender] };
+    }
+}
+
 fn cg(rect: Rect) -> CGRect {
     CGRect::new(
         CGPoint::new(rect.x as CGFloat, rect.y as CGFloat),
@@ -723,6 +945,9 @@ pub(crate) struct Surfaces {
     clips: Vec<(NodeId, Clip)>,
     backdrops: Vec<Backdrop>,
     overlay_view: Retained<OverlayView>,
+    /// Over the overlay: where AppKit carries a drag of the app's
+    /// (`DragShield`).
+    shield: Retained<DragShield>,
     overlay_root: Retained<CALayer>,
     overlay_host: Retained<CALayer>,
     /// The overlay's box as last shown (None: hidden), with the orientation
@@ -880,9 +1105,13 @@ impl Surfaces {
             );
             view
         };
+        let shield = DragShield::new(mtm, parent.bounds());
+        shield.set_shielding(crate::native_drag::handed_off());
         let transaction = Transaction::begin();
         parent.addSubview(&overlay_view);
+        parent.addSubview(&shield);
         drop(transaction);
+        SHIELDS.with(|shields| shields.borrow_mut().push(shield.clone()));
         let shared = Rc::new(RefCell::new(Shared {
             parent: Some(parent.clone()),
             overlay_view: Some(overlay_view.clone()),
@@ -905,6 +1134,7 @@ impl Surfaces {
             clips: Vec::new(),
             backdrops: Vec::new(),
             overlay_view,
+            shield,
             overlay_root,
             overlay_host,
             overlay_shown: None,
@@ -1461,7 +1691,13 @@ impl Drop for Surfaces {
             backdrop.cuts[0].view.removeFromSuperview();
         }
         self.overlay_view.removeFromSuperview();
+        self.shield.removeFromSuperview();
         drop(transaction);
+        SHIELDS.with(|shields| {
+            shields
+                .borrow_mut()
+                .retain(|shield| Retained::as_ptr(shield) != Retained::as_ptr(&self.shield))
+        });
     }
 }
 

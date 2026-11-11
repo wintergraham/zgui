@@ -9,7 +9,8 @@
 //! to the host (`NativeDrag`) as the window's pointer: back over the window,
 //! its destinations hear it as before, and a release there drops on them
 //! (AppKit's own drop is refused inside the app, but by a native view
-//! showing under the pointer: a page). Another app taking it is the drag's
+//! showing under the pointer: a page, which a shield over the window hands
+//! it to, as AppKit would drop on a page under zgx's paint too). Another app taking it is the drag's
 //! acceptance; nothing taking it, the preview slides back. A drag over a
 //! native view in its own window is handed off there too, so the view takes
 //! what it carries as it would another app's (a file dropped on a page).
@@ -99,6 +100,15 @@ thread_local! {
 pub(crate) fn handed_off() -> bool {
     HANDED_OFF.with(|count| count.get() > 0)
 }
+/// Over the app's windows, the platform drops a drag of the app's only on a
+/// page that shows under the pointer (`native_host::shield_drags`), not on
+/// one under zgx's paint.
+fn shield(on: bool) {
+    #[cfg(target_os = "macos")]
+    crate::native_host::shield_drags(on);
+    #[cfg(not(target_os = "macos"))]
+    let _ = on;
+}
 impl Handoff {
     /// Whether the platform has the drag.
     pub(crate) fn active(&self) -> bool {
@@ -107,6 +117,7 @@ impl Handoff {
     pub(crate) fn begun(&mut self) {
         if !std::mem::replace(&mut self.active, true) {
             HANDED_OFF.with(|count| count.set(count.get() + 1));
+            shield(true);
         }
     }
     /// The window lost focus: whether it deactivates now (not while the
@@ -124,6 +135,7 @@ impl Handoff {
     pub(crate) fn ended(&mut self) -> bool {
         if std::mem::take(&mut self.active) {
             HANDED_OFF.with(|count| count.set(count.get() - 1));
+            shield(handed_off());
         }
         std::mem::take(&mut self.deactivated)
     }

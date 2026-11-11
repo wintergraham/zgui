@@ -249,3 +249,77 @@ fn a_drag_drops_on_the_page_wherever_it_shows() {
     assert_eq!(split.native_at(&scene, 100., 20.), None);
     assert_eq!(split.native_at(&scene, 700., 300.), None);
 }
+
+/// A drag released over a popover open on the page drops nothing there:
+/// over its rows (which paint nothing of their own, their text aside), in a
+/// panel that fades in as a layer of its own, over the window-wide scrim
+/// the popover opens with, as Ask's downloads menu is built.
+#[test]
+fn a_drag_over_a_popover_on_the_page_drops_nothing_there() {
+    let mut ui = Ui::new(800., 600.);
+    let natives = NativeViews::new();
+    natives.set_supported(true);
+    let web = WebView::new(&ui.runtime, WebViewOptions::default());
+    let row = || {
+        div()
+            .w_full()
+            .h(52.)
+            .p(8.)
+            .on_event(|_| {})
+            .child(text("report.pdf"))
+    };
+    ui.mount(provide(
+        natives.clone(),
+        overlay()
+            .w(800.)
+            .h(600.)
+            .child(
+                column()
+                    .w(800.)
+                    .h(600.)
+                    .child(div().w_full().h(40.).bg(rgb(0x303030)))
+                    .child(web_view(&web).w(800.).h(560.)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(0.)
+                    .top(0.)
+                    .size(800., 600.)
+                    .on_event(|_| {}),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(0.)
+                    .top(0.)
+                    .size(800., 600.)
+                    .pointer_events(false)
+                    .child(
+                        column()
+                            .absolute()
+                            .left(500.)
+                            .top(44.)
+                            .w(280.)
+                            .opacity(0.9)
+                            .child(
+                                column()
+                                    .w_full()
+                                    .bg(rgb(0x202020))
+                                    .rounded(12.)
+                                    .overflow_hidden()
+                                    .child(column().w_full().p(6.).child(row()).child(row())),
+                            ),
+                    ),
+            ),
+    ));
+    ui.prepare_frame();
+    let scene = ui.scene.borrow();
+    let split = PlaneSplit::compute(&scene, &natives.nodes(), &PlaneSplit::default()).0;
+    let page = natives.nodes()[0];
+    // On a row, between its text and its edge, and in the panel's padding.
+    assert_eq!(split.native_at(&scene, 760., 80.), None);
+    assert_eq!(split.native_at(&scene, 503., 47.), None);
+    // Beside the popover, the page.
+    assert_eq!(split.native_at(&scene, 200., 300.), Some(page));
+}

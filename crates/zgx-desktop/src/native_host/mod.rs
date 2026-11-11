@@ -34,7 +34,7 @@ use zgx::{
 #[cfg(target_os = "macos")]
 pub use macos::{BackdropReport, NativeDiagnostics, NativeViewReport};
 #[cfg(target_os = "macos")]
-pub(crate) use macos::{disable_cursor_rects, native_view_at, set_cursor};
+pub(crate) use macos::{disable_cursor_rects, native_view_at, set_cursor, shield_drags};
 #[cfg(target_os = "macos")]
 pub(crate) type NativeDiagnosticsHandle = NativeDiagnostics;
 #[cfg(not(target_os = "macos"))]
