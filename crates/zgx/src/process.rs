@@ -41,17 +41,26 @@ pub struct Reading {
 /// Enumerate once; recheck identity after metadata reads to avoid joining two
 /// lifetimes of a PID. Command lines and application labels are never read here.
 pub fn snapshot(gpu: bool) -> Vec<Reading> {
+    // Bind the GPU lookup and metadata to the same lifetime too: a PID can be
+    // reused between reading the driver's PID-keyed map and reading libproc.
+    let rows: Vec<_> = platform::pids()
+        .into_iter()
+        .map(|pid| {
+            (
+                pid,
+                platform::read(pid),
+                platform::parent(pid),
+                platform::name(pid),
+            )
+        })
+        .collect();
     let gpu_times = if gpu {
         platform::gpu_times()
     } else {
         HashMap::new()
     };
-    platform::pids()
-        .into_iter()
-        .map(|pid| {
-            let before = platform::read(pid);
-            let parent = platform::parent(pid);
-            let name = platform::name(pid);
+    rows.into_iter()
+        .map(|(pid, before, parent, name)| {
             let usage = before
                 .and_then(|before| platform::read(pid).filter(|after| before.start == after.start));
             Reading {
@@ -67,7 +76,7 @@ pub fn snapshot(gpu: bool) -> Vec<Reading> {
                 footprint_bytes: usage
                     .as_ref()
                     .and_then(|u| cfg!(target_os = "macos").then_some(u.footprint)),
-                gpu_ns: gpu_times.get(&pid).copied(),
+                gpu_ns: usage.as_ref().and_then(|_| gpu_times.get(&pid).copied()),
             }
         })
         .collect()
