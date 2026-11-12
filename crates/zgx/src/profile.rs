@@ -474,16 +474,19 @@ mod counter {
                 uuid: [u8; 16],
                 fields: [u64; 40],
             }
-            unsafe extern "C" {
-                fn proc_pid_rusage(pid: i32, flavor: i32, buffer: *mut RusageInfoV4) -> i32;
-            }
             let mut info = RusageInfoV4 {
                 uuid: [0; 16],
                 fields: [0; 40],
             };
             // SAFETY: RUSAGE_INFO_V4 (4) fills a rusage_info_v4: a 16-byte
             // UUID then 40 u64 fields, of which ri_instructions is the 30th.
-            let ok = unsafe { proc_pid_rusage(std::process::id() as i32, 4, &mut info) } == 0;
+            let ok = unsafe {
+                crate::process::platform::rusage(
+                    std::process::id() as i32,
+                    4,
+                    (&raw mut info).cast(),
+                )
+            } == 0;
             if ok { info.fields[29] } else { 0 }
         }
     }
@@ -502,7 +505,6 @@ mod counter {
             denom: u32,
         }
         unsafe extern "C" {
-            fn proc_pid_rusage(pid: i32, flavor: i32, buffer: *mut RusageInfoV4) -> i32;
             fn mach_absolute_time() -> u64;
             fn mach_timebase_info(info: *mut Timebase) -> i32;
         }
@@ -515,7 +517,11 @@ mod counter {
         // ri_proc_start_abstime, in mach_absolute_time's units.
         let (now, ok) = unsafe {
             mach_timebase_info(&mut base);
-            let ok = proc_pid_rusage(std::process::id() as i32, 4, &mut info) == 0;
+            let ok = crate::process::platform::rusage(
+                std::process::id() as i32,
+                4,
+                (&raw mut info).cast(),
+            ) == 0;
             (mach_absolute_time(), ok)
         };
         if !ok {
