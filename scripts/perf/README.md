@@ -116,3 +116,31 @@ presented time, 0 when skipped) or stamped frames.
 `scripts/windowserver_pair.py` and `scripts/windowserver_alternate.py`
 measure the window server's CPU for two apps, or two configurations of one,
 in paired seconds; see `docs/performance-feature-audit.md`.
+
+## Process families in host applications
+
+`zgx::process` exposes the monitor's existing platform readers and an on-demand
+`FamilySampler`. It installs no sampling timer. Bind it to a root PID once, then
+sample as needed. The OS start token prevents PID reuse from joining two
+lifetimes; recursive descendants are deduplicated and previously observed
+reparented children stay associated with that lifetime. Detached processes not
+observed under the root cannot be attributed. Apps own their role classification.
+
+RSS and macOS physical footprint are separate byte fields. RSS sums can count
+shared pages repeatedly. CPU is percent of one core over the actual interval,
+so it can exceed 100. Missing readings, unsupported counters, new identities and
+counter resets stay unavailable. GPU counters reuse the monitor's macOS reader.
+Linux reads CPU tick/page sizes from `sysconf`; physical footprint and GPU usage
+are unavailable there. Windows family sampling is not implemented.
+
+The process module's tests can run without GUI dependencies:
+
+```sh
+rustc --edition 2024 --test crates/zgx/src/process.rs -o /tmp/zgx-process-tests
+/tmp/zgx-process-tests
+```
+
+Host applications can combine this sampler with `ZGX_PROFILE` and `zgx inspect
+frames` rather than adding phase timers. Ask's `scripts/measure-browser.py` is an
+example: fixed local pages, isolated profiles, alternating candidate/control
+runs and descriptive reports, with no automatic regression verdict.
