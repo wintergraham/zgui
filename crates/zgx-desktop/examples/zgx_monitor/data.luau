@@ -107,7 +107,10 @@ function M.apps(): { App }
 	local trees: { [number]: App } = {}
 	for _, p in list do
 		local parent = by_pid[p.ppid or 0]
-		while parent and parent.pid > 1 do
+		-- Parent links are cached per process lifetime, so a reused PID can close a loop: walk each ancestor once.
+		local seen: { [number]: boolean } = { [p.pid] = true }
+		while parent and parent.pid > 1 and not seen[parent.pid] do
+			seen[parent.pid] = true
 			local tree = trees[parent.pid]
 			if not tree then
 				tree = { name = parent.name, count = 1, mem = parent.mem }

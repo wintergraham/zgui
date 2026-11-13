@@ -71,6 +71,11 @@ path = "examples/layout_bench.rs"
 name = "script_web_view"
 path = "examples/web_view.rs"
 
+# Ask's chrome benchmark reads frame traces (`zgx::trace`), which `inspect` turns on.
+[[example]]
+name = "chrome_bench"
+required-features = ["inspect"]
+
 [dev-dependencies]
 zgx-desktop = { path = "../zgx-desktop" }
 # The benchmark workload of the vlist_luau example.

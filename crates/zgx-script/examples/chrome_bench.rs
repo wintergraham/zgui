@@ -20,17 +20,24 @@ const H: f32 = 900.;
 const SCALE: f32 = 2.;
 
 fn instructions() -> u64 {
-    #[repr(C)]
-    struct Usage {
-        uuid: [u8; 16],
-        fields: [u64; 40],
+    #[cfg(target_os = "macos")]
+    {
+        #[repr(C)]
+        struct Usage {
+            uuid: [u8; 16],
+            fields: [u64; 40],
+        }
+        unsafe extern "C" {
+            fn proc_pid_rusage(pid: i32, flavor: i32, buffer: *mut Usage) -> i32;
+        }
+        let mut usage = Usage { uuid: [0; 16], fields: [0; 40] };
+        // RUSAGE_INFO_V4: `ri_instructions` is the 30th field after the uuid.
+        unsafe { proc_pid_rusage(std::process::id() as i32, 4, &mut usage) };
+        usage.fields[29]
     }
-    unsafe extern "C" {
-        fn proc_pid_rusage(pid: i32, flavor: i32, buffer: *mut Usage) -> i32;
-    }
-    let mut usage = Usage { uuid: [0; 16], fields: [0; 40] };
-    unsafe { proc_pid_rusage(std::process::id() as i32, 4, &mut usage) };
-    usage.fields[29]
+    // No instruction counter off macOS: the timings still compare.
+    #[cfg(not(target_os = "macos"))]
+    0
 }
 
 fn value(j: &J) -> Value {
