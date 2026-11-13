@@ -841,6 +841,13 @@ impl InputDispatcher {
         state.unfocused_keys.retain(|n| *n != node);
         state.unfocused_keys.push(node);
     }
+    /// A trackpad's fingers touched (`ScrollGesture::Began`): a new gesture,
+    /// which goes to the scroll view under the pointer however soon after
+    /// the last one, as AppKit latches each gesture (its momentum included)
+    /// to its own view. The pause only ends a gesture that has no phases.
+    pub(crate) fn end_scroll_latch(&self) {
+        self.state.borrow_mut().scroll_latch = None;
+    }
     /// How soon after a press another on the same spot counts as a double
     /// (then triple) click: the system's double-click time, which the
     /// desktop host gives (macOS's and Windows' setting, GNOME's and KDE's);
