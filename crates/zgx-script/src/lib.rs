@@ -73,6 +73,8 @@ pub use bundle::{Bundle, BundleFile, build};
 pub use calls::{Body, Request, Response};
 pub use command::Command;
 pub use design::DesignLint;
+#[cfg(target_os = "macos")]
+pub use file_events::FileEvents;
 pub use persist::app_data_dir;
 pub use value::{ElementHandle, PathKey, Shared, Store, Value, tables_converted, values_converted};
 pub use windows::Window;

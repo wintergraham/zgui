@@ -12,7 +12,8 @@ use std::{
     },
 };
 
-pub(crate) struct FileEvents {
+/// Kernel notifications for files and directory entries on macOS.
+pub struct FileEvents {
     /// The queue, shared with its thread: it closes when both have let go,
     /// so neither uses its number after the other closed it (when the
     /// system may have given the number to another file).
@@ -22,6 +23,7 @@ pub(crate) struct FileEvents {
     /// What is watched now, and the descriptors that watch it (closing
     /// one drops what watched it).
     watched: Vec<PathBuf>,
+    watch_complete: bool,
     fds: Vec<OwnedFd>,
     changed: zgx::task::LatestReceiver<()>,
 }
@@ -49,7 +51,7 @@ impl FileEvents {
         };
         // SAFETY: `queue` is open; one change is read from `wake`, and no
         // event is written.
-        unsafe {
+        let registered = unsafe {
             libc::kevent(
                 queue.as_raw_fd(),
                 &wake,
@@ -59,6 +61,9 @@ impl FileEvents {
                 std::ptr::null(),
             )
         };
+        if registered != 0 {
+            return None;
+        }
         let (tell, changed) = zgx::task::latest::<()>();
         let done = Arc::new(AtomicBool::new(false));
         let ended = done.clone();
@@ -102,6 +107,7 @@ impl FileEvents {
             queue,
             done,
             watched: Vec::new(),
+            watch_complete: true,
             fds: Vec::new(),
             changed,
         })
@@ -111,7 +117,9 @@ impl FileEvents {
     /// from now on, instead of what was watched before. Watching what is
     /// already watched opens nothing again, unless a file was replaced (its
     /// descriptor still names the old one).
-    pub fn watch(&mut self, mut paths: Vec<PathBuf>, whole: Vec<PathBuf>, replaced: bool) {
+    /// Returns whether every requested watch was registered. On failure,
+    /// successful watches remain active; callers can also poll as a fallback.
+    pub fn watch(&mut self, mut paths: Vec<PathBuf>, whole: Vec<PathBuf>, replaced: bool) -> bool {
         let mut dirs: Vec<PathBuf> = paths
             .iter()
             .filter_map(|path| path.parent().map(PathBuf::from))
@@ -122,8 +130,8 @@ impl FileEvents {
         paths.sort();
         paths.dedup();
         let wanted: Vec<PathBuf> = paths.iter().chain(&dirs).cloned().collect();
-        if wanted == self.watched && !replaced {
-            return;
+        if wanted == self.watched && self.watch_complete && !replaced {
+            return true;
         }
         // Closing a descriptor drops what watched it.
         self.fds.clear();
@@ -133,17 +141,20 @@ impl FileEvents {
             | libc::NOTE_DELETE
             | libc::NOTE_RENAME
             | libc::NOTE_REVOKE;
+        let mut complete = true;
         for (path, notes) in paths
             .iter()
             .map(|p| (p, file))
             .chain(dirs.iter().map(|d| (d, libc::NOTE_WRITE)))
         {
             let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) else {
+                complete = false;
                 continue;
             };
             // SAFETY: `c_path` is a NUL-terminated path, read for the call.
             let fd = unsafe { libc::open(c_path.as_ptr(), libc::O_EVTONLY | libc::O_CLOEXEC) };
             if fd < 0 {
+                complete = false;
                 continue;
             }
             // SAFETY: `fd` was just opened, and nothing else owns it.
@@ -158,7 +169,7 @@ impl FileEvents {
             };
             // SAFETY: the queue is open while this holds it; one change is
             // read from `change`, and no event is written.
-            unsafe {
+            let registered = unsafe {
                 libc::kevent(
                     self.queue.as_raw_fd(),
                     &change,
@@ -168,9 +179,15 @@ impl FileEvents {
                     std::ptr::null(),
                 )
             };
-            self.fds.push(fd);
+            if registered == 0 {
+                self.fds.push(fd);
+            } else {
+                complete = false;
+            }
         }
         self.watched = wanted;
+        self.watch_complete = complete;
+        complete
     }
 
     /// Wait for a change to what is watched; `false` once nothing can
@@ -266,6 +283,25 @@ mod tests {
             let mut events = FileEvents::new().unwrap();
             events.watch(vec![app.clone()], Vec::new(), false);
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn incomplete_watches_are_reported_and_can_be_retried() {
+        let dir =
+            std::env::temp_dir().join(format!("zgx-kqueue-incomplete-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("app.luau");
+        let mut events = FileEvents::new().unwrap();
+        assert!(!events.watch(vec![file.clone()], Vec::new(), false));
+        assert!(!events.watch(vec![file.clone()], Vec::new(), false));
+        std::fs::write(&file, "return 1").unwrap();
+        assert!(events.watch(vec![file.clone()], Vec::new(), false));
+        while heard(&mut events, Duration::from_millis(50)) {}
+        std::fs::write(&file, "return 2").unwrap();
+        assert!(heard(&mut events, Duration::from_secs(5)));
+        drop(events);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
