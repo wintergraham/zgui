@@ -159,11 +159,7 @@ impl FamilySampler {
             selected.insert(self.root.pid);
         }
         // Never attach to a new lifetime at the root PID, even after exit.
-        for row in &rows {
-            if retained.iter().any(|id| id.pid == row.pid) {
-                selected.insert(row.pid);
-            }
-        }
+        selected.extend(retained.iter().map(|id| id.pid));
         loop {
             let before = selected.len();
             for row in &rows {

@@ -3752,22 +3752,18 @@ impl GpuRenderer {
                     NodeKind::Image(image) => Some(image.id()),
                     #[cfg(target_os = "macos")]
                     NodeKind::NativeSurface(frame) => Some(frame.id()),
+                    NodeKind::Quad(quad) | NodeKind::Panel { quad, .. } => {
+                        match quad.decoration.as_deref()?.background.as_ref()? {
+                            zgx::decoration::Background::Image { image, .. } => Some(image.id()),
+                            _ => None,
+                        }
+                    }
                     _ => None,
                 })
                 .collect();
             live_images.extend(self.canvases.image_ids());
             live_images.extend(self.ramps.values().map(|ramp| ramp.id()));
             live_images.extend(self.svgs.image_ids());
-            // Boxes' background images.
-            live_images.extend(scene.paint_items().filter_map(|item| match item.kind {
-                NodeKind::Quad(quad) | NodeKind::Panel { quad, .. } => {
-                    match quad.decoration.as_deref()?.background.as_ref()? {
-                        zgx::decoration::Background::Image { image, .. } => Some(image.id()),
-                        _ => None,
-                    }
-                }
-                _ => None,
-            }));
             // Effect layers' atlas and masks.
             live_images.insert(effects::EFFECT_ATLAS);
             live_images.extend(
