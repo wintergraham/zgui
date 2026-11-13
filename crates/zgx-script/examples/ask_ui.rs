@@ -38,6 +38,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let host = ScriptHost::new(&cx.ui.runtime, script.clone());
         let window = cx.window.clone();
         host.action("drag_window", move |_| window.drag_window());
+        // `ui.invoke("window_buttons", { visible, dx, dy })`: the traffic lights shown or hidden and moved from home
+        // (a sidebar carrying them as it slides).
+        let window = cx.window.clone();
+        host.action("window_buttons", move |arg| {
+            let num = |k: &str| arg.field(k).and_then(|v| v.as_f64()).unwrap_or(0.);
+            let visible = !matches!(arg.field("visible"), Some(zgx_script::Value::Bool(false)));
+            window.set_window_buttons(visible, num("dx"), num("dy"));
+        });
         if let Err(error) = host.reload() {
             eprintln!("ask_ui: {error}");
         }

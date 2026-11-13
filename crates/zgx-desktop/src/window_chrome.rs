@@ -151,6 +151,17 @@ pub(crate) fn set_background_blur(window: &winit::window::Window, radius: u32) {
     let _ = (window, radius);
 }
 
+/// Shows or hides the window's own buttons, moved `dx`, `dy` points (right,
+/// down) from where the title bar laid them out (`WindowHandle::set_window_buttons`).
+pub(crate) fn set_window_buttons(window: &winit::window::Window, visible: bool, dx: f64, dy: f64) {
+    #[cfg(target_os = "macos")]
+    if let Some(window) = mac::ns_window(window) {
+        mac::window_buttons(&window, visible, dx, dy);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, visible, dx, dy);
+}
+
 /// The title bar's free area and the window's buttons in it, in points
 /// (`WindowInfo::titlebar_area`, `controls`): `None` for a standard title
 /// bar and in fullscreen.
@@ -1772,6 +1783,53 @@ mod mac {
         // winit hands out an AppKit handle only on the main thread.
         let view = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
         view.window()
+    }
+
+    thread_local! {
+        /// Each window's buttons' origins as the title bar laid them out, the
+        /// first time they were moved: offsets count from these.
+        static BUTTON_HOMES: std::cell::RefCell<std::collections::HashMap<usize, [(f64, f64); 3]>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+
+    pub(super) fn window_buttons(window: &NSWindow, visible: bool, dx: f64, dy: f64) {
+        use objc2_foundation::{NSPoint, NSRect};
+        let key = window as *const NSWindow as usize;
+        // NSWindowCloseButton, MiniaturizeButton, ZoomButton.
+        let buttons: Vec<Retained<NSView>> = [0_usize, 1, 2]
+            .into_iter()
+            .filter_map(|b| {
+                // SAFETY: `-standardWindowButton:` takes an NSUInteger and
+                // returns an NSButton (a view) or nil, retained here.
+                let button: Option<Retained<NSView>> =
+                    unsafe { msg_send![window, standardWindowButton: b] };
+                button
+            })
+            .collect();
+        if buttons.len() != 3 {
+            return;
+        }
+        let homes = BUTTON_HOMES.with(|homes| {
+            *homes.borrow_mut().entry(key).or_insert_with(|| {
+                let origin = |v: &NSView| {
+                    let f: NSRect = v.frame();
+                    (f.origin.x, f.origin.y)
+                };
+                [
+                    origin(&buttons[0]),
+                    origin(&buttons[1]),
+                    origin(&buttons[2]),
+                ]
+            })
+        });
+        for (button, (x, y)) in buttons.iter().zip(homes) {
+            // The title bar's view is unflipped: down is a smaller y.
+            // SAFETY: `-superview` returns the view's parent (or nil), retained here.
+            let flipped = unsafe { button.superview() }.is_some_and(|s| s.isFlipped());
+            let y = if flipped { y + dy } else { y - dy };
+            button.setFrameOrigin(NSPoint::new(x + dx, y));
+            button.setHidden(!visible);
+        }
     }
 
     pub(super) fn apply(

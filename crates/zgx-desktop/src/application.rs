@@ -192,6 +192,11 @@ enum WindowCommand {
     Visible(bool),
     Focus,
     MaxFrameRate(Option<f64>),
+    WindowButtons {
+        visible: bool,
+        dx: f64,
+        dy: f64,
+    },
     LoseGpu,
     ContextMenu {
         entries: Vec<crate::AppMenuEntry>,
@@ -230,6 +235,7 @@ impl WindowState {
             WindowCommand::Drag
             | WindowCommand::RefreshInfo
             | WindowCommand::LoseGpu
+            | WindowCommand::WindowButtons { .. }
             | WindowCommand::ContextMenu { .. } => {}
             WindowCommand::Title(title) => options.title.clone_from(title),
             WindowCommand::Size(width, height) => {
@@ -340,6 +346,13 @@ impl WindowHandle {
         if size.is_none_or(|(w, h)| valid_window_size(w, h)) {
             self.command(WindowCommand::MinSize(size));
         }
+    }
+    /// Show or hide the window's own buttons (macOS's traffic lights), moved
+    /// `dx`, `dy` points from where the title bar puts them: a sidebar that
+    /// carries them as it slides in and out. Only an inset or standard title
+    /// bar has them; elsewhere this does nothing.
+    pub fn set_window_buttons(&self, visible: bool, dx: f64, dy: f64) {
+        self.command(WindowCommand::WindowButtons { visible, dx, dy });
     }
     /// Start a native move gesture from a primary-pointer press on a custom titlebar.
     /// Rejections are reported through WindowInfo::last_request_error.
@@ -2951,6 +2964,9 @@ impl Host {
             WindowCommand::Shadow(value) => crate::window_info::set_shadow(window, value),
             WindowCommand::BackgroundBlur(radius) => {
                 crate::window_chrome::set_background_blur(window, radius)
+            }
+            WindowCommand::WindowButtons { visible, dx, dy } => {
+                crate::window_chrome::set_window_buttons(window, visible, dx, dy)
             }
             WindowCommand::MinSize(value) => {
                 window.set_min_inner_size(value.map(|(w, h)| LogicalSize::new(w, h)))
