@@ -530,7 +530,11 @@ mod platform {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(target_os = "windows")]
+#[path = "windows.rs"]
+mod platform;
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 mod platform {
     /// Command-line reading is unsupported.
     pub fn arguments(_: i32) -> Option<Vec<String>> {
