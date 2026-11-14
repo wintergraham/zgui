@@ -35,7 +35,8 @@ use windows::{
                     DXGI_ALPHA_MODE_IGNORE, DXGI_ALPHA_MODE_PREMULTIPLIED,
                     DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
                 },
-                CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_PRESENT,
+                CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_ERROR_DEVICE_REMOVED,
+                DXGI_ERROR_DEVICE_RESET, DXGI_PRESENT,
                 DXGI_PRESENT_PARAMETERS, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
                 DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
                 DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT,
@@ -309,9 +310,13 @@ impl Chain {
         // SAFETY: `params` points at `rects`, alive across the call; sync
         // interval 0: a present replaces one the compositor has not taken.
         let result = unsafe { self.swap_chain.Present1(0, DXGI_PRESENT(0), &params) };
-        result
-            .ok()
-            .map_err(|e| GpuError(format!("Present1: {e}")))?;
+        result.ok().map_err(|e| {
+            if e.code() == DXGI_ERROR_DEVICE_REMOVED || e.code() == DXGI_ERROR_DEVICE_RESET {
+                GpuError::device_lost(&format!("Present1: {e}"))
+            } else {
+                GpuError(format!("Present1: {e}"))
+            }
+        })?;
         self.whole = false;
         Ok(result != DXGI_STATUS_OCCLUDED)
     }
