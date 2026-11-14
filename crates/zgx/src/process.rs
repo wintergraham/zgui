@@ -43,6 +43,7 @@ pub struct Reading {
 pub fn snapshot(gpu: bool) -> Vec<Reading> {
     // Bind the GPU lookup and metadata to the same lifetime too: a PID can be
     // reused between reading the driver's PID-keyed map and reading libproc.
+    #[cfg(not(target_os = "windows"))]
     let rows: Vec<_> = platform::pids()
         .into_iter()
         .map(|pid| {
@@ -54,6 +55,23 @@ pub fn snapshot(gpu: bool) -> Vec<Reading> {
             )
         })
         .collect();
+    // Bracket one Toolhelp metadata snapshot with lifetime reads. Reading a
+    // separate system-wide snapshot for each parent/name would distort sampling.
+    #[cfg(target_os = "windows")]
+    let rows: Vec<_> = {
+        let before: Vec<_> = platform::pids()
+            .into_iter()
+            .map(|pid| (pid, platform::read(pid)))
+            .collect();
+        let mut metadata = platform::metadata();
+        before
+            .into_iter()
+            .filter_map(|(pid, usage)| {
+                let (parent, name) = metadata.remove(&pid)?;
+                Some((pid, usage, parent, name))
+            })
+            .collect()
+    };
     let gpu_times = if gpu {
         platform::gpu_times()
     } else {
