@@ -230,17 +230,28 @@ impl Compact {
                     .sum::<usize>();
             }
         }
-        let index = slab.room(3 * words + glyphs);
-        let chunk = slab.chunks[index].as_mut().expect("live chunk");
-        let start = chunk.data.len();
-        // Its words, then their advances, filled in place.
-        chunk.data.resize(start + 3 * words + glyphs, 0);
-        let (packed, advances) = chunk.data[start..].split_at_mut(3 * words);
+        let length = 3 * words + glyphs;
+        // A text of no words (an empty line) takes no room in any chunk: at
+        // a chunk's end, it would be past it once the text before it went
+        // (`Slab::drop` shortens a chunk whose last text goes).
+        let index = (length > 0).then(|| slab.room(length));
+        let mut none: [u32; 0] = [];
+        let (data, start) = match index {
+            Some(index) => {
+                let chunk = slab.chunks[index].as_mut().expect("live chunk");
+                let start = chunk.data.len();
+                // Its words, then their advances, filled in place.
+                chunk.data.resize(start + length, 0);
+                (&mut chunk.data[start..], start)
+            }
+            None => (&mut none[..], 0),
+        };
+        let (packed, advances) = data.split_at_mut(3 * words);
         let (packed, _) = packed.as_chunks_mut::<3>();
         let mut compact = Self {
-            chunk: index as u32,
+            chunk: index.map_or(NO_CHUNK, |index| index as u32),
             start: start as u32,
-            end: (start + 3 * words + glyphs) as u32,
+            end: (start + length) as u32,
             words: words as u32,
             spans: smallvec::SmallVec::with_capacity(spans),
             lines: smallvec::SmallVec::with_capacity(lines.len()),
@@ -290,7 +301,9 @@ impl Compact {
         })();
         if filled.is_none() {
             // As if made and dropped at once: no gap, no text counted.
-            slab.unmake(index, start);
+            if let Some(index) = index {
+                slab.unmake(index, start);
+            }
             return None;
         }
         Some(compact)
@@ -310,9 +323,10 @@ impl Compact {
     }
     /// The size cosmic-text's word-or-glyph wrapping gives these lines at
     /// `width`: the widest line, and the sum of line heights. This follows
-    /// its congruent-direction branch step by step.
-    fn size(&self, slab: &Slab, width: Option<f32>, line_height: f32) -> (f32, f32) {
-        let (all_words, glyphs) = slab.of(self);
+    /// its congruent-direction branch step by step. None if its words are
+    /// not where it says (`Slab::of`).
+    fn size(&self, slab: &Slab, width: Option<f32>, line_height: f32) -> Option<(f32, f32)> {
+        let (all_words, glyphs) = slab.of(self)?;
         let limit = crate::text::wrap_width(width).unwrap_or(f32::INFINITY);
         let (mut widest, mut height) = (0_f32, 0_f32);
         for (spans, empty) in &self.lines {
@@ -390,7 +404,7 @@ impl Compact {
                 height += empty.unwrap_or(line_height);
             }
         }
-        (widest, height)
+        Some((widest, height))
     }
 }
 
@@ -407,6 +421,10 @@ struct Slab {
     chunks: Vec<Option<Chunk>>,
     /// Where texts go while it has room.
     newest: Option<usize>,
+    /// A compact was found not where it says (its chunk gone, or its range
+    /// past the chunk's end): nothing more is moved or dropped, and the
+    /// cache starts again (`TextCache::reset`) rather than panicking.
+    broken: bool,
 }
 struct Chunk {
     data: Vec<u32>,
@@ -417,15 +435,27 @@ struct Chunk {
 /// A chunk's length: 64 KiB, an allocation of whole pages of its own,
 /// given back whole.
 const CHUNK: usize = 16 * 1024;
+/// The chunk of a compact of no words or advances, which is in none.
+const NO_CHUNK: u32 = u32::MAX;
 impl Slab {
-    /// `compact`'s words and glyph advances.
-    fn of(&self, compact: &Compact) -> (&[Packed], &[u32]) {
-        let chunk = self.chunks[compact.chunk as usize]
-            .as_ref()
-            .expect("live chunk");
-        let data = &chunk.data[compact.start as usize..compact.end as usize];
-        let (words, glyphs) = data.split_at(3 * compact.words as usize);
-        (words.as_chunks().0, glyphs)
+    /// `compact`'s words and glyph advances; None if they are not where it
+    /// says.
+    fn of(&self, compact: &Compact) -> Option<(&[Packed], &[u32])> {
+        let data = if compact.chunk == NO_CHUNK {
+            &[][..]
+        } else {
+            self.chunk_data(compact)?
+        };
+        let (words, glyphs) = data.split_at_checked(3 * compact.words as usize)?;
+        Some((words.as_chunks().0, glyphs))
+    }
+    /// The part of its chunk `compact` says is its own, if there is one.
+    fn chunk_data(&self, compact: &Compact) -> Option<&[u32]> {
+        self.chunks
+            .get(compact.chunk as usize)?
+            .as_ref()?
+            .data
+            .get(compact.start as usize..compact.end as usize)
     }
     /// The chunk a text of `length` goes in, counted in it.
     fn room(&mut self, length: usize) -> usize {
@@ -477,8 +507,19 @@ impl Slab {
     /// chunk left with no texts is freed, and one mostly gaps has its
     /// texts, found among `entries`, moved to the newest chunk.
     fn drop(&mut self, compact: &Compact, entries: &mut FxHashMap<u64, Entry>) {
+        if compact.chunk == NO_CHUNK || self.broken {
+            return;
+        }
+        if self.chunk_data(compact).is_none() {
+            self.broken = true;
+            return;
+        }
         let index = compact.chunk as usize;
         let chunk = self.chunks[index].as_mut().expect("live chunk");
+        if chunk.texts == 0 {
+            self.broken = true;
+            return;
+        }
         if compact.end as usize == chunk.data.len() {
             self.unmake(index, compact.start as usize);
             return;
@@ -495,7 +536,17 @@ impl Slab {
         if self.newest == Some(index) || 2 * chunk.dropped <= chunk.data.len() {
             return;
         }
-        // Mostly gaps: its texts to the newest chunk, and it goes.
+        // Mostly gaps: its texts to the newest chunk, and it goes. Each is
+        // checked first: one not where it says would leave the rest half
+        // moved, pointing at a chunk that is gone.
+        if entries
+            .values()
+            .filter_map(|entry| entry.compact.as_ref())
+            .any(|compact| compact.chunk as usize == index && self.chunk_data(compact).is_none())
+        {
+            self.broken = true;
+            return;
+        }
         let old = self.chunks[index].take().expect("live chunk");
         for compact in entries
             .values_mut()
@@ -669,12 +720,19 @@ impl Entry {
         }
         (next == words.len()).then_some((widest, height))
     }
-    fn size(&mut self, fonts: &mut FontSystem, slab: &Slab, width: Option<f32>) -> (f32, f32) {
+    /// Its size at `width`; None if its compact's words are not where it
+    /// says.
+    fn size(
+        &mut self,
+        fonts: &mut FontSystem,
+        slab: &Slab,
+        width: Option<f32>,
+    ) -> Option<(f32, f32)> {
         if let Some((_, size)) = self.sizes.iter().find(|(w, _)| *w == width) {
-            return *size;
+            return Some(*size);
         }
         let size = match &self.compact {
-            Some(compact) => compact.size(slab, width, self.metrics.line_height),
+            Some(compact) => compact.size(slab, width, self.metrics.line_height)?,
             None => {
                 self.lay_out(fonts, width);
                 let lines = self.lines.as_deref().expect("laid out");
@@ -688,7 +746,7 @@ impl Entry {
             self.sizes.remove(0);
         }
         self.sizes.push((width, size));
-        size
+        Some(size)
     }
 }
 
@@ -761,6 +819,9 @@ pub struct TextCache {
     drawn_bytes: usize,
     /// `trim`s so far: drawn entries are marked with the latest.
     trims: u64,
+    /// Set while a public call changes the cache: still set at the next,
+    /// a panic stopped one half way (and was contained), and it starts again.
+    busy: bool,
     /// Texts shaped, and requests served without shaping, for tests and stats.
     pub shaped: u64,
     /// Requests served without shaping.
@@ -802,11 +863,10 @@ impl TextCache {
         rich: &RichText,
         width: Option<f32>,
     ) -> (f32, f32) {
-        if !Self::handles(rich) {
-            return self.clamped_size(fonts, rich, width);
-        }
-        let hash = self.entry(fonts, Source::Rich(rich), false, Need::Measure);
-        self.sized(fonts, hash, width)
+        self.begin();
+        let size = self.measure_rich(fonts, rich, width, Need::Measure);
+        self.busy = false;
+        size
     }
     /// As `measure`, for text that is not drawn (the estimated heights of
     /// rows a virtualized list has not mounted): a text prepared here keeps
@@ -818,11 +878,52 @@ impl TextCache {
         rich: &RichText,
         width: Option<f32>,
     ) -> (f32, f32) {
+        self.begin();
+        let size = self.measure_rich(fonts, rich, width, Need::Detached);
+        self.busy = false;
+        size
+    }
+    fn measure_rich(
+        &mut self,
+        fonts: &mut FontSystem,
+        rich: &RichText,
+        width: Option<f32>,
+        need: Need,
+    ) -> (f32, f32) {
         if !Self::handles(rich) {
             return self.clamped_size(fonts, rich, width);
         }
-        let hash = self.entry(fonts, Source::Rich(rich), false, Need::Detached);
-        self.sized(fonts, hash, width)
+        let hash = self.entry(fonts, Source::Rich(rich), false, need);
+        self.sized(fonts, hash, width).unwrap_or_else(|| {
+            self.reset("a text's measurements were not where it said");
+            crate::text::ShapedText::with_runs(fonts, rich, width).size()
+        })
+    }
+    /// Start a public call that changes the cache: one a panic stopped half
+    /// way, or a compact found not where it says, and it starts again.
+    fn begin(&mut self) {
+        if self.busy {
+            self.reset("a panic stopped a change half way");
+        } else if self.slab.broken {
+            self.reset("a text's measurements were not where it said");
+        }
+        self.busy = true;
+    }
+    /// Drop every prepared text, to be shaped again as it is next asked for
+    /// (a frame's worth of shaping), rather than keep a cache that is not
+    /// what it says. Said once a process.
+    fn reset(&mut self, why: &str) {
+        static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            eprintln!("zgx: prepared text is shaped again from scratch ({why})");
+        }
+        *self = Self {
+            clock: self.clock,
+            trims: self.trims,
+            shaped: self.shaped,
+            hits: self.hits,
+            ..Self::default()
+        };
     }
     /// A clamped or ellipsized text's size at `width`, as
     /// `ShapedText::with_runs` measures it, shaped only the first time.
@@ -905,8 +1006,11 @@ impl TextCache {
         rich: &RichText,
         width: Option<f32>,
     ) -> Laid<'_> {
+        self.begin();
         let hash = self.entry(fonts, Source::Rich(rich), false, Need::Layout);
-        self.laid_out(fonts, hash, width)
+        self.lay_out(fonts, hash, width);
+        self.busy = false;
+        self.laid(hash)
     }
     /// Whether plain text goes through the cache: nonempty, at a valid size.
     pub fn handles_plain(text: &str, font_size: f32) -> bool {
@@ -922,26 +1026,47 @@ impl TextCache {
         font: &FontStyle,
         width: Option<f32>,
     ) -> (f32, f32) {
+        self.begin();
+        let size = self.measure_plain_text(fonts, text, font_size, font, width);
+        self.busy = false;
+        size
+    }
+    fn measure_plain_text(
+        &mut self,
+        fonts: &mut FontSystem,
+        text: &Arc<str>,
+        font_size: f32,
+        font: &FontStyle,
+        width: Option<f32>,
+    ) -> (f32, f32) {
+        let shaped = |fonts: &mut FontSystem| {
+            crate::text::ShapedText::with_font(fonts, text.clone(), font_size, width, font).size()
+        };
         if !Self::handles_plain(text, font_size) {
-            return crate::text::ShapedText::with_font(fonts, text.clone(), font_size, width, font)
-                .size();
+            return shaped(fonts);
         }
         let hash = self.plain_entry(fonts, text, font_size, font, Need::Measure);
-        self.sized(fonts, hash, width)
+        self.sized(fonts, hash, width).unwrap_or_else(|| {
+            self.reset("a text's measurements were not where it said");
+            shaped(fonts)
+        })
     }
     /// `rich`'s min-content size, CSS's: as `rich.min_content_lines()`
     /// measures unwrapped, worked out from the words `rich` was shaped
     /// into where they are its lines' words (`min_content_plain`).
     pub fn min_content(&mut self, fonts: &mut FontSystem, rich: &RichText) -> (f32, f32) {
+        self.begin();
+        let mut size = None;
         if Self::handles(rich) && !rich.text().contains(['\n', '\r']) {
             let hash = self.entry(fonts, Source::Rich(rich), false, Need::Measure);
-            let size = self.entries[&hash].min_content(rich.text());
+            size = self.entries[&hash].min_content(rich.text());
             self.evict(hash);
-            if let Some(size) = size {
-                return size;
-            }
         }
-        self.measure(fonts, &rich.min_content_lines(), None)
+        let size = size.unwrap_or_else(|| {
+            self.measure_rich(fonts, &rich.min_content_lines(), None, Need::Measure)
+        });
+        self.busy = false;
+        size
     }
     /// Plain text's min-content size, CSS's: as `min_content_lines(text)`
     /// measures unwrapped, a line at every opportunity to break one and never
@@ -955,16 +1080,19 @@ impl TextCache {
         font_size: f32,
         font: &FontStyle,
     ) -> (f32, f32) {
+        self.begin();
+        let mut size = None;
         if Self::handles_plain(text, font_size) && !text.contains(['\n', '\r']) {
             let hash = self.plain_entry(fonts, text, font_size, font, Need::Measure);
-            let size = self.entries[&hash].min_content(text);
+            size = self.entries[&hash].min_content(text);
             self.evict(hash);
-            if let Some(size) = size {
-                return size;
-            }
         }
-        let lines: Arc<str> = zgx::text_layout::min_content_lines(text).into();
-        self.measure_plain(fonts, &lines, font_size, font, None)
+        let size = size.unwrap_or_else(|| {
+            let lines: Arc<str> = zgx::text_layout::min_content_lines(text).into();
+            self.measure_plain_text(fonts, &lines, font_size, font, None)
+        });
+        self.busy = false;
+        size
     }
     /// Plain text laid out at `width`. Only for text `handles_plain` accepts.
     pub fn layout_plain(
@@ -975,8 +1103,11 @@ impl TextCache {
         font: &FontStyle,
         width: Option<f32>,
     ) -> Laid<'_> {
+        self.begin();
         let hash = self.plain_entry(fonts, text, font_size, font, Need::Layout);
-        self.laid_out(fonts, hash, width)
+        self.lay_out(fonts, hash, width);
+        self.busy = false;
+        self.laid(hash)
     }
     /// The entry for plain text. Found, as most lookups are (a layout
     /// measures a text at a few widths, each frame draws it again), it costs
@@ -1006,16 +1137,29 @@ impl TextCache {
         };
         self.entry(fonts, source, true, need)
     }
-    fn sized(&mut self, fonts: &mut FontSystem, hash: u64, width: Option<f32>) -> (f32, f32) {
+    /// An entry's size at `width`; None if its compact's words are not
+    /// where it says.
+    fn sized(
+        &mut self,
+        fonts: &mut FontSystem,
+        hash: u64,
+        width: Option<f32>,
+    ) -> Option<(f32, f32)> {
         // Measuring changes no compact (`update` is not needed).
         let entry = self.entries.get_mut(&hash).expect("prepared");
-        let size = entry.size(fonts, &self.slab, width);
+        let size = entry.size(fonts, &self.slab, width)?;
         self.evict(hash);
-        size
+        Some(size)
     }
     fn laid_out(&mut self, fonts: &mut FontSystem, hash: u64, width: Option<f32>) -> Laid<'_> {
+        self.lay_out(fonts, hash, width);
+        self.laid(hash)
+    }
+    fn lay_out(&mut self, fonts: &mut FontSystem, hash: u64, width: Option<f32>) {
         self.update(hash, |entry| entry.lay_out(fonts, width));
         self.evict(hash);
+    }
+    fn laid(&self, hash: u64) -> Laid<'_> {
         let entry = &self.entries[&hash];
         Laid {
             lines: entry.lines.as_deref().expect("laid out"),
@@ -1032,6 +1176,7 @@ impl TextCache {
     /// the screen goes, keeping memory to what is shown. Measurements of
     /// text that is not drawn (`measure_detached`) are kept apart.
     pub fn trim(&mut self, drawn: impl IntoIterator<Item = u64>) {
+        self.begin();
         // Each drawn entry marked where it is, once (two nodes may draw
         // one text), rather than a set of them looked up for every entry.
         self.trims += 1;
@@ -1068,6 +1213,11 @@ impl TextCache {
         // what is more than twice what is held.
         if self.entries.capacity() > 2 * self.entries.len() + 64 {
             self.entries.shrink_to_fit();
+        }
+        self.busy = false;
+        // A compact found not where it says while texts were dropped.
+        if self.slab.broken {
+            self.reset("a text's measurements were not where it said");
         }
     }
     /// Estimated bytes held: shaped lines, and compact measurements.
@@ -1113,9 +1263,13 @@ impl TextCache {
         let known = cached.is_some();
         self.shaped += 1;
         let (lines, metrics) = self.shape(fonts, source, caret_row);
-        if known {
+        // A compact found not where it says while dropping the texts this
+        // one supersedes: started again, this text is prepared afresh.
+        if self.slab.broken {
+            self.reset("a text's measurements were not where it said");
+        }
+        if known && let Some(entry) = self.entries.get_mut(&hash) {
             // Evicted lines, shaped again for drawing; measurements stay.
-            let entry = self.entries.get_mut(&hash).expect("cached");
             entry.lines = Some(lines);
             entry.laid = None;
             entry.used = self.clock;
@@ -1925,6 +2079,139 @@ mod tests {
                 *size
             );
         }
+    }
+
+    /// Every kept compact lies inside a live chunk.
+    fn assert_slab_holds(cache: &TextCache) {
+        for entry in cache.entries.values() {
+            if let Some(compact) = &entry.compact {
+                assert!(
+                    cache.slab.of(compact).is_some()
+                        && (compact.chunk == NO_CHUNK) == (compact.start == compact.end),
+                    "{:?}: chunk {} at {}..{}",
+                    entry.key.text,
+                    compact.chunk,
+                    compact.start,
+                    compact.end
+                );
+            }
+        }
+    }
+
+    /// A text of no words (an empty line) takes no room, so dropping the
+    /// text before it at its chunk's end (which shortens the chunk) leaves
+    /// nothing past the end: when that chunk, no longer the newest, is
+    /// mostly gaps and its texts move, each is where its compact says.
+    #[test]
+    fn a_chunk_moved_after_its_end_was_dropped_keeps_its_empty_texts() {
+        let mut fonts = FontSystem::new();
+        let font = FontStyle::default();
+        let mut cache = TextCache::default();
+        let words = |tag: &str, count: usize| -> Arc<str> {
+            format!("{tag} {}", "word ".repeat(count)).into()
+        };
+        let mut draw = |cache: &mut TextCache, text: &Arc<str>| -> u64 {
+            cache
+                .layout_plain(&mut fonts, text, 14., &font, Some(320.))
+                .key()
+        };
+        // One chunk: a large text, a small one, one that drops, then an
+        // empty line, which went at the dropped one's end.
+        let large = words("large", 700);
+        let small = words("small", 50);
+        let dropped = words("dropped", 600);
+        let empty: Arc<str> = "\n".into();
+        let large_key = draw(&mut cache, &large);
+        let small_key = draw(&mut cache, &small);
+        draw(&mut cache, &dropped);
+        let empty_key = draw(&mut cache, &empty);
+        let chunk_of = |cache: &TextCache, key: u64| {
+            let compact = cache.entries[&key].compact.as_ref().expect("compact");
+            (compact.chunk, compact.end - compact.start)
+        };
+        assert_eq!(chunk_of(&cache, large_key).0, chunk_of(&cache, small_key).0);
+        assert_eq!(
+            chunk_of(&cache, empty_key).1,
+            0,
+            "an empty line has no words"
+        );
+        cache.trim([large_key, small_key, empty_key]);
+        assert!(cache.entries.len() == 3, "only the dropped text went");
+        assert_slab_holds(&cache);
+        // A text too big for the room left starts the newest chunk.
+        let newest = words("newest", 1000);
+        let newest_key = draw(&mut cache, &newest);
+        assert_ne!(
+            chunk_of(&cache, newest_key).0,
+            chunk_of(&cache, small_key).0
+        );
+        // The large text goes: the first chunk is mostly gaps, and its
+        // texts move to the newest.
+        cache.trim([small_key, empty_key, newest_key]);
+        assert_slab_holds(&cache);
+        assert_eq!(
+            chunk_of(&cache, small_key).0,
+            chunk_of(&cache, newest_key).0
+        );
+        for text in [&small, &empty, &newest] {
+            for width in [None, Some(200.)] {
+                assert_eq!(
+                    cache.measure_plain(&mut fonts, text, 14., &font, width),
+                    ShapedText::with_font(&mut fonts, text.clone(), 14., width, &font).size()
+                );
+            }
+        }
+    }
+
+    /// A cache found not as it says (a chunk gone from under its texts, as a
+    /// panic half way through moving them left it), or left half changed by
+    /// a panic, starts again rather than panicking on every frame after.
+    #[test]
+    fn a_broken_cache_starts_again() {
+        let mut fonts = FontSystem::new();
+        let font = FontStyle::default();
+        let mut cache = TextCache::default();
+        let texts: Vec<Arc<str>> = (0..6)
+            .map(|i| format!("{i} {}", "word ".repeat(40)).into())
+            .collect();
+        let measured = |fonts: &mut FontSystem, text: &Arc<str>, width| {
+            ShapedText::with_font(fonts, text.clone(), 14., width, &font).size()
+        };
+        for text in &texts {
+            cache.layout_plain(&mut fonts, text, 14., &font, Some(320.));
+        }
+        // Its chunk gone: measuring at a new width reads it.
+        cache.slab.chunks.iter_mut().for_each(|chunk| *chunk = None);
+        assert_eq!(
+            cache.measure_plain(&mut fonts, &texts[0], 14., &font, Some(200.)),
+            measured(&mut fonts, &texts[0], Some(200.))
+        );
+        assert!(cache.entries.is_empty(), "started again");
+        // Dropping texts whose chunk is gone.
+        for text in &texts {
+            cache.layout_plain(&mut fonts, text, 14., &font, Some(320.));
+        }
+        cache.slab.chunks.iter_mut().for_each(|chunk| *chunk = None);
+        cache.trim([]);
+        assert!(cache.entries.is_empty(), "started again");
+        // A panic half way through a change.
+        cache.layout_plain(&mut fonts, &texts[1], 14., &font, Some(320.));
+        cache.busy = true;
+        assert_eq!(
+            cache.measure_plain(&mut fonts, &texts[2], 14., &font, Some(320.)),
+            measured(&mut fonts, &texts[2], Some(320.))
+        );
+        assert_eq!(cache.entries.len(), 1, "only the text since");
+        // And it keeps working.
+        for text in &texts {
+            cache.layout_plain(&mut fonts, text, 14., &font, Some(320.));
+            assert_eq!(
+                cache.measure_plain(&mut fonts, text, 14., &font, Some(150.)),
+                measured(&mut fonts, text, Some(150.))
+            );
+        }
+        cache.trim([]);
+        assert_slab_holds(&cache);
     }
 
     /// An interface's first layout measures every text; once most are gone,
