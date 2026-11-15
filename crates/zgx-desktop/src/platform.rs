@@ -58,6 +58,13 @@ impl Platform for Desktop {
             .window()
             .is_some_and(|window| crate::look_up::show(&window, text, baseline, size))
     }
+    #[cfg(target_os = "macos")]
+    fn window_snapshot(&self) -> Pending<Option<zgx::image::ImageData>> {
+        match self.dialogs.window() {
+            Some(window) => crate::window_snapshot::take(&window),
+            None => Box::pin(async { None }),
+        }
+    }
     fn open_url(&self, url: &str) -> bool {
         // The launcher runs detached: nothing waits on the browser.
         crate::url::valid_url(url) && open::that_detached(url).is_ok()

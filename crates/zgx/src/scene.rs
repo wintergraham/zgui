@@ -3107,7 +3107,10 @@ impl Scene {
                 .decoration
                 .as_deref()
                 .and_then(|detail| match &detail.background {
-                    Some(crate::decoration::Background::Shader(shader)) => shader.fps(),
+                    Some(
+                        crate::decoration::Background::Shader(shader)
+                        | crate::decoration::Background::ShadedImage { shader, .. },
+                    ) => shader.fps(),
                     _ => None,
                 }),
             _ => None,

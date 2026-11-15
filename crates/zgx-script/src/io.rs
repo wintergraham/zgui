@@ -124,9 +124,9 @@ fn off_thread(
     Ok(PromiseUd(promise))
 }
 
-/// Installs `ui.clipboard` (text and images), `ui.open_files`, `ui.save_file`, `ui.read_file`
-/// and `ui.write_file`. `clipboard` and `files` are false for a plugin the
-/// host did not grant them.
+/// Installs `ui.clipboard` (text and images), `ui.open_files`, `ui.save_file`, `ui.read_file`,
+/// `ui.write_file` and `ui.window_snapshot`. `clipboard` and `files` are false for a plugin the
+/// host did not grant them, `snapshot` for one not granted web pages (a snapshot holds theirs).
 pub(crate) fn install(
     lua: &Lua,
     ui: &Table,
@@ -134,7 +134,29 @@ pub(crate) fn install(
     picked: Picked,
     clipboard: bool,
     files: bool,
+    snapshot: bool,
 ) -> mlua::Result<()> {
+    {
+        let shared = shared.clone();
+        ui.set(
+            "window_snapshot",
+            // A promise: the window server composites the window (native
+            // views included) and its pixels are read off the main thread.
+            lua.create_function(move |lua, ()| {
+                if !snapshot {
+                    return Err(denied("ui.window_snapshot", "Web"));
+                }
+                let taking = platform(&shared, "ui.window_snapshot")?.0.window_snapshot();
+                let promise = pending(lua, "window_snapshot".into())?;
+                settle_with(lua, &promise, async move {
+                    Ok(taking
+                        .await
+                        .map_or(Value::Nil, |image| Value::Image(Arc::new(image))))
+                })?;
+                Ok(PromiseUd(promise))
+            })?,
+        )?;
+    }
     let board = lua.create_table()?;
     {
         let shared = shared.clone();

@@ -236,3 +236,174 @@ fn shader_fills_painted_after_a_backdrop_blur_keep_their_uniforms() {
         }
     }
 }
+
+/// A full-box node filled by `shader` sampling `image` (`ShadedImage`), at
+/// `(0, 0)`, `w` by `h` points.
+fn shaded(
+    scene: &mut Scene,
+    shader: Arc<FillShader>,
+    image: Arc<zgx::image::ImageData>,
+    w: f32,
+    h: f32,
+) -> NodeId {
+    let quad = QuadStyle {
+        decoration: Some(Arc::new(Decoration {
+            background: Some(Background::ShadedImage { shader, image }),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    scene.append(
+        scene.root(),
+        NodeKind::Panel {
+            layout: Layout::Overlay,
+            quad,
+        },
+        Style {
+            width: Some(w),
+            height: Some(h),
+            ..Default::default()
+        },
+    )
+}
+/// An opaque `w` by `h` picture: red across, green down.
+fn ramp(w: u32, h: u32) -> Arc<zgx::image::ImageData> {
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            rgba.extend([
+                (x * 255 / (w - 1)) as u8,
+                (y * 255 / (h - 1)) as u8,
+                96,
+                255,
+            ]);
+        }
+    }
+    Arc::new(zgx::image::ImageData::new(w, h, rgba).unwrap())
+}
+
+#[test]
+fn shader_fills_sample_their_image() {
+    let _gpu_fixture = gpu_fixture();
+    // The image mirrored left to right where params[0].x is 1, as it is
+    // elsewhere, and transparent past params[0].y of the box's width.
+    let shader = FillShader::new(
+        "fn fill(input: FillInput) -> vec4<f32> {
+    if input.p.x > input.params[0].y * input.size.x { return vec4(0.0); }
+    var uv = input.p / input.size;
+    if input.params[0].x > 0.5 { uv.x = 1.0 - uv.x; }
+    return zgx_image(uv);
+}",
+        None,
+    );
+    let image = ramp(SIZE, SIZE);
+    for (direct, mut gpu) in renderers() {
+        let mut scene = scene();
+        let id = shaded(
+            &mut scene,
+            shader.clone(),
+            image.clone(),
+            SIZE as f32,
+            SIZE as f32,
+        );
+        let set = |scene: &mut Scene, mirror: f32, upto: f32| {
+            scene.set_shader_uniforms(
+                id,
+                ShaderUniforms {
+                    time: 0.,
+                    params: [[mirror, upto, 0., 0.], [0.; 4], [0.; 4], [0.; 4]],
+                },
+            )
+        };
+        set(&mut scene, 0., 1.);
+        let (_, p) = render(&mut gpu, &mut scene);
+        let at = |p: &[u8], x: u32, y: u32| pixel(p, x, y);
+        let near = |a: [u8; 4], b: [u8; 4]| a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 2);
+        let source = |x: u32, y: u32| pixel(image.pixels(), x, y);
+        for (x, y) in [(10, 20), (150, 40), (199, 199)] {
+            assert!(
+                near(at(&p, x, y), source(x, y)),
+                "direct {direct}: {:?} at {x},{y}",
+                at(&p, x, y)
+            );
+        }
+        // New uniforms: the same texture, read another way, cut halfway.
+        set(&mut scene, 1., 0.5);
+        let (frame, p) = render(&mut gpu, &mut scene);
+        assert_eq!(frame.layout_nodes, 0);
+        assert!(
+            near(at(&p, 10, 20), source(SIZE - 1 - 10, 20)),
+            "{:?}",
+            at(&p, 10, 20)
+        );
+        assert_eq!(at(&p, 150, 40), [0; 4]);
+    }
+}
+
+/// The theme sweep's cost per frame (ui/kit/theme_swipe.luau in Ask): a
+/// full-window picture swept by its shader at a MacBook's window, 1728 by
+/// 1117 points at 2x. `SWEEP_SHADER` names the Luau file to take the WGSL
+/// from (between its `[=[` and `]=]`). Prints the time per frame, GPU
+/// included (frames back to back, waited for at the end).
+/// `SWEEP_SHADER=../ui/kit/theme_swipe.luau cargo test --release -p zgx-gpu --test shader_fill sweep_cost -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn sweep_cost() {
+    let _gpu_fixture = gpu_fixture();
+    let Some(path) = std::env::var_os("SWEEP_SHADER") else {
+        eprintln!("SWEEP_SHADER is not set");
+        return;
+    };
+    let luau = std::fs::read_to_string(path).unwrap();
+    let start = luau.find("[=[").unwrap() + 3;
+    let end = start + luau[start..].find("]=]").unwrap();
+    let shader = FillShader::new(&luau[start..end], None);
+    let plain = FillShader::new(
+        "fn fill(input: FillInput) -> vec4<f32> { return zgx_image(input.p / input.size); }",
+        None,
+    );
+    let (w, h, scale) = (1728_u32, 1117_u32, 2_u32);
+    let picture = ramp(w * scale, h * scale);
+    let mut gpu = GpuRenderer::new(w * scale, h * scale).unwrap();
+    gpu.set_scale_factor(scale as f32);
+    for (name, shader) in [("plain sample", plain), ("sweep", shader)] {
+        let mut scene = Scene::new(w as f32, h as f32);
+        scene.set_kind(scene.root(), NodeKind::Container(Layout::Overlay));
+        let id = shaded(&mut scene, shader, picture.clone(), w as f32, h as f32);
+        let full = [Rect::new(0., 0., w as f32, h as f32)];
+        // The first frame uploads the picture and compiles the pipeline.
+        let first = std::time::Instant::now();
+        scene.flush();
+        gpu.render(&scene, &full).unwrap();
+        gpu.readback().unwrap();
+        let first = first.elapsed();
+        let read = std::time::Instant::now();
+        gpu.readback().unwrap();
+        let read = read.elapsed();
+        const FRAMES: u32 = 120;
+        let mut cpu = std::time::Duration::ZERO;
+        let all = std::time::Instant::now();
+        for i in 0..FRAMES {
+            let t = i as f32 / (FRAMES - 1) as f32;
+            scene.set_shader_uniforms(
+                id,
+                ShaderUniforms {
+                    time: 0.,
+                    params: [[t, 0., 0., 0.], [1500., 900., 0., 0.], [0.; 4], [0.; 4]],
+                },
+            );
+            let frame = scene.flush();
+            let encode = std::time::Instant::now();
+            gpu.render(&scene, &frame.damage).unwrap();
+            cpu += encode.elapsed();
+        }
+        gpu.readback().unwrap();
+        let all = all.elapsed().saturating_sub(read);
+        eprintln!(
+            "{name}: {:.2} ms a frame all told, {:.3} ms of it encoding on the CPU; first frame (upload, compile) {:.1} ms",
+            all.as_secs_f64() * 1e3 / FRAMES as f64,
+            cpu.as_secs_f64() * 1e3 / FRAMES as f64,
+            first.as_secs_f64() * 1e3,
+        );
+    }
+}

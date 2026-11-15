@@ -148,6 +148,7 @@ const NOT_ELEMENTS: &[&str] = &[
     "save_file",
     "read_file",
     "write_file",
+    "window_snapshot",
 ];
 
 /// Lint every `.luau` script at `paths` (files, or directories searched).

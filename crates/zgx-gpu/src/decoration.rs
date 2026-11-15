@@ -101,7 +101,9 @@ pub fn canvas(style: &QuadStyle, width: f32, height: f32) -> Result<Canvas, GpuE
             .map_err(|e| GpuError(e.into()))?
         }
         // Drawn over the fill by the renderer, not rasterized.
-        Some(Background::Image { .. } | Background::Shader(_)) => Brush::Solid(style.fill),
+        Some(Background::Image { .. } | Background::Shader(_) | Background::ShadedImage { .. }) => {
+            Brush::Solid(style.fill)
+        }
     };
     canvas.fill(outer.clone(), background);
     let borders = detail

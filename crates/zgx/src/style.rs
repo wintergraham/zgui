@@ -1841,6 +1841,22 @@ pub trait Styled: Sized {
             .paint_background = Some(Some(crate::decoration::Background::Shader(shader)));
         self
     }
+    /// Fill the view with a shader that samples `image` (see
+    /// `crate::decoration::Background::ShadedImage`): its WGSL `fill` reads
+    /// the image with `zgx_image(uv)`. Set after `bg`, which clears it.
+    fn bg_shader_image(
+        mut self,
+        shader: std::sync::Arc<crate::decoration::FillShader>,
+        image: std::sync::Arc<crate::image::ImageData>,
+    ) -> Self {
+        self.styles_mut()
+            .fields_mut(bit::PAINT_BACKGROUND)
+            .paint_background = Some(Some(crate::decoration::Background::ShadedImage {
+            shader,
+            image,
+        }));
+        self
+    }
     /// The uniforms its `bg_shader` draws with: time and user parameters.
     /// Animating them per frame repaints the view alone (or set them with
     /// `Scene::set_shader_uniforms` directly, skipping style resolution).

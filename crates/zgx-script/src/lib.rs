@@ -2336,6 +2336,7 @@ impl ScriptHost {
             self.0.picked.clone(),
             may(Capability::Clipboard),
             may(Capability::Files),
+            may(Capability::Web),
         )
         .map_err(fail)?;
         theme::install(&lua, &ui, script.dir()).map_err(fail)?;

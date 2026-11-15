@@ -8,6 +8,9 @@ zgx is on crates.io from 0.1.0 (`zgx = "0.1"`); this lists what changed for apps
 
 - Menu bar: a menu labelled `AppMenu::APPLICATION` ("Application") puts its items at the head of macOS's application menu (About, Check for Updates…, Settings…), above Services, Hide and Quit; elsewhere it is an ordinary menu. An app's own "Window" menu keeps Minimize and Zoom above its items and Bring All to Front below, and an app's "Help" menu is AppKit's help menu, which holds its menu search. `StandardItem::ToggleFullScreen` is AppKit's Enter Full Screen item (⌃⌘F, retitled Exit Full Screen while the window is).
   - *Migrate:* a `match` naming every `StandardItem` adds `ToggleFullScreen`.
+- A window's snapshot: `Platform::window_snapshot` (Luau `ui.window_snapshot()`, a promise of a `Bitmap`) is the window as the user sees it, native views (web pages, video) included. On macOS 14.4 and later it is ScreenCaptureKit's screenshot of the app's own window, which needs no Screen Recording permission (about 40 ms; elsewhere none). A plugin needs `Capability::Web`.
+- Shader fills that sample an image: `Background::ShadedImage { shader, image }` (`Styled::bg_shader_image`; Luau `bg_shader` with `bg_image`, which now also takes a `Bitmap` in a state or function) binds the image's texture to the fill, read with `zgx_image(uv)`: one quad, no layer. A transition drawn over a change (a window's snapshot swept off it) costs one textured pass a frame.
+  - *Migrate:* a `match` naming every `Background` adds `ShadedImage`.
 
 ## 0.1.3 (2026-10-27)
 

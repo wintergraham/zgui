@@ -3754,7 +3754,10 @@ impl GpuRenderer {
                     NodeKind::NativeSurface(frame) => Some(frame.id()),
                     NodeKind::Quad(quad) | NodeKind::Panel { quad, .. } => {
                         match quad.decoration.as_deref()?.background.as_ref()? {
-                            zgx::decoration::Background::Image { image, .. } => Some(image.id()),
+                            zgx::decoration::Background::Image { image, .. }
+                            | zgx::decoration::Background::ShadedImage { image, .. } => {
+                                Some(image.id())
+                            }
                             _ => None,
                         }
                     }
@@ -5524,7 +5527,8 @@ impl GpuRenderer {
                                 None
                                 | Some(
                                     zgx::decoration::Background::Image { .. }
-                                    | zgx::decoration::Background::Shader(_),
+                                    | zgx::decoration::Background::Shader(_)
+                                    | zgx::decoration::Background::ShadedImage { .. },
                                 ) => style.fill,
                                 Some(zgx::decoration::Background::Brush(
                                     zgx::canvas::Brush::Solid(color),
@@ -5571,12 +5575,32 @@ impl GpuRenderer {
                                 quads.push(quad);
                                 canvas_image = Some(image.id());
                             }
-                            if let Some(zgx::decoration::Background::Shader(shader)) = style
+                            // A shader fill, and the image it samples (`zgx_image`) if
+                            // any: bound as the draw's texture, as an image's is.
+                            let shaded = match style
                                 .decoration
                                 .as_deref()
                                 .and_then(|d| d.background.as_ref())
+                            {
+                                Some(zgx::decoration::Background::Shader(shader)) => {
+                                    Some((shader, None))
+                                }
+                                Some(zgx::decoration::Background::ShadedImage {
+                                    shader,
+                                    image,
+                                }) => Some((shader, Some(image))),
+                                _ => None,
+                            };
+                            if let Some((shader, image)) = shaded
                                 && self.prepare_fill(shader)
                             {
+                                if let Some(image) = image {
+                                    if !self.images.contains_key(&image.id()) {
+                                        self.upload_image(image)?;
+                                        stats.image_uploads += 1;
+                                    }
+                                    canvas_image = Some(image.id());
+                                }
                                 let uniforms = Region::uniforms(scene.shader_uniforms(item.id));
                                 let record = region_index(&mut clips, Some(uniforms));
                                 quads.push(Quad {
@@ -9819,7 +9843,13 @@ fn rich_decoration_quad(d: &text::RichDecoration) -> TextQuad {
 /// table, plus one) with `fill`'s colour and the rest as `shade` does.
 pub(crate) fn fill_source(user: &str) -> String {
     format!(
-        "{}\nstruct FillInput {{ p:vec2<f32>, size:vec2<f32>, time:f32, scale:f32, params:array<vec4<f32>,4> }}\n{user}\n{}",
+        "{}\nstruct FillInput {{ p:vec2<f32>, size:vec2<f32>, time:f32, scale:f32, params:array<vec4<f32>,4> }}
+// The node's image (`Background::ShadedImage`), straight alpha, at `uv` (0
+// to 1 across the box). Without one it reads whatever texture the draw has.
+fn zgx_image(uv:vec2<f32>)->vec4<f32> {{
+ let t=textureSampleLevel(atlas,tex_sampler,uv,0.);
+ return select(vec4(0.),vec4(t.rgb/t.a,t.a),t.a>0.);
+}}\n{user}\n{}",
         include_str!("draw.wgsl"),
         "@fragment fn zgx_fill(input:Out)->@location(0) vec4<f32> {
  if input.mask.y<.5 {return shade(input);}

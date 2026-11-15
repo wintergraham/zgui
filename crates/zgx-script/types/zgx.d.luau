@@ -1347,7 +1347,9 @@ export type StyleProps = {
 	bg: Reactive<Color>?,
 	gradient: Reactive<Gradient>?,
 	color: Reactive<Color>?,
-	bg_image: Reactive<string>?,
+	-- A path; or a `Bitmap` (a state or function holding one), which a
+	-- `bg_shader` samples with `zgx_image(uv)` rather than showing it.
+	bg_image: Reactive<string | Bitmap>?,
 	bg_fit: Reactive<Fit>?,
 	rounded: Reactive<Num>?,
 	corners: Reactive<Corners>?,
@@ -16199,6 +16201,12 @@ declare ui: {
 	read_file: (file: File | string) -> Promise<string>,
 	-- Write `text` to a file the user picked (beside it, then over it).
 	write_file: (file: File | string, text: string) -> Promise<nil>,
+	-- The window as the user sees it, native views (web pages) included,
+	-- as a `Bitmap` in device pixels (nil where the platform can't take
+	-- one): a promise, as the window server composites it and its pixels
+	-- are read off the main thread (about 40 ms on macOS). Show it with a
+	-- shader fill (`bg_shader` with `bg_image` a state holding it).
+	window_snapshot: () -> Promise<Bitmap?>,
 	-- What the app was launched with after its script (`zgx-run app/
 	-- notes.txt` gives `{ "notes.txt" }`).
 	args: { string },

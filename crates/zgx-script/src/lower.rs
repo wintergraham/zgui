@@ -2032,15 +2032,19 @@ fn styled(
                     }
                 }
             };
+            // A path, or a bitmap itself (a state holding one).
             let image = bg_image.as_ref().and_then(|(src, fit, low)| {
-                match resolve(src, Ty::Str, None, &vm) {
-                    Some(Lit::Str(path)) => load_image(&vm, low, &path).map(|image| (image, *fit)),
-                    _ => None,
+                match picture_of(src, &vm)? {
+                    Picture::Path(path) => load_image(&vm, low, &path).map(|image| (image, *fit)),
+                    Picture::Image(image) => Some((image, *fit)),
                 }
             });
-            let styles = match image {
-                Some((image, fit)) => styles.bg_image(image, fit),
-                None => styles,
+            // With a shader fill, the image is what the shader samples
+            // (`zgx_image`), not a background of its own.
+            let (styles, image) = match image {
+                Some((image, _)) if shader.is_some() => (styles, Some(image)),
+                Some((image, fit)) => (styles.bg_image(image, fit), None),
+                None => (styles, None),
             };
             let styles = match layer.as_deref() {
                 Some((shader, params)) => {
@@ -2073,7 +2077,11 @@ fn styled(
                                 styles.token(zgx::theme::Field::ShaderParam(slot as u8), *token);
                         }
                     }
-                    styles.bg_shader(fill.clone()).shader_uniforms(uniforms)
+                    match image {
+                        Some(image) => styles.bg_shader_image(fill.clone(), image),
+                        None => styles.bg_shader(fill.clone()),
+                    }
+                    .shader_uniforms(uniforms)
                 }
                 None => match params_only {
                     Some(params) => styles.shader_uniforms(

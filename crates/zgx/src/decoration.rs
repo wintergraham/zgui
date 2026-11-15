@@ -68,6 +68,18 @@ pub enum Background {
     /// corners, under its border and children. Its uniforms are the node's
     /// (`Scene::set_shader_uniforms`).
     Shader(Arc<FillShader>),
+    /// A fragment shader filling the box, as `Shader`, that reads `image`
+    /// too: its source calls `zgx_image(uv)` for the image's straight-alpha
+    /// colour at `uv` (0 to 1 across the box, linearly filtered, clamped at
+    /// the edges), stretched over the box. One quad samples the image's own
+    /// texture: no layer, no raster. A window's snapshot swept off it, a
+    /// photo rippled.
+    ShadedImage {
+        /// The shader.
+        shader: Arc<FillShader>,
+        /// The image it samples.
+        image: Arc<crate::image::ImageData>,
+    },
 }
 /// A fill written as a WGSL function the GPU runs for every pixel of a box:
 ///

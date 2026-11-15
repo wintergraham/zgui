@@ -86,6 +86,14 @@ pub trait Platform {
         let _ = image;
         Box::pin(async { false })
     }
+    /// The window as the user sees it now, native views (web pages, video)
+    /// included: the window server's composite of it, as straight RGBA in
+    /// device pixels covering the content view, read off the UI thread.
+    /// Later: capturing takes tens of milliseconds. For a transition drawn
+    /// over a change (a theme swept off). None takes none.
+    fn window_snapshot(&self) -> Pending<Option<crate::image::ImageData>> {
+        Box::pin(async { None })
+    }
     /// The files the user picks to open: none if they cancel.
     fn open_files(&self, picker: FilePicker) -> Pending<Result<Vec<PathBuf>, String>>;
     /// Where the user chooses to save: none if they cancel.
