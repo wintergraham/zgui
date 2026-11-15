@@ -3812,6 +3812,15 @@ fn code_editor(
             _ => None,
         });
     }
+    if let Some(ms) = &code.caret_glide {
+        let (ms, vm) = (resolve_owned(ms), vm.clone());
+        view = view.caret_glide(move || match resolve(&ms, Ty::Num, None, &vm) {
+            Some(Lit::Num(ms)) if ms > 0. => {
+                Some(std::time::Duration::from_secs_f32(ms.min(2000.) / 1000.))
+            }
+            _ => None,
+        });
+    }
     if let Some(tab) = &code.tab {
         view = view.tab_indent(tab.clone());
     }

@@ -185,6 +185,9 @@ struct CodeHint {
     decorations: RefCell<Vec<(std::ops::Range<usize>, Color)>>,
     /// The colour behind the caret's row (a code editor's current line).
     current_line: Cell<Option<Color>>,
+    /// How long the caret glides to where an edit puts it
+    /// (`EditorHandle::set_caret_glide`); `None` jumps.
+    caret_glide: Cell<Option<std::time::Duration>>,
     /// What Tab inserts (a code editor's indent), instead of moving focus.
     indent: RefCell<Option<std::sync::Arc<str>>>,
     /// A long text's lines (`editor_lines`), made when one first shows, and
@@ -493,6 +496,16 @@ impl EditorHandle {
     /// A colour behind the caret's row (a code editor's current line).
     pub fn set_current_line(&self, color: Option<Color>) {
         if self.hint.code_made().current_line.replace(color) != color {
+            self.refresh();
+        }
+    }
+    /// Glide the caret to where an edit puts it over `duration` (text
+    /// streaming in: dictation) instead of jumping there; along its line,
+    /// or onto another from that line's start. Clicks and keys still put
+    /// it in place at once. `None` (the default) jumps.
+    pub fn set_caret_glide(&self, duration: Option<std::time::Duration>) {
+        let duration = duration.filter(|d| !d.is_zero());
+        if self.hint.code_made().caret_glide.replace(duration) != duration {
             self.refresh();
         }
     }
@@ -1038,6 +1051,8 @@ pub(crate) struct UiStorage {
     caret_width: Rc<Cell<f32>>,
     /// The focused editor's caret blinking (`Ui::set_caret_blink`).
     caret_blink: Rc<crate::caret_blink::Blink>,
+    /// The focused editor's caret gliding (`EditorHandle::set_caret_glide`).
+    caret_glide: Rc<crate::caret_glide::Glide>,
     /// Assistive technology reads the semantics (`Ui::set_assistive_technology`).
     assistive: Signal<bool>,
     /// What the trackpad is doing (`Ui::trackpad`): the runtime's, shared
@@ -1205,6 +1220,7 @@ impl Ui {
             overlay_scrollbars: runtime.signal(false),
             caret_width: Rc::new(Cell::new(1.)),
             caret_blink: Rc::default(),
+            caret_glide: Rc::default(),
             assistive: runtime.signal(true),
             trackpad: crate::input::Trackpad::signal(&runtime),
             popup_screens: runtime.signal(Vec::new()),
@@ -2249,6 +2265,9 @@ impl Ui {
     pub(crate) fn caret_blink(&self) -> &crate::caret_blink::Blink {
         &self.storage.caret_blink
     }
+    pub(crate) fn caret_glide(&self) -> &crate::caret_glide::Glide {
+        &self.storage.caret_glide
+    }
     /// Let anchored popups (popovers, menus, submenus, context menus,
     /// tooltips) show past the window, within `screens`: the visible part of
     /// each screen, in window coordinates. Each flips and clamps to the
@@ -2868,6 +2887,7 @@ impl Ui {
             crate::compose_scrollbar::next_fade(self),
             crate::elastic::next_step(self),
             crate::caret_blink::next(self),
+            crate::caret_glide::next(self),
             crate::find::next_step(self),
         ]
         .into_iter()
@@ -2934,6 +2954,13 @@ impl Ui {
         };
         // The focused editor's caret blinking.
         let keys = if crate::caret_blink::advance(self, now) {
+            self.try_prepare_frame()?;
+            true
+        } else {
+            keys
+        };
+        // The focused editor's caret gliding to where an edit put it.
+        let keys = if crate::caret_glide::advance(self, now) {
             self.try_prepare_frame()?;
             true
         } else {
@@ -3426,6 +3453,10 @@ impl Ui {
         let focus = focused.clone();
         let draw_caret_width = self.storage.caret_width.clone();
         let draw_blink = self.storage.caret_blink.clone();
+        let draw_glide = self.storage.caret_glide.clone();
+        // The text's revision the caret was last drawn for: a new one is an
+        // edit, which may glide it (`EditorHandle::set_caret_glide`).
+        let draw_glide_revision: Cell<Option<u64>> = Cell::new(None);
         let scroll_for_draw = scroll.clone();
         let reveal_caret = Rc::new(Cell::new(true));
         let draw_reveal_caret = reveal_caret.clone();
@@ -3864,17 +3895,28 @@ impl Ui {
                 }
                 drop(pool);
             }
-            s.set_transform(
-                caret,
-                Transform {
-                    x: if draw_wrap.get() {
-                        cx.min((inner_width - caret_width).max(0.))
-                    } else {
-                        cx - scroll.0
-                    },
-                    y: cy - scroll.1,
+            let caret_at = (
+                if draw_wrap.get() {
+                    cx.min((inner_width - caret_width).max(0.))
+                } else {
+                    cx - scroll.0
                 },
+                cy - scroll.1,
             );
+            let edited = draw_glide_revision.replace(Some(e.revision())) != Some(e.revision());
+            let glide = draw_hint
+                .code()
+                .and_then(|code| code.caret_glide.get())
+                .filter(|_| *focus.borrow() && e.preedit().is_none());
+            let (x, y) = draw_glide.place(
+                caret,
+                caret_at,
+                glide,
+                edited,
+                (inner_width - caret_width).max(0.),
+                Instant::now(),
+            );
+            s.set_transform(caret, Transform { x, y });
             let mut effects = s.effects(caret);
             // Read-only text shows a selection but no caret.
             let caret_shown = *focus.borrow()

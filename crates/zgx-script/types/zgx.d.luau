@@ -5664,6 +5664,10 @@ export type InputProps = {
 	}?,
 	-- Several lines only: the colour behind the caret's row.
 	current_line: Reactive<Color>?,
+	-- Milliseconds the caret glides to where an edit puts it (text streaming
+	-- in) instead of jumping: along its line, or onto another from that
+	-- line's start. Clicks and keys still place it at once. 0 or nil jumps.
+	caret_glide: Reactive<number>?,
 	-- Several lines only: what Tab inserts (`"    "`), instead of moving
 	-- focus; with lines selected it indents each, Shift+Tab outdents.
 	tab: string?,

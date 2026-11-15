@@ -1113,6 +1113,9 @@ pub(crate) struct CodeProps {
     pub decorations: Option<Readable>,
     /// `current_line`: the colour behind the caret's row.
     pub current_line: Option<Source>,
+    /// `caret_glide`: milliseconds the caret glides to where an edit puts
+    /// it (0 or nil: it jumps).
+    pub caret_glide: Option<Source>,
     /// `tab`: what Tab inserts (`"    "`), indenting selected lines.
     pub tab: Option<String>,
     /// `on_caret = function(line, column, anchor, focus)`: where the caret
@@ -2173,6 +2176,7 @@ const WIDGET_FIELDS: &[&str] = &[
     "decorations",
     "find",
     "current_line",
+    "caret_glide",
     "tab",
     "on_caret",
     "on_history",
@@ -3497,6 +3501,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
                             })?)),
                         };
                         let current_line = optional("current_line", Ty::Color)?;
+                        let caret_glide = optional("caret_glide", Ty::Num)?;
                         let tab = table.get::<Option<String>>("tab")?;
                         let on_caret = table.get::<Option<Function>>("on_caret")?;
                         let on_history = table.get::<Option<Function>>("on_history")?;
@@ -3526,6 +3531,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
                         (highlight.is_some()
                             || decorations.is_some()
                             || current_line.is_some()
+                            || caret_glide.is_some()
                             || tab.is_some()
                             || on_caret.is_some()
                             || on_history.is_some()
@@ -3535,6 +3541,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
                                 highlight,
                                 decorations,
                                 current_line,
+                                caret_glide,
                                 tab,
                                 on_caret,
                                 on_history,

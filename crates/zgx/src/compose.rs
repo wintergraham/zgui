@@ -342,6 +342,7 @@ pub(crate) struct CodeOptions {
     highlighter: Option<crate::widgets::Highlighter>,
     decorations: Option<Box<dyn FnMut() -> Decorations>>,
     current_line: Option<Box<dyn FnMut() -> Option<crate::scene::Color>>>,
+    caret_glide: Option<Box<dyn FnMut() -> Option<std::time::Duration>>>,
     indent: Option<String>,
     on_caret: Option<Box<dyn FnMut(crate::widgets::Caret)>>,
     on_history: Option<Box<dyn FnMut(u64, crate::widgets::HistoryDirection)>>,
@@ -1222,6 +1223,16 @@ impl View {
         color: impl FnMut() -> Option<crate::scene::Color> + 'static,
     ) -> Self {
         self.code_mut().current_line = Some(Box::new(color));
+        self
+    }
+    /// How long a text area's caret glides to where an edit puts it (text
+    /// streaming in), kept current as what `duration` reads changes; `None`
+    /// jumps (see `EditorHandle::set_caret_glide`).
+    pub fn caret_glide(
+        mut self,
+        duration: impl FnMut() -> Option<std::time::Duration> + 'static,
+    ) -> Self {
+        self.code_mut().caret_glide = Some(Box::new(duration));
         self
     }
     /// What Tab inserts in a text area (`"    "`, `"\t"`) instead of moving
@@ -3402,7 +3413,7 @@ fn open_element(
     );
     assert!(
         rare.as_deref().is_none_or(|r| r.code.is_none()) || is_editor,
-        "highlighter, decorations, current_line and tab_indent are only supported on editor views"
+        "highlighter, decorations, current_line, caret_glide and tab_indent are only supported on editor views"
     );
     if is_editor {
         assert!(
@@ -4301,6 +4312,7 @@ fn open_element(
                 highlighter,
                 decorations,
                 current_line,
+                caret_glide,
                 indent,
                 on_caret,
                 on_history,
@@ -4333,6 +4345,10 @@ fn open_element(
             if let Some(mut color) = current_line {
                 let editor = editor.clone();
                 ui.bind(root, move || editor.set_current_line(color()));
+            }
+            if let Some(mut duration) = caret_glide {
+                let editor = editor.clone();
+                ui.bind(root, move || editor.set_caret_glide(duration()));
             }
         }
         let (mut text, mut color) = (
