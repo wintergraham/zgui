@@ -15,6 +15,24 @@ pub(crate) fn shrink(
     let factor = width.div_ceil(max_width.max(1)).max(1);
     let (w, h) = ((width / factor).max(1), (height / factor).max(1));
     let mut out = vec![0u8; w * h * 4];
+    if factor == 1 {
+        // At its own size (a window's snapshot): each pixel converted alone, opaque ones without dividing.
+        for y in 0..h {
+            let row = &bytes[y * stride..][..w * 4];
+            for (px, at) in row.as_chunks::<4>().0.iter().zip(out[y * w * 4..][..w * 4].as_chunks_mut::<4>().0) {
+                let [b, g, r, a] = *px;
+                *at = match a {
+                    255 => [r, g, b, 255],
+                    0 => [0; 4],
+                    _ => {
+                        let straight = |c: u8| ((u32::from(c) * 255) / u32::from(a)).min(255) as u8;
+                        [straight(r), straight(g), straight(b), a]
+                    }
+                };
+            }
+        }
+        return (w, h, out);
+    }
     for y in 0..h {
         for x in 0..w {
             let mut sum = [0u32; 4];

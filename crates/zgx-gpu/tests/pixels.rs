@@ -791,18 +791,20 @@ fn images_over_the_byte_budget_fail_only_the_frame() {
         fixed(8., 8.),
     );
     let large = || {
-        let pixels = [255, 0, 0, 255].repeat(4096 * 2100);
+        let pixels = [255, 0, 0, 255].repeat(4096 * 4096);
         NodeKind::Image(std::sync::Arc::new(
-            zgx::image::ImageData::new(4096, 2100, pixels).unwrap(),
+            zgx::image::ImageData::new(4096, 4096, pixels).unwrap(),
         ))
     };
-    let (_first, second) = (
+    // 64 MiB each: two fit the budget, three don't.
+    let (_first, _second, third) = (
+        scene.append(stack, large(), fixed(8., 8.)),
         scene.append(stack, large(), fixed(8., 8.)),
         scene.append(stack, large(), fixed(8., 8.)),
     );
     let d = scene.flush().damage;
     assert!(gpu.render(&scene, &d).unwrap_err().is_over_texture_budget());
-    scene.remove(second);
+    scene.remove(third);
     scene.flush();
     // As the app does after a failed frame: the whole window, not just what changed.
     gpu.render(&scene, &[scene.bounds(scene.root())]).unwrap();

@@ -5809,10 +5809,10 @@ impl GpuRenderer {
                                 6
                             };
                         if bytes + self.images.values().map(|e| e.1).sum::<usize>()
-                            > 64 * 1024 * 1024
+                            > IMAGE_BUDGET
                         {
                             return Err(GpuError::over_texture_budget(
-                                "visible image and native surface textures exceed 64 MiB",
+                                "visible image and native surface textures exceed 160 MiB",
                             ));
                         }
                         if self.native_surfaces.is_none() {
@@ -8249,9 +8249,9 @@ impl GpuRenderer {
     }
     fn upload_image(&mut self, image: &zgx::image::ImageData) -> Result<(), GpuError> {
         let bytes = image.pixels().len();
-        if bytes + self.images.values().map(|entry| entry.1).sum::<usize>() > 64 * 1024 * 1024 {
+        if bytes + self.images.values().map(|entry| entry.1).sum::<usize>() > IMAGE_BUDGET {
             return Err(GpuError::over_texture_budget(
-                "visible image textures exceed the 64 MiB budget",
+                "visible image textures exceed the 160 MiB budget",
             ));
         }
         if self.images.len() >= MAX_IMAGES {
@@ -8273,6 +8273,10 @@ impl GpuRenderer {
         );
         let mut pixels = image.pixels().to_vec();
         for pixel in pixels.as_chunks_mut::<4>().0 {
+            // Opaque pixels (most of a window's snapshot) are as they are.
+            if pixel[3] == 255 {
+                continue;
+            }
             let alpha = u16::from(pixel[3]);
             for channel in &mut pixel[..3] {
                 *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
@@ -9551,6 +9555,12 @@ impl GpuRenderer {
         Ok(pixels)
     }
 }
+/// The most bytes of image textures (and native surfaces) one frame may
+/// show. A window's own snapshot swept off it over a capture of its page
+/// is two window-sized pictures: on a 5K display's large window, about
+/// 46 MB and 34 MB, which with the window's other images passed 64 MiB and
+/// failed every frame of the sweep. Only what shows is kept.
+const IMAGE_BUDGET: usize = 160 * 1024 * 1024;
 /// A frame a window showed (`GpuRenderer::shown_frame`), its pixels
 /// readable while it is held.
 #[cfg(target_os = "macos")]
