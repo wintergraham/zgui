@@ -352,7 +352,20 @@ pub(crate) struct Vm {
     pub(crate) locate: Rc<Cell<bool>>,
     /// The host's live lint mode, warnings and script call count.
     pub(crate) warnings: SharedWarnings,
+    /// What the running call spent on state writes that stay on its clock
+    /// (a batch's or a flush's), for the budget error to say.
+    stats: Cell<CallStats>,
 }
+/// State writes on one call's clock: in a batch or a flush they run no
+/// updates, so they stay on the script's budget, and a long list written
+/// record by record can spend most of it.
+#[derive(Clone, Copy, Default)]
+struct CallStats {
+    writes: u32,
+    write_time: Duration,
+}
+/// The time budget's error, as the interrupt raises it.
+const OUT_OF_TIME: &str = "script exceeded its time budget";
 impl Vm {
     /// Runs `f` with its own budget. A nested call (a component built
     /// while a handler runs) stops the outer call's clock meanwhile.
@@ -369,6 +382,7 @@ impl Vm {
             Some(_) => Deadline::start(budget),
         };
         let outer = self.deadline.replace(Some(started));
+        let outer_stats = self.stats.replace(CallStats::default());
         // The watchdog hears of outermost calls alone: nested calls (and
         // work off the clock) only move the budget's end later, and an
         // interrupt set early just checks it sooner.
@@ -381,9 +395,38 @@ impl Vm {
         let _end = CallEnd {
             vm: self,
             outer,
+            outer_stats,
             started,
         };
-        f()
+        match f() {
+            Err(error) => Err(self.explain_budget(error, budget)),
+            ok => ok,
+        }
+    }
+    /// The budget's error with what this call's time went on, said once (by
+    /// the call that ran out; the calls around it pass it on as it is): the
+    /// traceback shows where the clock stopped, not what spent it.
+    fn explain_budget(&self, error: mlua::Error, budget: Duration) -> mlua::Error {
+        let text = error.to_string();
+        if !text.contains(OUT_OF_TIME) || text.contains(&format!("{OUT_OF_TIME} (")) {
+            return error;
+        }
+        let stats = self.stats.get();
+        let spent = if stats.writes == 0 {
+            "all of it in the script itself".to_owned()
+        } else {
+            format!(
+                "{} state writes in a batch or flush took {} ms of it",
+                stats.writes,
+                stats.write_time.as_millis()
+            )
+        };
+        let detail = format!(
+            "{OUT_OF_TIME} ({} ms in one call; {spent})",
+            budget.as_millis()
+        );
+        let text = text.strip_prefix("runtime error: ").unwrap_or(&text);
+        mlua::Error::RuntimeError(text.replacen(OUT_OF_TIME, &detail, 1))
     }
     /// Runs Rust work a script asked for (a state write and the interface
     /// it rebuilds) off the script's clock: the budget stops runaway
@@ -402,7 +445,14 @@ impl Vm {
     /// which costs more than the write) is not read.
     pub(crate) fn write_off_clock<R>(&self, write: impl FnOnce() -> R) -> R {
         if self.runtime.deferring() {
-            return write();
+            // Wall time: the CPU clock costs more than the write.
+            let started = Instant::now();
+            let result = write();
+            let mut stats = self.stats.get();
+            stats.writes += 1;
+            stats.write_time += started.elapsed();
+            self.stats.set(stats);
+            return result;
         }
         self.off_clock(write)
     }
@@ -425,6 +475,7 @@ impl Vm {
 struct CallEnd<'a> {
     vm: &'a Vm,
     outer: Option<Deadline>,
+    outer_stats: CallStats,
     started: Deadline,
 }
 impl Drop for CallEnd<'_> {
@@ -433,6 +484,7 @@ impl Drop for CallEnd<'_> {
         self.vm
             .deadline
             .set(self.outer.map(|d| d.shifted(&self.started)));
+        self.vm.stats.set(self.outer_stats);
         if self.outer.is_none() {
             self.vm.interrupt.publish(None);
         }
@@ -2284,6 +2336,7 @@ impl ScriptHost {
             layout_ids: Default::default(),
             locate: self.0.locate.clone(),
             warnings: self.0.warnings.clone(),
+            stats: Cell::default(),
         });
         let store = self
             .0
@@ -2451,6 +2504,7 @@ mod tests {
             layout_ids: Default::default(),
             locate: Rc::default(),
             warnings: Rc::default(),
+            stats: Cell::default(),
         };
         let host = vm
             .lua
@@ -2465,5 +2519,36 @@ mod tests {
             assert!(vm.deadline.get().is_none(), "no call left running");
             assert_eq!(vm.interrupt.state(), (false, false));
         }
+    }
+
+    /// A call out of time says its budget and what spent it, once, though the
+    /// error passes out through the calls around it.
+    #[test]
+    fn running_out_of_time_says_what_the_time_went_on() {
+        let runtime = Runtime::new();
+        let lua = Lua::new();
+        let deadline: Rc<Cell<Option<Deadline>>> = Rc::default();
+        let vm = Vm {
+            name: "loops".into(),
+            interrupt: interrupt::install(&lua, deadline.clone(), 0),
+            lua,
+            base: None,
+            deadline,
+            budget: Duration::from_millis(20),
+            runtime: runtime.clone(),
+            errors: runtime.signal(None),
+            layout_ids: Default::default(),
+            locate: Rc::default(),
+            warnings: Rc::default(),
+            stats: Cell::default(),
+        };
+        let looping = || vm.guard(vm.budget, || vm.lua.load("while true do end").exec());
+        let error = vm.guard(vm.budget, looping).unwrap_err().to_string();
+        assert!(
+            error.contains("script exceeded its time budget (20 ms in one call; all of it in the script itself)"),
+            "{error}"
+        );
+        assert_eq!(error.matches("ms in one call").count(), 1, "{error}");
+        assert!(vm.deadline.get().is_none(), "no call left running");
     }
 }
