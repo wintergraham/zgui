@@ -2839,7 +2839,15 @@ impl Ui {
                 }
                 let trackpad = &self.storage.trackpad;
                 let now = trackpad.with_untracked(|now| *now);
-                trackpad.set(crate::input::Trackpad::after(now, phase));
+                let next = crate::input::Trackpad::after(now, phase);
+                trackpad.set(next);
+                // While it scrolls, rows sliding under the resting pointer
+                // aren't hovered; once it ends, what rests there is.
+                if next.is_some() {
+                    self.input.freeze_hover();
+                } else {
+                    self.input.thaw_hover(&self.scene);
+                }
                 return Default::default();
             }
             event @ InputEvent::Scroll { .. } if elastic && !crate::zoom::wheel_zooms() => {

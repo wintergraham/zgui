@@ -715,6 +715,10 @@ struct State {
     /// The hovered node (the pointer's hit target) and its ancestors, up to
     /// the active modal root: each has had its enter, none its leave yet.
     hover: Vec<NodeId>,
+    /// A trackpad gesture is scrolling (`freeze_hover`): content sliding
+    /// under the resting pointer isn't hovered. `Some(true)` once what
+    /// was hovered has been let go.
+    hover_frozen: Option<bool>,
     /// Where the pointer last was over the window (None: outside it).
     pointer: Option<(f32, f32)>,
     file_hovered: Option<NodeId>,
@@ -1337,8 +1341,41 @@ impl InputDispatcher {
         let Some((x, y)) = pointer else {
             return;
         };
+        // Scrolling, what slides under the pointer isn't hovered (as
+        // browsers leave it while a page scrolls): a list moving under a
+        // resting pointer would light, then unlight, every row it passes,
+        // each a change to its look (and its layout) on every frame of the
+        // scroll. What was hovered is let go once it moves away; nothing is
+        // hovered again until the gesture ends (`thaw_hover`) or the
+        // pointer moves.
+        let frozen = self.state.borrow().hover_frozen;
+        match frozen {
+            Some(true) => return,
+            Some(false) => {
+                let hit = self.hit_target(&scene.borrow(), x, y);
+                if self.state.borrow().hover.first().copied() != hit {
+                    self.state.borrow_mut().hover_frozen = Some(true);
+                    self.set_hover(scene, None);
+                }
+                return;
+            }
+            None => {}
+        }
         let hit = self.hit_target(&scene.borrow(), x, y);
         self.set_hover(scene, hit);
+    }
+    /// A trackpad gesture began scrolling (its fingers, or its momentum):
+    /// until `thaw_hover`, layout moving under the resting pointer leaves
+    /// hover be (see `refresh_hover`).
+    pub(crate) fn freeze_hover(&self) {
+        let mut state = self.state.borrow_mut();
+        state.hover_frozen.get_or_insert(false);
+    }
+    /// The gesture ended: hover what rests under the pointer now.
+    pub(crate) fn thaw_hover(&self, scene: &Rc<RefCell<Scene>>) {
+        if self.state.borrow_mut().hover_frozen.take().is_some() {
+            self.refresh_hover(scene);
+        }
     }
     /// Move hover to `hit` and its ancestors, as the DOM's `mouseenter` and
     /// `mouseleave` do: a node hears `PointerLeave` once the pointer is
