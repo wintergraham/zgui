@@ -753,6 +753,24 @@ fn layer_texture_budget_fails_before_allocation_and_recovers_after_removal() {
 }
 
 #[test]
+fn layer_longer_than_a_texture_renders_coarser() {
+    let _gpu_fixture = gpu_fixture();
+    let mut gpu = GpuRenderer::new(8, 8).unwrap();
+    let mut scene = Scene::new(8., 8.);
+    let strip = scene.append(
+        scene.root(),
+        NodeKind::Container(Layout::Overlay),
+        Style {
+            flex_shrink: 0.,
+            ..fixed(8., 40_000.)
+        },
+    );
+    scene.set_isolated(strip, true);
+    let d = scene.flush().damage;
+    gpu.render(&scene, &d).unwrap();
+}
+
+#[test]
 fn image_count_budget_fails_the_frame_and_recovers_after_removal() {
     let _gpu_fixture = gpu_fixture();
     let mut gpu = GpuRenderer::new(8, 8).unwrap();

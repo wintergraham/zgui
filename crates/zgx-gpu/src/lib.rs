@@ -3818,15 +3818,18 @@ impl GpuRenderer {
         let content = scene.layer_bounds(id);
         let limit = self.device.limits().max_texture_dimension_2d;
         // Magnified past what the texture limits or the budget allow, a
-        // layer renders at the finest scale that fits.
+        // layer renders at the finest scale that fits. One longer than a
+        // texture at the device's scale (a strip of thousands of rows, say)
+        // renders coarser instead of failing every frame.
         let pixels = |step: i32| {
             let scale = self.scale * step_scale(step);
             (content.width + 2. / scale) * scale * (content.height + 2. / scale) * scale
         };
-        while step > 0
-            && ((content.width.max(content.height) + 2.) * self.scale * step_scale(step)
-                > limit as f32
-                || pixels(step) * 4. > 16. * 1024. * 1024.)
+        let too_long = |step: i32| {
+            (content.width.max(content.height) + 2.) * self.scale * step_scale(step) > limit as f32
+        };
+        while (step > 0 && (too_long(step) || pixels(step) * 4. > 16. * 1024. * 1024.))
+            || (step > -32 && too_long(step))
         {
             step -= 1;
         }
@@ -3893,8 +3896,8 @@ impl GpuRenderer {
             ));
         }
         if width > limit || height > limit {
-            return Err(GpuError(
-                "isolated layer exceeds GPU texture dimensions".into(),
+            return Err(GpuError::over_texture_budget(
+                "isolated layer exceeds GPU texture dimensions",
             ));
         }
         // Animated layers change size every frame: round allocations up and
