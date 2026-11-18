@@ -4995,6 +4995,7 @@ fn lower_rich(spans: &[Span], vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
         padding: [f32; 2],
         radius: f32,
         underline_offset: Option<f32>,
+        underline_color: Option<zgx::theme::Themed<Color>>,
         hover: Option<(bool, Option<zgx::theme::Themed<Color>>)>,
     }
     let owned: Vec<Owned> = spans
@@ -5027,6 +5028,7 @@ fn lower_rich(spans: &[Span], vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
                 padding: s.padding,
                 radius: s.radius,
                 underline_offset: s.underline_offset,
+                underline_color: s.underline_color,
                 hover: s.hover,
             },
             click: s.click.clone(),
@@ -5053,6 +5055,7 @@ fn lower_rich(spans: &[Span], vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
                     padding,
                     radius,
                     underline_offset,
+                    underline_color,
                     hover,
                 } = span.style;
                 let decoration = || {
@@ -5096,6 +5099,9 @@ fn lower_rich(spans: &[Span], vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
                 }
                 if active {
                     out = out.active(true);
+                }
+                if let Some(c) = underline_color {
+                    out = out.underline_color(c);
                 }
                 if mono {
                     out = out.font_family(FontFamily::Monospace);

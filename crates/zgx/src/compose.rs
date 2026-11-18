@@ -3990,6 +3990,13 @@ fn open_element(
                     crate::theme::resolve(&mut span.styles, &theme);
                     span.background = span.background.or(span.styles.background);
                 }
+                if let (Some(color), Some(line)) = (span.underline_color, span.underline) {
+                    let color = match color {
+                        crate::theme::Themed::Value(color) => color,
+                        crate::theme::Themed::Token(id) => theme.color(crate::theme::ColorToken(id)),
+                    };
+                    span.underline = Some(line.color(color));
+                }
                 // An icon keeps its room before the text: a padded
                 // placeholder run of its own.
                 let icon_at = span.icon.is_some().then(|| {

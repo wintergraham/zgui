@@ -3551,6 +3551,9 @@ export type SpanProps = {
 	-- How far below the baseline the underline sits (CSS's
 	-- `text-underline-offset`).
 	underline_offset: number?,
+	-- The underline's colour, when not the text's (CSS's
+	-- `text-decoration-color`).
+	underline_color: Color?,
 	strike: boolean?,
 	font: "mono"?,
 	-- A link shown as chosen (the menu it opens is open): the rounded fill

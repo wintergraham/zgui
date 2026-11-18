@@ -80,6 +80,7 @@ pub struct TextSpan {
     pub(crate) hover: Option<SpanHover>,
     pub(crate) icon: Option<SpanIcon>,
     pub(crate) active: bool,
+    pub(crate) underline_color: Option<crate::theme::Themed<Color>>,
 }
 /// How a link span looks under the pointer (`TextSpan::hover`): CSS's
 /// `a:hover { text-decoration: underline }`.
@@ -105,6 +106,7 @@ pub fn text_span(text: impl Into<Arc<str>>) -> TextSpan {
         hover: None,
         icon: None,
         active: false,
+        underline_color: None,
     }
 }
 impl TextSpan {
@@ -127,6 +129,13 @@ impl TextSpan {
     /// the text: an inline code chip.
     pub fn padding(mut self, x: f32, y: f32) -> Self {
         self.padding = [x.max(0.), y.max(0.)];
+        self
+    }
+    /// Its underline in `color` rather than the text's (CSS
+    /// `text-decoration-color`): a line under clear text, laid over words
+    /// drawn elsewhere, marks them without drawing them twice.
+    pub fn underline_color(mut self, color: impl Into<crate::theme::Themed<Color>>) -> Self {
+        self.underline_color = Some(color.into());
         self
     }
     /// A link shown as chosen (the menu it opens is open, say): the

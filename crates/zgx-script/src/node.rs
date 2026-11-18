@@ -1062,6 +1062,8 @@ pub(crate) struct Span {
     pub href: Option<std::sync::Arc<str>>,
     /// How far below the baseline its underline sits.
     pub underline_offset: Option<f32>,
+    /// Its underline's colour, when not the text's.
+    pub underline_color: Option<Themed<Color>>,
     /// A link's look under the pointer: underlined, and its colour.
     pub hover: Option<(bool, Option<Themed<Color>>)>,
     /// An icon before the text, in the line.
@@ -3104,6 +3106,7 @@ fn span(lua: &Lua, arg: mlua::Value, literal: bool) -> mlua::Result<Span> {
         click: None,
         href: None,
         underline_offset: None,
+        underline_color: None,
         hover: None,
         icon: None,
     };
@@ -3135,6 +3138,7 @@ fn span(lua: &Lua, arg: mlua::Value, literal: bool) -> mlua::Result<Span> {
         };
         span.radius = value("radius")?.as_f64().unwrap_or(0.) as f32;
         span.underline_offset = value("underline_offset")?.as_f64().map(|v| v as f32);
+        span.underline_color = themed_color(&value("underline_color")?);
         // `hover = { underline = true, color = … }`: a link's look under
         // the pointer (CSS's `a:hover`).
         if let Some(hover) = t.get::<Option<Table>>("hover")? {
