@@ -1047,8 +1047,12 @@ pub(crate) struct Span {
     pub weight: Option<u16>,
     pub italic: bool,
     pub underline: bool,
+    /// Its underline (and strikethrough) as dashes: `underline = "dashed"`.
+    pub dashed: bool,
     pub strike: bool,
     pub mono: bool,
+    /// A link shown as chosen (`active = true`): its rounded fill, kept.
+    pub active: bool,
     /// Room around it (across, down) and its background's corners: an
     /// inline code chip.
     pub padding: [f32; 2],
@@ -3091,8 +3095,10 @@ fn span(lua: &Lua, arg: mlua::Value, literal: bool) -> mlua::Result<Span> {
         weight: None,
         italic: false,
         underline: false,
+        dashed: false,
         strike: false,
         mono: false,
+        active: false,
         padding: [0.; 2],
         radius: 0.,
         click: None,
@@ -3111,8 +3117,12 @@ fn span(lua: &Lua, arg: mlua::Value, literal: bool) -> mlua::Result<Span> {
             .map(|v| v as u16)
             .or(value("bold")?.truthy().then_some(700));
         span.italic = value("italic")?.truthy();
-        span.underline = value("underline")?.truthy();
+        // `underline = "dashed"`: underlined, in dashes.
+        let underline = value("underline")?;
+        span.dashed = matches!(&underline, Value::Str(s) if &**s == "dashed");
+        span.underline = underline.truthy();
         span.strike = value("strike")?.truthy();
+        span.active = value("active")?.truthy();
         span.mono = matches!(&value("font")?, Value::Str(f) if &**f == "mono");
         // `padding = 4` (across) or `{ 4, 0.5 }` (across, down).
         span.padding = match value("padding")? {

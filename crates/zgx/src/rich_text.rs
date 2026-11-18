@@ -55,6 +55,8 @@ pub struct Decoration {
     /// How far below the baseline it sits (CSS `text-underline-offset`);
     /// None, a tenth of the font size.
     offset: Option<f32>,
+    /// Drawn as dashes (CSS `text-decoration-style: dashed`).
+    dashed: bool,
 }
 impl Decoration {
     /// A decoration `thickness` logical pixels thick (1 unless that is
@@ -68,7 +70,19 @@ impl Decoration {
                 1.
             },
             offset: None,
+            dashed: false,
         }
+    }
+    /// Drawn as dashes rather than a solid line (CSS
+    /// `text-decoration-style: dashed`): each three times its thickness long,
+    /// two thicknesses apart.
+    pub fn dashed(mut self) -> Self {
+        self.dashed = true;
+        self
+    }
+    /// Whether it is drawn as dashes (`dashed`).
+    pub fn is_dashed(self) -> bool {
+        self.dashed
     }
     /// Below the baseline by `px` (an underline's; CSS `text-underline-offset`).
     pub fn offset(mut self, px: f32) -> Self {
@@ -212,10 +226,10 @@ impl RichText {
         self.same_metrics(other)
             && self.runs.iter().zip(other.runs.iter()).all(|(a, b)| {
                 a.background.is_some() == b.background.is_some()
-                    && a.underline.map(|d| (d.thickness(), d.offset))
-                        == b.underline.map(|d| (d.thickness(), d.offset))
-                    && a.strikethrough.map(|d| d.thickness())
-                        == b.strikethrough.map(|d| d.thickness())
+                    && a.underline.map(|d| (d.thickness(), d.offset, d.dashed))
+                        == b.underline.map(|d| (d.thickness(), d.offset, d.dashed))
+                    && a.strikethrough.map(|d| (d.thickness(), d.dashed))
+                        == b.strikethrough.map(|d| (d.thickness(), d.dashed))
             })
     }
     pub(crate) fn same_metrics(&self, other: &Self) -> bool {

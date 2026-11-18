@@ -4005,6 +4005,7 @@ fn open_element(
                         action: span.action,
                         href: span.href,
                         styled_hover: span.hover.is_some(),
+                        active: span.active,
                     });
                 }
                 let mut font = base.font_in(Some(&theme));

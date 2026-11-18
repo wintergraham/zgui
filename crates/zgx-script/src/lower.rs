@@ -4988,8 +4988,10 @@ fn lower_rich(spans: &[Span], vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
         weight: Option<u16>,
         italic: bool,
         underline: bool,
+        dashed: bool,
         strike: bool,
         mono: bool,
+        active: bool,
         padding: [f32; 2],
         radius: f32,
         underline_offset: Option<f32>,
@@ -5018,8 +5020,10 @@ fn lower_rich(spans: &[Span], vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
                 weight: s.weight,
                 italic: s.italic,
                 underline: s.underline,
+                dashed: s.dashed,
                 strike: s.strike,
                 mono: s.mono,
+                active: s.active,
                 padding: s.padding,
                 radius: s.radius,
                 underline_offset: s.underline_offset,
@@ -5042,15 +5046,20 @@ fn lower_rich(spans: &[Span], vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
                     weight,
                     italic,
                     underline,
+                    dashed,
                     strike,
                     mono,
+                    active,
                     padding,
                     radius,
                     underline_offset,
                     hover,
                 } = span.style;
                 let decoration = || {
-                    let d = zgx::rich_text::Decoration::default();
+                    let mut d = zgx::rich_text::Decoration::default();
+                    if dashed {
+                        d = d.dashed();
+                    }
                     match underline_offset {
                         Some(offset) => d.offset(offset),
                         None => d,
@@ -5082,7 +5091,11 @@ fn lower_rich(spans: &[Span], vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
                     });
                 }
                 if strike {
-                    out = out.strikethrough(Default::default());
+                    let d = zgx::rich_text::Decoration::default();
+                    out = out.strikethrough(if dashed { d.dashed() } else { d });
+                }
+                if active {
+                    out = out.active(true);
                 }
                 if mono {
                     out = out.font_family(FontFamily::Monospace);
@@ -5095,9 +5108,20 @@ fn lower_rich(spans: &[Span], vm: &Rc<Vm>, low: &Rc<Lowering>) -> View {
                 }
                 if let Some(handler) = &span.click {
                     let (handler, vm, actions) = (handler.clone(), vm.clone(), actions.clone());
-                    // Told the keys held, as an element's `on_click` is.
-                    out = out.on_click_with(move |held| {
+                    // Told the keys held, as an element's `on_click` is, and
+                    // where its words are (`at`, `{ x, y, w, h }` in the
+                    // window): a menu opens under them.
+                    out = out.on_click_at(move |held, at| {
                         let keys = modifiers_table(&vm.lua, held).ok();
+                        if let Some(keys) = &keys
+                            && let Ok(place) = vm.lua.create_table()
+                        {
+                            let _ = place.set("x", at.x);
+                            let _ = place.set("y", at.y);
+                            let _ = place.set("w", at.width);
+                            let _ = place.set("h", at.height);
+                            let _ = keys.set("at", place);
+                        }
                         run(&handler, &vm, &actions, keys);
                     });
                 }

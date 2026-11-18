@@ -3546,12 +3546,16 @@ export type SpanProps = {
 	weight: number?,
 	bold: boolean?,
 	italic: boolean?,
-	underline: boolean?,
+	-- `"dashed"`: underlined in dashes (and a strikethrough too).
+	underline: (boolean | "dashed")?,
 	-- How far below the baseline the underline sits (CSS's
 	-- `text-underline-offset`).
 	underline_offset: number?,
 	strike: boolean?,
 	font: "mono"?,
+	-- A link shown as chosen (the menu it opens is open): the rounded fill
+	-- it has under the pointer, deeper, kept there.
+	active: boolean?,
 	-- A link (`on_click`) under the pointer: underlined, recoloured. With
 	-- it, the link isn't underlined at rest unless `underline` says so.
 	hover: { underline: boolean?, color: Color? }?,

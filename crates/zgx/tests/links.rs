@@ -231,7 +231,7 @@ fn only_web_and_mail_links_open_through_the_system() {
 }
 
 #[test]
-fn a_links_focus_ring_shows_from_the_keyboard_not_a_click() {
+fn a_links_focus_fill_shows_from_the_keyboard_not_a_click() {
     let mut ui = Ui::new(300., 100.);
     ui.mount(
         rich_text()
@@ -243,8 +243,13 @@ fn a_links_focus_ring_shows_from_the_keyboard_not_a_click() {
     );
     ui.prepare_frame();
     let links = links(&ui);
-    let ring = |ui: &Ui, link: NodeId| match ui.scene.borrow().kind(link) {
-        zgx::scene::NodeKind::Panel { quad, .. } => quad.border_width,
+    // A rounded fill, never an outline.
+    let lit = |ui: &Ui, link: NodeId| match ui.scene.borrow().kind(link) {
+        zgx::scene::NodeKind::Panel { quad, .. } => {
+            assert_eq!(quad.border_width, 0., "no outline");
+            assert!(quad.radius > 0., "rounded");
+            quad.fill.3 > 0
+        }
         other => panic!("a link's box, not {other:?}"),
     };
     click(
@@ -256,7 +261,7 @@ fn a_links_focus_ring_shows_from_the_keyboard_not_a_click() {
     ui.dispatch(InputEvent::PointerMove { x: 290., y: 90. });
     ui.prepare_frame();
     assert_eq!(ui.input.focused(), Some(links[0]));
-    assert_eq!(ring(&ui, links[0]), 0., "clicked: focused, no ring");
+    assert!(!lit(&ui, links[0]), "clicked: focused, no fill");
     ui.dispatch(InputEvent::KeyDown {
         key: Key::Tab,
         modifiers: Modifiers::default(),
@@ -264,7 +269,33 @@ fn a_links_focus_ring_shows_from_the_keyboard_not_a_click() {
     });
     ui.prepare_frame();
     assert_eq!(ui.input.focused(), Some(links[1]));
-    assert_eq!(ring(&ui, links[1]), 1., "tabbed to: its ring");
+    assert!(lit(&ui, links[1]), "tabbed to: its fill");
+}
+
+#[test]
+fn an_active_link_keeps_its_fill_and_a_click_says_where_its_words_are() {
+    let at = Rc::new(RefCell::new(None));
+    let seen = at.clone();
+    let mut ui = Ui::new(300., 100.);
+    ui.mount(
+        rich_text()
+            .text_size(16.)
+            .child(text_span("chosen").active(true).on_click_at(move |_, rect| {
+                *seen.borrow_mut() = Some(rect)
+            }))
+            .into(),
+    );
+    ui.prepare_frame();
+    let link = links(&ui)[0];
+    let (fill, bounds) = match ui.scene.borrow().kind(link) {
+        zgx::scene::NodeKind::Panel { quad, .. } => (quad.fill, ui.scene.borrow().bounds(link)),
+        other => panic!("a link's box, not {other:?}"),
+    };
+    assert!(fill.3 > 0, "active: filled without the pointer");
+    click(&mut ui, link, PointerButton::Primary, Modifiers::default());
+    let rect = at.borrow().expect("clicked");
+    // The words, inside the fill that reaches past them.
+    assert!(rect.width > 0. && rect.width < bounds.width && rect.x > bounds.x);
 }
 
 #[test]

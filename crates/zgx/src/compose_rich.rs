@@ -6,9 +6,9 @@ use crate::{
     text_layout::{FontFamily, LetterSpacing, LineHeight},
 };
 use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc};
-/// A link's click, told the keys held (a ⌘-click).
+/// A link's click, told the keys held (a ⌘-click) and where its text is.
 #[derive(Clone)]
-pub(crate) struct InlineAction(Rc<RefCell<dyn FnMut(crate::input::Modifiers)>>);
+pub(crate) struct InlineAction(Rc<RefCell<dyn FnMut(crate::input::Modifiers, crate::scene::Rect)>>);
 impl std::fmt::Debug for InlineAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("InlineAction")
@@ -26,8 +26,10 @@ pub(crate) struct Link {
     /// Where it goes (`TextSpan::href`): a click opens it, its context menu
     /// opens or copies it.
     pub href: Option<Arc<str>>,
-    /// It restyles under the pointer, so no hover ring.
+    /// It restyles under the pointer, so no hover fill.
     pub styled_hover: bool,
+    /// Shown as chosen (`TextSpan::active`): the pressed fill, pointer or not.
+    pub active: bool,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Content {
@@ -77,6 +79,7 @@ pub struct TextSpan {
     pub(crate) radius: f32,
     pub(crate) hover: Option<SpanHover>,
     pub(crate) icon: Option<SpanIcon>,
+    pub(crate) active: bool,
 }
 /// How a link span looks under the pointer (`TextSpan::hover`): CSS's
 /// `a:hover { text-decoration: underline }`.
@@ -101,6 +104,7 @@ pub fn text_span(text: impl Into<Arc<str>>) -> TextSpan {
         radius: 0.,
         hover: None,
         icon: None,
+        active: false,
     }
 }
 impl TextSpan {
@@ -125,6 +129,12 @@ impl TextSpan {
         self.padding = [x.max(0.), y.max(0.)];
         self
     }
+    /// A link shown as chosen (the menu it opens is open, say): the
+    /// rounded fill it has under the pointer, deeper, and kept there.
+    pub fn active(mut self, active: bool) -> Self {
+        self.active = active;
+        self
+    }
     /// The span background's corner radius.
     pub fn radius(mut self, radius: f32) -> Self {
         self.radius = radius.max(0.);
@@ -139,8 +149,17 @@ impl TextSpan {
     /// elsewhere), or a middle click, which passes as one, as browsers open
     /// a link in the background.
     pub fn on_click_with(
+        self,
+        mut callback: impl FnMut(crate::input::Modifiers) + 'static,
+    ) -> Self {
+        self.on_click_at(move |held, _| callback(held))
+    }
+    /// `on_click_with`, told too where the link's text is in the window
+    /// (its first line's, when it wraps): for a menu to open under the
+    /// words that opened it.
+    pub fn on_click_at(
         mut self,
-        callback: impl FnMut(crate::input::Modifiers) + 'static,
+        callback: impl FnMut(crate::input::Modifiers, crate::scene::Rect) + 'static,
     ) -> Self {
         self.action = Some(InlineAction(Rc::new(RefCell::new(callback))));
         self
@@ -362,6 +381,32 @@ fn opens(url: &str) -> bool {
             .any(|allowed| scheme.eq_ignore_ascii_case(allowed))
     })
 }
+/// How far a link's fill reaches past its text (across, down): a rounded
+/// rect around the words that takes no room, so lighting it moves nothing.
+const LINK_FILL_PAD: (f32, f32) = (3., 1.);
+const LINK_FILL_RADIUS: f32 = 4.;
+
+/// A link's fill: the theme's pressed wash when chosen, its hover wash under
+/// the pointer or focused (`:focus-visible`), else none. No outline.
+fn link_fill(
+    color: impl Fn(crate::theme::ColorToken) -> Color,
+    lit: bool,
+    active: bool,
+) -> crate::scene::QuadStyle {
+    let fill = if active {
+        color(crate::theme::tok::PRESSED)
+    } else if lit {
+        color(crate::theme::tok::HOVER)
+    } else {
+        Color(0, 0, 0, 0)
+    };
+    crate::scene::QuadStyle {
+        fill,
+        radius: LINK_FILL_RADIUS,
+        ..Default::default()
+    }
+}
+
 pub(crate) fn mount_links(
     ui: &mut crate::widgets::Ui,
     owner: crate::scene::NodeId,
@@ -372,7 +417,7 @@ pub(crate) fn mount_links(
 ) {
     use crate::{
         input::{EventPhase, InputEvent, Modifiers, PointerButton},
-        scene::{Layout, NodeId, NodeKind, QuadStyle, Rect, Style},
+        scene::{Layout, NodeId, NodeKind, Rect, Style},
         semantics::{Role, SemanticNode},
     };
     use std::cell::Cell;
@@ -385,8 +430,10 @@ pub(crate) fn mount_links(
         hover: Rc<Cell<bool>>,
         /// Its Open Link and Copy Link menu is mounted.
         menu: bool,
-        /// Restyled under the pointer: no ring for hover.
+        /// Restyled under the pointer: no fill for hover.
         styled: Rc<Cell<bool>>,
+        /// Shown as chosen: filled, pointer or not.
+        active: Rc<Cell<bool>>,
     }
     let bounds = ui.observe_bounds(paragraph);
     let owner_bounds = ui.observe_bounds(owner);
@@ -486,22 +533,40 @@ pub(crate) fn mount_links(
                 let focus = Rc::new(Cell::new(false));
                 let hover = Rc::new(Cell::new(false));
                 let styled = Rc::new(Cell::new(link.styled_hover));
-                let (nodes, callback, focused, hovered, restyled, under) = (
+                let active = Rc::new(Cell::new(link.active));
+                let (nodes, callback, focused, hovered, restyled, chosen, under) = (
                     fragments.clone(),
                     action.clone(),
                     focus.clone(),
                     hover.clone(),
                     styled.clone(),
+                    active.clone(),
                     hovered.clone(),
                 );
                 let weak = ui.downgrade();
                 let ring = theme.clone();
                 let open = platform.clone();
-                // A click's: its own action with the keys held, then its
-                // `href` opened.
+                let placed = ui.downgrade();
+                // A click's: its own action with the keys held and where its
+                // text is (the node, less its fill's reach), then its `href`
+                // opened.
                 let activate = move |link: &LinkTarget, held| {
                     if let Some(action) = &link.0 {
-                        (action.0.borrow_mut())(held);
+                        let (pad_x, pad_y) = LINK_FILL_PAD;
+                        let at = placed
+                            .upgrade()
+                            .filter(|ui| ui.scene.borrow().contains(node))
+                            .map(|ui| ui.scene.borrow().bounds(node))
+                            .map(|b| {
+                                Rect::new(
+                                    b.x + pad_x,
+                                    b.y + pad_y,
+                                    b.width - 2. * pad_x,
+                                    b.height - 2. * pad_y,
+                                )
+                            })
+                            .unwrap_or_default();
+                        (action.0.borrow_mut())(held, at);
                     }
                     if let (Some(url), Some(platform)) = (&link.1, &open)
                         && opens(url)
@@ -585,20 +650,12 @@ pub(crate) fn mount_links(
                     let Some(ui) = weak.upgrade() else {
                         return;
                     };
-                    let border = if focused.get() || (hovered.get() && !restyled.get()) {
-                        1.
-                    } else {
-                        0.
-                    };
+                    let lit = focused.get() || (hovered.get() && !restyled.get());
                     let mut scene = ui.scene.borrow_mut();
                     if !scene.contains(node) {
                         return;
                     }
-                    let quad = QuadStyle {
-                        border_width: border,
-                        border_color: ring.color_untracked(crate::theme::tok::FOCUS_RING),
-                        ..Default::default()
-                    };
+                    let quad = link_fill(|t| ring.color_untracked(t), lit, chosen.get());
                     scene.set_kind(
                         node,
                         NodeKind::Panel {
@@ -619,11 +676,13 @@ pub(crate) fn mount_links(
                     focus,
                     hover,
                     styled,
+                    active,
                     menu: false,
                 });
             }
             let entry = &mut mounted[index];
             entry.styled.set(link.styled_hover);
+            entry.active.set(link.active);
             let old = entry
                 .action
                 .replace((link.action.clone(), link.href.clone()));
@@ -648,13 +707,14 @@ pub(crate) fn mount_links(
             );
             let rects = &geometry[index];
             let first = rects.first().copied().unwrap_or_default();
+            let (pad_x, pad_y) = LINK_FILL_PAD;
             let mut style = ui.scene.borrow().style(entry.node);
-            style.width = Some(first.width);
-            style.height = Some(first.height);
+            style.width = Some(first.width + 2. * pad_x);
+            style.height = Some(first.height + 2. * pad_y);
             // Placed from the owner's content box: inside its padding and border.
             let padding = ui.scene.borrow().content_insets(owner);
-            style.margin.left = bounds.x - owner_bounds.x + first.x - padding.left;
-            style.margin.top = bounds.y - owner_bounds.y + first.y - padding.top;
+            style.margin.left = bounds.x - owner_bounds.x + first.x - padding.left - pad_x;
+            style.margin.top = bounds.y - owner_bounds.y + first.y - padding.top - pad_y;
             ui.scene.borrow_mut().set_style(entry.node, style);
             ui.set_disabled(entry.node, rects.is_empty());
             if !ui.scene.borrow().contains(owner) {
@@ -664,20 +724,22 @@ pub(crate) fn mount_links(
             while nodes.len() > rects.len().saturating_sub(1) {
                 ui.remove(nodes.pop().unwrap());
             }
-            let quad = QuadStyle {
-                border_width: if entry.focus.get() || (entry.hover.get() && !entry.styled.get()) {
-                    1.
-                } else {
-                    0.
+            let lit = entry.focus.get() || (entry.hover.get() && !entry.styled.get());
+            let quad = link_fill(|t| theme.color(t), lit, entry.active.get());
+            // Its own fill too (the first fragment's), from the start: an
+            // active link is filled before the pointer comes.
+            ui.scene.borrow_mut().set_kind(
+                entry.node,
+                NodeKind::Panel {
+                    layout: Layout::Overlay,
+                    quad: quad.clone(),
                 },
-                border_color: theme.color(crate::theme::tok::FOCUS_RING),
-                ..Default::default()
-            };
+            );
             for (i, rect) in rects.iter().skip(1).enumerate() {
                 let style = Style {
                     absolute: true,
-                    width: Some(rect.width),
-                    height: Some(rect.height),
+                    width: Some(rect.width + 2. * pad_x),
+                    height: Some(rect.height + 2. * pad_y),
                     margin: crate::scene::Insets {
                         left: rect.x - first.x,
                         top: rect.y - first.y,

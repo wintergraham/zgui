@@ -2353,14 +2353,27 @@ pub fn rich_decorations_in<'a>(
                     (run.strikethrough, line.line_y - run.font_size * 0.3, true),
                 ] {
                     if let Some(style) = decoration {
-                        output.push(RichDecoration {
-                            bounds: Rect::new(left, y, right - left, style.thickness()),
+                        let thickness = style.thickness();
+                        let line = |from: f32, to: f32| RichDecoration {
+                            bounds: Rect::new(from, y, to - from, thickness),
                             color: style.color.unwrap_or(run.color),
                             background: false,
                             radius: 0.,
                             run: index,
                             strike,
-                        });
+                        };
+                        if style.is_dashed() {
+                            // Dashes from the fragment's start, the last one
+                            // cut where the text ends.
+                            let (dash, gap) = (thickness * 3., thickness * 2.);
+                            let mut at = left;
+                            while at < right {
+                                output.push(line(at, (at + dash).min(right)));
+                                at += dash + gap;
+                            }
+                        } else {
+                            output.push(line(left, right));
+                        }
                     }
                 }
             }
