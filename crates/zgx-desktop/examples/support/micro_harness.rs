@@ -65,6 +65,11 @@ fn cpu_ns() -> u64 {
         .as_nanos() as u64
 }
 
+/// Frames the GPU may trail before `settle` drains its queue: a window's
+/// presents bound it to a few; a small bound keeps the bench's queue finite
+/// without a full framebuffer copy (and wait) per batch.
+const SETTLE_AFTER: usize = 64;
+
 /// What one operation changes, and how a frame is made of it.
 struct Bench {
     ui: Ui,
@@ -73,6 +78,8 @@ struct Bench {
     step: Box<dyn FnMut(usize)>,
     /// What another engine's scene keeps alive while it runs.
     _kept: Option<Box<dyn std::any::Any>>,
+    /// Frames rendered since the queue was last drained.
+    unsettled: usize,
 }
 impl Bench {
     fn new(scene: &str, render: bool, engine: Option<Engine>) -> Self {
@@ -150,6 +157,7 @@ impl Bench {
             _text: text,
             step,
             _kept: kept,
+            unsettled: 0,
         };
         bench.frame();
         bench
@@ -161,13 +169,22 @@ impl Bench {
         if let Some(gpu) = &mut self.gpu {
             gpu.render(&self.ui.scene.borrow(), &report.damage)
                 .expect("render");
+            self.unsettled += 1;
         }
     }
     /// Settles the GPU between batches (untimed): a window's presents never
-    /// let submitted work pile up.
+    /// let submitted work pile up. Nothing rendered since the last drain
+    /// means nothing to wait for, so the write figure's calls cost nothing.
     fn settle(&mut self) {
+        if self.unsettled >= SETTLE_AFTER {
+            self.drain();
+        }
+    }
+    /// Waits the queue out outright, so a figure ends with its frames done.
+    fn drain(&mut self) {
         if let Some(gpu) = &mut self.gpu {
             gpu.readback().expect("readback");
+            self.unsettled = 0;
         }
     }
 }
@@ -255,7 +272,7 @@ fn measure(bench: &mut Bench, ops: usize, batch: usize, frame: bool, next: &mut 
     for _ in 0..env("WARMUP", WARMUP) {
         one(bench, next);
     }
-    bench.settle();
+    bench.drain();
     let mut samples = Vec::with_capacity(ops / batch);
     for _ in 0..ops / batch {
         let started = cpu_ns();
@@ -265,11 +282,12 @@ fn measure(bench: &mut Bench, ops: usize, batch: usize, frame: bool, next: &mut 
         samples.push((cpu_ns() - started) as f64 / batch as f64);
         bench.settle();
     }
-    // A write alone leaves the frame to do: catch up, untimed.
+    // A figure ends with its work drained; a write alone leaves the frame to
+    // do: catch up, untimed.
     if !frame {
         bench.frame();
-        bench.settle();
     }
+    bench.drain();
     samples
 }
 
