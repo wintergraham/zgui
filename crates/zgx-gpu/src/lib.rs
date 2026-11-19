@@ -6070,6 +6070,7 @@ impl GpuRenderer {
                                 font_size.max(1.),
                                 item.font.line_height.resolve(font_size),
                             ));
+                            b.lines = text::spare_lines();
                             b.set_size(text::wrap_width(Some(bounds.width)), Some(bounds.height));
                             text::set_buffer_text(
                                 &mut fonts,
@@ -6083,24 +6084,24 @@ impl GpuRenderer {
                         };
                         let (glyphs, decorations, prepared, epoch) = match b {
                             Err(made) => made,
-                            Ok(b) => (
-                                glyphs_of(
+                            Ok(b) => {
+                                let glyphs = glyphs_of(
                                     std::mem::take(&mut spare_glyphs),
                                     b.layout_runs(),
                                     &text::line_starts(&b),
                                     rich.as_deref(),
                                     self.scale,
-                                ),
-                                match (&rich, item.font.underline) {
+                                );
+                                let decorations = match (&rich, item.font.underline) {
                                     (Some(rich), _) => text::rich_decorations(&b, rich),
                                     (None, Some(line)) => {
                                         text::plain_underlines(b.layout_runs(), font_size, line)
                                     }
                                     (None, None) => Vec::new(),
-                                },
-                                None,
-                                None,
-                            ),
+                                };
+                                text::recycle_lines(b.lines);
+                                (glyphs, decorations, None, None)
+                            }
                         };
                         let shaped = Shaped {
                             decorations,
