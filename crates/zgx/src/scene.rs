@@ -4995,8 +4995,17 @@ impl Scene {
             return;
         }
         // Its old place and its new, under the same ancestors: their
-        // context is worked out once.
+        // context is worked out once. A leaf's pair of places is one
+        // `leaf_damage` (`moved_leaf_damage`), not two subtree walks.
         let mut context = None;
+        if self.transformed + self.filtered == 0 && self.node(id).children.is_empty() {
+            let was = self.node(id).transform;
+            self.node_mut(id).transform = transform;
+            self.geometry_revision = self.geometry_revision.wrapping_add(1);
+            self.moved_leaf_damage(id, &mut context, was);
+            self.invalidate(id, COMPOSITE);
+            return;
+        }
         self.damage_subtree_with(id, &mut context);
         self.node_mut(id).transform = transform;
         self.geometry_revision = self.geometry_revision.wrapping_add(1);
@@ -5084,6 +5093,25 @@ impl Scene {
         }
         self.effects_changing(id, &effects);
         let mut context = None;
+        // A leaf staying in the flat, unfiltered world (no blur changing
+        // what it paints, either way) damages both its places as one
+        // `leaf_damage`, not two subtree walks (`set_transform`).
+        if self.transformed + self.filtered == 0
+            && self.node(id).children.is_empty()
+            && self.node(id).effects.blur_radius <= 0.
+            && effects.blur_radius <= 0.
+            && effects.filter_blur <= 0.
+        {
+            let was = self.node(id).transform;
+            self.filter_changing(id, &effects);
+            let node = self.node_mut(id);
+            node.transform = transform;
+            node.effects = effects;
+            self.geometry_revision = self.geometry_revision.wrapping_add(1);
+            self.moved_leaf_damage(id, &mut context, was);
+            self.invalidate(id, COMPOSITE);
+            return;
+        }
         self.damage_subtree_with(id, &mut context);
         self.filter_changing(id, &effects);
         let node = self.node_mut(id);
@@ -5444,6 +5472,24 @@ impl Scene {
     #[inline(never)]
     fn add_leaf_damage(&mut self, rect: Rect) {
         self.add_damage_as::<true>(rect);
+    }
+    /// `set_transform`'s two `damage_subtree_with` calls for a leaf where
+    /// nothing is transformed or filtered — its paint where `was` put it
+    /// and where it is now — worked out as `leaf_damage` works it out.
+    fn moved_leaf_damage(
+        &mut self,
+        id: NodeId,
+        context: &mut Option<DamageContext>,
+        was: Transform,
+    ) {
+        let node = self.tree_node(id);
+        let (before, after) = self.leaf_damage::<false>(
+            id,
+            context,
+            (node.bounds, was),
+            (node.bounds, node.transform),
+        );
+        self.add_moved_leaf_damage(before, after);
     }
     /// `add_damage`, looking for the grid before a recent rectangle that
     /// holds `rect` when `GRID_FIRST`: on the grid, marking cells again
@@ -9010,6 +9056,37 @@ mod tests {
         assert_eq!(frame.composite_nodes, 1);
         assert!(frame.damage.contains(&Rect::new(0.0, 0.0, 20.0, 20.0)));
         assert!(frame.damage.contains(&Rect::new(100.0, 0.0, 20.0, 20.0)));
+    }
+    #[test]
+    fn a_moved_and_faded_leaf_damages_both_places_once() {
+        let mut scene = Scene::new(800.0, 600.0);
+        let id = scene.append(
+            scene.root(),
+            NodeKind::Rect(Color(1, 2, 3, 255)),
+            Style {
+                width: Some(20.0),
+                height: Some(20.0),
+                ..Style::default()
+            },
+        );
+        scene.flush();
+        scene.set_transform_and_effects(
+            id,
+            Transform { x: 100.0, y: 0.0 },
+            Effects {
+                opacity: 0.5,
+                ..Effects::default()
+            },
+        );
+        let frame = scene.flush();
+        assert_eq!(
+            frame.damage,
+            vec![
+                Rect::new(0.0, 0.0, 20.0, 20.0),
+                Rect::new(100.0, 0.0, 20.0, 20.0)
+            ]
+        );
+        assert!(scene.flush().is_idle());
     }
     #[test]
     fn reused_slots_do_not_resurrect_handles() {
