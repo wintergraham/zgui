@@ -13,6 +13,9 @@ export type Message = {
 	date: string,
 	unread: boolean,
 	starred: boolean,
+	-- What a search reads (subject and sender), made once with the message
+	-- rather than joined and folded each time it is searched.
+	search: string,
 }
 
 local people = {
@@ -74,12 +77,17 @@ function M.messages(count: number): { Message }
 		end
 		local body = table.concat(paragraphs, "\n\n")
 		local day = 28 - (i // 40) % 28
+		-- The picks in the order the fields list them, so the stream is
+		-- what it was.
+		local mailbox = mailboxes[pick(#mailboxes)]
+		local subject = topics[pick(#topics)]
 		table.insert(out, {
 			id = i,
-			mailbox = mailboxes[pick(#mailboxes)],
+			mailbox = mailbox,
 			from = person[1],
 			email = person[2],
-			subject = topics[pick(#topics)],
+			subject = subject,
+			search = subject .. " " .. person[1],
 			preview = string.sub(paragraphs[1], 1, 90),
 			body = body,
 			date = `Oct {day}`,

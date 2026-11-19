@@ -6,15 +6,13 @@ local M = {}
 -- The messages the list shows now, newest first as stored, for the list
 -- and for the actions that move on to the next of them: kept in Rust as
 -- the messages change (an archive judges the one it wrote, not 4000). A
--- search reads the subject and the sender, a test of its own.
+-- search reads `search`, each message's subject and sender made with it,
+-- so a keystroke tests fields in Rust rather than calling once a message.
 M.shown = ui.sorted(state.messages, function()
-	local mailbox, needle = state.mailbox:get(), string.lower(state.query:get())
+	local mailbox, needle = state.mailbox:get(), state.query:get()
 	local filter: any = if mailbox == "Starred" then { starred = true } else { mailbox = mailbox }
 	if needle ~= "" then
-		filter = function(m: state.Message): boolean
-			local here = if mailbox == "Starred" then m.starred else m.mailbox == mailbox
-			return here and string.find(string.lower(m.subject .. " " .. m.from), needle, 1, true) ~= nil
-		end
+		filter.search = { contains = needle, case = false }
 	end
 	return { filter = filter }
 end)
@@ -135,13 +133,15 @@ end
 
 function M.send()
 	local next_id = #state.messages:peek() + 1
+	local subject = state.draft_subject:peek()
 	ui.batch(function()
 		state.messages:insert(1, {
 			id = next_id,
 			mailbox = "Sent",
 			from = "Me",
 			email = state.draft_to:peek(),
-			subject = state.draft_subject:peek(),
+			subject = subject,
+			search = subject .. " Me",
 			preview = string.sub(state.draft_body:peek(), 1, 90),
 			body = state.draft_body:peek(),
 			date = "Now",
@@ -163,6 +163,7 @@ function M.receive()
 			from = "Grace Hopper",
 			email = "grace@navy.mil",
 			subject = "The nanosecond, again",
+			search = "The nanosecond, again Grace Hopper",
 			preview = "Here is the length of wire I promised, for the demo on Friday.",
 			body = "Here is the length of wire I promised, for the demo on Friday.",
 			date = "Now",
