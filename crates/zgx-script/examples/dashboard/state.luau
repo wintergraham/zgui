@@ -10,17 +10,11 @@ export type Appearance = "dark" | "light"
 
 local M = {}
 -- `zgx-run dashboard 1000`: fewer rows (a benchmark's).
-local rows, histories = data.rows(tonumber(ui.args[1]) or 100_000)
+-- Totals the charts show come back with the rows: kept as the feed moves
+-- rows rather than summed over all 100,000 each tick.
+local rows, histories, volumes, value = data.rows(tonumber(ui.args[1]) or 100_000)
 M.history = histories
 M.series = data.series(120)
--- Totals the charts show, kept as the feed moves rows rather than summed
--- over all 100,000 each tick.
-local volumes: { [string]: number } = {}
-local value = 0
-for _, row in rows do
-	volumes[row.sector] = (volumes[row.sector] or 0) + row.volume
-	value += row.price * row.volume
-end
 M.rows = ui.state("rows", rows)
 M.volumes = ui.state("volumes", volumes)
 M.value = ui.state("value", value)

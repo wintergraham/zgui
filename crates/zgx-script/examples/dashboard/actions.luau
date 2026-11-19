@@ -12,12 +12,13 @@ function M.feed()
 	local n = rows:len()
 	local volumes = table.clone(state.volumes:peek())
 	local value = state.value:peek()
+	local random = data.random
 	ui.batch(function()
 		for _ = 1, 300 do
-			local i = math.floor(data.random() * n) + 1
+			local i = math.floor(random() * n) + 1
 			local row = table.clone(rows:at(i) :: data.Row)
-			local moved = row.price * (1 + (data.random() - 0.5) * 0.01)
-			local traded = math.floor(data.random() * 20_000)
+			local moved = row.price * (1 + (random() - 0.5) * 0.01)
+			local traded = math.floor(random() * 20_000)
 			value += moved * (row.volume + traded) - row.price * row.volume
 			volumes[row.sector] += traded
 			row.change += (moved - row.price) / row.price * 100
@@ -32,7 +33,7 @@ function M.feed()
 		state.value:set(value)
 		local series = state.series
 		table.remove(series, 1)
-		table.insert(series, math.max(10, series[#series] + (data.random() - 0.5) * 6))
+		table.insert(series, math.max(10, series[#series] + (random() - 0.5) * 6))
 		state.tick:set(state.tick:peek() + 1)
 	end)
 end
