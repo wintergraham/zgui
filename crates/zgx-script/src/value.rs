@@ -543,6 +543,28 @@ impl From<bool> for Value {
     }
 }
 
+/// A hasher for words (string addresses, value ids): a rotate and a
+/// multiply, as rustc's FxHasher does, where the default SipHash spends
+/// more than the lookups it serves.
+#[derive(Default)]
+struct WordHasher(u64);
+impl std::hash::Hasher for WordHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.write_u8(*byte);
+        }
+    }
+    fn write_u8(&mut self, value: u8) {
+        self.write_usize(value as usize);
+    }
+    fn write_usize(&mut self, value: usize) {
+        self.0 = (self.0.rotate_left(5) ^ value as u64).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+}
+type WordMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<WordHasher>>;
 /// A script value as a state value. Where `old` has an equal part (a
 /// string, a subtree), the result shares it, so the new state compares
 /// cheaply with the old and keeps one copy of what did not change.
@@ -660,8 +682,8 @@ fn raw_table(t: &Table, old: Option<&Value>) -> Option<mlua::Result<Value>> {
     use mlua::ffi;
     use std::ffi::c_int;
     struct Cx<'a> {
-        held: Option<std::cell::Ref<'a, HashMap<usize, (Value, usize)>>>,
-        strings: HashMap<usize, Rc<str>>,
+        held: Option<std::cell::Ref<'a, WordMap<usize, (Value, usize)>>>,
+        strings: WordMap<usize, Rc<str>>,
     }
     const TABLE: c_int = 1;
     const IDS: c_int = 2;
@@ -758,14 +780,21 @@ fn raw_table(t: &Table, old: Option<&Value>) -> Option<mlua::Result<Value>> {
                 _ => &[],
             };
             let mut items: Vec<(usize, Value)> = Vec::with_capacity(len);
-            let mut keyed: Vec<(Rc<str>, Value)> = Vec::new();
+            // Each keyed entry carries its place in `was_fields` (its index,
+            // or where it would insert): sorting by it orders the map by key
+            // with integer compares, a key the table shares with `old` found
+            // once (its string reused) instead of compared at every probe.
+            let mut keyed: Vec<(usize, bool, Rc<str>, Value)> =
+                Vec::with_capacity(was_fields.len());
             let mut iter = 0;
+            // `lua_rawiter` pushes a key and a value, both popped each pass:
+            // the stack top is the same throughout.
+            let top = ffi::lua_gettop(state) + 2;
             loop {
                 iter = ffi::lua_rawiter(state, idx, iter);
                 if iter < 0 {
                     break;
                 }
-                let top = ffi::lua_gettop(state);
                 let read_one = match ffi::lua_type(state, top - 1) {
                     ffi::LUA_TNUMBER => {
                         let n = ffi::lua_tonumberx(state, top - 1, std::ptr::null_mut());
@@ -781,16 +810,13 @@ fn raw_table(t: &Table, old: Option<&Value>) -> Option<mlua::Result<Value>> {
                         let mut n = 0;
                         let data = ffi::lua_tolstring(state, top - 1, &mut n);
                         let bytes = std::slice::from_raw_parts(data.cast::<u8>(), n);
-                        let prior = was_fields
-                            .binary_search_by(|(k, _)| k.as_bytes().cmp(bytes))
-                            .ok()
-                            .map(|i| &was_fields[i]);
-                        let key = match prior {
-                            Some((k, _)) => k.clone(),
-                            None => string(cx, data as usize, bytes),
+                        let prior = was_fields.binary_search_by(|(k, _)| k.as_bytes().cmp(bytes));
+                        let (pos, key, old) = match prior {
+                            Ok(i) => (i, was_fields[i].0.clone(), Some(&was_fields[i].1)),
+                            Err(i) => (i, string(cx, data as usize, bytes), None),
                         };
-                        read(state, top, prior.map(|(_, v)| v), depth + 1, cx)
-                            .map(|v| keyed.push((key, v)))
+                        read(state, top, old, depth + 1, cx)
+                            .map(|v| keyed.push((pos, prior.is_err(), key, v)))
                     }
                     _ => Err(Unread::General),
                 };
@@ -803,8 +829,19 @@ fn raw_table(t: &Table, old: Option<&Value>) -> Option<mlua::Result<Value>> {
                         "a state table is a list or has string keys, not both",
                     ));
                 }
-                keyed.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-                let fresh = Value::Map(keyed.into());
+                // A key new to its place in `was_fields` sorts before the
+                // field there; keys new to the same place order by bytes.
+                keyed.sort_unstable_by(|a, b| {
+                    a.0.cmp(&b.0)
+                        .then_with(|| b.1.cmp(&a.1))
+                        .then_with(|| a.2.cmp(&b.2))
+                });
+                let fresh = Value::Map(
+                    keyed
+                        .into_iter()
+                        .map(|(_, _, key, value)| (key, value))
+                        .collect(),
+                );
                 return Ok(match old {
                     Some(old) if *old == fresh => old.clone(),
                     _ => fresh,
@@ -833,7 +870,7 @@ fn raw_table(t: &Table, old: Option<&Value>) -> Option<mlua::Result<Value>> {
     let ids = cache.as_ref().map(|c| c.ids.clone());
     let mut cx = Cx {
         held: cache.as_ref().map(|c| c.held.borrow()),
-        strings: HashMap::new(),
+        strings: WordMap::default(),
     };
     let mut out = Err(Unread::General);
     // SAFETY: `exec_raw` runs the closure as a C function inside a protected
@@ -864,7 +901,11 @@ fn table(t: &Table, old: Option<&Value>, depth: u32) -> mlua::Result<Value> {
     }
     let convert = |value, old| convert_in(value, old, depth + 1);
     let len = t.raw_len();
-    let mut keyed: Vec<(String, mlua::Value)> = Vec::new();
+    let was_map = match old {
+        Some(Value::Map(f)) => f.len(),
+        _ => 0,
+    };
+    let mut keyed: Vec<(String, mlua::Value)> = Vec::with_capacity(was_map);
     // One walk, unprotected per step: a computed's list of thousands of
     // rows is converted every time it runs.
     let mut items: Vec<(usize, mlua::Value)> = Vec::with_capacity(len);
@@ -1210,7 +1251,7 @@ pub(crate) fn install_cache(lua: &Lua) {
 /// vary from run to run.
 struct Converted {
     /// id → the value and its `weight`.
-    held: std::cell::RefCell<HashMap<usize, (Value, usize)>>,
+    held: std::cell::RefCell<WordMap<usize, (Value, usize)>>,
     /// id → table, while `held` holds its value. (Handles, not registry
     /// keys: looked up for every row converted.)
     tables: Table,
@@ -1221,7 +1262,7 @@ struct Converted {
     clone: mlua::Function,
     /// id → the value a list was written from (`derives_from`), whose
     /// table its own is derived from when a script reads it.
-    bases: std::cell::RefCell<HashMap<usize, Value>>,
+    bases: std::cell::RefCell<WordMap<usize, Value>>,
     /// The `weight` of what is held.
     weight: std::cell::Cell<usize>,
     /// The `weight` of what was held after the last sweep.
@@ -1238,14 +1279,11 @@ const SWEPT_FROM: usize = 1 << 12;
 /// way down (each large part is cached, and weighed, on its own): what its
 /// table costs the VM.
 fn weight(value: &Value) -> usize {
-    fn children(value: &Value) -> Box<dyn Iterator<Item = &Value> + '_> {
-        match value {
-            Value::List(items) => Box::new(items.iter()),
-            Value::Map(fields) => Box::new(fields.iter().map(|(_, v)| v)),
-            _ => Box::new(std::iter::empty()),
-        }
+    1 + match value {
+        Value::List(items) => items.iter().map(part_weight).sum::<usize>(),
+        Value::Map(fields) => fields.iter().map(|(_, v)| part_weight(v)).sum::<usize>(),
+        _ => 0,
     }
-    1 + children(value).map(part_weight).sum::<usize>()
 }
 /// What a part adds to its container's `weight`: 1 for a large one (cached,
 /// and weighed, on its own), all of a small one.
