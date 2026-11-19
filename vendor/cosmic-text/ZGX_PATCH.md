@@ -161,6 +161,20 @@ why the text does not show. `font_cache`'s
 `text_shapes_to_nothing_with_no_font_installed` and the Linux `no-fonts`
 probe check it.
 
+## Fallback families find their faces in an index
+
+For every fallback family a word needed (its default family's first, then
+each script and common family), `FontFallbackIter` scanned all the font
+match keys and asked the database for each face's family names to compare
+— a face lookup and string compares for every face per family, for every
+newly shaped word; a family no font holds costs a pass over every face.
+`FontSystem::ensure_family_index` now builds every family name's face ids
+once (`faces_in_family`, rebuilt when the database is), and each loop
+takes a family's face ids once (`family_faces`) and checks ids against
+them. Where nothing loops — a face's membership in a forbidden family —
+`face_contains_family` still reads the face's own names. `check/` finds
+every layout identical.
+
 ## A run's first font is kept for its attributes
 
 Every run shaped without the word cache (a new value: a dashboard's figure)
