@@ -103,8 +103,10 @@ fn main() {
         let laid = Instant::now();
         let at_layout = ALLOCATIONS.load(Relaxed);
         let stats = gpu.render(&ui.scene.borrow(), &report.damage).unwrap();
-        // A window presents every frame; readback only settles the GPU.
-        if tick % 60 == 0 {
+        // A window presents every frame; readback only settles the GPU's
+        // queue. Every few hundred ticks keeps it bounded without a full
+        // framebuffer copy (and wait) all that often.
+        if tick % 240 == 0 {
             gpu.readback().unwrap();
         }
         let done = Instant::now();
@@ -120,6 +122,8 @@ fn main() {
             nodes += report.layout_nodes;
         }
     }
+    // The run ends with its submitted frames done.
+    gpu.readback().unwrap();
     let measured = (ticks - 60).max(1) as f64;
     let ms = |d: Duration| d.as_secs_f64() * 1e3 / measured;
     let mb = |bytes: usize| bytes as f64 / 1048576.;
