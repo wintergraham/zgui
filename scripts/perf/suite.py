@@ -145,15 +145,28 @@ def measure(binary, env):
     seconds = time.monotonic() - started
     if result.returncode:
         sys.exit(f'{binary} failed:\n{result.stdout}{result.stderr}')
+    metric = None
     if platform.system() == 'Darwin':
         found = re.search(r'(\d+)\s+instructions retired', result.stderr)
+        if found:
+            metric = int(found.group(1))
+        else:
+            # VMs without exposed perf counters: fall back to process CPU
+            # time in microseconds (the least of N runs is still the
+            # least disturbed).
+            user = re.search(r'(\d+\.\d+)\s+user', result.stderr)
+            syst = re.search(r'(\d+\.\d+)\s+sys', result.stderr)
+            if user and syst:
+                metric = int((float(user.group(1)) + float(syst.group(1))) * 1e6)
     else:
         found = re.search(r'^(\d+),[^,]*,instructions', result.stderr, re.M)
-    if not found:
+        if found:
+            metric = int(found.group(1))
+    if metric is None:
         sys.exit(f'no instruction count from {binary}:\n{result.stderr}')
     report = [line for line in (result.stdout + result.stderr).splitlines()
               if line.startswith('profile') or line.startswith('PROFILE')]
-    return int(found.group(1)), seconds, report
+    return metric, seconds, report
 
 
 def spread(values):
@@ -164,7 +177,7 @@ def spread(values):
 def run(args):
     scenes = chosen(args)
     examples = build(ROOT, pathlib.Path(os.environ.get('CARGO_TARGET_DIR', ROOT / 'target')), scenes)
-    print(f'{"scene":14} {"instructions":>14} {"spread":>7} {"time":>8}')
+    print(f'{"scene":14} {"instr/cpu-us":>14} {"spread":>7} {"time":>8}')
     for name, _, example, env in scenes:
         runs = [measure(examples / example, env) for _ in range(args.repeat)]
         counts = [r[0] for r in runs]
