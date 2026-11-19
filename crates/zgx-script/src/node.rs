@@ -2411,7 +2411,7 @@ fn fill_from(
     let mut variants = None;
     // One walk over the table: properties as they come, children kept to
     // put in order after.
-    let mut items = Vec::new();
+    let mut items = Vec::with_capacity(table.raw_len());
     let keys = lua.app_data_ref::<StyleKeys>();
     let lint = Some(lint);
     // Keys are read where they lie on the stack (a string key's identity
