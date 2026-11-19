@@ -3849,11 +3849,13 @@ impl Scene {
             if node.children.is_empty() {
                 continue;
             }
-            if !hit
-                && !POPUPS
-                && transform == Transform::default()
-                && self.hit_outside(node, bounds, point)
-            {
+            // `hit_outside` compares `point` against `bounds` in the space
+            // they are both in now: what a direction proof caches is in the
+            // node's own box's space, which translation preserves. Only a
+            // local transform mixes the spaces: `point` was remapped through
+            // the node's inverse while `bounds` was not, so it is excluded
+            // rather than every node that moved.
+            if !hit && !POPUPS && !node.transformed() && self.hit_outside(node, bounds, point) {
                 continue;
             }
             if !siblings.as_slice().is_empty() {
@@ -8897,6 +8899,41 @@ mod tests {
         );
         assert_eq!(scene.hit_test(15.0, 10.0), Some(a));
         assert_eq!(scene.hit_test(110.0, 10.0), None);
+    }
+    #[test]
+    fn a_translated_parent_still_finds_and_prunes_hits_in_its_subtree() {
+        let mut scene = Scene::new(200.0, 200.0);
+        scene.set_kind(scene.root(), NodeKind::Container(Layout::Overlay));
+        let parent = scene.append(
+            scene.root(),
+            NodeKind::Container(Layout::Overlay),
+            Style {
+                width: Some(40.0),
+                height: Some(40.0),
+                ..Style::default()
+            },
+        );
+        let child = scene.append(
+            parent,
+            NodeKind::Rect(Color(1, 2, 3, 255)),
+            Style {
+                width: Some(10.0),
+                height: Some(10.0),
+                ..Style::default()
+            },
+        );
+        scene.set_transform(parent, Transform { x: 50.0, y: 50.0 });
+        scene.flush();
+        // Translation alone does not stop the directional proof from
+        // bounding the subtree: a hit inside the child is found, misses
+        // past the subtree fall through to what is under it.
+        assert_eq!(scene.hit_test(55.0, 55.0), Some(child));
+        assert_eq!(scene.hit_test(85.0, 55.0), Some(parent));
+        assert_eq!(scene.hit_test(95.0, 55.0), Some(scene.root()));
+        // Left of every box in the subtree: the proof rejects the whole
+        // subtree without a look at the child, then a real hit still wins.
+        assert_eq!(scene.hit_test(5.0, 55.0), Some(scene.root()));
+        assert_eq!(scene.hit_test(55.0, 55.0), Some(child));
     }
     #[test]
     fn preparing_input_geometry_preserves_damage_for_renderer() {
