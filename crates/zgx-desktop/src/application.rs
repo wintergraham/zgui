@@ -189,6 +189,7 @@ enum WindowCommand {
     Size(f64, f64),
     Minimized(bool),
     Maximized(bool),
+    Attention,
     Visible(bool),
     Focus,
     MaxFrameRate(Option<f64>),
@@ -244,6 +245,7 @@ impl WindowState {
             }
             WindowCommand::Minimized(value) => self.minimized = *value,
             WindowCommand::Maximized(value) => self.maximized = *value,
+            WindowCommand::Attention => {}
             WindowCommand::Visible(value) => self.visible = *value,
             WindowCommand::Focus => self.focus_requested = true,
             WindowCommand::MaxFrameRate(hz) => options.max_frame_rate = *hz,
@@ -406,6 +408,11 @@ impl WindowHandle {
     /// Request minimization or restoration. Some compositors cannot unminimize windows.
     pub fn set_minimized(&self, minimized: bool) {
         self.command(WindowCommand::Minimized(minimized));
+    }
+    /// Ask for the person's attention for the window (the dock icon bounces,
+    /// the taskbar button flashes, a Wayland urgency hint).
+    pub fn request_attention(&self) {
+        self.command(WindowCommand::Attention);
     }
     /// Request maximization or restoration.
     pub fn set_maximized(&self, maximized: bool) {
@@ -2221,6 +2228,11 @@ impl Host {
         }
         if over_native {
             self.native_cursor = None;
+            // A painted source under the pointer may name its own cursor.
+            #[cfg(target_os = "linux")]
+            if let Some(cursor) = self.native.painted_cursor() {
+                window.set_cursor(cursor);
+            }
         } else if Some(cursor) != self.native_cursor {
             // Only when zgx's own choice changes, so at a page's edge it never
             // takes back a cursor the page has just set.
@@ -2962,6 +2974,9 @@ impl Host {
             }
             WindowCommand::Level(level) => window.set_window_level(level.winit()),
             WindowCommand::Shadow(value) => crate::window_info::set_shadow(window, value),
+            WindowCommand::Attention => {
+                window.request_user_attention(Some(winit::window::UserAttentionType::Informational))
+            }
             WindowCommand::BackgroundBlur(radius) => {
                 crate::window_chrome::set_background_blur(window, radius)
             }
@@ -3413,6 +3428,8 @@ impl Host {
                     alt: s.alt_key(),
                     meta: s.super_key(),
                 };
+                #[cfg(target_os = "linux")]
+                self.native.set_modifiers(self.modifiers);
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let p = position.to_logical::<f32>(self.scale_factor);
@@ -3543,6 +3560,14 @@ impl Host {
                     let _ = window.drag_resize_window(direction);
                     return Ok(());
                 }
+                // A click on a painted native view is the page's, not zgx's.
+                #[cfg(target_os = "linux")]
+                if self
+                    .native
+                    .pointer_button(x, y, button, state == ElementState::Pressed)
+                {
+                    return Ok(());
+                }
                 self.dispatch(if state == ElementState::Pressed {
                     InputEvent::PointerDown { x, y, button }
                 } else {
@@ -3632,6 +3657,11 @@ impl Host {
                     && !self.modifiers.alt
                     && !self.modifiers.meta
                     && self.context.ui.wheel_zooms();
+                // Over a painted native view, the wheel is the page's.
+                #[cfg(target_os = "linux")]
+                if !zooms && self.native.wheel(self.cursor.0, self.cursor.1, dx, dy) {
+                    return Ok(());
+                }
                 if zooms {
                     let event = InputEvent::Scroll {
                         x: self.cursor.0,
@@ -3681,6 +3711,7 @@ impl Host {
             }
             WindowEvent::Focused(false) => {
                 zgx_gpu::present_log::log(|| "window-focus false".into());
+                self.context.window_info.focused.set(false);
                 #[cfg(target_os = "linux")]
                 if let Some(caption) = &mut self.caption {
                     caption.sync(&mut self.context.ui);
@@ -3707,6 +3738,7 @@ impl Host {
                 }
             }
             WindowEvent::Focused(true) => {
+                self.context.window_info.focused.set(true);
                 // The user may have changed the accent while it was at the back.
                 crate::system_colors::sync(&self.context.ui);
                 crate::scrollers::sync(&self.context.ui);
@@ -3753,6 +3785,11 @@ impl Host {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                // A painted native view holding focus hears the key first.
+                #[cfg(target_os = "linux")]
+                if self.native.key_event(&event) {
+                    return Ok(());
+                }
                 let key = map_key(&event.logical_key)
                     .map(|key| shortcut_key(key, event.physical_key, self.modifiers));
                 let mut prevented = false;

@@ -121,6 +121,12 @@ pub struct WindowInfo {
     pub bounds: Signal<WindowBounds>,
     /// Whether it is fullscreen.
     pub fullscreen: Signal<bool>,
+    /// Whether it is focused.
+    pub focused: Signal<bool>,
+    /// Whether it is minimized (where the platform reports it).
+    pub minimized: Signal<bool>,
+    /// Whether it is maximized.
+    pub maximized: Signal<bool>,
     /// The displays connected.
     pub displays: Signal<Vec<DisplayInfo>>,
     /// The index in `displays` of the one it is on, when known.
@@ -153,6 +159,9 @@ impl WindowInfo {
                 height.max(1.) as u32,
             )),
             fullscreen: ui.signal(false),
+            focused: ui.signal(false),
+            minimized: ui.signal(false),
+            maximized: ui.signal(false),
             displays: ui.signal(Vec::new()),
             current_display: ui.signal(None),
             capabilities: ui.signal(WindowCapabilities::default()),
@@ -195,6 +204,8 @@ impl WindowInfo {
         );
         self.bounds.set(WindowBounds::read(window));
         self.fullscreen.set(window.fullscreen().is_some());
+        self.minimized.set(window.is_minimized().unwrap_or(false));
+        self.maximized.set(window.is_maximized());
         let (area, controls) = crate::window_chrome::titlebar_area(window, titlebar);
         // In the content's points, its zoom's (a custom title bar's content
         // zooms; the platform's own buttons do not).

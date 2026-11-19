@@ -28,7 +28,7 @@
 //! reactive ([`WebView::state`] and its accessors) and platform events reach
 //! [`WebView::on_event`] subscribers on the UI thread at a safe point.
 use crate::{
-    compose::{NodeHandle, View, component, div, switch, text},
+    compose::{NodeHandle, View, component, div, overlay, switch, text},
     input::InputEvent,
     native_view::{NativeContent, NativeRegistration, NativeViews},
     reactive::{Runtime, Signal},
@@ -808,8 +808,15 @@ pub fn native_view_when(
         // What the placeholder says; None while a platform view shows.
         let label: Signal<Option<String>> = runtime.signal(None);
         let shown = label.clone();
+        // A zgx-painted source (a windowless page): mounted as an image of
+        // its own frames, so the node's box clips and rounds it.
+        let painted: Signal<Option<PaintedView>> = runtime.signal(None);
+        let frames = painted.clone();
         let focused = current.clone();
-        div()
+        // An overlay, not a column: `switch` mounts its branch in an
+        // auto-sized region box, so a `h_full` child in a column gets zero
+        // height; overlay lays every child out in the node's whole box.
+        overlay()
             .focusable(true)
             .on_event(move |event| {
                 let Some(focus) = focused.borrow().as_ref().and_then(Focusable::of) else {
@@ -828,10 +835,18 @@ pub fn native_view_when(
                     None => div(),
                 },
             ))
+            .child(switch(
+                move || frames.get(),
+                |source, _| match source {
+                    Some(source) => painted_frame(source.0),
+                    None => div().w(0.).h(0.),
+                },
+            ))
             .on_mount(move |handle| {
                 let node = handle.node();
                 let painter = handle.clone();
-                let registration: RefCell<Option<NativeRegistration>> = RefCell::default();
+                let registration: RefCell<Option<(NativeRegistration, Option<MountedGuard>)>> =
+                    RefCell::default();
                 let effect = runtime.clone().effect(move || {
                     let next = content();
                     if let (Ok(next), Some(now)) = (&next, &*current.borrow())
@@ -841,17 +856,28 @@ pub fn native_view_when(
                     }
                     // The old view goes before the new one comes.
                     drop(registration.borrow_mut().take());
-                    let (painted, placeholder) = match &next {
+                    let (painted_flag, placeholder) = match &next {
                         Ok(content) => {
                             if let Some(natives) = &natives {
-                                *registration.borrow_mut() =
-                                    Some(natives.register(node, content.clone()));
+                                *registration.borrow_mut() = Some((
+                                    natives.register(node, content.clone()),
+                                    MountedGuard::of(content),
+                                ));
                             }
-                            (supported, (!supported).then(|| content.label()))
+                            // A Painted source draws itself: nothing is
+                            // platform-painted, and it never shows a placeholder.
+                            match content {
+                                NativeContent::Painted(_) => (false, None),
+                                _ => (supported, (!supported).then(|| content.label())),
+                            }
                         }
                         Err(missing) => (false, Some(missing.clone())),
                     };
-                    platform_painted(&painter, painted);
+                    platform_painted(&painter, painted_flag);
+                    painted.set(match &next {
+                        Ok(NativeContent::Painted(source)) => Some(PaintedView(source.clone())),
+                        _ => None,
+                    });
                     *current.borrow_mut() = next.ok();
                     label.set(placeholder);
                 });
@@ -880,6 +906,41 @@ enum Focusable {
     /// A host's own view: AppKit's first responder follows the node's focus
     /// in the desktop host (`Surfaces::sync_focus`).
     Platform,
+    /// A zgx-painted source: the node's focus is its own.
+    Painted(Rc<dyn crate::native_view::PaintedSource>, std::cell::Cell<bool>),
+}
+/// Tells a `PaintedSource` its node sits in the scene while this guard
+/// lives (`PaintedSource::mounted`); dropped when the node unmounts or its
+/// registration is replaced.
+struct MountedGuard(Rc<dyn crate::native_view::PaintedSource>);
+impl MountedGuard {
+    /// `Some` for painted content, after telling it the node mounted.
+    fn of(content: &NativeContent) -> Option<Self> {
+        match content {
+            NativeContent::Painted(source) => {
+                source.mounted(true);
+                Some(Self(source.clone()))
+            }
+            _ => None,
+        }
+    }
+}
+impl Drop for MountedGuard {
+    fn drop(&mut self) {
+        self.0.mounted(false);
+    }
+}
+/// A `PaintedSource` in a signal: identity, not contents.
+struct PaintedView(Rc<dyn crate::native_view::PaintedSource>);
+impl Clone for PaintedView {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+impl PartialEq for PaintedView {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
 }
 impl Focusable {
     fn of(content: &NativeContent) -> Option<Self> {
@@ -887,6 +948,9 @@ impl Focusable {
             NativeContent::Web(web) => Some(Self::Web(web.clone())),
             NativeContent::Terminal(term) => Some(Self::Terminal(term.clone())),
             NativeContent::Platform(_) => Some(Self::Platform),
+            NativeContent::Painted(source) => {
+                Some(Self::Painted(source.clone(), std::cell::Cell::new(false)))
+            }
         }
     }
     fn focused(&self) -> bool {
@@ -894,6 +958,7 @@ impl Focusable {
             Self::Web(web) => web.focused(),
             Self::Terminal(term) => term.focused(),
             Self::Platform => true,
+            Self::Painted(_, focused) => focused.get(),
         }
     }
     fn focus(&self, on: bool) {
@@ -903,8 +968,33 @@ impl Focusable {
             (Self::Terminal(term), true) => term.focus(),
             (Self::Terminal(term), false) => term.blur(),
             (Self::Platform, _) => {}
+            (Self::Painted(source, focused), on) => {
+                focused.set(on);
+                source.focus(on);
+            }
         }
     }
+}
+/// A zgx-painted native view's latest frame, filling its node's box: new
+/// pixels follow the source's `revision`.
+fn painted_frame(source: Rc<dyn crate::native_view::PaintedSource>) -> View {
+    let fallback = std::cell::RefCell::new(None);
+    crate::compose::image_signal("native view", move || {
+        let _ = source.revision().get();
+        let frame = source.frame();
+        frame.unwrap_or_else(|| {
+            fallback
+                .borrow_mut()
+                .get_or_insert_with(|| {
+                    std::sync::Arc::new(
+                        crate::image::ImageData::new(1, 1, vec![0; 4]).expect("1x1 image"),
+                    )
+                })
+                .clone()
+        })
+    })
+    .w_full()
+    .h_full()
 }
 fn native(
     content: NativeContent,
@@ -932,6 +1022,11 @@ fn native(
                 _ => {}
             }
         });
+        if supported
+            && let NativeContent::Painted(source) = &content
+        {
+            root = root.child(painted_frame(source.clone()));
+        }
         if !supported {
             let label = content.clone();
             root = root.child(placeholder(label));
@@ -940,10 +1035,14 @@ fn native(
         root.on_mount(move |handle| {
             if let Some(natives) = natives {
                 if supported
+                    && !matches!(registered, NativeContent::Painted(_))
                     && let Some(scene) = handle.scene()
                     && let Ok(mut scene) = scene.try_borrow_mut()
                 {
                     scene.set_platform_painted(handle.node(), true);
+                }
+                if let Some(guard) = MountedGuard::of(&registered) {
+                    handle.retain(guard);
                 }
                 handle.retain(natives.register(handle.node(), registered));
             }
@@ -975,7 +1074,7 @@ fn placeholder(content: NativeContent) -> View {
                 }
             })
         }
-        NativeContent::Platform(_) => text(content.label()),
+        NativeContent::Platform(_) | NativeContent::Painted(_) => text(content.label()),
     };
     placeholder_box(label)
 }

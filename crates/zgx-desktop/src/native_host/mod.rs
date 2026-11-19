@@ -17,6 +17,8 @@ mod dcomp;
 mod ghostty;
 #[cfg(all(target_os = "macos", feature = "ghostty"))]
 pub(crate) use ghostty::processes_changed;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
@@ -25,9 +27,11 @@ mod webkit;
 mod webview2;
 
 use std::rc::Rc;
+#[cfg(any(target_os = "macos", windows))]
+use zgx::scene::Rect;
 use zgx::{
     native_view::{NativeViews, PlaneSplit, PointerStep},
-    scene::{Rect, Scene},
+    scene::Scene,
     widgets::Ui,
 };
 
@@ -98,6 +102,21 @@ pub(crate) struct NativeHost {
         allow(dead_code)
     )]
     input: zgx::input::InputDispatcher,
+    /// The painted node the pointer is over (Linux only paints natives).
+    #[cfg(target_os = "linux")]
+    over: Option<linux::Pointed>,
+    /// A press in progress on a painted node (Linux).
+    #[cfg(target_os = "linux")]
+    held: Option<linux::Held>,
+    /// The last press's click streak (button, when, where, count).
+    #[cfg(target_os = "linux")]
+    held_clicks: Option<(zgx::input::PointerButton, std::time::Instant, f32, f32, u32)>,
+    /// The focused node's painted source (Linux).
+    #[cfg(target_os = "linux")]
+    focused: Option<(zgx::scene::NodeId, Rc<dyn zgx::native_view::PaintedSource>)>,
+    /// What the keyboard holds, for `PaintedKey::modifiers` (Linux).
+    #[cfg(target_os = "linux")]
+    modifiers: zgx::input::Modifiers,
     _waker: zgx::native_view::WakerGuard,
 }
 
@@ -112,8 +131,10 @@ impl NativeHost {
                 let backends = backends.to_ascii_lowercase();
                 backends.contains("dx12") || backends.contains("d3d12")
             });
+        // Linux hosts `Painted` sources: its only native content, since
+        // it has no platform views to mount (see `linux.rs`).
         #[cfg(not(all(windows, feature = "webview2")))]
-        let supported = cfg!(any(target_os = "macos", windows));
+        let supported = cfg!(any(target_os = "macos", windows, target_os = "linux"));
         natives.set_supported(supported);
         Self {
             natives,
@@ -138,6 +159,16 @@ impl NativeHost {
             pending: false,
             scene: Rc::downgrade(&ui.scene),
             input: ui.input.clone(),
+            #[cfg(target_os = "linux")]
+            over: None,
+            #[cfg(target_os = "linux")]
+            held: None,
+            #[cfg(target_os = "linux")]
+            held_clicks: None,
+            #[cfg(target_os = "linux")]
+            focused: None,
+            #[cfg(target_os = "linux")]
+            modifiers: Default::default(),
             _waker: zgx::native_view::set_waker(wake),
         }
     }
@@ -196,18 +227,27 @@ impl NativeHost {
     /// The pointer moved to window point `(x, y)` (the host's own report):
     /// what zgx hears of it (see `NativePointer`). `held`: a press of
     /// zgx's follows the pointer.
-    pub fn pointer_moved(&self, x: f32, y: f32, held: bool) -> PointerStep {
+    pub fn pointer_moved(&mut self, x: f32, y: f32, held: bool) -> PointerStep {
+        #[cfg(target_os = "linux")]
+        {
+            return self.painted_pointer_moved(x, y, held);
+        }
         #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
         if let Some(surfaces) = &self.surfaces {
             let (step, report) = surfaces.router().track(x, y, held);
             report.apply();
             return step;
         }
-        let _ = (x, y, held);
-        PointerStep::Move
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (x, y, held);
+            PointerStep::Move
+        }
     }
     /// The pointer left the window, or the window went to the back.
-    pub fn pointer_left(&self) {
+    pub fn pointer_left(&mut self) {
+        #[cfg(target_os = "linux")]
+        self.painted_pointer_left();
         #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
         if let Some(surfaces) = &self.surfaces {
             surfaces.router().pointer.left().apply();
@@ -216,11 +256,14 @@ impl NativeHost {
     /// Whether the pointer is over a native view taking input (it shows
     /// its own cursor).
     pub fn pointer_over_native(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        return self.over.is_some() || self.held.is_some();
         #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
         if let Some(surfaces) = &self.surfaces {
             return surfaces.router().pointer.over().is_some();
         }
-        false
+        #[cfg(not(target_os = "linux"))]
+        return false;
     }
     /// Where the pointer last moved to that the host did not hear itself
     /// (a native view had keyboard focus, so AppKit sent the move there).
@@ -253,6 +296,8 @@ impl NativeHost {
         {
             self.composition = None;
         }
+        #[cfg(target_os = "linux")]
+        self.suspend_painted();
         self.split = Rc::new(PlaneSplit::default());
         #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
         {
@@ -624,7 +669,7 @@ impl NativeHost {
     }
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 impl NativeHost {
     pub fn plan(
         &mut self,

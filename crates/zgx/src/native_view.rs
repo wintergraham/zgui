@@ -38,6 +38,123 @@ pub enum NativeContent {
     /// A platform view the host knows how to mount: on macOS a
     /// `Retained<NSView>` (see `zgx_desktop::native_view`).
     Platform(Rc<dyn Any>),
+    /// A view whose pixels zgx itself draws, from [`PaintedSource`]'s frames:
+    /// windowless (off-screen) backends such as CEF on Linux, where no
+    /// platform view exists to host. The node clips, rounds and fades it
+    /// like any paint, overlay content draws over it in the same plane and
+    /// no plane split is needed; the host still routes its pointer and key
+    /// input and tracks its placement for the source.
+    Painted(Rc<dyn PaintedSource>),
+}
+
+/// A native view's frame source, composited by zgx itself
+/// ([`NativeContent::Painted`]). Implemented by the backend; every call is
+/// on the UI thread.
+pub trait PaintedSource {
+    /// Bumped whenever `frame` has new pixels (the node's paint re-reads
+    /// then). Created from the component's runtime.
+    fn revision(&self) -> crate::reactive::Signal<u64>;
+    /// Its latest pixels; `None` before the first frame.
+    fn frame(&self) -> Option<std::sync::Arc<crate::image::ImageData>>;
+    /// Its laid-out size in points or its drawing scale changed: the
+    /// backend sizes its next frames to `width` × `height` × `scale`
+    /// device pixels.
+    fn layout(&self, _width: f32, _height: f32, _scale: f32) {}
+    /// Its node mounted into or left the scene (`true`/`false`). A hidden
+    /// node stays mounted — `layout` fires only while it is visible — so a
+    /// backend that must run before its first frame (a browser engine)
+    /// starts here, not on `layout`.
+    fn mounted(&self, _mounted: bool) {}
+    /// Fully drawn over, clipped away or not mounted: the backend need not
+    /// produce frames.
+    fn visible(&self, _visible: bool) {}
+    /// The pointer moved over its box, at `(x, y)` in its local points.
+    fn pointer_moved(&self, _x: f32, _y: f32) {}
+    /// The pointer left its box (or the window).
+    fn pointer_left(&self) {}
+    /// A button went down at local `(x, y)`, the `clicks`-th in a row, with
+    /// the platform's modifier flags (`PaintedKey::modifiers`).
+    fn pointer_down(
+        &self,
+        _x: f32,
+        _y: f32,
+        _button: crate::input::PointerButton,
+        _clicks: u32,
+        _modifiers: u32,
+    ) {
+    }
+    /// A button went up at local `(x, y)`.
+    fn pointer_up(
+        &self,
+        _x: f32,
+        _y: f32,
+        _button: crate::input::PointerButton,
+        _modifiers: u32,
+    ) {
+    }
+    /// A wheel or trackpad scroll at local `(x, y)`, `dx`/`dy` in points.
+    fn wheel(&self, _x: f32, _y: f32, _dx: f32, _dy: f32, _modifiers: u32) {}
+    /// A key press (`pressed`) or release while it holds the node's focus;
+    /// `true` keeps it from zgx's shortcuts.
+    fn key(&self, _event: &PaintedKey) -> bool {
+        false
+    }
+    /// The node's keyboard focus came to it or left it.
+    fn focus(&self, _focused: bool) {}
+    /// The source wants the node's zgx focus given back (its backend moved
+    /// focus to the chrome, where zgx's own focus belongs): `true` once, the
+    /// host drops the node's focus. Default: never asks.
+    fn take_blur(&self) -> bool {
+        false
+    }
+    /// The cursor to show while the pointer is over it, if it drives one.
+    fn cursor(&self) -> Option<PaintedCursor> {
+        None
+    }
+}
+/// A key event as a [`PaintedSource`] hears it, from the platform's own.
+#[derive(Clone, Copy, Debug)]
+pub struct PaintedKey {
+    /// Down (else up).
+    pub pressed: bool,
+    /// The platform's virtual-key code, as the backend knows it.
+    pub key_code: u32,
+    /// The platform's hardware (scan) code.
+    pub native_code: u32,
+    /// The text it types, if any (a char event follows a press).
+    pub character: u16,
+    /// The character with no modifiers applied.
+    pub unmodified_character: u16,
+    /// Shift, Control, Alt, Super held (CEF's `EVENTFLAG` values).
+    pub modifiers: u32,
+}
+/// The cursor a [`PaintedSource`] asks for; the host maps it to its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaintedCursor {
+    /// The platform's pointer (arrow).
+    Pointer,
+    /// Over text it can edit or select.
+    Text,
+    /// A link or other activatable spot.
+    Hand,
+    /// Cannot act here.
+    NotAllowed,
+    /// A drag is in progress.
+    Move,
+    /// A resize, by its direction (`n`/`s`/`e`/`w` and the diagonals).
+    Resize(PaintedResize),
+}
+/// A resize cursor's direction (CSS cursor names).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaintedResize {
+    /// `ns-resize`.
+    Vertical,
+    /// `ew-resize`.
+    Horizontal,
+    /// `nwse-resize`.
+    NorthWestSouthEast,
+    /// `nesw-resize`.
+    NorthEastSouthWest,
 }
 impl NativeContent {
     /// A short description for placeholders and diagnostics.
@@ -60,6 +177,7 @@ impl NativeContent {
                 }
             }
             Self::Platform(_) => "Native view".into(),
+            Self::Painted(_) => "Native view".into(),
         }
     }
     /// Whether both show the same page, session or platform view.
@@ -68,6 +186,9 @@ impl NativeContent {
             (Self::Web(a), Self::Web(b)) => a.ptr_eq(b),
             (Self::Terminal(a), Self::Terminal(b)) => a.ptr_eq(b),
             (Self::Platform(a), Self::Platform(b)) => {
+                std::ptr::addr_eq(Rc::as_ptr(a), Rc::as_ptr(b))
+            }
+            (Self::Painted(a), Self::Painted(b)) => {
                 std::ptr::addr_eq(Rc::as_ptr(a), Rc::as_ptr(b))
             }
             _ => false,
@@ -748,7 +869,19 @@ impl Walk<'_> {
             }) else {
                 continue;
             };
-            let on_overlay = !self.native_rects.is_empty() && self.overlaps(painted);
+            // Inside a native node (a painted source's own frame), paint is
+            // the view's, not overlay content: the pointer must reach the
+            // view under it.
+            let mut ancestor = self.scene.parent(item.id);
+            let inside_native = loop {
+                match ancestor {
+                    Some(id) if self.natives.contains(&id) => break true,
+                    Some(id) => ancestor = self.scene.parent(id),
+                    None => break false,
+                }
+            };
+            let on_overlay =
+                !inside_native && !self.native_rects.is_empty() && self.overlaps(painted);
             let was = self.previous.overlay.get(&item.id).copied();
             if on_overlay {
                 if item.effects.blur_radius > 0. {
