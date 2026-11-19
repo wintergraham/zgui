@@ -7204,10 +7204,23 @@ impl Scene {
         // A leaf, nothing transformed or filtered: what it painted is damaged
         // with what it will paint, once it is placed (see `leaf_damage`).
         let leaf = damage && childless && self.transformed + self.filtered == 0;
-        // A moved leaf's damage where it was and where it lands, worked out
-        // and added before its box changes: a leaf has no children, so no
-        // other damage comes between, and nothing it paints changes.
-        match (damage, leaf) {
+        // A box that only grew or shrank in place, which passes nothing of its
+        // box on to its children (`keeps_children`): their places, clips and
+        // paint are what they were, so only what it paints itself is damaged,
+        // as a leaf's would be, at its old box and its new one. A child that
+        // did move still damages itself below: `covered` stays false.
+        let resized = damage
+            && !childless
+            && self.transformed + self.filtered == 0
+            && node.parent.is_some()
+            && node.bounds.x == bounds.x
+            && node.bounds.y == bounds.y
+            && keeps_children(node);
+        // A moved leaf's (or resized box's own paint's) damage where it was
+        // and where it lands, worked out and added before its box changes: a
+        // leaf has no children, so no other damage comes between, and nothing
+        // it paints changes.
+        match (damage, leaf || resized) {
             (true, true) => {
                 let node = self.tree_node(id);
                 let (before, after) = self.leaf_damage::<CELLS>(
@@ -7260,12 +7273,12 @@ impl Scene {
                 self.measure_full(child, constraints);
             }
             crate::deep(level + 1, || {
-                let covered = covered || changed;
+                let covered = covered || (changed && !resized);
                 let (x, y) = (x + rect.x, y + rect.y);
                 self.arrange::<CELLS>(child, x, y, report, covered, level + 1, &mut children)
             });
         }
-        if damage && !leaf {
+        if damage && !leaf && !resized {
             self.damage_subtree_with(id, context);
         }
         let node = self.tree_node_mut(id);
@@ -8391,6 +8404,27 @@ impl Scene {
         }
     }
 }
+/// Whether nothing of `node`'s box reaches its children: no clip, fade or
+/// inset to apply over them, no layer they paint into by its box, no text
+/// or contents layout placing them inside it. Only such a node may resize
+/// in place without a look at its subtree (`arrange`: `resized`); the root
+/// is out too, its clip being the viewport a resize changes.
+fn keeps_children(node: &Node) -> bool {
+    node.clip_inset.is_none()
+        && !node.isolated
+        && !node.promoted
+        && !node.layered
+        && !node.scroll_copy
+        && !node.contents
+        && node.effects == Effects::default()
+        && clip_axes(&node.style) == (false, false)
+        && !fades(&node.style)
+        && !node.style.fade_overflow
+        && matches!(
+            node.kind,
+            NodeKind::Container(_) | NodeKind::Panel { .. } | NodeKind::Rect(_)
+        )
+}
 /// Whether `style` fades any edge (`fade_mask` makes a mask of its own).
 fn fades(style: &Style) -> bool {
     style
@@ -9085,6 +9119,52 @@ mod tests {
                 Rect::new(0.0, 0.0, 20.0, 20.0),
                 Rect::new(100.0, 0.0, 20.0, 20.0)
             ]
+        );
+        assert!(scene.flush().is_idle());
+    }
+    #[test]
+    fn a_box_resized_in_place_damages_its_own_paint_not_unchanged_children() {
+        let mut scene = Scene::new(500.0, 500.0);
+        let mut style = Style {
+            width: Some(50.0),
+            height: Some(50.0),
+            ..Style::default()
+        };
+        let panel = scene.append(
+            scene.root(),
+            NodeKind::Panel {
+                layout: Layout::Overlay,
+                quad: QuadStyle {
+                    fill: Color(1, 2, 3, 255),
+                    ..QuadStyle::default()
+                },
+            },
+            style.clone(),
+        );
+        // Past the panel's box before and after the resize: it does not
+        // clip, so the child paints where it was all along.
+        let child = scene.append(
+            panel,
+            NodeKind::Rect(Color(4, 5, 6, 255)),
+            Style {
+                width: Some(10.0),
+                height: Some(10.0),
+                ..Style::default()
+            },
+        );
+        scene.set_transform(child, Transform { x: 200.0, y: 0.0 });
+        scene.flush();
+        style.width = Some(100.0);
+        scene.set_style(panel, style);
+        let frame = scene.flush();
+        // The panel's own paint at both sizes merges into one area; the
+        // child at x = 200 is nobody's repaint.
+        assert_eq!(frame.damage, vec![Rect::new(0.0, 0.0, 100.0, 50.0)]);
+        assert!(
+            !frame
+                .damage
+                .iter()
+                .any(|rect| rect.intersects(Rect::new(200.0, 0.0, 10.0, 10.0)))
         );
         assert!(scene.flush().is_idle());
     }
