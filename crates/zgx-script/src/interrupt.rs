@@ -606,7 +606,7 @@ unsafe fn check(state: *mut ffi::lua_State) -> Verdict {
                 watch.collect.set(false);
                 let live = used(state);
                 watch.live.set(live);
-                watch.collect_at.set(live + limit.saturating_sub(limit) / 2);
+                watch.collect_at.set(live + limit.saturating_sub(live) / 2);
                 watch.set_memory_alarm();
             }
         }
@@ -711,6 +711,10 @@ mod tests {
             installed.watch.live.get() > 0,
             "a collection cycle ran and measured the live heap"
         );
+        // The next alarm is halfway from the live heap to the limit, not at
+        // the live heap itself (which would start the next cycle at once).
+        let (live, at) = (installed.watch.live.get(), installed.watch.collect_at.get());
+        assert_eq!(at, live + (limit - live) / 2, "the alarm set halfway up again");
         assert!(
             installed.watch.steps.get() > 1,
             "a cycle took several steps: {} step(s)",
