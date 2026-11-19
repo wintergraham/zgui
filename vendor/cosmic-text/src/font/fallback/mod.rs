@@ -211,6 +211,8 @@ impl<'a> FontFallbackIter<'a> {
         font_system
             .fallbacks
             .extend(font_system.dyn_fallback.as_ref(), scripts);
+        // zgx patch: the family index every `face_contains_family` reads.
+        font_system.ensure_family_index();
         font_system.monospace_fallbacks_buffer.clear();
         Self {
             font_system,
@@ -294,6 +296,13 @@ impl<'a> FontFallbackIter<'a> {
         &mut self.font_system.shape_buffer
     }
 
+    /// zgx patch: the ids of `family_name`'s faces, for the `contains` a
+    /// loop over every match key makes of them (`faces_in_family` would
+    /// hash the name per pair). A family's faces are a handful.
+    fn family_faces(&self, family_name: &str) -> Vec<fontdb::ID> {
+        self.font_system.faces_in_family(family_name).to_vec()
+    }
+
     fn face_contains_family(&self, id: fontdb::ID, family_name: &str) -> bool {
         self.font_system
             .db()
@@ -304,11 +313,12 @@ impl<'a> FontFallbackIter<'a> {
     fn default_font_match_key(&self) -> Option<&FontMatchKey> {
         let default_family = self.default_families[self.default_i - 1];
         let default_family_name = self.font_system.db().family_name(default_family);
+        let faces = self.family_faces(default_family_name);
 
         self.font_match_keys
             .iter()
             .filter(|m_key| m_key.font_weight_diff == 0 || m_key.variable_weight_match)
-            .find(|m_key| self.face_contains_family(m_key.id, default_family_name))
+            .find(|m_key| faces.contains(&m_key.id))
     }
 
     fn next_item(&mut self, fallbacks: &Fallbacks) -> Option<<Self as Iterator>::Item> {
@@ -456,8 +466,9 @@ impl<'a> FontFallbackIter<'a> {
             while self.script_i.1 < script_families.len() {
                 let script_family = script_families[self.script_i.1];
                 self.script_i.1 += 1;
+                let faces = self.family_faces(script_family);
                 for m_key in font_match_keys_iter(false) {
-                    if self.face_contains_family(m_key.id, script_family) {
+                    if faces.contains(&m_key.id) {
                         if let Some(font) = self.font_system.get_font_at(m_key.id, self.ideal_weight, self.optical) {
                             return Some(font);
                         }
@@ -479,8 +490,9 @@ impl<'a> FontFallbackIter<'a> {
         while self.common_i < common_families.len() {
             let common_family = common_families[self.common_i];
             self.common_i += 1;
+            let faces = self.family_faces(common_family);
             for m_key in font_match_keys_iter(false) {
-                if self.face_contains_family(m_key.id, common_family) {
+                if faces.contains(&m_key.id) {
                     if let Some(font) = self.font_system.get_font_at(m_key.id, self.ideal_weight, self.optical) {
                         return Some(font);
                     }

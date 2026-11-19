@@ -116,6 +116,33 @@ macro_rules! bench {
     }};
 }
 
+/// Shaping time for a line that needs font fallback (CJK, emoji and
+/// codepoints no installed font holds) — every line unique so the patched
+/// word cache cannot serve it and the fallback iterator's scan runs.
+macro_rules! fbench {
+    ($ct:ident) => {{
+        use $ct::*;
+        let mut fonts = FontSystem::new();
+        let attrs = Attrs::new().family(Family::SansSerif);
+        let mut shaping = Duration::ZERO;
+        for tick in 0..20_000u64 {
+            let line = format!(
+                "{tick:05} 漢{tick:05}字 ひら{tick:03}な カタ{tick:04}ナ 😀한{tick:03}어 \u{10fffd}{tick:04}\u{e0001}"
+            );
+            let started = Instant::now();
+            let mut line = BufferLine::new(
+                &line,
+                LineEnding::None,
+                AttrsList::new(&attrs),
+                Shaping::Advanced,
+            );
+            line.shape(&mut fonts, 8);
+            shaping += started.elapsed();
+        }
+        shaping.as_secs_f64() * 1e6 / 20_000.
+    }};
+}
+
 fn next(seed: &mut u64) -> u64 {
     *seed ^= *seed << 13;
     *seed ^= *seed >> 7;
@@ -137,6 +164,57 @@ fn main() {
             let upstream = bench!(upstream, 50_000);
             let patched = bench!(patched, 50_000, shape_run_cache);
             println!("shaping per tick: upstream (no word cache) {upstream:.2} µs, patched {patched:.2} µs");
+        }
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("scan") {
+        // The fallback iterator alone: a word of many scripts, most of
+        // whose fallback families no installed font holds, so their
+        // membership tests scan every match key — the test the zgx family
+        // index replaces.
+        use patched::*;
+        use unicode_script::Script::*;
+        let mut fonts = FontSystem::new();
+        let attrs = Attrs::new().family(Family::SansSerif);
+        let keys = fonts.get_font_matches(&attrs);
+        let default_families = [&attrs.family];
+        let scripts = [
+            Adlam, Armenian, Buhid, Canadian_Aboriginal, Chakma, Devanagari, Ethiopic, Gothic,
+            Grantha, Hanunoo, Javanese, Kannada, Khmer, Malayalam, Mongolian, Myanmar, Oriya,
+            Sinhala, Syriac, Tagalog, Tagbanwa, Tai_Le, Tai_Tham, Tai_Viet, Tamil, Telugu, Thaana,
+            Tifinagh, Vai, Yi,
+        ];
+        let mut scan = Duration::ZERO;
+        for _ in 0..2000 {
+            let mut iter = patched::fallback::FontFallbackIter::new(
+                &mut fonts,
+                &keys,
+                &default_families,
+                &scripts,
+                "x",
+                attrs.weight,
+                0,
+            );
+            let started = Instant::now();
+            // A handful of `next`s: the first walks the default family,
+            // the next few walk every script and common family — where
+            // missing families mean a pass over every match key each.
+            for _ in 0..8 {
+                iter.next();
+            }
+            scan += started.elapsed();
+        }
+        println!(
+            "fallback iteration, first 8 next()s: {:.2} µs",
+            scan.as_secs_f64() * 1e6 / 2000.
+        );
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("fallback") {
+        for _ in 0..3 {
+            let upstream = fbench!(upstream);
+            let patched = fbench!(patched);
+            println!("fallback shaping per line: upstream {upstream:.2} µs, patched {patched:.2} µs");
         }
         return;
     }

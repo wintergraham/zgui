@@ -183,6 +183,12 @@ pub struct FontSystem {
     /// zgx patch: the colour emoji face, once looked for (`emoji_font`).
     emoji_face: Option<Option<fontdb::ID>>,
 
+    /// zgx patch: every family name's faces, indexed the first time a
+    /// fallback looks one up (`ensure_family_index`). Finding a fallback
+    /// family otherwise asked the database for every face's family names,
+    /// once per face per family searched.
+    family_index: Option<HashMap<String, Vec<fontdb::ID>>>,
+
     /// Scratch buffer for shaping and laying out.
     pub(crate) shape_buffer: ShapeBuffer,
 
@@ -334,6 +340,7 @@ impl FontSystem {
             font_matches_cache: HashMap::default(),
             first_font: Vec::new(),
             emoji_face: None,
+            family_index: None,
             weight_axes: HashMap::default(),
             font_codepoint_support_info_cache: HashMap::default(),
             monospace_fallbacks_buffer: BTreeSet::default(),
@@ -365,12 +372,38 @@ impl FontSystem {
         self.font_matches_cache.clear();
         self.first_font.clear();
         self.emoji_face = None;
+        self.family_index = None;
         &mut self.db
     }
 
     /// Consume this [`FontSystem`] and return the locale and database.
     pub fn into_locale_and_db(self) -> (String, fontdb::Database) {
         (self.locale, self.db)
+    }
+
+    /// zgx patch: index every family name to its faces, so `faces_in_family`
+    /// is a lookup rather than a scan of every face's names.
+    pub(crate) fn ensure_family_index(&mut self) {
+        if self.family_index.is_some() {
+            return;
+        }
+        let mut index: HashMap<String, Vec<fontdb::ID>> = HashMap::default();
+        for face in self.db.faces() {
+            for (name, _) in &face.families {
+                index.entry(name.clone()).or_default().push(face.id);
+            }
+        }
+        self.family_index = Some(index);
+    }
+
+    /// zgx patch: the faces of the family `name`, `ensure_family_index`
+    /// having run (a `FontFallbackIter` runs it as it is made).
+    pub(crate) fn faces_in_family(&self, name: &str) -> &[fontdb::ID] {
+        self.family_index
+            .as_ref()
+            .expect("the family index is built before a fallback searches")
+            .get(name)
+            .map_or(&[], Vec::as_slice)
     }
 
     /// Get a font by its ID and weight.
