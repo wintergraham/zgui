@@ -66,6 +66,12 @@ fn main() {
     let wanted = |name: &str| only.as_deref().is_none_or(|only| only == name);
     let limits = Limits {
         load: Duration::from_secs(5),
+        // `MEM_MB` caps a VM's heap so the memory watch's collection runs
+        // in the measured frames: its in-frame cost shows in the tail.
+        memory: std::env::var("MEM_MB")
+            .ok()
+            .and_then(|mb| mb.parse().ok())
+            .map_or(1 << 30, |mb: usize| mb << 20),
         ..Limits::default()
     };
     if wanted("dashboard") {
@@ -74,6 +80,31 @@ fn main() {
         app.frames(2);
         scene("dashboard", app, frames, |app, _| {
             assert!(app.host.run_command("refresh"));
+        });
+    }
+    if wanted("gc") {
+        // Nothing but garbage churn: each "churn" drops tens of megabytes
+        // of dead tables faster than the VM's own pacing frees them, so
+        // under `MEM_MB` the memory watch's collections are the tail.
+        let app = TestApp::new(|runtime| {
+            ScriptHost::inline(
+                runtime,
+                "gc",
+                r#"
+ui.command { id = "churn", run = function()
+	local junk = {}
+	for i = 1, 200000 do
+		junk[i] = { i, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }
+	end
+end }
+return ui.column { ui.text { "gc" } }
+"#,
+            )
+            .limits(limits)
+        });
+        app.frames(2);
+        scene("gc", app, frames, |app, _| {
+            assert!(app.host.run_command("churn"));
         });
     }
     if wanted("mail") {

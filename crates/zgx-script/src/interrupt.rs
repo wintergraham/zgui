@@ -95,9 +95,18 @@ pub(crate) struct Watch {
     /// collector a turn, and a loop of them between host calls would fill
     /// the VM with garbage until the limit failed the script.
     collect_at: Cell<usize>,
-    /// The allocator passed `collect_at` (its alarm, `on_memory`): the
-    /// interrupt collects at its next check.
+    /// The allocator passed `collect_at` (its alarm, `on_memory`) and the
+    /// interrupt has not finished collecting since: the interrupt collects
+    /// at its next check, and stays set until a cycle has run.
     collect: Cell<bool>,
+    /// When the cycle's next piece may run: a check collecting holds off
+    /// until then (`GC_SPACING`), so one frame holds a piece or two, not
+    /// the burst back to back that a call's many checks would give it.
+    /// Near the limit this is ignored and checks collect straight away.
+    next_collect: Cell<Instant>,
+    /// Collection steps the interrupt has run (a test counts them).
+    #[cfg(test)]
+    steps: Cell<u64>,
 }
 impl Watch {
     /// The VM may hold `limit` from now: it collects halfway there.
@@ -214,6 +223,23 @@ struct Watchdog {
 /// budget is spent. Only a call running almost its whole budget runs its
 /// last moments with the interrupt set.
 const EARLY: u64 = 5_000_000;
+/// One incremental collection step's size (`LUA_GCSTEP`, in KB): small
+/// enough that a single step's work stays a fraction of a millisecond on
+/// the heaps scripts hold.
+const GC_STEP: c_int = 1024;
+/// The most a check collects for: the rest of a cycle continues at the
+/// next checks (`collect` stays set meanwhile). A full collection of a
+/// 67 MB heap takes around nine milliseconds in one pause; spread this
+/// way no check's piece is near a millisecond.
+const GC_BUDGET: Duration = Duration::from_micros(700);
+/// The least between one check's piece and the next: checks land every
+/// 64 safepoints, many of them in one call, so without a beat the
+/// pieces would pile back into one frame. Spaced this way a frame holds
+/// at most a couple of pieces, and a cycle of a 67 MB heap finishes
+/// within a couple hundred milliseconds — far under what the room past
+/// `collect_at` gives it. A heap closing on the limit does not wait
+/// (the check ignores the spacing within the last eighth of it).
+const GC_SPACING: Duration = Duration::from_millis(8);
 impl Watchdog {
     /// The process's watchdog.
     fn get() -> &'static Watchdog {
@@ -425,6 +451,9 @@ fn install_on(
         live: Cell::new(0),
         collect_at: Cell::new(limit / 2),
         collect: Cell::new(false),
+        next_collect: Cell::new(Instant::now()),
+        #[cfg(test)]
+        steps: Cell::new(0),
     });
     watch.set_memory_alarm();
     watchdog.lock().push(Arc::downgrade(&alarm));
@@ -534,24 +563,53 @@ unsafe fn check(state: *mut ffi::lua_State) -> Verdict {
         return Verdict::Continue;
     };
     let limit = watch.limit.get();
-    if watch.collect.replace(false) && limit > 0 {
-        // SAFETY: the counts read the VM's totals. The full collection runs
-        // at a safepoint, where the VM has saved its frame and keeps the
-        // thread's top above every live register, as it does for the
-        // collection steps its own instructions take. Neither raises an
-        // error (a collection only frees and shrinks). The collector may run
-        // userdata destructors (Rust drops), as any allocation's step may;
-        // no borrow of `WATCHES` is held meanwhile, so one dropping an
-        // `Installed` is fine.
+    if limit == 0 {
+        watch.collect.set(false);
+    } else if watch.collect.get() {
+        // SAFETY: the counts read the VM's totals.
         let used = |state| unsafe {
             ffi::lua_gc(state, ffi::LUA_GCCOUNT, 0) as usize * 1024
                 + ffi::lua_gc(state, ffi::LUA_GCCOUNTB, 0) as usize
         };
-        unsafe { ffi::lua_gc(state, ffi::LUA_GCCOLLECT, 0) };
-        let live = used(state);
-        watch.live.set(live);
-        watch.collect_at.set(live + limit.saturating_sub(live) / 2);
-        watch.set_memory_alarm();
+        // A full collection of a large heap takes milliseconds inside the
+        // running call — a visible hitch in a frame — so it runs in
+        // bounded pieces: `GC_STEP` of incremental work at a time, at most
+        // `GC_BUDGET` of it a check, and a check waits `GC_SPACING` after
+        // the last piece before the next (without it a call's many checks
+        // would run the pieces back to back, the whole cycle again inside
+        // one frame). Its sweep frees as it goes, and the interrupt stays
+        // set (`collect` left set) until the cycle ends. A heap within an
+        // eighth of the limit cannot wait for the beat: pieces then run
+        // at every check, as the whole collection once did.
+        if Instant::now() >= watch.next_collect.get()
+            || used(state) >= limit.saturating_sub(limit / 8)
+        {
+            // SAFETY: the steps run at a safepoint, where the VM has
+            // saved its frame and keeps the thread's top above every live
+            // register, as they do for the collection steps its own
+            // instructions take. They raise no error (a collection only
+            // frees and shrinks). The collector may run userdata
+            // destructors (Rust drops), as any allocation's step may; no
+            // borrow of `WATCHES` is held meanwhile, so one dropping an
+            // `Installed` is fine.
+            let until = Instant::now() + GC_BUDGET;
+            let done = loop {
+                let done = unsafe { ffi::lua_gc(state, ffi::LUA_GCSTEP, GC_STEP) } != 0;
+                #[cfg(test)]
+                watch.steps.set(watch.steps.get() + 1);
+                if done || Instant::now() >= until {
+                    break done;
+                }
+            };
+            watch.next_collect.set(Instant::now() + GC_SPACING);
+            if done {
+                watch.collect.set(false);
+                let live = used(state);
+                watch.live.set(live);
+                watch.collect_at.set(live + limit.saturating_sub(limit) / 2);
+                watch.set_memory_alarm();
+            }
+        }
     }
     match watch.deadline.get() {
         Some(d) if d.exceeded() => Verdict::OutOfTime,
@@ -611,6 +669,53 @@ mod tests {
         unsafe { on_memory(std::ptr::from_ref(&*installed.watch).cast()) };
         installed.publish(None);
         assert!(set(), "a pending collection keeps it set past a call's end");
+    }
+
+    /// The collection the memory alarm asks for runs in bounded steps over
+    /// as many checks as it takes, not one pause inside the call: a cycle
+    /// over a heap this size takes more than one step, and `live` is
+    /// measured when it ends.
+    #[test]
+    fn the_memory_alarm_collects_in_steps() {
+        let lua = Lua::new();
+        let limit = 8 << 20;
+        lua.set_memory_limit(limit).unwrap();
+        let deadline: Rc<Cell<Option<Deadline>>> = Rc::default();
+        let installed = install(&lua, deadline, limit);
+        installed.publish(Some(Deadline::start(Duration::from_secs(60))));
+        // Growth past `collect_at` (kept alive, so it is not collected
+        // back under it): the alarm sets the interrupt, whose checks step
+        // the collector.
+        lua.load("big = {} for i = 1, 200000 do big[i] = i end")
+            .exec()
+            .unwrap();
+        installed.publish(None);
+        // A cycle's pieces run a beat apart (`GC_SPACING`), so it finishes
+        // over calls spread in time, as frames deliver them.
+        for _ in 0..40 {
+            if !installed.watch.collect.get() {
+                break;
+            }
+            std::thread::sleep(GC_SPACING + Duration::from_millis(2));
+            installed.publish(Some(Deadline::start(Duration::from_secs(60))));
+            lua.load("for i = 1, 2000 do local t = { i } end")
+                .exec()
+                .unwrap();
+            installed.publish(None);
+        }
+        assert!(
+            !installed.watch.collect.get(),
+            "the collection cycle finished"
+        );
+        assert!(
+            installed.watch.live.get() > 0,
+            "a collection cycle ran and measured the live heap"
+        );
+        assert!(
+            installed.watch.steps.get() > 1,
+            "a cycle took several steps: {} step(s)",
+            installed.watch.steps.get()
+        );
     }
 
     /// With no call running the watchdog parks for good: an idle app wakes
