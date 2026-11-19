@@ -100,15 +100,33 @@ fn rss_mb() -> f64 {
 
 #[cfg(not(windows))]
 fn rss_mb() -> f64 {
-    let out = std::process::Command::new("ps")
-        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
-        .output()
-        .expect("ps");
-    String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .parse::<f64>()
-        .unwrap_or(0.)
-        / 1024.
+    // ru_maxrss (bytes on macOS, kilobytes on Linux): the peak size, which a
+    // monotonically growing bench reaches at the end — without forking `ps`.
+    #[repr(C)]
+    #[derive(Default)]
+    struct Timeval {
+        seconds: i64,
+        micros: i32,
+    }
+    #[repr(C)]
+    #[derive(Default)]
+    struct Rusage {
+        user: Timeval,
+        system: Timeval,
+        maxrss: i64,
+        rest: [i64; 13],
+    }
+    unsafe extern "C" {
+        fn getrusage(who: i32, usage: *mut Rusage) -> i32;
+    }
+    let mut usage = Rusage::default();
+    // SAFETY: Fills a struct rusage for this process (RUSAGE_SELF).
+    unsafe { getrusage(0, &mut usage) };
+    if cfg!(target_os = "macos") {
+        usage.maxrss as f64 / 1048576.
+    } else {
+        usage.maxrss as f64 / 1024.
+    }
 }
 
 fn main() {
