@@ -121,8 +121,10 @@ fn main() {
         let laid = Instant::now();
         if let Some(gpu) = &mut gpu {
             gpu.render(&ui.scene.borrow(), &report.damage).unwrap();
-            // A window presents every frame; readback only settles the GPU.
-            if frame % 120 == 0 {
+            // A window presents every frame; readback only settles the GPU's
+            // queue. Every few hundred frames keeps it bounded without a
+            // full framebuffer copy (and wait) all that often.
+            if frame % 240 == 0 {
                 gpu.readback().unwrap();
             }
         } else {
@@ -135,8 +137,13 @@ fn main() {
             render += done - laid;
         }
     }
+    let cpu_end = cpu_time();
+    // The run ends with its submitted frames done.
+    if let Some(gpu) = &gpu {
+        gpu.readback().unwrap();
+    }
     let measured = (frames - warmup).max(1) as f64;
-    let cpu = (cpu_time() - cpu_start).as_secs_f64() * 1e6 / measured;
+    let cpu = (cpu_end - cpu_start).as_secs_f64() * 1e6 / measured;
     let us = |d: Duration| d.as_secs_f64() * 1e6 / measured;
     println!(
         "animate: update {:.1} + flush {:.1} + render {:.1} = {:.1} us/frame wall, {:.1} us/frame CPU ({} dots, {} characters)",

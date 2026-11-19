@@ -165,8 +165,10 @@ fn main() {
             continue;
         };
         let stats = gpu.render(&ui.scene.borrow(), &report.damage).unwrap();
-        // Frames a window would present; readback only settles the GPU.
-        if tick % 60 == 0 {
+        // Frames a window would present; readback only settles the GPU's
+        // queue. Every few hundred ticks keeps it bounded without a full
+        // framebuffer copy (and wait) all that often.
+        if tick % 240 == 0 {
             gpu.readback().unwrap();
         }
         let done = Instant::now();
@@ -184,6 +186,8 @@ fn main() {
         );
         return;
     };
+    // The run ends with its submitted frames done.
+    gpu.readback().unwrap();
     let caches = gpu.debug_cache_stats();
     let mb = |bytes: usize| bytes as f64 / 1048576.;
     println!(
