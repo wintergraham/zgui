@@ -5294,9 +5294,13 @@ impl Scene {
             || self.damage_grid.as_ref().is_some_and(DamageGrid::full)
     }
     /// What `damage_subtree_with` would add for leaf `id` (no children)
-    /// where nothing is transformed or filtered, at its box `was` and at
-    /// `now`, where layout places it: worked out together, from one look at
-    /// the node. With `CELLS` (`arrange::<true>`: the grid takes cells,
+    /// where nothing is transformed or filtered, at `was` and at `now`: each
+    /// placement its box and its translation — a move in `arrange` changes
+    /// the box, `set_transform` the translation — worked out together, from
+    /// one look at the node. `arrange` uses it too for a node resized in
+    /// place whose children keep theirs (`keeps_children`): only its own
+    /// paint is damaged, which is all this works out. With `CELLS`
+    /// (`arrange::<true>`: the grid takes cells,
     /// `DamageGrid::mark_clipped_pair`) they are clipped but not rounded.
     /// Otherwise each is quantized as `add_damage` quantizes it: two such
     /// areas sharing their extent along an axis and overlapping are,
@@ -5307,8 +5311,8 @@ impl Scene {
         &self,
         id: NodeId,
         context: &mut Option<DamageContext>,
-        was: Rect,
-        now: Rect,
+        was: (Rect, Transform),
+        now: (Rect, Transform),
     ) -> (Option<Rect>, Option<Rect>) {
         if self.damage_is_full() {
             return (None, None);
@@ -5325,10 +5329,6 @@ impl Scene {
         if !own_visible(&node.style) || unplaced {
             return (None, None);
         }
-        let transform = Transform {
-            x: parent.x + node.transform.x,
-            y: parent.y + node.transform.y,
-        };
         let clips = clip_axes(&node.style) != (false, false);
         let past_clip = clips && matches!(node.kind, NodeKind::Quad(_) | NodeKind::Panel { .. });
         // Both placements paint the same kind. Select it once; only their
@@ -5336,7 +5336,11 @@ impl Scene {
         macro_rules! pair {
             ($paint:expr) => {{
                 let paint = $paint;
-                let at = |bounds| {
+                let at = |(bounds, own): (Rect, Transform)| {
+                    let transform = Transform {
+                        x: parent.x + own.x,
+                        y: parent.y + own.y,
+                    };
                     self.leaf_rect::<CELLS>(
                         node,
                         bounds,
@@ -7159,8 +7163,13 @@ impl Scene {
         // other damage comes between, and nothing it paints changes.
         match (damage, leaf) {
             (true, true) => {
-                let was = self.tree_node(id).bounds;
-                let (before, after) = self.leaf_damage::<CELLS>(id, context, was, bounds);
+                let node = self.tree_node(id);
+                let (before, after) = self.leaf_damage::<CELLS>(
+                    id,
+                    context,
+                    (node.bounds, node.transform),
+                    (bounds, node.transform),
+                );
                 match (CELLS, &mut self.damage_grid) {
                     (false, _) => self.add_moved_leaf_damage(before, after),
                     (true, Some(grid)) => grid.mark_clipped_pair(before, after),
