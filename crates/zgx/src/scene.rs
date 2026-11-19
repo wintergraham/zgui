@@ -415,33 +415,36 @@ impl LocalTransform {
     /// rotate · skew · scale · translate(-origin). Leaves out a tilt
     /// (`rotate_x`, `rotate_y`), which `projective` includes.
     pub fn matrix(&self, bounds: Rect) -> crate::affine::Affine {
+        self.flat().around(
+            bounds.x + bounds.width * self.origin.0,
+            bounds.y + bounds.height * self.origin.1,
+        )
+    }
+    /// `scale` then `skew` then `rotate`, flat: the parts that are the
+    /// identity are left out, so nothing is tangent'ed or sin_cos'ed that
+    /// the transform does not use (a pure scale or rotation, the common
+    /// layer).
+    fn flat(&self) -> crate::affine::Affine {
         use crate::affine::Affine;
-        let skew = Affine {
-            b: self.skew.1.tan(),
-            c: self.skew.0.tan(),
-            ..Affine::IDENTITY
-        };
-        Affine::scale(self.scale.0, self.scale.1)
-            .then(skew)
-            .then(Affine::rotation(self.rotate))
-            .around(
-                bounds.x + bounds.width * self.origin.0,
-                bounds.y + bounds.height * self.origin.1,
-            )
+        let mut flat = Affine::scale(self.scale.0, self.scale.1);
+        if self.skew != (0., 0.) {
+            flat = flat.then(Affine {
+                b: self.skew.1.tan(),
+                c: self.skew.0.tan(),
+                ..Affine::IDENTITY
+            });
+        }
+        if self.rotate != 0. {
+            flat = flat.then(Affine::rotation(self.rotate));
+        }
+        flat
     }
     /// The map for a node at `bounds` (layout rect, untranslated), as CSS
     /// `perspective() rotateX() rotateY() rotate() skew() scale()` about the
     /// origin: projective once tilted with a perspective, affine otherwise.
     pub fn projective(&self, bounds: Rect) -> crate::affine::Projective {
         use crate::affine::{Affine, Projective};
-        let skew = Affine {
-            b: self.skew.1.tan(),
-            c: self.skew.0.tan(),
-            ..Affine::IDENTITY
-        };
-        let flat = Affine::scale(self.scale.0, self.scale.1)
-            .then(skew)
-            .then(Affine::rotation(self.rotate));
+        let flat = self.flat();
         let (ox, oy) = (
             bounds.x + bounds.width * self.origin.0,
             bounds.y + bounds.height * self.origin.1,
