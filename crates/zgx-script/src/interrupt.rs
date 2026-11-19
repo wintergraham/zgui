@@ -606,7 +606,7 @@ unsafe fn check(state: *mut ffi::lua_State) -> Verdict {
                 watch.collect.set(false);
                 let live = used(state);
                 watch.live.set(live);
-                watch.collect_at.set(live + limit.saturating_sub(limit) / 2);
+                watch.collect_at.set(live + limit.saturating_sub(live) / 2);
                 watch.set_memory_alarm();
             }
         }
@@ -715,6 +715,15 @@ mod tests {
             installed.watch.steps.get() > 1,
             "a cycle took several steps: {} step(s)",
             installed.watch.steps.get()
+        );
+        let (live, collect_at) = (
+            installed.watch.live.get(),
+            installed.watch.collect_at.get(),
+        );
+        assert!(
+            collect_at > live,
+            "the alarm left room to allocate past the live heap: \
+             {collect_at} vs {live} would fire on the next allocation"
         );
     }
 
