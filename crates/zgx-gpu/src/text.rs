@@ -246,6 +246,7 @@ impl ShapedText {
         let size = font_size.max(1.);
         let line_height = font.line_height.resolve(size);
         let mut buffer = Buffer::new_empty(Metrics::new(size, line_height));
+        buffer.lines = spare_lines();
         buffer.set_size(wrap_width(width), None);
         set_buffer_text(fonts, &mut buffer, &text, font, size);
         // Editors need a visual row for the caret after a final line ending;
@@ -446,6 +447,12 @@ impl ShapedText {
     /// Its line pitch.
     pub fn line_height(&self) -> f32 {
         self.line_height
+    }
+}
+impl Drop for ShapedText {
+    /// Its lines' allocations go to `spare_lines` for the next buffer built.
+    fn drop(&mut self) {
+        recycle_lines(std::mem::take(&mut self.buffer.lines));
     }
 }
 
@@ -1328,7 +1335,13 @@ pub fn rich_buffer(
     };
     let original = rich_buffer_raw(fonts, rich, width, None, false);
     let rows = Rows::of(original.layout_runs(), &original.lines, limit);
-    truncated(fonts, rich, width, limit, &rows).unwrap_or(original)
+    match truncated(fonts, rich, width, limit, &rows) {
+        Some(cut) => {
+            recycle_lines(original.lines);
+            cut
+        }
+        None => original,
+    }
 }
 /// The lines a clamped or ellipsized text keeps at most (`rich_buffer`),
 /// or None for one that is neither.
@@ -1584,6 +1597,36 @@ thread_local! {
     /// (`ellipsis_width`): one a run's style, the same for every text.
     static ELLIPSES: std::cell::RefCell<rustc_hash::FxHashMap<(zgx::text_layout::FontStyle, u32), f32>> =
         Default::default();
+    /// Lines of dropped buffers, their allocations — a line's text, spans
+    /// and shape and layout caches — kept for the next buffer built
+    /// (`recycled` of the unshaped builders): freeing a shaped line's many
+    /// parts and growing them again costs more than shaping a short text
+    /// over them, as `prepared`'s `spare` lists.
+    static SPARE_LINES: std::cell::RefCell<Vec<cosmic_text::BufferLine>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+/// Lines kept at once for `spare_lines`, and their texts' total bytes
+/// (the rest of a line's parts scale with them).
+const SPARE_LINE_CAP: usize = 64;
+const SPARE_LINE_TEXT: usize = 8 * 1024;
+/// Lines for a new buffer to fill again (`recycled` of the unshaped
+/// builders, `Buffer::set_rich_text` reuses them as it does its own).
+pub(crate) fn spare_lines() -> Vec<cosmic_text::BufferLine> {
+    SPARE_LINES.with(|spare| std::mem::take(&mut *spare.borrow_mut()))
+}
+/// A dropped buffer's lines kept for `spare_lines`, within the caps.
+pub(crate) fn recycle_lines(lines: Vec<cosmic_text::BufferLine>) {
+    SPARE_LINES.with(|spare| {
+        let spare = &mut *spare.borrow_mut();
+        let mut text: usize = spare.iter().map(|line| line.text().len()).sum();
+        for line in lines {
+            text += line.text().len();
+            if spare.len() == SPARE_LINE_CAP || text > SPARE_LINE_TEXT {
+                break;
+            }
+            spare.push(line);
+        }
+    });
 }
 /// The width of the ellipsis truncation appends to `rich` cut at `cut`, in
 /// the run there, as `rich_buffer` shapes it. Kept by the run's font and
@@ -1653,7 +1696,7 @@ fn rich_buffer_raw(
     height: Option<f32>,
     ellipsis: bool,
 ) -> Buffer {
-    let mut buffer = rich_buffer_unshaped(fonts, rich, ellipsis, Vec::new());
+    let mut buffer = rich_buffer_unshaped(fonts, rich, ellipsis, spare_lines());
     buffer.set_size(wrap_width(width), height);
     buffer.shape_until_scroll(fonts, false);
     buffer
