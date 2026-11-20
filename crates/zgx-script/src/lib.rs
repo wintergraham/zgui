@@ -1052,6 +1052,10 @@ struct Inner {
     type_errors: Signal<Option<String>>,
     /// What `zgx lint` finds in the scripts as loaded (debug builds).
     lint: Signal<Option<String>>,
+    /// The lint running since the last reload: finding every loaded file's
+    /// findings on the main thread held it for tens of milliseconds, so the
+    /// scan runs on a thread of its own and `poll_lint` applies it.
+    linter: RefCell<Option<LintJob>>,
     /// The theme file error shown, if any (cleared when the file reads).
     theme_error: RefCell<Option<String>>,
     /// Host-provided native views (`ui.native`): they outlive reloads.
@@ -1094,6 +1098,17 @@ fn diagnostics_requested() -> bool {
 /// Loads an application script and its plugins and mounts what they describe.
 #[derive(Clone)]
 pub struct ScriptHost(Rc<Inner>);
+/// A lint running on its own thread (`lint_loaded`): what it found is taken
+/// once it finishes. A reload replaces the slot, so a stale scan's findings
+/// never show.
+struct LintJob {
+    result: std::sync::Arc<std::sync::Mutex<Option<Vec<String>>>>,
+}
+impl LintJob {
+    fn take(&self) -> Option<Vec<String>> {
+        self.result.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+}
 /// A script run: its VM, the view it returned and its slot contributions.
 type Ran = (
     Rc<Vm>,
@@ -1187,6 +1202,7 @@ impl ScriptHost {
             checker: RefCell::default(),
             type_errors: runtime.signal(None),
             lint: runtime.signal(None),
+            linter: RefCell::default(),
             theme_error: RefCell::default(),
             natives: Rc::new(Natives::new(runtime)),
         }));
@@ -1764,7 +1780,9 @@ impl ScriptHost {
     /// In a debug build, `zgx lint` over the scripts as loaded, after each
     /// load: each finding once on stderr and in `warnings`, and over the
     /// interface while there is no error. Scripts read from a bundle, and
-    /// `ZGX_LINT=0`, skip it.
+    /// `ZGX_LINT=0`, skip it. The scan runs on its own thread — hundreds of
+    /// files' reads and lints held a reload for tens of milliseconds — and
+    /// `poll_lint` applies what it found.
     fn lint_loaded(&self) {
         if !cfg!(debug_assertions)
             || matches!(self.0.files, Files::Bundle(_))
@@ -1782,24 +1800,46 @@ impl ScriptHost {
             .collect();
         files.sort();
         files.dedup();
-        let mut found = Vec::new();
-        for file in &files {
-            let Ok(source) = std::fs::read_to_string(file) else {
-                continue;
-            };
-            for d in lint::lint_source(file, &source) {
-                let name = d.file.file_name().unwrap_or(d.file.as_os_str());
-                let line = format!(
-                    "{}:{}:{}: lint[{}]: {}",
-                    name.to_string_lossy(),
-                    d.line,
-                    d.column,
-                    d.code,
-                    d.message
-                );
-                warning(Some(&self.0.warnings), line.clone());
-                found.push(line);
-            }
+        let job = LintJob {
+            result: std::sync::Arc::default(),
+        };
+        let slot = job.result.clone();
+        *self.0.linter.borrow_mut() = std::thread::Builder::new()
+            .name("zgx-lint".into())
+            .spawn(move || {
+                let mut found = Vec::new();
+                for file in &files {
+                    let Ok(source) = std::fs::read_to_string(file) else {
+                        continue;
+                    };
+                    for d in lint::lint_source(file, &source) {
+                        let name = d.file.file_name().unwrap_or(d.file.as_os_str());
+                        found.push(format!(
+                            "{}:{}:{}: lint[{}]: {}",
+                            name.to_string_lossy(),
+                            d.line,
+                            d.column,
+                            d.code,
+                            d.message
+                        ));
+                    }
+                }
+                *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(found);
+            })
+            .ok()
+            .map(|_| job);
+    }
+    /// Applies a finished background lint (`lint_loaded`): each finding once
+    /// on stderr and in `warnings`, and over the interface while there is no
+    /// error. Called where `poll_check` is, and on each reload at the latest.
+    pub fn poll_lint(&self) {
+        let result = self.0.linter.borrow().as_ref().and_then(|job| job.take());
+        let Some(found) = result else {
+            return;
+        };
+        *self.0.linter.borrow_mut() = None;
+        for line in &found {
+            warning(Some(&self.0.warnings), line.clone());
         }
         self.0.lint.set((!found.is_empty()).then(|| {
             format!(
@@ -1879,6 +1919,7 @@ impl ScriptHost {
                 if let Some(rewatch) = &*self.0.rewatch.borrow() {
                     rewatch.send(());
                 }
+                self.poll_lint();
                 self.lint_loaded();
                 self.start_check();
                 Ok(())
@@ -1962,10 +2003,12 @@ impl ScriptHost {
                     // After a change, open them again: a file an editor
                     // replaced is a new file.
                     events.watch(host.watched_files(), host.watched_dirs(), heard);
-                    // While a type check runs on its thread, its result is
-                    // looked for this often; a change still wakes this at
-                    // once.
-                    let poll = host.0.checker.borrow().is_some().then_some(every);
+                    // While a type check or lint runs on its thread, its
+                    // result is looked for this often; a change still wakes
+                    // this at once.
+                    let poll = (host.0.checker.borrow().is_some()
+                        || host.0.linter.borrow().is_some())
+                    .then_some(every);
                     match wake(&mut events, &mut rewatched, poll).await {
                         Woke::Changed => {
                             // An editor's save can be several writes: reload
@@ -1990,6 +2033,7 @@ impl ScriptHost {
                     }
                     host.reload_if_changed();
                     host.poll_check();
+                    host.poll_lint();
                 }
             }
             if matches!(host.0.files, Files::Bundle(_)) && host.0.managed.borrow().is_empty() {
@@ -1999,6 +2043,7 @@ impl ScriptHost {
                 zgx::timer::sleep(every).await;
                 host.reload_if_changed();
                 host.poll_check();
+                host.poll_lint();
             }
         }
     }
