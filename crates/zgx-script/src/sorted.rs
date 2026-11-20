@@ -272,6 +272,16 @@ struct Kept {
     shown: Vec<u32>,
     /// Where the items `update` placed landed in `order`.
     placed_at: Vec<u32>,
+    /// `order` inverted: each kept item's place in it. Made when an
+    /// `update` finds the order is one the writes could not have changed,
+    /// to answer where the written rows sit, and dropped as soon as the
+    /// order does change.
+    pos: Option<Vec<u32>>,
+    /// `update`'s working room, kept between refreshes: the rows a write
+    /// touched (a bit an item, only the bits set cleared again) and what
+    /// the order is merged into (the last order's own room, in turn).
+    moved: Vec<u64>,
+    scratch: Vec<u32>,
     /// The field `keys` are of (every item's, kept or not), and the list's
     /// version they are current at; and the last field's, kept beside them:
     /// a sort back to it, or a filter's keystroke, reads no field again
@@ -523,6 +533,7 @@ impl Kept {
         written_since: &dyn Fn(u64) -> Option<Vec<u32>>,
     ) -> mlua::Result<()> {
         self.kept.clear();
+        self.pos = None;
         let by_script = matches!(spec.by, By::Function(_));
         let tests = match &spec.filter {
             Some(Filter::Fields(tests)) => Some(tests.clone()),
@@ -595,7 +606,9 @@ impl Kept {
         };
         self.order = order;
         if !rows.is_empty() {
-            self.update(vm, spec, items, &rows)?;
+            // `keys` are the items' own, newer than the order taken again:
+            // which rows' keys it was sorted by is no longer known.
+            self.update(vm, spec, items, &rows, false)?;
         }
         Ok(true)
     }
@@ -781,7 +794,15 @@ impl Kept {
         Ok(())
     }
     /// Items `changed` judged again and put back in their places: taken out
-    /// in one pass, sorted among themselves, merged back in another.
+    /// in one pass, sorted among themselves, merged back in another. A row
+    /// the write left with its key and its keeping as they were keeps its
+    /// place; when that is every row written (a feed moving values its
+    /// order is not by), the order is the same permutation already — only
+    /// the rows' places in it are wanted (`placed_at`, for the view's
+    /// slots), read from `pos` rather than merged for. `keys_are_ordered`:
+    /// whether `keys` for `changed` are still the keys `order` was sorted
+    /// by (false when `order` is one taken again and `keys` are newer).
+    /// Whether the order is the same one it was.
     // Kept out of the view's effect: inlined there it changes how the
     // whole sort (the same effect's other path) is compiled.
     #[inline(never)]
@@ -791,20 +812,57 @@ impl Kept {
         spec: &Spec,
         items: &Rc<[Value]>,
         changed: &[u32],
-    ) -> mlua::Result<()> {
-        let mut moved = vec![false; items.len()];
-        for &i in changed {
-            moved[i as usize] = true;
-        }
+        keys_are_ordered: bool,
+    ) -> mlua::Result<bool> {
         // Appended items are judged as changed ones.
         self.keys.resize(items.len(), Key::Nil);
         self.kept.resize(items.len(), false);
+        let mut same_order = keys_are_ordered;
         for &i in changed {
             let (key, kept) = Self::judge(vm, spec, &items[i as usize])?;
-            self.keys[i as usize] = key;
-            self.kept[i as usize] = kept;
+            let i = i as usize;
+            if same_order
+                && (self.kept[i] != kept
+                    || (kept && self.keys[i].cmp(&key, false) != Ordering::Equal))
+            {
+                same_order = false;
+            }
+            self.keys[i] = key;
+            self.kept[i] = kept;
         }
-        self.order.retain(|i| !moved[*i as usize]);
+        if same_order {
+            let pos = match self.pos.take() {
+                Some(pos) => pos,
+                None => {
+                    let mut pos = vec![u32::MAX; items.len()];
+                    for (p, &i) in self.order.iter().enumerate() {
+                        pos[i as usize] = p as u32;
+                    }
+                    pos
+                }
+            };
+            self.placed_at.clear();
+            for &i in changed {
+                let i = i as usize;
+                if self.kept[i] {
+                    self.placed_at.push(pos[i]);
+                }
+            }
+            self.pos = Some(pos);
+            return Ok(true);
+        }
+        self.pos = None;
+        // The rows the write touched, a bit an item, taken out of the
+        // order; only the bits set are cleared again.
+        self.moved.resize(items.len().div_ceil(64), 0);
+        for &i in changed {
+            self.moved[i as usize / 64] |= 1 << (i % 64);
+        }
+        let mut rest = std::mem::take(&mut self.order);
+        rest.retain(|&i| self.moved[i as usize / 64] & (1 << (i % 64)) == 0);
+        for &i in changed {
+            self.moved[i as usize / 64] = 0;
+        }
         let mut placed: Vec<u32> = changed
             .iter()
             .copied()
@@ -813,24 +871,27 @@ impl Kept {
         placed.sort_unstable_by(|a, b| self.before(spec.descending, *a, *b));
         // Each placed one's place among the rest, found by halving (a few
         // hundred rows placed in 100,000 compare a few thousand times, not
-        // 100,000), then the runs between them copied whole.
-        let mut merged = Vec::with_capacity(self.order.len() + placed.len());
+        // 100,000), then the runs between them copied whole — into room
+        // kept between refreshes rather than a vector made each time.
+        let mut merged = std::mem::take(&mut self.scratch);
+        merged.clear();
+        merged.reserve(rest.len() + placed.len());
         let mut from = 0;
         self.placed_at.clear();
         for &item in &placed {
-            let rest = &self.order[from..];
             let at = from
-                + rest.partition_point(|&other| {
+                + rest[from..].partition_point(|&other| {
                     self.before(spec.descending, other, item) == Ordering::Less
                 });
-            merged.extend_from_slice(&self.order[from..at]);
+            merged.extend_from_slice(&rest[from..at]);
             self.placed_at.push(merged.len() as u32);
             merged.push(item);
             from = at;
         }
-        merged.extend_from_slice(&self.order[from..]);
+        merged.extend_from_slice(&rest[from..]);
+        self.scratch = rest;
         self.order = merged;
-        Ok(())
+        Ok(false)
     }
 }
 
@@ -962,7 +1023,9 @@ fn change(was: Option<&Vec<Value>>, now: &[Value]) -> Change {
 /// holds the items that shift within it, in the same order (an item not
 /// written keeps its order among the others), so their values move along
 /// the run: a clone and a drop of every row a move shifts touched each
-/// one's count. Items `written` since are taken afresh. Whether it changed.
+/// one's count. Items `written` since are taken afresh. `order_held`:
+/// `order` is `shown` over again (the writes moved nothing) — only the
+/// written rows' slots are refreshed. Whether it changed.
 fn write_back(
     slots: &mut [Value],
     order: &[u32],
@@ -971,11 +1034,12 @@ fn write_back(
     placed: &[u32],
     moving: &mut Vec<Value>,
     items: &[Value],
+    order_held: bool,
 ) -> bool {
     const RUN: usize = 16;
     let is_written = |i: u32| written[i as usize / 64] & (1 << (i % 64)) != 0;
     let (n, mut p, mut any) = (order.len(), 0, false);
-    while p < n {
+    while !order_held && p < n {
         if p % RUN == 0 && p + RUN <= n && order[p..p + RUN] == shown[p..p + RUN] {
             p += RUN;
             continue;
@@ -1169,15 +1233,15 @@ pub(crate) fn sorted(lua: &Lua, (list, spec): (mlua::Value, mlua::Value)) -> mlu
         let result = runtime.untracked(|| match change {
             Change::None if same_spec => Ok(None),
             Change::Some(changed) if same_spec => kept
-                .update(&vm, &spec, &items, &changed)
-                .map(|_| Some((Some(changed), false))),
+                .update(&vm, &spec, &items, &changed, true)
+                .map(|order_held| Some((Some(changed), order_held, false))),
             // A new spec over the same items (a sort, a filter): held as they are.
             Change::None => kept
                 .rebuild(&vm, &spec, &items, version, &written_since_seen)
-                .map(|_| Some((Some(Vec::new()), true))),
+                .map(|_| Some((Some(Vec::new()), false, true))),
             _ => kept
                 .rebuild(&vm, &spec, &items, version, &written_since_seen)
-                .map(|_| Some((None, true))),
+                .map(|_| Some((None, false, true))),
         });
         // The keys kept are current now: every row written since was judged.
         if result.is_ok() {
@@ -1188,7 +1252,7 @@ pub(crate) fn sorted(lua: &Lua, (list, spec): (mlua::Value, mlua::Value)) -> mlu
         }
         match result {
             Ok(None) => {}
-            Ok(Some((changed, sorted_again))) => {
+            Ok(Some((changed, order_held, sorted_again))) => {
                 kept.spec = Some(spec);
                 // The items held: the written ones taken again, or all.
                 match (&changed, kept.items.as_mut()) {
@@ -1212,13 +1276,29 @@ pub(crate) fn sorted(lua: &Lua, (list, spec): (mlua::Value, mlua::Value)) -> mlu
                         && list.len() == order.len()
                         && let Some(slots) = Rc::get_mut(list)
                     {
-                        let mut written = vec![0u64; items.len().div_ceil(64)];
-                        for &i in changed.iter().flatten() {
-                            written[i as usize / 64] |= 1 << (i % 64);
+                        // `order` the writes could not change is `shown`
+                        // over again: no runs to walk, nothing to mark —
+                        // the written rows' slots take the new values.
+                        let mut written = Vec::new();
+                        if !order_held {
+                            written = vec![0u64; items.len().div_ceil(64)];
+                            for &i in changed.iter().flatten() {
+                                written[i as usize / 64] |= 1 << (i % 64);
+                            }
                         }
-                        let any =
-                            write_back(slots, order, shown, &written, placed, &mut moving, &items);
-                        shown.copy_from_slice(order);
+                        let any = write_back(
+                            slots,
+                            order,
+                            shown,
+                            &written,
+                            placed,
+                            &mut moving,
+                            &items,
+                            order_held,
+                        );
+                        if !order_held {
+                            shown.copy_from_slice(order);
+                        }
                         return any;
                     }
                     // Sorted again over the same items: moved into place.
