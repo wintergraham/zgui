@@ -1060,6 +1060,14 @@ struct Latch {
     resting: u8,
     /// How long the frame rendering was held (`hold`).
     held: std::time::Duration,
+    /// How long the handover itself takes once the wait ends (the layer's
+    /// transaction to the window server), tracked so the wait ends early
+    /// enough for the frame to reach the server on its point, not after it
+    /// (`sent`).
+    send: std::time::Duration,
+    /// The point the frame presenting waited for (`decide`), which `sent`
+    /// measures the handover against.
+    pointed: Option<std::time::Instant>,
 }
 #[cfg(target_os = "macos")]
 impl Latch {
@@ -1078,6 +1086,9 @@ impl Latch {
     const STEP: std::time::Duration = std::time::Duration::from_millis(2);
     /// Frames rendered at once after a held one missed its refresh.
     const REST: u8 = 120;
+    /// The longest handover the wait makes room for: worse than this and the
+    /// frame is late either way.
+    const SEND_MAX: std::time::Duration = std::time::Duration::from_millis(8);
     /// When a frame complete at `now` presents, on the refresh grid through
     /// `origin` with `period`.
     fn decide(
@@ -1139,8 +1150,27 @@ impl Latch {
             self.offset = std::time::Duration::ZERO;
             self.resting = Self::REST;
         }
+        self.pointed = Some(at);
         self.last = Some((ready, at));
         at
+    }
+    /// Where the wait for a handover at `at` should end: the send itself
+    /// takes `send`, measured from the point to the transaction's end
+    /// (`sent`), so waking that much earlier lands it on `at`. Waking too
+    /// early is safe — a little more `LEAD` is — while waking late hands the
+    /// frame to the window server past the refresh it was for.
+    fn send_from(&self, at: std::time::Instant) -> std::time::Instant {
+        at.checked_sub(self.send).unwrap_or(at)
+    }
+    /// The frame sent for the point `decide` gave finished handing over at
+    /// `now`: how far past the point it landed is what the next waits end
+    /// sooner by. A few frames of an unchanged cost settle on it; a single
+    /// slow send only nudges the next.
+    fn sent(&mut self, now: std::time::Instant) {
+        if let Some(pointed) = self.pointed.take() {
+            let over = now.saturating_duration_since(pointed).min(Self::SEND_MAX);
+            self.send = (self.send.mul_f64(0.6) + over.mul_f64(0.4)).min(Self::SEND_MAX);
+        }
     }
     /// The point a frame ready at `ready` presents at, the count of frames
     /// comfortably early on a later cadence that it leaves, and whether that
@@ -1220,6 +1250,14 @@ impl Latch {
     /// The frame that started rendering at `at` (after `hold`).
     fn rendering(&mut self, at: std::time::Instant) {
         self.started = Some(at);
+    }
+    /// Forget the stream (`refresh_grid` lost it); the send the window
+    /// server takes (`send`) does not change with it.
+    fn reset(&mut self) {
+        *self = Latch {
+            send: self.send,
+            ..Default::default()
+        };
     }
     /// How long the GPU took to run the frame just presented: well over the
     /// least lately, twice within a few frames, is another client's rhythm.
@@ -2097,7 +2135,7 @@ impl Host {
                     if let Some((origin, period)) = grid {
                         let at = latch.decide(std::time::Instant::now(), origin, period);
                         let _wait = zgx::profile::span(zgx::profile::Phase::Wait);
-                        sleep_until(at);
+                        sleep_until(latch.send_from(at));
                     }
                     #[cfg(target_os = "macos")]
                     if let Some(link) = link
@@ -2122,7 +2160,11 @@ impl Host {
                 drop(transaction);
                 #[cfg(target_os = "macos")]
                 {
-                    self.presented_at = Some(std::time::Instant::now());
+                    let now = std::time::Instant::now();
+                    self.presented_at = Some(now);
+                    if grid.is_some() {
+                        self.latch.sent(now);
+                    }
                     // What it shows now, for `Ui::snapshot` (the last frame's
                     // surface is the renderer's to reuse again).
                     *self.shown.borrow_mut() = renderer
@@ -4438,14 +4480,14 @@ impl Host {
         if self.context.frame_mode.get() == FrameMode::Unlimited
             || !zgx::switches::REFRESH_GRID.on()
         {
-            self.latch = Latch::default();
+            self.latch.reset();
             return None;
         }
         if self
             .resized_at
             .is_some_and(|at| now.duration_since(at) < RESIZE_SETTLE)
         {
-            self.latch = Latch::default();
+            self.latch.reset();
             return None;
         }
         let steady = self
@@ -4457,7 +4499,7 @@ impl Host {
             .filter(|_| steady && !self.link_paced)
             .and_then(|link| link.refresh_phase(crate::frame_source::VSYNC_RESYNC * 3));
         let Some((phase, period)) = refresh else {
-            self.latch = Latch::default();
+            self.latch.reset();
             return None;
         };
         Some((now - phase, period))
@@ -6707,6 +6749,39 @@ mod tests {
         // Held up there too: no room for another step, back to the start.
         assert_eq!(frame(8, 1.2), Latch::STEP);
         assert_eq!(frame(9, 0.3), Duration::ZERO);
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_wait_ends_early_enough_for_the_send_to_land_on_the_point() {
+        use std::time::{Duration, Instant};
+        let period = Duration::from_nanos(16_666_667);
+        let ms = |v: f64| Duration::from_secs_f64(v / 1e3);
+        let origin = Instant::now();
+        let mut latch = Latch::default();
+        // Nothing measured yet: the wait ends at the point itself.
+        let ready = origin + period * 10 + ms(2.);
+        let mut at = latch.decide(ready, origin, period);
+        assert_eq!(latch.send_from(at), at);
+        // The send then ran 3 ms past it; the next wait ends before its
+        // point by some of that, settling on all of it as the cost repeats.
+        latch.sent(at + ms(3.));
+        at = latch.decide(origin + period * 11 + ms(2.), origin, period);
+        let wake = latch.send_from(at);
+        assert!(wake < at && at - wake <= ms(3.));
+        for i in 2..8 {
+            at = latch.decide(origin + period * (10 + i) + ms(2.), origin, period);
+            latch.sent(at + ms(3.));
+            assert!(at - latch.send_from(at) <= ms(3.));
+        }
+        assert!((at - latch.send_from(at)).abs_diff(ms(3.)) < ms(0.5));
+        // A single slow send cannot move the wake past `SEND_MAX` early.
+        latch.sent(at + ms(30.));
+        let at = latch.decide(origin + period * 30 + ms(2.), origin, period);
+        assert!(at - latch.send_from(at) <= Latch::SEND_MAX);
+        // And without a `decide` first there is nothing to measure.
+        let mut latch = Latch::default();
+        latch.sent(Instant::now() + ms(5.));
+        assert_eq!(latch.send_from(at), at);
     }
     #[test]
     fn window_commands_preserve_recreation_options() {
