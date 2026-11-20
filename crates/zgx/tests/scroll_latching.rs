@@ -73,6 +73,37 @@ fn a_trackpad_gesture_latches_afresh_without_a_pause() {
 }
 
 #[test]
+fn a_click_ends_the_latch_of_a_flick_still_coasting() {
+    use zgx::input::{PointerButton, ScrollGesture};
+    let mut ui = Ui::new(400., 400.);
+    let (outer, inner) = (ui.signal(0.), ui.signal(0.));
+    ui.mount(
+        scroll(outer.clone()).w(300.).h(300.).child(
+            column()
+                .child(
+                    scroll(inner.clone()).w(300.).h(100.).child(
+                        column().children((0..10).map(|i| text(format!("Inner {i}")).h(20.))),
+                    ),
+                )
+                .children((0..40).map(|i| text(format!("Outer {i}")).h(20.))),
+        ),
+    );
+    ui.prepare_frame();
+    // A flick over the outer view's foot, coasting.
+    ui.dispatch(InputEvent::ScrollGesture(ScrollGesture::Began));
+    wheel(&mut ui, 50., 250., 0., 10.);
+    ui.dispatch(InputEvent::ScrollGesture(ScrollGesture::Ended));
+    ui.dispatch(InputEvent::ScrollGesture(ScrollGesture::MomentumBegan));
+    wheel(&mut ui, 50., 250., 0., 5.);
+    assert_eq!(outer.get(), 15.);
+    // A click over the inner view: the rest of the momentum goes where the pointer is, not to the outer view.
+    ui.dispatch(InputEvent::PointerDown { x: 50., y: 50., button: PointerButton::Primary });
+    ui.dispatch(InputEvent::PointerUp { x: 50., y: 50., button: PointerButton::Primary });
+    wheel(&mut ui, 50., 50., 0., 5.);
+    assert_eq!((outer.get(), inner.get()), (15., 5.), "the click let go of the coasting view");
+}
+
+#[test]
 fn a_diagonal_swipe_over_a_horizontal_view_still_scrolls_the_page() {
     let mut ui = Ui::new(400., 400.);
     let (page, carousel) = (ui.signal(0.), ui.signal(0.));

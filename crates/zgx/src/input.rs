@@ -2413,6 +2413,17 @@ impl InputDispatcher {
         if capture.is_none() {
             self.set_capture(None, &event);
         }
+        // A press ends a wheel gesture's latch, as a click stops a scroll
+        // view's momentum on macOS: what a flick still sends after it goes
+        // where the pointer is, not on moving the view the flick moved (a
+        // menu opened by that click, anchored there, would close).
+        if let InputEvent::PointerDown {
+            button: PointerButton::Primary,
+            ..
+        } = &event
+        {
+            self.state.borrow_mut().scroll_latch = None;
+        }
         // The rest of a wheel gesture goes to the scroll view it latched
         // to, alone, as macOS latches one: it neither chains to the views
         // around it at an edge nor moves to one that slides under the
