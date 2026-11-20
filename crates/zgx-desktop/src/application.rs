@@ -1027,6 +1027,21 @@ fn align_wait(
 /// presents on the plain layer for as long: `zgx_gpu`'s `RESIZE_SETTLE`).
 #[cfg(target_os = "macos")]
 const RESIZE_SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
+/// Whether input armed to draw at once (`Host::input_arrived`) must wait:
+/// `None` draws now (no present yet, or the last is a refresh old),
+/// `Some(at)` holds until the last present plus a refresh — so input
+/// faster than the display cannot draw and hand over a frame per event
+/// (`Host::input_draw_at`).
+#[cfg(any(target_os = "macos", test))]
+fn input_draw_hold(
+    presented_at: Option<std::time::Instant>,
+    frame_interval: std::time::Duration,
+    now: std::time::Instant,
+) -> Option<std::time::Instant> {
+    presented_at
+        .filter(|at| now.saturating_duration_since(*at) < frame_interval)
+        .map(|at| at + frame_interval)
+}
 /// How long after input frames stay at the display's full rate: a press's
 /// release spring or a hover fade that follows input keeps its frames too.
 #[cfg(any(target_os = "macos", windows))]
@@ -1366,6 +1381,15 @@ struct Host {
     /// consumed once, so the same input arms one frame, not every frame.
     #[cfg(target_os = "macos")]
     input_seen: Option<std::time::Instant>,
+    /// When armed input may next draw at once — the last present plus a
+    /// refresh. Input faster than the display would otherwise draw and
+    /// hand over a frame per event, far past the refresh rate (a 150-key
+    /// burst measured ~1300 commits/s at 60 Hz; all but the last in a
+    /// refresh are dropped unseen). Armed input keeps its flag until a
+    /// refresh passed (`update`), so the frame goes out on that turn or
+    /// the stream's next tick — not one per event.
+    #[cfg(target_os = "macos")]
+    input_draw_at: Option<std::time::Instant>,
     present_ready: bool,
     frames: FrameClock,
     #[cfg(any(target_os = "macos", windows))]
@@ -1711,6 +1735,8 @@ impl Host {
             input_at: None,
             #[cfg(target_os = "macos")]
             input_seen: None,
+            #[cfg(target_os = "macos")]
+            input_draw_at: None,
             present_ready: false,
             gpu_stats: crate::gpu_stats::GpuStatsLog::from_env(),
             damage_check: zgx::env::var_os("ZGX_DAMAGE_CHECK").map(|_| 0),
@@ -4442,14 +4468,33 @@ impl Host {
         }
         // A key typed while frames follow the refresh draws at once: waiting
         // for the next refresh's frame cost it a refresh (8 ms at 120 Hz)
-        // more than at rest. The newest frame is the one shown.
+        // more than at rest. The newest frame is the one shown. But at most
+        // once a refresh: input arriving faster than the display folds into
+        // `input_draw_at`'s turn (or the stream's next tick, whichever is
+        // first) instead of drawing per event.
         #[cfg(target_os = "macos")]
-        let paced = !std::mem::take(&mut self.input_arrived)
-            && (self.vsync_paced
-                || self
-                    .display_link
-                    .as_ref()
-                    .is_some_and(|link| link.running()));
+        let paced = {
+            let hold = if self.input_arrived {
+                input_draw_hold(
+                    self.presented_at,
+                    self.frame_interval,
+                    std::time::Instant::now(),
+                )
+            } else {
+                None
+            };
+            let input_ready = self.input_arrived && hold.is_none();
+            self.input_draw_at = hold;
+            if input_ready {
+                self.input_arrived = false;
+            }
+            !input_ready
+                && (self.vsync_paced
+                    || self
+                        .display_link
+                        .as_ref()
+                        .is_some_and(|link| link.running()))
+        };
         // Input draws at once: presents replace one another until the
         // compositor takes the newest (`present_mode`), so a key typed
         // mid-refresh shows on the next, as it does at rest.
@@ -4472,6 +4517,10 @@ impl Host {
             #[cfg(target_os = "macos")]
             {
                 self.refresh_frame = false;
+                // Any drawn frame answered the pending input: the flag
+                // cannot linger into another turn's draw.
+                self.input_arrived = false;
+                self.input_draw_at = None;
             }
         }
         self.sync_frames();
@@ -6022,6 +6071,8 @@ impl WindowManager {
                     host.presentation.deadline(),
                     host.context.ui.next_interaction_deadline(),
                     host.frame_deadline,
+                    #[cfg(target_os = "macos")]
+                    host.input_draw_at,
                     host.renderer_retry,
                     host.touch.hold_deadline(),
                     host.trim_at,
@@ -7576,5 +7627,29 @@ mod tests {
     fn window_handles_can_close_from_worker_threads() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<WindowHandle>();
+    }
+
+    #[test]
+    fn armed_input_draws_at_once_only_once_a_refresh() {
+        let t0 = std::time::Instant::now();
+        let refresh = std::time::Duration::from_millis(16);
+        // No present yet, or a present a refresh old: draw at once.
+        assert_eq!(input_draw_hold(None, refresh, t0), None);
+        assert_eq!(input_draw_hold(Some(t0 - refresh), refresh, t0), None);
+        // Mid-refresh it waits for the last present plus a refresh —
+        // bursts cannot hand over a frame per event.
+        let mid = t0 - refresh / 2;
+        assert_eq!(input_draw_hold(Some(mid), refresh, t0), Some(mid + refresh));
+        // Just after a present: almost a whole refresh to go.
+        let just = t0 - std::time::Duration::from_millis(1);
+        assert_eq!(
+            input_draw_hold(Some(just), refresh, t0),
+            Some(just + refresh)
+        );
+        // A present timestamped in the future holds at most a refresh.
+        assert_eq!(
+            input_draw_hold(Some(t0 + refresh), refresh, t0),
+            Some(t0 + refresh * 2)
+        );
     }
 }
