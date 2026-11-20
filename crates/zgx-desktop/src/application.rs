@@ -2176,6 +2176,10 @@ impl Host {
         drop(scene);
         // Native geometry that changed without zgx pixels to show with it.
         self.native.flush();
+        // A native view's window hides a frame after the frame replacing it (Windows): one more frame.
+        if self.native.wants_frame() {
+            window.request_redraw();
+        }
         let ui = &self.context.ui;
         let pointer = ui
             .input
