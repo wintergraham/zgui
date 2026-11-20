@@ -2178,6 +2178,45 @@ impl InputDispatcher {
         let state = self.state.try_borrow().ok()?;
         Some(receives_pointer(&state.options, scene, node))
     }
+    /// The cursor the pointer shows at `x`, `y`. While a press holds the
+    /// pointer it is the pressed node's, over it or dragged off it, until
+    /// the release: a press never changes it. Otherwise it is the cursor of
+    /// the topmost node the pointer stops at, as `hit_target` finds it:
+    /// past what `pointer_events(false)` lets through (a full-window layer
+    /// holding popovers) and inert subtrees, so hovering a control shows
+    /// the cursor pressing it does. `None` leaves it to the control's role.
+    pub fn cursor_at(&self, scene: &Scene, x: f32, y: f32) -> Option<crate::cursor::Cursor> {
+        if let Some(pressed) = self.captured().filter(|id| scene.contains(*id)) {
+            return scene.cursor_for(pressed);
+        }
+        self.hover_cursor_at(scene, x, y)
+    }
+    /// `cursor_at` with no press held: what is under the pointer alone.
+    pub fn hover_cursor_at(&self, scene: &Scene, x: f32, y: f32) -> Option<crate::cursor::Cursor> {
+        if !scene.shows_cursors() {
+            return None;
+        }
+        'hits: for hit in scene.hit_test_all(x, y) {
+            if !self.receives_pointer(scene, hit) {
+                continue;
+            }
+            let mut node = Some(hit);
+            while let Some(id) = node {
+                if self
+                    .options(id)
+                    .is_some_and(|options| options.passes(scene, id))
+                {
+                    continue 'hits;
+                }
+                if self.has_listeners(id) {
+                    break;
+                }
+                node = scene.parent(id);
+            }
+            return scene.cursor_over(hit);
+        }
+        None
+    }
     fn hit_target(&self, scene: &Scene, x: f32, y: f32) -> Option<NodeId> {
         let mut fallback = None;
         'hits: for hit in scene.hit_test_all(x, y) {

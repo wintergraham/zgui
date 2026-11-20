@@ -5,7 +5,7 @@ pub enum Cursor {
     /// The arrow (CSS `default`).
     #[default]
     Default,
-    /// A pointing hand, over links and buttons (CSS `pointer`).
+    /// A pointing hand, over links (CSS `pointer`).
     Pointer,
     /// The I-beam, over text (CSS `text`).
     Text,

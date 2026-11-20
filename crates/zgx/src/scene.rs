@@ -3438,12 +3438,22 @@ impl Scene {
     }
     /// The cursor at `x`, `y`: a selectable text's, or the topmost node's.
     pub fn cursor_at(&self, x: f32, y: f32) -> Option<crate::cursor::Cursor> {
-        if self.cursor_styles == 0 && !self.selectable.any() {
+        if !self.shows_cursors() {
             return None;
         }
         self.hit_test_all(x, y)
             .first()
-            .and_then(|id| self.selection_cursor(*id).or_else(|| self.cursor_for(*id)))
+            .and_then(|id| self.cursor_over(*id))
+    }
+    /// Whether any node sets a cursor or any text is selectable: if not,
+    /// every point shows the role's.
+    pub fn shows_cursors(&self) -> bool {
+        self.cursor_styles != 0 || self.selectable.any()
+    }
+    /// The cursor over `hit`: a selectable text's, else its own or its
+    /// nearest ancestor's.
+    pub fn cursor_over(&self, hit: NodeId) -> Option<crate::cursor::Cursor> {
+        self.selection_cursor(hit).or_else(|| self.cursor_for(hit))
     }
     /// `id`'s parent; `None` for the root.
     pub fn parent(&self, id: NodeId) -> Option<NodeId> {

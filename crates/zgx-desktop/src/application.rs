@@ -2194,14 +2194,15 @@ impl Host {
             self.cursor_query = Some((
                 self.cursor,
                 revision,
-                scene.cursor_at(self.cursor.0, self.cursor.1),
+                ui.input
+                    .hover_cursor_at(&scene, self.cursor.0, self.cursor.1),
             ));
         }
-        let explicit = ui
-            .input
-            .captured()
-            .and_then(|id| scene.contains(id).then(|| scene.cursor_for(id)).flatten())
-            .or(self.cursor_query.and_then(|(_, _, cursor)| cursor));
+        // A press keeps the pressed node's cursor (`InputDispatcher::cursor_at`).
+        let explicit = match ui.input.captured().filter(|id| scene.contains(*id)) {
+            Some(pressed) => scene.cursor_for(pressed),
+            None => self.cursor_query.and_then(|(_, _, cursor)| cursor),
+        };
         drop(scene);
         let cursor = explicit
             .map(native_cursor)
