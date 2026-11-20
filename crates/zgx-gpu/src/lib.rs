@@ -1962,6 +1962,11 @@ const RESIZE_SETTLE: std::time::Duration = std::time::Duration::from_millis(500)
 #[cfg(target_os = "macos")]
 static VIDEO_AT_FULL_RATE: std::sync::LazyLock<bool> =
     std::sync::LazyLock::new(|| zgx::env::var_os("ZGX_PRESENT_VIDEO").is_some());
+/// `ZGX_PRESENT_ORDER=0`: the GPU wait runs before the pacing handover
+/// (`before_present`), as presents did, instead of overlapping it.
+#[cfg(target_os = "macos")]
+static WAIT_OVERLAPS_PACING: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| zgx::env::var_os("ZGX_PRESENT_ORDER").is_none_or(|v| v != "0"));
 /// `ZGX_GPU_WARM=0`: the first input after a window idled (`trim`) no longer
 /// wakes the GPU ahead of its frame (`GpuRenderer::warm_up`). Measured
 /// (2026-10-26, the mail example after idle, 8 gestures a cell): the first
@@ -8849,12 +8854,13 @@ impl GpuRenderer {
             return Ok(PresentationStatus::Presented);
         };
         // The window server reads the surface from its next composite: the
-        // frame must be complete by then.
-        if self.finish_direct() {
-            // wgpu still frees what was dropped once its own work is done.
-            if present.frame.is_multiple_of(64) {
-                let _ = self.device.poll(wgpu::PollType::Poll);
-            }
+        // frame must be complete by then. Its wait runs while the GPU does:
+        // `before_present` hands over at a set point before the refresh
+        // (`Host::decide`), so waiting for completion after it — usually an
+        // instant — costs no time of its own.
+        let direct = self.metal_inflight.borrow().is_some();
+        let submission = if direct {
+            None
         } else {
             let encoder = self
                 .pending
@@ -8867,12 +8873,15 @@ impl GpuRenderer {
             if let Some(mapped) = self.mapped.as_mut() {
                 mapped.get_mut().submitted();
             }
-            let _ = self.device.poll(wgpu::PollType::Wait {
-                submission_index: Some(submission),
-                timeout: None,
-            });
+            Some(submission)
+        };
+        if !*WAIT_OVERLAPS_PACING {
+            self.wait_submission(submission.clone(), present.frame);
         }
         before_present();
+        if *WAIT_OVERLAPS_PACING {
+            self.wait_submission(submission, present.frame);
+        }
         let plane = present.plane();
         let opaque = self.background.3 == 255;
         let plain = present
@@ -8922,6 +8931,27 @@ impl GpuRenderer {
         present.presented(index);
         self.layer_present = Some(present);
         Ok(PresentationStatus::Presented)
+    }
+    /// Wait for the frame's submission (the direct path's is already
+    /// committed). The window server reads the surface from its next
+    /// composite, so it must be complete by the time the commit lands;
+    /// `present_layer` calls this after `before_present` so the wait —
+    /// usually an instant — runs while the pacing handover does
+    /// (`WAIT_OVERLAPS_PACING`).
+    #[cfg(target_os = "macos")]
+    fn wait_submission(&mut self, submission: Option<wgpu::SubmissionIndex>, frame: u64) {
+        if let Some(submission) = submission {
+            let _ = self.device.poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: None,
+            });
+        } else {
+            self.finish_direct();
+            // wgpu still frees what was dropped once its own work is done.
+            if frame.is_multiple_of(64) {
+                let _ = self.device.poll(wgpu::PollType::Poll);
+            }
+        }
     }
     /// Make the swap chain's current buffer the retained target for the
     /// frame about to draw, unless one is: once the compositor lets a frame
