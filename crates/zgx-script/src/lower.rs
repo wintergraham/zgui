@@ -929,7 +929,7 @@ pub(crate) fn build_scoped(
         cx.retain(resource);
     }
     let mounted: Vec<mlua::Function> = scope.mounted.borrow_mut().drain(..).collect();
-    let view = built(vm, result, low);
+    let view = built(vm, f, result, low);
     if mounted.is_empty() {
         return view;
     }
@@ -1040,15 +1040,26 @@ fn web_view_of(spec: &crate::node::WebSpec, vm: &Rc<Vm>, low: &Rc<Lowering>) -> 
     })
 }
 
-/// Builds a node a script function returned.
-fn built(vm: &Rc<Vm>, result: mlua::Result<mlua::Value>, low: &Rc<Lowering>) -> View {
+/// Builds a node script function `f` returned. A wrong return names `f` by
+/// where it is defined: the error surfaces when the view builds, long after
+/// the script line that set it up, so without it there is nothing to search.
+fn built(vm: &Rc<Vm>, f: &mlua::Function, result: mlua::Result<mlua::Value>, low: &Rc<Lowering>) -> View {
+    let site = || {
+        let info = f.info();
+        match (info.short_src, info.line_defined) {
+            (Some(src), Some(line)) => format!("{src}:{line}: "),
+            _ => String::new(),
+        }
+    };
     match result.and_then(|v| match v {
         mlua::Value::UserData(ud) => ud.borrow::<NodeUd>().map(|n| n.0.clone()),
-        mlua::Value::Nil => Err(mlua::Error::runtime(
-            "the function returned nothing; return a ui node",
-        )),
+        mlua::Value::Nil => Err(mlua::Error::runtime(format!(
+            "{}the function defined here returned nothing; return a ui node (`ui.div {{}}` for an empty one)",
+            site()
+        ))),
         other => Err(mlua::Error::runtime(format!(
-            "expected a ui node, got {}",
+            "{}the function defined here returned {}; expected a ui node",
+            site(),
             other.type_name()
         ))),
     }) {
@@ -3402,7 +3413,7 @@ fn with_drag(
         let (vm, low) = (vm.clone(), low.clone());
         let build = move |payload: &Value| {
             let result = vm.call::<mlua::Value>(&preview, payload.clone());
-            built(&vm, result, &low)
+            built(&vm, &preview, result, &low)
         };
         view = match (events.drag_preview_anchor, events.drag_preview_offset) {
             (None, None) => view.drag_preview(build),
