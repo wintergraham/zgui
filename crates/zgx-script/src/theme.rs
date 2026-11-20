@@ -8,7 +8,10 @@
 use crate::{node::env, value::Value};
 use mlua::{Lua, Table};
 use std::{path::PathBuf, rc::Rc};
-use zgx::theme::{Theme, ThemeOverride, Themes, TokenInput, TokenValue, token};
+use zgx::theme::{
+    Theme, ThemeKind, ThemeOverride, Themes, TokenInput, TokenKind, TokenValue, standard_kind,
+    token,
+};
 
 /// What `theme = …` gives a subtree: a theme's name, or a table of token
 /// overrides with an optional `theme` (or `extends`) to start from.
@@ -55,9 +58,123 @@ fn inputs(name: &str, value: &Value) -> Result<Vec<(String, TokenInput)>, String
         other => Err(format!("`{name}` cannot be {other}")),
     }
 }
-/// A Luau theme table (`{ name, type, extends, tokens }`) as a theme.
+/// A Luau theme table (`{ name, type, extends, tokens }`) as a theme,
+/// read as a theme file's JSON reads — without a trip through one (an
+/// eased theme switch re-registers the table every frame).
 fn theme_of(value: &Value) -> Result<Theme, String> {
-    Theme::from_json(&value.to_json()).map_err(|e| e.to_string())
+    let Value::Map(_) = value else {
+        return Err("a theme is a table (`{ name, type, extends, tokens }`)".into());
+    };
+    let name = match value.field("name") {
+        Some(Value::Str(name)) => name.to_string(),
+        Some(_) => return Err("`name` must be a string".into()),
+        None => return Err("a theme needs a `name`".into()),
+    };
+    let kind = match value.field("type") {
+        None => ThemeKind::Dark,
+        Some(Value::Str(kind)) => ThemeKind::parse(kind).ok_or_else(|| {
+            format!(
+                "`type` is \"dark\", \"light\", \"high-contrast\" or \"high-contrast-light\", not \"{kind}\""
+            )
+        })?,
+        Some(_) => return Err("`type` must be a string".into()),
+    };
+    let mut theme = Theme::new(name, kind);
+    match value.field("extends") {
+        None | Some(Value::Nil) => {}
+        Some(Value::Str(base)) => theme = theme.extending(&**base),
+        Some(_) => return Err("`extends` must be a theme's name".into()),
+    }
+    match value.field("tokens") {
+        None => {}
+        Some(tokens @ Value::Map(_)) => theme_tokens(&mut theme, "", tokens)?,
+        Some(_) => return Err("`tokens` must be an object".into()),
+    }
+    Ok(theme)
+}
+/// `tokens` (dotted names or nested groups) as `Theme`'s JSON reader takes
+/// them: strings as expressions, numbers, shadow lists and shadow objects.
+fn theme_tokens(theme: &mut Theme, prefix: &str, group: &Value) -> Result<(), String> {
+    let Value::Map(members) = group else {
+        return Ok(());
+    };
+    for (key, value) in members.iter() {
+        let name = if prefix.is_empty() {
+            key.to_string()
+        } else {
+            format!("{prefix}.{key}")
+        };
+        let id = token(&name);
+        let kind = standard_kind(id);
+        match value {
+            Value::Str(text) => theme.set_expr(id, text).map_err(|e| e.0)?,
+            Value::Text(text) => theme.set_expr(id, &text.to_string()).map_err(|e| e.0)?,
+            Value::Num(n) => {
+                if kind.is_some_and(|k| k != TokenKind::Number) {
+                    return Err(format!("`{name}` is not a number token"));
+                }
+                theme.set_token(id, *n as f32);
+            }
+            Value::List(items) => {
+                // A list of shadows, as strings or objects.
+                let mut parts = Vec::new();
+                for item in items.iter() {
+                    parts.push(match item {
+                        Value::Str(s) => s.to_string(),
+                        item @ Value::Map(_) => shadow_object(&name, item)?,
+                        _ => {
+                            return Err(format!("`{name}`: a shadow list holds strings or tables"));
+                        }
+                    });
+                }
+                let text = if parts.is_empty() {
+                    "none".to_owned()
+                } else {
+                    parts.join(", ")
+                };
+                theme.set_token(id, TokenInput::shadows(&text).map_err(|e| e.0)?);
+            }
+            // A shadow written as an object: only shadow fields, an offset
+            // among them.
+            group @ Value::Map(fields)
+                if kind == Some(TokenKind::Shadow)
+                    || kind.is_none()
+                        && fields.iter().any(|(k, _)| &**k == "x" || &**k == "y")
+                        && fields.iter().all(|(k, _)| {
+                            matches!(&**k, "x" | "y" | "blur" | "spread" | "color")
+                        }) =>
+            {
+                let text = shadow_object(&name, group)?;
+                theme.set_token(id, TokenInput::shadows(&text).map_err(|e| e.0)?);
+            }
+            group @ Value::Map(_) => theme_tokens(theme, &name, group)?,
+            _ => {
+                return Err(format!(
+                    "`{name}` must be a string, a number or a group of tokens"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+/// `{ x = 0, y = 8, blur = 24, spread = 0, color = "#0006" }` as CSS.
+fn shadow_object(name: &str, object: &Value) -> Result<String, String> {
+    let number = |key: &str| match object.field(key) {
+        None => Ok(0.),
+        Some(Value::Num(n)) => Ok(*n),
+        Some(_) => Err(format!("`{name}.{key}` must be a number")),
+    };
+    let color = match object.field("color") {
+        Some(Value::Str(color)) => color.to_string(),
+        _ => "#00000059".to_owned(),
+    };
+    Ok(format!(
+        "{} {} {} {} {color}",
+        number("x")?,
+        number("y")?,
+        number("blur")?,
+        number("spread")?
+    ))
 }
 /// A token's value as scripts see it: colours as `#rrggbbaa`, numbers,
 /// font names, shadows as `{ x, y, blur, spread, color }` lists.
@@ -177,9 +294,11 @@ pub(crate) fn install(lua: &Lua, ui: &Table, dir: Option<PathBuf>) -> mlua::Resu
             }
             let themes = themes(lua)?;
             off_clock(lua, || {
-                for (name, input) in declared {
-                    themes.declare(token(&name), input);
-                }
+                themes.declare_many(
+                    declared
+                        .into_iter()
+                        .map(|(name, input)| (token(&name), input)),
+                );
             });
             Ok(())
         })?,

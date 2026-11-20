@@ -87,6 +87,14 @@ impl TokenInput {
     pub fn parse(text: &str) -> Result<Self, ThemeError> {
         value::parse(text, None).map(TokenInput).map_err(ThemeError)
     }
+    /// CSS `box-shadow` text (`"none"`, `"0 8 24 #0006, 0 1 3 #0003"`) as a
+    /// token's shadows — for callers that build a shadow list into text
+    /// (a theme table's list of shadow objects).
+    pub fn shadows(text: &str) -> Result<Self, ThemeError> {
+        value::parse_shadows(text)
+            .map(TokenInput)
+            .map_err(ThemeError)
+    }
     /// Parse with the token's kind known (a bare word is a font, an easing).
     pub(crate) fn parse_for(id: TokenId, text: &str) -> Result<Self, ThemeError> {
         value::parse(text, super::tokens::standard_kind(id))
@@ -176,6 +184,15 @@ impl Theme {
     }
     /// Set `token`; a later value for the same token replaces it.
     pub fn with(mut self, token: impl Into<TokenId>, value: impl Into<TokenInput>) -> Self {
+        self.set_token(token, value);
+        self
+    }
+    /// `with` in place.
+    pub fn set_token(
+        &mut self,
+        token: impl Into<TokenId>,
+        value: impl Into<TokenInput>,
+    ) -> &mut Self {
         let id = token.into();
         let expr = value.into().0;
         let source = describe(&expr);
@@ -184,10 +201,16 @@ impl Theme {
     }
     /// Set `token` from a theme expression (`"alpha({accent}, 0.2)"`).
     pub fn with_expr(mut self, token: impl Into<TokenId>, text: &str) -> Result<Self, ThemeError> {
+        self.set_expr(token, text)?;
+        Ok(self)
+    }
+    /// `with_expr` in place: `text` parses as the token's kind (a bare word
+    /// on a font token is a family, not text) and stays its written source.
+    pub fn set_expr(&mut self, token: impl Into<TokenId>, text: &str) -> Result<(), ThemeError> {
         let id = token.into();
         let input = TokenInput::parse_for(id, text)?;
         self.insert(id, text.into(), input.0);
-        Ok(self)
+        Ok(())
     }
     fn insert(&mut self, id: TokenId, source: Arc<str>, expr: Expr) {
         let entry = Entry {

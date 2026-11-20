@@ -133,8 +133,12 @@ fn what_ships_keeps_errors_off_the_interface_and_tells_the_app() {
 #[test]
 #[ignore]
 fn bytecode_load_time() {
-    let dir =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../zgx-desktop/examples/terminal");
+    let dir = std::env::var_os("ZGX_SCRIPT_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../zgx-desktop/examples/terminal")
+        });
     let mut scripts = Vec::new();
     let mut stack = vec![dir];
     while let Some(dir) = stack.pop() {
@@ -170,4 +174,37 @@ fn bytecode_load_time() {
         scripts.len(),
         source / bytecode
     );
+}
+
+/// A host with `bytecode_cache` writes the bytecode of the scripts it reads
+/// to disk; a changed source compiles again instead of running stale code.
+#[test]
+fn a_host_caches_disk_scripts_bytecode() {
+    let dir = std::env::temp_dir().join(format!("zgx-luauc-{}", std::process::id()));
+    let scripts = dir.join("ui");
+    let cache = dir.join("cache");
+    std::fs::create_dir_all(&scripts).unwrap();
+    std::fs::write(
+        scripts.join("app.luau"),
+        r#"return ui.text { "first", id = "label" }"#,
+    )
+    .unwrap();
+    let mut h = Harness::new(|runtime| {
+        ScriptHost::new(runtime, scripts.join("app.luau")).bytecode_cache(&cache)
+    });
+    assert_eq!(h.text("label"), "first");
+    let entries = std::fs::read_dir(&cache)
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(entries.len(), 1, "one cache entry per script");
+    std::fs::write(
+        scripts.join("app.luau"),
+        r#"return ui.text { "edited", id = "label" }"#,
+    )
+    .unwrap();
+    h.host.reload().unwrap();
+    h.settle();
+    assert_eq!(h.text("label"), "edited");
+    let _ = std::fs::remove_dir_all(&dir);
 }

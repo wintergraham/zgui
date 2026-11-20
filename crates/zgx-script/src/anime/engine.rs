@@ -280,6 +280,25 @@ pub(crate) struct Site {
 /// Replacements in a row before a site's restarts are reported.
 const RESTARTS: u32 = 20;
 
+/// Keys that only change how an element paints — a shader's clock and
+/// parameters, filters, its mask — never where its box is or whether it
+/// has one. On an element nothing of which is drawn they still draw
+/// nothing, so an endless loop of them can wait unseen.
+fn paint_only(key: &Key) -> bool {
+    matches!(
+        key,
+        Key::Opacity
+            | Key::Blur
+            | Key::Brightness
+            | Key::Contrast
+            | Key::Saturate
+            | Key::MaskX
+            | Key::MaskY
+            | Key::Shader(_)
+            | Key::Layer(_)
+    )
+}
+
 impl Clip {
     pub fn new(
         engine: &Rc<Engine>,
@@ -746,10 +765,13 @@ impl Clip {
     /// Stops without completing; values stay where they are.
     /// Whether the clip animates only elements, all removed since mounting.
     /// An endless loop whose elements all sit where nothing shows: in a
-    /// closed dialog, under a faded-out ancestor, clipped away. Their own
-    /// opacity doesn't count (a blink fades its element out and back).
-    /// Advancing it would draw nothing, so it waits; a finite animation
-    /// always runs on, to finish and call back.
+    /// closed dialog, under a faded-out ancestor, hidden, laid out to no
+    /// size or clipped entirely away. Their own opacity doesn't count (a
+    /// blink fades its element out and back), and neither does a track
+    /// that can move, size or unclip its element — it may show it again on
+    /// its own; what counts is work whose frames still draw nothing (a
+    /// shader's clock, a filter). Advancing it would draw nothing, so it
+    /// waits; a finite animation always runs on, to finish and call back.
     fn unseen_loop(&self) -> bool {
         if !self.timing.borrow().loops.is_infinite() {
             return false;
@@ -759,9 +781,27 @@ impl Clip {
             && tracks.iter().all(|t| match &t.target {
                 Target::Element(e) => e
                     .read(|scene, id| {
-                        scene
+                        // Nothing of an ancestor shows, or it is hidden
+                        // itself — which no track undoes (`hidden` is not
+                        // animatable).
+                        if scene
                             .parent(id)
                             .is_some_and(|parent| scene.visible_bounds(parent).is_none())
+                            || !scene.layout_visible(id)
+                        {
+                            return true;
+                        }
+                        // Its box paints nothing — laid out to no size or
+                        // clipped away — and the track only changes how it
+                        // paints, so its time still draws nothing.
+                        paint_only(&t.key)
+                            && e
+                                .animated
+                                .borrow()
+                                .opacity
+                                .unwrap_or_else(|| scene.effects(id).opacity)
+                                > 0.
+                            && scene.visible_bounds(id).is_none()
                     })
                     .unwrap_or(false),
                 _ => false,

@@ -894,6 +894,70 @@ impl Script {
     }
 }
 
+/// Evaluate `code` as a chunk named `name`. With a [`bytecode_cache`]
+/// the source's compiled form is kept on disk and later loads call the
+/// cached function instead of compiling again; any miss, stale or
+/// unreadable entry falls back to loading the source as usual (which is
+/// also where parse errors are reported from).
+fn eval_chunk(
+    lua: &Lua,
+    files: Files,
+    cache: Option<&std::path::Path>,
+    name: String,
+    code: Vec<u8>,
+) -> mlua::Result<mlua::Value> {
+    if let (Files::Disk, Some(dir)) = (files, cache)
+        && let Some(function) = bytecode_cached(lua, dir, &name, &code)
+    {
+        return function.call(());
+    }
+    files
+        .chunk(lua.load(code).set_name(name))
+        .eval::<mlua::Value>()
+}
+
+/// The function `code` compiles to, from `dir`'s cache or freshly compiled
+/// and written there. An entry holds the source it was compiled from and
+/// is used only when it matches byte for byte, so an edited file or a
+/// colliding name simply compiles again. Bytecode an older or newer Luau
+/// cannot load is rewritten. `None` leaves the caller the source path,
+/// where parse errors surface with the chunk's name.
+fn bytecode_cached(
+    lua: &Lua,
+    dir: &std::path::Path,
+    name: &str,
+    code: &[u8],
+) -> Option<mlua::Function> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    code.hash(&mut hasher);
+    let path = dir.join(format!("{:016x}.luauc", hasher.finish()));
+    let stored = std::fs::read(&path).ok().and_then(|stored| {
+        let (len, rest) = stored.split_at_checked(8)?;
+        let len = usize::try_from(u64::from_le_bytes(len.try_into().ok()?)).ok()?;
+        let (source, bytecode) = rest.split_at_checked(len)?;
+        (source == code).then(|| bytecode.to_vec())
+    });
+    let cached = stored.and_then(|bytecode| lua.load(bytecode).set_name(name).into_function().ok());
+    if cached.is_some() {
+        return cached;
+    }
+    let bytecode = build::compile(code).ok()?;
+    let function = lua
+        .load(bytecode.clone())
+        .set_name(name)
+        .into_function()
+        .ok()?;
+    if std::fs::create_dir_all(dir).is_ok() {
+        let mut entry = (code.len() as u64).to_le_bytes().to_vec();
+        entry.extend_from_slice(code);
+        entry.extend_from_slice(&bytecode);
+        let tmp = path.with_extension("tmp");
+        let _ = std::fs::write(&tmp, &entry).and_then(|()| std::fs::rename(&tmp, &path));
+    }
+    Some(function)
+}
+
 struct Loaded {
     _vms: Vec<Rc<Vm>>,
     /// The scripts' `ui.on_mount`s outside components, run as the app's
@@ -936,6 +1000,9 @@ struct Inner {
     error_watch: RefCell<Option<Box<dyn std::any::Any>>>,
     plugin_dir: Option<PathBuf>,
     plugins: Vec<Script>,
+    /// Where scripts read from the disk keep their compiled bytecode
+    /// ([`ScriptHost::bytecode_cache`]).
+    bytecode_cache: Option<PathBuf>,
     limits: Limits,
     stores: RefCell<HashMap<String, Rc<Store>>>,
     shared: Rc<Store>,
@@ -985,6 +1052,10 @@ struct Inner {
     type_errors: Signal<Option<String>>,
     /// What `zgx lint` finds in the scripts as loaded (debug builds).
     lint: Signal<Option<String>>,
+    /// The lint running since the last reload: finding every loaded file's
+    /// findings on the main thread held it for tens of milliseconds, so the
+    /// scan runs on a thread of its own and `poll_lint` applies it.
+    linter: RefCell<Option<LintJob>>,
     /// The theme file error shown, if any (cleared when the file reads).
     theme_error: RefCell<Option<String>>,
     /// Host-provided native views (`ui.native`): they outlive reloads.
@@ -1027,6 +1098,17 @@ fn diagnostics_requested() -> bool {
 /// Loads an application script and its plugins and mounts what they describe.
 #[derive(Clone)]
 pub struct ScriptHost(Rc<Inner>);
+/// A lint running on its own thread (`lint_loaded`): what it found is taken
+/// once it finishes. A reload replaces the slot, so a stale scan's findings
+/// never show.
+struct LintJob {
+    result: std::sync::Arc<std::sync::Mutex<Option<Vec<String>>>>,
+}
+impl LintJob {
+    fn take(&self) -> Option<Vec<String>> {
+        self.result.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+}
 /// A script run: its VM, the view it returned and its slot contributions.
 type Ran = (
     Rc<Vm>,
@@ -1076,6 +1158,7 @@ impl ScriptHost {
             error_watch: RefCell::default(),
             plugin_dir: None,
             plugins: Vec::new(),
+            bytecode_cache: None,
             limits: Limits::default(),
             stores: RefCell::default(),
             elements: elements.clone(),
@@ -1119,6 +1202,7 @@ impl ScriptHost {
             checker: RefCell::default(),
             type_errors: runtime.signal(None),
             lint: runtime.signal(None),
+            linter: RefCell::default(),
             theme_error: RefCell::default(),
             natives: Rc::new(Natives::new(runtime)),
         }));
@@ -1208,6 +1292,13 @@ impl ScriptHost {
     /// Run scripts within `limits`: heap, and time to load and per call.
     pub fn limits(self, limits: Limits) -> Self {
         self.configure(|inner| inner.limits = limits)
+    }
+    /// Cache in `dir` the bytecode each script read from the disk compiles
+    /// to, so the next load calls it instead of compiling again. `dir` must
+    /// be no less trusted than the scripts' own directory: its files load
+    /// as bytecode, which Luau does not check.
+    pub fn bytecode_cache(self, dir: impl Into<PathBuf>) -> Self {
+        self.configure(|inner| inner.bytecode_cache = Some(dir.into()))
     }
     /// Names the application: `ui.persist` saves under its data directory
     /// ([`app_data_dir`]), in `script-state`.
@@ -1628,6 +1719,13 @@ impl ScriptHost {
             None => {}
         }
     }
+    /// Holds the scripts' `ui.every` and `ui.after` callbacks until resumed
+    /// (`false`): a host whose window is out of sight has no use for their
+    /// work, and a timer that comes due while paused waits for the resume —
+    /// firing then, not for each missed tick.
+    pub fn set_timers_paused(&self, paused: bool) {
+        self.0.timers.set_paused(paused);
+    }
     /// Type checks the scripts in the background after every reload, as
     /// `zgx check` does, and shows the errors over the interface (with
     /// `watch`, which collects the results). It needs luau-lsp; a check
@@ -1689,7 +1787,9 @@ impl ScriptHost {
     /// In a debug build, `zgx lint` over the scripts as loaded, after each
     /// load: each finding once on stderr and in `warnings`, and over the
     /// interface while there is no error. Scripts read from a bundle, and
-    /// `ZGX_LINT=0`, skip it.
+    /// `ZGX_LINT=0`, skip it. The scan runs on its own thread — hundreds of
+    /// files' reads and lints held a reload for tens of milliseconds — and
+    /// `poll_lint` applies what it found.
     fn lint_loaded(&self) {
         if !cfg!(debug_assertions)
             || matches!(self.0.files, Files::Bundle(_))
@@ -1707,24 +1807,46 @@ impl ScriptHost {
             .collect();
         files.sort();
         files.dedup();
-        let mut found = Vec::new();
-        for file in &files {
-            let Ok(source) = std::fs::read_to_string(file) else {
-                continue;
-            };
-            for d in lint::lint_source(file, &source) {
-                let name = d.file.file_name().unwrap_or(d.file.as_os_str());
-                let line = format!(
-                    "{}:{}:{}: lint[{}]: {}",
-                    name.to_string_lossy(),
-                    d.line,
-                    d.column,
-                    d.code,
-                    d.message
-                );
-                warning(Some(&self.0.warnings), line.clone());
-                found.push(line);
-            }
+        let job = LintJob {
+            result: std::sync::Arc::default(),
+        };
+        let slot = job.result.clone();
+        *self.0.linter.borrow_mut() = std::thread::Builder::new()
+            .name("zgx-lint".into())
+            .spawn(move || {
+                let mut found = Vec::new();
+                for file in &files {
+                    let Ok(source) = std::fs::read_to_string(file) else {
+                        continue;
+                    };
+                    for d in lint::lint_source(file, &source) {
+                        let name = d.file.file_name().unwrap_or(d.file.as_os_str());
+                        found.push(format!(
+                            "{}:{}:{}: lint[{}]: {}",
+                            name.to_string_lossy(),
+                            d.line,
+                            d.column,
+                            d.code,
+                            d.message
+                        ));
+                    }
+                }
+                *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(found);
+            })
+            .ok()
+            .map(|_| job);
+    }
+    /// Applies a finished background lint (`lint_loaded`): each finding once
+    /// on stderr and in `warnings`, and over the interface while there is no
+    /// error. Called where `poll_check` is, and on each reload at the latest.
+    pub fn poll_lint(&self) {
+        let result = self.0.linter.borrow().as_ref().and_then(|job| job.take());
+        let Some(found) = result else {
+            return;
+        };
+        *self.0.linter.borrow_mut() = None;
+        for line in &found {
+            warning(Some(&self.0.warnings), line.clone());
         }
         self.0.lint.set((!found.is_empty()).then(|| {
             format!(
@@ -1804,6 +1926,7 @@ impl ScriptHost {
                 if let Some(rewatch) = &*self.0.rewatch.borrow() {
                     rewatch.send(());
                 }
+                self.poll_lint();
                 self.lint_loaded();
                 self.start_check();
                 Ok(())
@@ -1887,10 +2010,12 @@ impl ScriptHost {
                     // After a change, open them again: a file an editor
                     // replaced is a new file.
                     events.watch(host.watched_files(), host.watched_dirs(), heard);
-                    // While a type check runs on its thread, its result is
-                    // looked for this often; a change still wakes this at
-                    // once.
-                    let poll = host.0.checker.borrow().is_some().then_some(every);
+                    // While a type check or lint runs on its thread, its
+                    // result is looked for this often; a change still wakes
+                    // this at once.
+                    let poll = (host.0.checker.borrow().is_some()
+                        || host.0.linter.borrow().is_some())
+                    .then_some(every);
                     match wake(&mut events, &mut rewatched, poll).await {
                         Woke::Changed => {
                             // An editor's save can be several writes: reload
@@ -1915,6 +2040,7 @@ impl ScriptHost {
                     }
                     host.reload_if_changed();
                     host.poll_check();
+                    host.poll_lint();
                 }
             }
             if matches!(host.0.files, Files::Bundle(_)) && host.0.managed.borrow().is_empty() {
@@ -1924,6 +2050,7 @@ impl ScriptHost {
                 zgx::timer::sleep(every).await;
                 host.reload_if_changed();
                 host.poll_check();
+                host.poll_lint();
             }
         }
     }
@@ -2259,10 +2386,8 @@ impl ScriptHost {
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .into_owned();
-            let value = match files
-                .chunk(lua.load(code).set_name(format!("@{chunk}")))
-                .eval::<mlua::Value>()
-            {
+            let cache = host.upgrade().and_then(|h| h.bytecode_cache.clone());
+            let value = match eval_chunk(lua, files, cache.as_deref(), format!("@{chunk}"), code) {
                 Ok(mlua::Value::Nil) => mlua::Value::Boolean(true),
                 Ok(value) => value,
                 Err(e) => {
@@ -2402,11 +2527,10 @@ impl ScriptHost {
         lua.sandbox(true).map_err(fail)?;
         // Building runs untracked: reading state while describing the tree
         // must not subscribe whatever is currently mounting.
+        let cache = self.0.bytecode_cache.clone();
         let result = self.0.runtime.untracked(|| {
             vm.guard(limits.load, || {
-                files
-                    .chunk(lua.load(code).set_name(format!("@{name}")))
-                    .eval::<mlua::Value>()
+                eval_chunk(&lua, files, cache.as_deref(), format!("@{name}"), code)
             })
         });
         let root = match result.map_err(fail)? {

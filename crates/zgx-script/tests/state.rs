@@ -611,6 +611,55 @@ fn timers_fire_on_their_clock_and_stop() {
     assert_eq!(h.text("out"), "3 1", "every stopped at 3, after fired once");
 }
 
+#[test]
+fn paused_timers_hold_until_resumed() {
+    let mut h = Harness::inline(
+        r#"local n = ui.state("n", 0)
+        local after = ui.state("after", 0)
+        ui.every(10, function() n:set(n:peek() + 1) end)
+        ui.after(120, function() after:set(1) end)
+        return ui.column { ui.text { "{n} {after}", id = "out" } }"#,
+    );
+    // Timers pump in `settle`; the script's every(10) needs wall time.
+    let pump = |h: &mut Harness, ms: u64| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+        while std::time::Instant::now() < deadline {
+            h.settle();
+            std::thread::sleep(std::time::Duration::from_millis(4));
+        }
+    };
+    let count = |h: &mut Harness| {
+        h.text("out")
+            .split(' ')
+            .next()
+            .and_then(|n| n.parse::<u32>().ok())
+            .unwrap_or(0)
+    };
+    pump(&mut h, 80);
+    let fired = count(&mut h);
+    assert!(
+        fired >= 2,
+        "timers fired before the pause: {:?}",
+        h.text("out")
+    );
+    h.host.set_timers_paused(true);
+    pump(&mut h, 80);
+    assert_eq!(count(&mut h), fired, "paused: {:?}", h.text("out"));
+    assert!(
+        h.text("out").ends_with(" 0"),
+        "ui.after held too: {:?}",
+        h.text("out")
+    );
+    h.host.set_timers_paused(false);
+    pump(&mut h, 80);
+    assert!(count(&mut h) > fired, "resumed: {:?}", h.text("out"));
+    assert!(
+        h.text("out").ends_with(" 1"),
+        "ui.after fired on resume: {:?}",
+        h.text("out")
+    );
+}
+
 /// Items converted for scripts per `set_key` on one row of a list of `n`
 /// rows that a filter computed and a list of its rows read.
 fn converted_per_row_write(n: usize) -> u64 {
