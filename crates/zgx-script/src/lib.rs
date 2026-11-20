@@ -894,6 +894,70 @@ impl Script {
     }
 }
 
+/// Evaluate `code` as a chunk named `name`. With a [`bytecode_cache`]
+/// the source's compiled form is kept on disk and later loads call the
+/// cached function instead of compiling again; any miss, stale or
+/// unreadable entry falls back to loading the source as usual (which is
+/// also where parse errors are reported from).
+fn eval_chunk(
+    lua: &Lua,
+    files: Files,
+    cache: Option<&std::path::Path>,
+    name: String,
+    code: Vec<u8>,
+) -> mlua::Result<mlua::Value> {
+    if let (Files::Disk, Some(dir)) = (files, cache)
+        && let Some(function) = bytecode_cached(lua, dir, &name, &code)
+    {
+        return function.call(());
+    }
+    files
+        .chunk(lua.load(code).set_name(name))
+        .eval::<mlua::Value>()
+}
+
+/// The function `code` compiles to, from `dir`'s cache or freshly compiled
+/// and written there. An entry holds the source it was compiled from and
+/// is used only when it matches byte for byte, so an edited file or a
+/// colliding name simply compiles again. Bytecode an older or newer Luau
+/// cannot load is rewritten. `None` leaves the caller the source path,
+/// where parse errors surface with the chunk's name.
+fn bytecode_cached(
+    lua: &Lua,
+    dir: &std::path::Path,
+    name: &str,
+    code: &[u8],
+) -> Option<mlua::Function> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    code.hash(&mut hasher);
+    let path = dir.join(format!("{:016x}.luauc", hasher.finish()));
+    let stored = std::fs::read(&path).ok().and_then(|stored| {
+        let (len, rest) = stored.split_at_checked(8)?;
+        let len = usize::try_from(u64::from_le_bytes(len.try_into().ok()?)).ok()?;
+        let (source, bytecode) = rest.split_at_checked(len)?;
+        (source == code).then(|| bytecode.to_vec())
+    });
+    let cached = stored.and_then(|bytecode| lua.load(bytecode).set_name(name).into_function().ok());
+    if cached.is_some() {
+        return cached;
+    }
+    let bytecode = build::compile(code).ok()?;
+    let function = lua
+        .load(bytecode.clone())
+        .set_name(name)
+        .into_function()
+        .ok()?;
+    if std::fs::create_dir_all(dir).is_ok() {
+        let mut entry = (code.len() as u64).to_le_bytes().to_vec();
+        entry.extend_from_slice(code);
+        entry.extend_from_slice(&bytecode);
+        let tmp = path.with_extension("tmp");
+        let _ = std::fs::write(&tmp, &entry).and_then(|()| std::fs::rename(&tmp, &path));
+    }
+    Some(function)
+}
+
 struct Loaded {
     _vms: Vec<Rc<Vm>>,
     /// The scripts' `ui.on_mount`s outside components, run as the app's
@@ -936,6 +1000,9 @@ struct Inner {
     error_watch: RefCell<Option<Box<dyn std::any::Any>>>,
     plugin_dir: Option<PathBuf>,
     plugins: Vec<Script>,
+    /// Where scripts read from the disk keep their compiled bytecode
+    /// ([`ScriptHost::bytecode_cache`]).
+    bytecode_cache: Option<PathBuf>,
     limits: Limits,
     stores: RefCell<HashMap<String, Rc<Store>>>,
     shared: Rc<Store>,
@@ -1076,6 +1143,7 @@ impl ScriptHost {
             error_watch: RefCell::default(),
             plugin_dir: None,
             plugins: Vec::new(),
+            bytecode_cache: None,
             limits: Limits::default(),
             stores: RefCell::default(),
             elements: elements.clone(),
@@ -1208,6 +1276,13 @@ impl ScriptHost {
     /// Run scripts within `limits`: heap, and time to load and per call.
     pub fn limits(self, limits: Limits) -> Self {
         self.configure(|inner| inner.limits = limits)
+    }
+    /// Cache in `dir` the bytecode each script read from the disk compiles
+    /// to, so the next load calls it instead of compiling again. `dir` must
+    /// be no less trusted than the scripts' own directory: its files load
+    /// as bytecode, which Luau does not check.
+    pub fn bytecode_cache(self, dir: impl Into<PathBuf>) -> Self {
+        self.configure(|inner| inner.bytecode_cache = Some(dir.into()))
     }
     /// Names the application: `ui.persist` saves under its data directory
     /// ([`app_data_dir`]), in `script-state`.
@@ -2259,10 +2334,8 @@ impl ScriptHost {
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .into_owned();
-            let value = match files
-                .chunk(lua.load(code).set_name(format!("@{chunk}")))
-                .eval::<mlua::Value>()
-            {
+            let cache = host.upgrade().and_then(|h| h.bytecode_cache.clone());
+            let value = match eval_chunk(lua, files, cache.as_deref(), format!("@{chunk}"), code) {
                 Ok(mlua::Value::Nil) => mlua::Value::Boolean(true),
                 Ok(value) => value,
                 Err(e) => {
@@ -2402,11 +2475,10 @@ impl ScriptHost {
         lua.sandbox(true).map_err(fail)?;
         // Building runs untracked: reading state while describing the tree
         // must not subscribe whatever is currently mounting.
+        let cache = self.0.bytecode_cache.clone();
         let result = self.0.runtime.untracked(|| {
             vm.guard(limits.load, || {
-                files
-                    .chunk(lua.load(code).set_name(format!("@{name}")))
-                    .eval::<mlua::Value>()
+                eval_chunk(&lua, files, cache.as_deref(), format!("@{name}"), code)
             })
         });
         let root = match result.map_err(fail)? {
