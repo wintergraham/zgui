@@ -1282,7 +1282,7 @@ struct Host {
     primary: Option<String>,
     /// Where a press in a `window_drag` region was, until the pointer moves
     /// far enough from it to move the window, or is let go: a click.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     title_press: Option<(f32, f32)>,
     cursor: (f32, f32),
     pending_file_drops: crate::file_drop::FileDropBatch,
@@ -1621,7 +1621,7 @@ impl Host {
             clipboard,
             #[cfg(target_os = "linux")]
             primary: None,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
             title_press: None,
             cursor: (0., 0.),
             scroll: Default::default(),
@@ -2976,6 +2976,12 @@ impl Host {
                 if mouse_down::drag(window) {
                     return;
                 }
+                #[cfg(target_os = "windows")]
+                {
+                    let window = window.clone();
+                    self.windows_title_drag(&window);
+                }
+                #[cfg(not(target_os = "windows"))]
                 self.context
                     .window_info
                     .last_request_error
@@ -3111,7 +3117,9 @@ impl Host {
             // move away while held (`title_press_moved`).
             #[cfg(target_os = "linux")]
             WindowGesture::Drag => self.title_press = Some(self.cursor),
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(target_os = "windows")]
+            WindowGesture::Drag => self.windows_title_drag(&window),
+            #[cfg(not(any(target_os = "linux", target_os = "windows")))]
             WindowGesture::Drag => {
                 self.context
                     .window_info
@@ -3140,11 +3148,30 @@ impl Host {
         }
         Ok(())
     }
+    /// A press that moves the window, on Windows. Its move loop takes a
+    /// maximized window out of maximized at once, even for a click that never
+    /// moves, so there the move waits for the pointer to move away while held
+    /// (`title_press_moved`), as dragging a maximized title bar does. A
+    /// fullscreen window has nothing to move: a move would leave fullscreen.
+    #[cfg(target_os = "windows")]
+    fn windows_title_drag(&mut self, window: &winit::window::Window) {
+        if window.fullscreen().is_some() {
+            return;
+        }
+        if window.is_maximized() {
+            self.title_press = Some(self.cursor);
+            return;
+        }
+        self.context
+            .window_info
+            .last_request_error
+            .set(window.drag_window().err().map(|e| e.to_string()));
+    }
     /// The pointer moved, held, from a press in a `window_drag` region: past
     /// the drag threshold (as a drag starts), the window manager moves the
     /// window from here, holding the pointer until it is let go, so zgx's
     /// press ends now.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn title_press_moved(&mut self) {
         let Some((x, y)) = self.title_press else {
             return;
@@ -3426,7 +3453,7 @@ impl Host {
                 if self.resize_band(p.x, p.y)? {
                     return Ok(());
                 }
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
                 if self.title_press.is_some() {
                     self.title_press_moved();
                     return Ok(());
@@ -3509,7 +3536,7 @@ impl Host {
                     MouseButton::Other(n) => PointerButton::Other(n),
                 };
                 // Let go before it moved: a click on the title bar.
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
                 if state == ElementState::Released {
                     self.title_press = None;
                 }
