@@ -8,7 +8,8 @@ use zgx::{
     reactive::Runtime,
     scene::{Color, NodeId, NodeKind},
     theme::{
-        Appearance, DARK, LIGHT, Theme, ThemeKind, ThemeOverride, Themes, TokenValue, tok, token,
+        Appearance, DARK, LIGHT, Theme, ThemeKind, ThemeOverride, Themes, TokenInput, TokenValue,
+        tok, token,
     },
     widgets::Ui,
 };
@@ -225,6 +226,60 @@ fn colour_switches_repaint_only_token_nodes_without_layout() {
     ui.theme().set("test-same").unwrap();
     assert!(ui.scene.borrow_mut().flush().is_idle());
     assert_eq!(themed_runs.get(), themed_before + 1);
+}
+
+#[test]
+fn batched_writes_publish_once_and_reads_see_them() {
+    let runtime = Runtime::new();
+    let themes = Themes::of(&runtime);
+    themes.register(Theme::new("test-a", ThemeKind::Dark).with(tok::ACCENT, RED));
+    themes.register(Theme::new("test-b", ThemeKind::Dark).with(tok::ACCENT, GREEN));
+    let epoch = || themes.root().epoch();
+    let base = epoch();
+    let scope = themes.root().clone();
+    let runs = std::rc::Rc::new(std::cell::Cell::new(0));
+    let _watch = {
+        let runs = runs.clone();
+        runtime.effect(move || {
+            scope.color(tok::ACCENT);
+            runs.set(runs.get() + 1);
+        })
+    };
+    assert_eq!(runs.get(), 1);
+    // register + set + declares inside one batch: one publish, one run of
+    // the accent's observer, with the last write's values.
+    runtime.batch(|| {
+        themes.register(
+            Theme::new("test-a", ThemeKind::Dark).with(tok::ACCENT, Color(0, 0, 255, 255)),
+        );
+        themes.set("test-a").unwrap();
+        themes.declare_many([
+            (token("test.batch.x"), TokenInput::parse("#112233").unwrap()),
+            (
+                token("test.batch.y"),
+                TokenInput::parse("{test.batch.x}").unwrap(),
+            ),
+        ]);
+    });
+    assert_eq!(epoch(), base + 1, "one refresh for the batch's writes");
+    assert_eq!(runs.get(), 2, "one run, not one per write");
+    assert_eq!(themes.color(tok::ACCENT), Color(0, 0, 255, 255));
+    assert_eq!(
+        themes.root().get_untracked(token("test.batch.y")),
+        TokenValue::Color(Color(0x11, 0x22, 0x33, 255)),
+        "the declared token and its reference"
+    );
+    // A read inside the batch forces the pending publish rather than
+    // waiting it out: writes stay readable mid-batch.
+    runtime.batch(|| {
+        themes.set("test-b").unwrap();
+        assert_eq!(themes.color(tok::ACCENT), GREEN);
+    });
+    assert_eq!(runs.get(), 3);
+    // And outside any batch each write publishes as it did.
+    themes.set("test-a").unwrap();
+    assert_eq!(themes.color(tok::ACCENT), Color(0, 0, 255, 255));
+    assert_eq!(runs.get(), 4);
 }
 
 #[test]

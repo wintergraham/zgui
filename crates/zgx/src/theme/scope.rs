@@ -267,6 +267,30 @@ struct Shared {
     current: Signal<Arc<str>>,
     /// The system's display settings (`Themes::set_system_preferences`).
     preferences: Signal<SystemPreferences>,
+    /// Writes made inside a batch that publish together at its end: every
+    /// read forces the publish rather than seeing them half-applied.
+    pending: std::cell::Cell<bool>,
+    /// A publish is already queued at the flush's start.
+    publishing: std::cell::Cell<bool>,
+    /// The root scope, which [`Shared::sync`] refreshes (`Themes` owns it).
+    root: RefCell<Weak<ThemeScope>>,
+}
+impl Shared {
+    /// Publish writes a caller's batch deferred: reads never wait for the
+    /// batch's end to see them.
+    fn sync(&self) {
+        if !self.pending.replace(false) {
+            return;
+        }
+        let Some(root) = self.root.borrow().upgrade() else {
+            return;
+        };
+        root.batch(|| {
+            let name = self.state.borrow().current.clone();
+            self.current.set(name.as_str().into());
+            root.refresh();
+        });
+    }
 }
 
 /// The system's accessibility display settings, as a page's CSS media
@@ -321,6 +345,8 @@ impl ThemeScope {
         parent: Option<Rc<ThemeScope>>,
         spec: ThemeOverride,
     ) -> Rc<ThemeScope> {
+        // A scope made mid-batch starts from published values, not pending ones.
+        shared.sync();
         let scope = Rc::new(ThemeScope {
             shared,
             parent,
@@ -423,6 +449,7 @@ impl ThemeScope {
         }
     }
     fn signal(&self, id: TokenId) -> Option<Signal<TokenValue>> {
+        self.shared.sync();
         let i = id.index();
         if let Some(Some(signal)) = self.signals.borrow().get(i) {
             return Some(signal.clone());
@@ -443,6 +470,7 @@ impl ThemeScope {
     /// The token's value here. Read inside an effect (a style, a computed
     /// property), it subscribes that effect to this token alone.
     pub fn get(&self, token: impl Into<TokenId>) -> TokenValue {
+        self.shared.sync();
         let id = token.into();
         match self.signal(id) {
             Some(signal) => signal.get(),
@@ -450,6 +478,7 @@ impl ThemeScope {
         }
     }
     fn body_untracked(&self) -> Body {
+        self.shared.sync();
         let values = self.values.borrow();
         let get = |token: TokenId| values.get(token.index());
         Body {
@@ -467,6 +496,7 @@ impl ThemeScope {
     /// `f` of the body text style here, read in place (tracked, as one
     /// dependency): text reads it on every restyle, mostly to compare.
     pub(crate) fn with_body<R>(&self, f: impl FnOnce(&Body) -> R) -> R {
+        self.shared.sync();
         if let Some(signal) = &*self.body.borrow() {
             return signal.with(f);
         }
@@ -478,6 +508,7 @@ impl ThemeScope {
     /// `with_body` without subscribing: for an effect that called
     /// `subscribe_body`.
     pub(crate) fn with_body_untracked<R>(&self, f: impl FnOnce(&Body) -> R) -> R {
+        self.shared.sync();
         match &*self.body.borrow() {
             Some(signal) => signal.with_untracked(f),
             None => f(&self.body_untracked()),
@@ -487,6 +518,7 @@ impl ThemeScope {
     /// it lives (see `Signal::subscribe`): text restyled every frame then
     /// reads it untracked.
     pub(crate) fn subscribe_body(&self) {
+        self.shared.sync();
         let existing = self.body.borrow().clone();
         if let Some(signal) = existing.or_else(|| self.body_signal()) {
             signal.subscribe();
@@ -504,16 +536,20 @@ impl ThemeScope {
     }
     /// Subscribe the running effect to the token without reading its value.
     pub(crate) fn track(&self, token: TokenId) {
+        self.shared.sync();
         if let Some(signal) = self.signal(token) {
             signal.with(|_| ());
         }
     }
-    /// Increases whenever a refresh changes any token's value here.
-    pub(crate) fn epoch(&self) -> u64 {
+    /// Increases whenever a refresh changes any token's value here: equal
+    /// epochs, equal values. Reads force a batch's deferred publish.
+    pub fn epoch(&self) -> u64 {
+        self.shared.sync();
         self.epoch.get()
     }
     /// The token's value here, without subscribing to it.
     pub fn get_untracked(&self, token: impl Into<TokenId>) -> TokenValue {
+        self.shared.sync();
         self.values
             .borrow()
             .get(token.into().index())
@@ -552,6 +588,7 @@ impl ThemeScope {
     }
     /// Whether a theme or a declaration defines the token here.
     pub fn is_defined(&self, token: impl Into<TokenId>) -> bool {
+        self.shared.sync();
         self.exprs
             .borrow()
             .get(token.into().index())
@@ -559,10 +596,12 @@ impl ThemeScope {
     }
     /// The name of the theme in effect here (not tracked).
     pub fn theme_name(&self) -> Arc<str> {
+        self.shared.sync();
         self.name.borrow().clone()
     }
     /// The kind (dark, light) of the theme in effect here.
     pub fn theme_kind(&self) -> ThemeKind {
+        self.shared.sync();
         let state = self.shared.state.borrow();
         state
             .themes
@@ -586,6 +625,8 @@ impl ThemeScope {
         if self.parent.is_none() || *self.spec.borrow() == spec {
             return;
         }
+        // Publish writes the batch deferred: this refresh reads the parents'.
+        self.shared.sync();
         *self.spec.borrow_mut() = spec;
         self.batch(|| self.refresh());
     }
@@ -638,20 +679,40 @@ impl Themes {
             }),
             current: runtime.signal(DARK.into()),
             preferences: runtime.signal(SystemPreferences::default()),
+            pending: std::cell::Cell::new(false),
+            publishing: std::cell::Cell::new(false),
+            root: RefCell::new(Weak::new()),
         });
         let root = ThemeScope::new(shared.clone(), None, ThemeOverride::default());
+        *shared.root.borrow_mut() = Rc::downgrade(&root);
         Themes { shared, root }
     }
     /// The root scope: the applied theme with nothing overridden.
     pub fn root(&self) -> &Rc<ThemeScope> {
         &self.root
     }
+    /// Publish the themes' state now (one pass over every scope's tokens).
     fn refresh(&self) {
-        self.root.batch(|| {
-            let name = self.shared.state.borrow().current.clone();
-            self.shared.current.set(name.as_str().into());
-            self.root.refresh();
-        });
+        self.shared.pending.set(true);
+        self.shared.sync();
+    }
+    /// Publish after a write: inside a `Runtime::batch`, once when it ends
+    /// (a switch's register + set + declares are one publish, not one each);
+    /// otherwise at once, as before. Reads inside the batch force it.
+    fn mark_dirty(&self) {
+        match self.shared.runtime.upgrade() {
+            Some(runtime) if runtime.batching() => {
+                self.shared.pending.set(true);
+                if !self.shared.publishing.replace(true) {
+                    let shared = self.shared.clone();
+                    runtime.before_flush(move || {
+                        shared.publishing.set(false);
+                        shared.sync();
+                    });
+                }
+            }
+            _ => self.refresh(),
+        }
     }
     /// Add a theme, or replace the one with its name. If it is applied (or
     /// something applied extends it), what it changes restyles.
@@ -663,7 +724,7 @@ impl Themes {
             }
             state.themes.insert(theme.name.clone(), Arc::new(theme));
         }
-        self.refresh();
+        self.mark_dirty();
     }
     /// The theme named `name`, if registered.
     pub fn theme(&self, name: &str) -> Option<Arc<Theme>> {
@@ -689,7 +750,7 @@ impl Themes {
             }
             state.current = name.into();
         }
-        self.refresh();
+        self.mark_dirty();
         Ok(())
     }
     /// Apply `name` unless the app has chosen a theme (`set`) or follows the
@@ -706,11 +767,12 @@ impl Themes {
             }
             state.current = name.into();
         }
-        self.refresh();
+        self.mark_dirty();
         Ok(())
     }
     /// The applied theme's name. Read inside an effect, it subscribes to it.
     pub fn current(&self) -> Arc<str> {
+        self.shared.sync();
         self.shared.current.get()
     }
     /// The applied theme's kind.
@@ -766,7 +828,7 @@ impl Themes {
             }
             state.text_scale = scale;
         }
-        self.refresh();
+        self.mark_dirty();
     }
     /// The system's text size factor (see `set_system_text_scale`); 1 until the
     /// host sets one.
@@ -789,7 +851,7 @@ impl Themes {
             }
             state.system = system;
         }
-        self.refresh();
+        self.mark_dirty();
     }
     fn apply_appearance(&self) {
         let changed = {
@@ -812,7 +874,7 @@ impl Themes {
             changed
         };
         if changed {
-            self.refresh();
+            self.mark_dirty();
         }
     }
     /// Declare an app token with its default, written in terms of other
@@ -822,6 +884,19 @@ impl Themes {
         let id = token.into();
         let expr = default.into().0;
         self.declare_all([(id, expr)]);
+    }
+    /// `declare` for many tokens at once: one publish for the batch of them,
+    /// not one each (`ui.theme.tokens` declares a table's worth).
+    pub fn declare_many<K, V>(&self, tokens: impl IntoIterator<Item = (K, V)>)
+    where
+        K: Into<TokenId>,
+        V: Into<TokenInput>,
+    {
+        self.declare_all(
+            tokens
+                .into_iter()
+                .map(|(id, default)| (id.into(), default.into().0)),
+        );
     }
     /// Declare an app token from a theme expression.
     pub fn declare_expr(&self, token: impl Into<TokenId>, default: &str) -> Result<(), ThemeError> {
@@ -847,7 +922,7 @@ impl Themes {
             }
         }
         if changed {
-            self.refresh();
+            self.mark_dirty();
         }
     }
     /// Read a theme file and register it, keeping an eye on it for

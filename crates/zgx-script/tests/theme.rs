@@ -237,6 +237,66 @@ fn theme_files_reload_without_reloading_scripts() {
 }
 
 #[test]
+fn theme_tables_take_nested_groups_shadow_objects_and_lists() {
+    let mut h = Harness::inline(
+        r##"ui.theme.register {
+            name = "app-sh",
+            type = "dark",
+            tokens = {
+                app = {
+                    listed = { { y = 4, blur = 12, color = "#0003" } },
+                    object = { y = 4, blur = 12, color = "#0003" },
+                    deep = { deeper = "#123456" },
+                },
+            },
+        }
+        ui.theme.set("app-sh")
+        return ui.column {
+            ui.div { id = "deep", w = 10, h = 10, bg = "$app.deep.deeper" },
+            ui.text { function()
+                local one = ui.theme.get("app.listed")
+                local two = ui.theme.get("app.object")
+                return one[1].blur .. "/" .. one[1].y .. " " .. two[1].color
+            end, id = "v" },
+        }"##,
+    );
+    assert_eq!(h.fill("deep"), Color(0x12, 0x34, 0x56, 255));
+    assert_eq!(h.text("v"), "12/4 #00000033", "both shadow shapes resolve");
+}
+
+#[test]
+fn theme_writes_in_a_batch_apply_together() {
+    let mut h = Harness::inline(
+        r##"ui.theme.register {
+            name = "app-t",
+            type = "dark",
+            tokens = { app = { card = "#405060" } },
+        }
+        return ui.column {
+            ui.div { id = "card", w = 10, h = 10, bg = "$app.card" },
+            ui.button { id = "go", w = 20, h = 20, on_click = function()
+                ui.batch(function()
+                    ui.theme.tokens { app = { card = "#102030" } }
+                    ui.theme.register {
+                        name = "app-t",
+                        type = "dark",
+                        tokens = { app = { card = "#405060" } },
+                    }
+                    ui.theme.set("app-t")
+                end)
+            end },
+        }"##,
+    );
+    assert!(h.find("card").is_some(), "an undeclared token styles clear");
+    h.click("go");
+    assert_eq!(
+        h.fill("card"),
+        Color(0x40, 0x50, 0x60, 255),
+        "declare + register + set publish the final state"
+    );
+}
+
+#[test]
 fn defaults_survive_reloads_but_not_a_choice() {
     let h = Harness::inline(
         r##"ui.theme.default("zgx-light")

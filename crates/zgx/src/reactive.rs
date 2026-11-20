@@ -77,6 +77,10 @@ struct Inner {
     /// how many `hold`s are open.
     deferred: RefCell<Vec<Box<dyn FnOnce()>>>,
     holds: Cell<usize>,
+    /// Publishes to run before the next effects flush
+    /// (`Runtime::before_flush`): batched writes whose derived state is
+    /// settled ahead of the observers reading it.
+    pre_flush: RefCell<Vec<Box<dyn FnOnce()>>>,
     /// One value per type that belongs to this runtime (`Runtime::extension`).
     extensions: RefCell<Vec<(TypeId, Rc<dyn Any>)>>,
 }
@@ -311,6 +315,18 @@ impl Runtime {
     pub fn deferring(&self) -> bool {
         self.inner.batch_depth.get() != 0 || self.inner.flushing.get()
     }
+    /// Whether a batch is open now (`deferring`, excluding flushes): writes
+    /// made inside one publish together when it ends (`before_flush`).
+    pub(crate) fn batching(&self) -> bool {
+        self.inner.batch_depth.get() != 0
+    }
+    /// Run `f` at the start of the next effects flush — the outermost
+    /// batch's end or the first write outside one — before the observers
+    /// queued by then run: derived state a store computes from its writes
+    /// (a theme's token values) is settled before anything reads it.
+    pub(crate) fn before_flush(&self, f: impl FnOnce() + 'static) {
+        self.inner.pre_flush.borrow_mut().push(Box::new(f));
+    }
     /// Defers effects until the outermost batch finishes; mutations remain visible.
     pub fn batch<R>(&self, f: impl FnOnce() -> R) -> R {
         self.inner.batch_depth.set(self.inner.batch_depth.get() + 1);
@@ -422,6 +438,17 @@ impl Runtime {
             }
         }
         let _guard = Guard(&self.inner);
+        // Publishes a batch held back (`before_flush`) settle ahead of the
+        // effects about to run; one may leave another queued.
+        loop {
+            let callbacks = std::mem::take(&mut *self.inner.pre_flush.borrow_mut());
+            if callbacks.is_empty() {
+                break;
+            }
+            for callback in callbacks {
+                callback();
+            }
+        }
         // Only a flush with work: most find nothing queued.
         let _span = (crate::profile::enabled()
             && !(self.inner.queued.borrow().is_empty() && self.inner.pending.borrow().is_empty()))
