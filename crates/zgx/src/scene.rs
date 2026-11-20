@@ -2916,6 +2916,27 @@ impl Scene {
             self.node_mut(id).set_local(transform);
             return;
         }
+        if self.is_layer(id) {
+            // A layer's pixels are its ink at each placement (`damage_layer`).
+            let at = self.node(id).transform;
+            self.damage_layer(id, at);
+            if old.is_identity() != transform.is_identity() {
+                if transform.is_identity() {
+                    self.transformed -= 1;
+                } else {
+                    self.transformed += 1;
+                }
+            }
+            let node = self.node_mut(id);
+            node.set_local(transform);
+            if !std::mem::replace(&mut node.promoted, true) {
+                self.promoted_count += 1;
+            }
+            self.geometry_revision = self.geometry_revision.wrapping_add(1);
+            self.invalidate(id, COMPOSITE);
+            self.damage_layer(id, at);
+            return;
+        }
         self.damage_subtree(id);
         if old.is_identity() != transform.is_identity() {
             if transform.is_identity() {
@@ -5006,6 +5027,17 @@ impl Scene {
             self.invalidate(id, COMPOSITE);
             return;
         }
+        if self.is_layer(id) {
+            // A layer's pixels live in its texture: where it was and lands
+            // is its ink, not each descendant's worked out in turn.
+            let was = self.node(id).transform;
+            self.damage_layer(id, was);
+            self.node_mut(id).transform = transform;
+            self.geometry_revision = self.geometry_revision.wrapping_add(1);
+            self.invalidate(id, COMPOSITE);
+            self.damage_layer(id, transform);
+            return;
+        }
         self.damage_subtree_with(id, &mut context);
         self.node_mut(id).transform = transform;
         self.geometry_revision = self.geometry_revision.wrapping_add(1);
@@ -5056,6 +5088,15 @@ impl Scene {
         let same_area =
             old.blur_radius == effects.blur_radius && old.filter_blur == effects.filter_blur;
         let mut context = None;
+        if self.is_layer(id) {
+            let transform = self.node(id).transform;
+            self.damage_layer(id, transform);
+            self.filter_changing(id, &effects);
+            self.node_mut(id).effects = effects;
+            self.invalidate(id, COMPOSITE);
+            self.damage_layer(id, transform);
+            return;
+        }
         if !same_area {
             self.damage_subtree_with(id, &mut context);
         }
@@ -5110,6 +5151,18 @@ impl Scene {
             self.geometry_revision = self.geometry_revision.wrapping_add(1);
             self.moved_leaf_damage(id, &mut context, was);
             self.invalidate(id, COMPOSITE);
+            return;
+        }
+        if self.is_layer(id) {
+            let was = self.node(id).transform;
+            self.damage_layer(id, was);
+            self.filter_changing(id, &effects);
+            let node = self.node_mut(id);
+            node.transform = transform;
+            node.effects = effects;
+            self.geometry_revision = self.geometry_revision.wrapping_add(1);
+            self.invalidate(id, COMPOSITE);
+            self.damage_layer(id, transform);
             return;
         }
         self.damage_subtree_with(id, &mut context);
@@ -5603,6 +5656,55 @@ impl Scene {
     }
     fn damage_subtree(&mut self, id: NodeId) {
         self.damage_subtree_with(id, &mut None);
+    }
+    /// `damage_subtree` for a node painting as a layer (`is_layer`): its
+    /// subtree's pixels live in the layer's texture, so where it was and
+    /// lands is `id`'s ink — the union of its subtree's paint — not each
+    /// descendant's worked out in turn. `at` is the translation to damage
+    /// it under: a move's start before the new one is set, its own
+    /// otherwise. `ink` also carries its own local transform and content
+    /// blur spread, and `held` its own clip; an ancestor's clip and
+    /// placement are applied here, so the area is where the layer's quad
+    /// shows.
+    fn damage_layer(&mut self, id: NodeId, at: Transform) {
+        let node = self.node(id);
+        let unplaced = node.measurement.is_none() && node.bounds == Rect::default();
+        if !own_visible(&node.style) || unplaced || self.damage_is_full() {
+            return;
+        }
+        let Some(ink) = self.ink(id) else {
+            return;
+        };
+        // `ink` carries the node's own transform: shift it to `at`.
+        let ink = ink.translated(Transform {
+            x: at.x - node.transform.x,
+            y: at.y - node.transform.y,
+        });
+        if self.transformed + self.filtered > 0 {
+            if !self.shown(id) {
+                return;
+            }
+            let (transform, clip, placement) = match node.parent {
+                Some(parent) => self.context(parent),
+                None => (Transform::default(), Some(self.viewport), None),
+            };
+            let area = ink
+                .translated(transform)
+                .intersection(clip.unwrap_or(UNCLIPPED))
+                .and_then(|area| placement.map_or(Some(area), |p| p.shows(area)));
+            if let Some(area) = area {
+                self.add_damage(area);
+            }
+            return;
+        }
+        let parent = node.parent;
+        if let Some((transform, clip)) = self.damage_context(parent)
+            && let Some(area) = ink
+                .translated(transform)
+                .intersection(clip.unwrap_or(UNCLIPPED))
+        {
+            self.add_damage(area);
+        }
     }
     /// What `damage_subtree` works out for a parent's children: nothing if
     /// the parent is not shown, else their translation and clip.
