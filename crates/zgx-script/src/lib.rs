@@ -1719,6 +1719,13 @@ impl ScriptHost {
             None => {}
         }
     }
+    /// Holds the scripts' `ui.every` and `ui.after` callbacks until resumed
+    /// (`false`): a host whose window is out of sight has no use for their
+    /// work, and a timer that comes due while paused waits for the resume —
+    /// firing then, not for each missed tick.
+    pub fn set_timers_paused(&self, paused: bool) {
+        self.0.timers.set_paused(paused);
+    }
     /// Type checks the scripts in the background after every reload, as
     /// `zgx check` does, and shows the errors over the interface (with
     /// `watch`, which collects the results). It needs luau-lsp; a check

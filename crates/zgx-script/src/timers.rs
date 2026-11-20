@@ -7,17 +7,50 @@ use std::{
     future::Future,
     pin::Pin,
     rc::Rc,
+    task::Poll,
     time::Duration,
 };
 
 type Pending = Pin<Box<dyn Future<Output = ()>>>;
 
+/// Pause and resume for every timer of a host: a timer that comes due while
+/// paused waits for the resume, which wakes it at once.
+#[derive(Default)]
+struct Gate {
+    paused: Cell<bool>,
+    /// A waker per timer waiting out the pause (`wait` polls each in turn).
+    wakers: RefCell<Vec<std::task::Waker>>,
+}
+impl Gate {
+    fn set(&self, paused: bool) {
+        if paused == self.paused.replace(paused) {
+            return;
+        }
+        if !paused {
+            for waker in self.wakers.borrow_mut().drain(..) {
+                waker.wake();
+            }
+        }
+    }
+    /// Resolves once unpaused (at once while unpaused already).
+    fn wait(&self) -> impl Future<Output = ()> + '_ {
+        std::future::poll_fn(|cx| {
+            if !self.paused.get() {
+                return Poll::Ready(());
+            }
+            self.wakers.borrow_mut().push(cx.waker().clone());
+            Poll::Pending
+        })
+    }
+}
 /// Where timers run: the host view's tasks, once it mounts (a script makes
 /// its timers while it loads, before that; they wait here).
 #[derive(Default)]
 pub(crate) struct Timers {
     tasks: RefCell<Option<zgx::compose::Tasks>>,
     pending: RefCell<Vec<Pending>>,
+    /// `set_paused`'s hold on every timer: `fire`s wait it out.
+    gate: Rc<Gate>,
 }
 impl Timers {
     pub fn set_tasks(&self, tasks: zgx::compose::Tasks) {
@@ -25,6 +58,12 @@ impl Timers {
             tasks.spawn(task);
         }
         *self.tasks.borrow_mut() = Some(tasks);
+    }
+    /// Hold every timer's `fire` until resumed (`ScriptHost::pause_timers`): a
+    /// host whose window is out of sight has no use for the callbacks. Waits
+    /// already made wait out the pause.
+    pub fn set_paused(&self, paused: bool) {
+        self.gate.set(paused);
     }
     pub(crate) fn spawn(&self, task: impl Future<Output = ()> + 'static) {
         match &*self.tasks.borrow() {
@@ -42,9 +81,14 @@ impl Timers {
     ) -> Stop {
         let alive = Rc::new(Cell::new(true));
         let running = alive.clone();
+        let gate = self.gate.clone();
         self.spawn(async move {
             loop {
                 zgx::timer::sleep(period).await;
+                if !running.get() {
+                    return;
+                }
+                gate.wait().await;
                 if !running.get() || !fire() || !repeat {
                     return;
                 }
