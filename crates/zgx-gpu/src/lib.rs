@@ -8878,10 +8878,20 @@ impl GpuRenderer {
         if !*WAIT_OVERLAPS_PACING {
             self.wait_submission(submission.clone(), present.frame);
         }
+        let paced_at = std::time::Instant::now();
         before_present();
+        let gpu_waited_at = std::time::Instant::now();
         if *WAIT_OVERLAPS_PACING {
             self.wait_submission(submission, present.frame);
         }
+        present_log::log(|| {
+            format!(
+                "present frame={} pacing {:.2} ms gpu-wait {:.2} ms",
+                present.frame + 1,
+                gpu_waited_at.duration_since(paced_at).as_secs_f64() * 1e3,
+                gpu_waited_at.elapsed().as_secs_f64() * 1e3
+            )
+        });
         let plane = present.plane();
         let opaque = self.background.3 == 255;
         let plain = present

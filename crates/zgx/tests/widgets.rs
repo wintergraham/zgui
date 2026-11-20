@@ -482,3 +482,65 @@ fn slider_resize_keeps_pointer_mapping_and_fill_in_sync() {
     ui.prepare_frame();
     assert_eq!(ui.scene.borrow().bounds(children[1]).width, 374.);
 }
+
+#[test]
+fn input_stamp_marks_acting_input_and_its_pace() {
+    let mut ui = Ui::new(500., 200.);
+    assert_eq!(ui.last_input_stamp(), None);
+    // A press and its release stamp immediately; motion does not stamp.
+    ui.dispatch(InputEvent::PointerMove { x: 10., y: 10. });
+    assert_eq!(ui.last_input_stamp(), None);
+    ui.dispatch(InputEvent::PointerDown {
+        x: 10.,
+        y: 10.,
+        button: PointerButton::Primary,
+    });
+    let (down, immediate) = ui.last_input_stamp().expect("press stamps");
+    assert!(immediate);
+    ui.dispatch(InputEvent::PointerUp {
+        x: 10.,
+        y: 10.,
+        button: PointerButton::Primary,
+    });
+    let (up, _) = ui.last_input_stamp().expect("release stamps");
+    assert!(up >= down);
+    // Keys and typed text are immediate; a key's release marks nothing.
+    ui.dispatch(key(Key::Space, Modifiers::default()));
+    assert!(ui.last_input_stamp().expect("key stamps").1);
+    ui.dispatch(InputEvent::KeyUp {
+        key: Key::Space,
+        modifiers: Modifiers::default(),
+    });
+    ui.dispatch(InputEvent::Text("a".into()));
+    assert!(ui.last_input_stamp().expect("text stamps").1);
+    // Scrolls and pinches stamp but keep the refresh's pace.
+    ui.dispatch(InputEvent::Scroll {
+        x: 10.,
+        y: 10.,
+        delta_x: 0.,
+        delta_y: -12.,
+    });
+    assert_eq!(ui.last_input_stamp().map(|(_, i)| i), Some(false));
+    ui.dispatch(InputEvent::Pinch {
+        x: 10.,
+        y: 10.,
+        delta: 0.05,
+    });
+    let pinch = ui.last_input_stamp();
+    assert_eq!(pinch.map(|(_, i)| i), Some(false));
+    // A gesture's phase mark and focus bookkeeping leave nothing to show.
+    ui.dispatch(InputEvent::ScrollGesture(zgx::input::ScrollGesture::Began));
+    ui.dispatch(InputEvent::Focus);
+    assert_eq!(ui.last_input_stamp(), pinch);
+    // The same through `try_dispatch_with_modifiers`, the window's own path.
+    ui.try_dispatch_with_modifiers(
+        InputEvent::PointerDown {
+            x: 10.,
+            y: 10.,
+            button: PointerButton::Primary,
+        },
+        Modifiers::default(),
+    )
+    .unwrap();
+    assert!(ui.last_input_stamp().expect("modifiers path stamps").1);
+}

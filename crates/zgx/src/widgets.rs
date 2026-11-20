@@ -1062,6 +1062,9 @@ pub(crate) struct UiStorage {
     scrollbar_fades: RefCell<Vec<std::rc::Weak<crate::compose_scrollbar::Fade>>>,
     /// Input is being dispatched: what scrolls now, the user scrolled.
     dispatching: Cell<bool>,
+    /// When the input a coming frame answers last arrived, and whether it
+    /// asks to draw at once (`input_stamp_of`, `Ui::last_input_stamp`).
+    input_stamp: Cell<Option<(Instant, bool)>>,
     /// What hears every event the document gets (`Ui::on_document_event`):
     /// usually nothing.
     document_listeners: RefCell<Vec<(u64, DocumentListener)>>,
@@ -1203,6 +1206,33 @@ impl Drop for UiStorage {
         self.input.validate_drag(&self.scene);
     }
 }
+/// The input a coming frame answers (`Ui::last_input_stamp`), or `None`
+/// when the event leaves nothing to show (a pointer passing over or
+/// leaving, a key's release, a gesture's phase mark). The flag says the
+/// frame draws at once — presses shade and answers show — rather than
+/// keep the refresh's pace as scrolls and pinches do.
+fn input_stamp_of(event: &InputEvent) -> Option<bool> {
+    Some(match event {
+        InputEvent::PointerDown { .. }
+        | InputEvent::PointerUp { .. }
+        | InputEvent::PointerCancel
+        | InputEvent::KeyDown { .. }
+        | InputEvent::Text(_)
+        | InputEvent::ImePreedit { .. }
+        | InputEvent::ImeCommit(_)
+        | InputEvent::Action(_)
+        | InputEvent::Activate
+        | InputEvent::FileDrop { .. }
+        | InputEvent::FilesDrop { .. }
+        | InputEvent::SetValue(_)
+        | InputEvent::SetTextSelection { .. }
+        | InputEvent::SetNumericValue(_)
+        | InputEvent::Increment
+        | InputEvent::Decrement => true,
+        InputEvent::Scroll { .. } | InputEvent::Pinch { .. } => false,
+        _ => return None,
+    })
+}
 impl Ui {
     /// A `width` by `height` document on a runtime of its own.
     pub fn new(width: f32, height: f32) -> Self {
@@ -1263,6 +1293,7 @@ impl Ui {
             interaction: RefCell::new(None),
             advancing_interaction: Cell::new(false),
             window_gesture: Cell::new(None),
+            input_stamp: Cell::new(None),
             primary_paste: Cell::new(None),
             primary_paste_on: Cell::new(true),
             selection: Default::default(),
@@ -2735,6 +2766,15 @@ impl Ui {
     pub(crate) fn request_window_gesture(&self, gesture: WindowGesture) {
         self.storage.window_gesture.set(Some(gesture));
     }
+    /// When the input a coming frame answers last arrived, and whether it
+    /// asks to draw at once (`true`: presses, keys, typed text) or keeps the
+    /// refresh's pace (`false`: scrolls, pinches). Stamped on every dispatch
+    /// path — the window's own events, a replayed tape, devtools — so the
+    /// host can show that frame as soon as it is ready rather than holding
+    /// it for the steady stream's refresh point.
+    pub fn last_input_stamp(&self) -> Option<(Instant, bool)> {
+        self.storage.input_stamp.get()
+    }
     /// Deliver `event` after preparing the frame's layout. Panics if layout
     /// doesn't settle; [`Ui::try_dispatch`] returns the error instead.
     pub fn dispatch(&mut self, event: InputEvent) -> crate::input::DispatchResult {
@@ -2749,6 +2789,11 @@ impl Ui {
     ) -> Result<crate::input::DispatchResult, LayoutFeedbackError> {
         self.try_prepare_frame()?;
         let _span = crate::profile::span(crate::profile::Phase::Input);
+        if let Some(immediate) = input_stamp_of(&event) {
+            self.storage
+                .input_stamp
+                .set(Some((Instant::now(), immediate)));
+        }
         let after = (
             crate::selection::SelectionEvent::of(&event, Default::default()),
             crate::scroll_keys::ScrollKey::of(&event),
@@ -2792,6 +2837,11 @@ impl Ui {
     ) -> Result<crate::input::DispatchResult, LayoutFeedbackError> {
         self.try_prepare_frame()?;
         let _span = crate::profile::span(crate::profile::Phase::Input);
+        if let Some(immediate) = input_stamp_of(&event) {
+            self.storage
+                .input_stamp
+                .set(Some((Instant::now(), immediate)));
+        }
         let after = (
             crate::selection::SelectionEvent::of(&event, modifiers),
             crate::scroll_keys::ScrollKey::of(&event),

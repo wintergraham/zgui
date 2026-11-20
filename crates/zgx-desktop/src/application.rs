@@ -1031,6 +1031,13 @@ const RESIZE_SETTLE: std::time::Duration = std::time::Duration::from_millis(500)
 /// release spring or a hover fade that follows input keeps its frames too.
 #[cfg(any(target_os = "macos", windows))]
 const INPUT_FULL_RATE: std::time::Duration = std::time::Duration::from_millis(250);
+/// `ZGX_INPUT_LATCH=1`: frames answering input keep the old pacing — clicks
+/// wait for the next frame tick like scrolls do, and the drawn frame waits
+/// for the refresh grid's handover point — instead of drawing at once and
+/// presenting as soon as ready. Kept to compare the delta.
+#[cfg(target_os = "macos")]
+static INPUT_LATCH: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| zgx::env::var_os("ZGX_INPUT_LATCH").is_some_and(|v| v != "0"));
 /// The refresh point steady frames present at (see `Host::refresh_grid`),
 /// and when they render before it.
 #[cfg(target_os = "macos")]
@@ -1349,6 +1356,16 @@ struct Host {
     /// than at the next tick (Windows: any input; macOS: typing).
     #[cfg(any(target_os = "macos", windows))]
     input_arrived: bool,
+    /// When the input a coming frame answers arrived: its frame presents
+    /// as soon as it is ready rather than holding for the refresh grid
+    /// (`refresh_grid`), and `ZGX_PRESENT_LOG` times it (`input->commit`).
+    /// The latest pending one is what the frame shows.
+    #[cfg(target_os = "macos")]
+    input_at: Option<std::time::Instant>,
+    /// The input stamp last folded into `input_at` (`Ui::last_input_stamp`):
+    /// consumed once, so the same input arms one frame, not every frame.
+    #[cfg(target_os = "macos")]
+    input_seen: Option<std::time::Instant>,
     present_ready: bool,
     frames: FrameClock,
     #[cfg(any(target_os = "macos", windows))]
@@ -1690,6 +1707,10 @@ impl Host {
             input_until: None,
             #[cfg(any(target_os = "macos", windows))]
             input_arrived: false,
+            #[cfg(target_os = "macos")]
+            input_at: None,
+            #[cfg(target_os = "macos")]
+            input_seen: None,
             present_ready: false,
             gpu_stats: crate::gpu_stats::GpuStatsLog::from_env(),
             damage_check: zgx::env::var_os("ZGX_DAMAGE_CHECK").map(|_| 0),
@@ -1799,8 +1820,10 @@ impl Host {
         {
             self.input_arrived = true;
         }
-        // macOS: typing draws at once even mid-animation (see `process`);
-        // pointer motion and scrolling keep the refresh's pace.
+        // macOS: typing draws at once even mid-animation (see `update`),
+        // and clicks do too through the input stamp (`Ui::last_input_stamp`,
+        // which every dispatch path sets — including devtools' and tapes').
+        // Pointer motion and scrolling keep the refresh's pace.
         #[cfg(target_os = "macos")]
         if matches!(
             event,
@@ -2071,12 +2094,27 @@ impl Host {
                 // wait for the refresh point (`Latch::hold`).
                 #[cfg(target_os = "macos")]
                 if let Some((origin, period)) = self.refresh_grid() {
-                    let at = self.latch.hold(std::time::Instant::now(), origin, period);
+                    let now = std::time::Instant::now();
+                    let at = self.latch.hold(now, origin, period);
+                    if self.input_at.is_some() && at > now {
+                        zgx_gpu::present_log::log(|| {
+                            format!(
+                                "input frame held {:.2} ms before rendering",
+                                (at - now).as_secs_f64() * 1e3
+                            )
+                        });
+                    }
                     let _wait = zgx::profile::span(zgx::profile::Phase::Wait);
                     sleep_until(at);
                     self.latch.rendering(std::time::Instant::now());
                 }
                 if let Some(renderer) = &mut self.renderer {
+                    #[cfg(target_os = "macos")]
+                    if let Some(at) = self.input_at {
+                        zgx_gpu::present_log::log(|| {
+                            format!("input->render {:.2} ms", at.elapsed().as_secs_f64() * 1e3)
+                        });
+                    }
                     zgx_gpu::present_log::log(|| {
                         format!("render forced={forced} rects={}", damage.len())
                     });
@@ -2109,6 +2147,8 @@ impl Host {
                 let grid = self.refresh_grid();
                 #[cfg(target_os = "macos")]
                 let latch = &mut self.latch;
+                #[cfg(target_os = "macos")]
+                let input_pending = self.input_at.is_some();
                 // A frame the link paces at full rate, ready early, waits
                 // to land on the refresh the others do (`align_wait`); not
                 // while a resize settles (frames then show at once, with the
@@ -2133,9 +2173,19 @@ impl Host {
                     window.pre_present_notify();
                     #[cfg(target_os = "macos")]
                     if let Some((origin, period)) = grid {
-                        let at = latch.decide(std::time::Instant::now(), origin, period);
+                        let now = std::time::Instant::now();
+                        let at = latch.decide(now, origin, period);
+                        let send = latch.send_from(at);
+                        if input_pending && send > now {
+                            zgx_gpu::present_log::log(|| {
+                                format!(
+                                    "input frame waits {:.2} ms for its handover point",
+                                    (send - now).as_secs_f64() * 1e3
+                                )
+                            });
+                        }
                         let _wait = zgx::profile::span(zgx::profile::Phase::Wait);
-                        sleep_until(latch.send_from(at));
+                        sleep_until(send);
                     }
                     #[cfg(target_os = "macos")]
                     if let Some(link) = link
@@ -2162,6 +2212,14 @@ impl Host {
                 {
                     let now = std::time::Instant::now();
                     self.presented_at = Some(now);
+                    if let Some(at) = self.input_at.take() {
+                        zgx_gpu::present_log::log(|| {
+                            format!(
+                                "input->commit {:.2} ms",
+                                now.duration_since(at).as_secs_f64() * 1e3
+                            )
+                        });
+                    }
                     if grid.is_some() {
                         self.latch.sent(now);
                     }
@@ -4369,6 +4427,19 @@ impl Host {
         if let Some(caption) = &mut self.caption {
             caption.sync(&mut self.context.ui);
         }
+        // Input reaching `Ui` from any caller — the window's own events,
+        // a replayed tape, devtools' clicks — leaves a stamp
+        // (`Ui::last_input_stamp`); the frame answering it draws at once
+        // when the input asks (`immediate`), and shows without waiting for
+        // the steady stream's handover point (`refresh_grid`).
+        #[cfg(target_os = "macos")]
+        if let Some((at, immediate)) = self.context.ui.last_input_stamp()
+            && self.input_seen != Some(at)
+        {
+            self.input_seen = Some(at);
+            self.input_at = Some(at);
+            self.input_arrived |= immediate && !*INPUT_LATCH;
+        }
         // A key typed while frames follow the refresh draws at once: waiting
         // for the next refresh's frame cost it a refresh (8 ms at 120 Hz)
         // more than at rest. The newest frame is the one shown.
@@ -4480,6 +4551,14 @@ impl Host {
         if self.context.frame_mode.get() == FrameMode::Unlimited
             || !zgx::switches::REFRESH_GRID.on()
         {
+            self.latch.reset();
+            return None;
+        }
+        // So does a frame answering input: holding it for the next handover
+        // point can only show it a refresh later. The point orders a steady
+        // stream's frames, and this is not one of them (`ZGX_INPUT_LATCH=1`
+        // paces them anyway, to compare).
+        if self.input_at.is_some() && !*INPUT_LATCH {
             self.latch.reset();
             return None;
         }
