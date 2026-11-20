@@ -23,6 +23,10 @@ impl Harness {
         let node = self.find(id).unwrap();
         self.ui.scene.borrow().transform(node).x
     }
+    fn blur(&mut self, id: &str) -> f32 {
+        let node = self.find(id).unwrap();
+        self.ui.scene.borrow().effects(node).filter_blur
+    }
     fn fill(&mut self, id: &str) -> Color {
         let node = self.find(id).unwrap();
         match self.ui.scene.borrow().kind(node) {
@@ -1158,6 +1162,64 @@ fn a_loop_no_one_can_see_waits_until_it_shows() {
     h.run_ms(300.);
     assert!(h.x("spin") != x, "open, it moves: {}", h.x("spin"));
     assert_eq!(h.clock.demanded_rate(120.), Some(30.));
+}
+
+#[test]
+fn a_loop_on_a_hidden_element_waits_until_it_shows() {
+    // A fill's clock mounted inside a `hidden` branch: its parent shows,
+    // but nothing of it does, so the loop waits too — for every key, since
+    // nothing it writes un-hides the element.
+    let mut h = Harness::inline(
+        r##"local on = ui.state("on", false)
+        ui.command { id = "show", run = function() on:set(true) end }
+        return ui.column {
+            ui.div { id = "spin", w = 10, h = 10, bg = "#ff0000", hidden = function() return not on:get() end,
+                on_mount = function(el)
+                    anime.animate(el, { x = { 0, 100 }, duration = 1000, loop = true, ease = "linear", frameRate = 30 })
+                end } }"##,
+    );
+    h.frame();
+    h.run_ms(300.);
+    assert_eq!(h.x("spin"), 0., "hidden, it stands still");
+    assert_eq!(
+        h.clock.demanded_rate(120.),
+        Some(4.),
+        "and the engine only looks now and then"
+    );
+    assert!(h.host.run_command("show"));
+    h.run_ms(300.);
+    assert!(h.x("spin") != 0., "shown, it moves: {}", h.x("spin"));
+    assert_eq!(h.clock.demanded_rate(120.), Some(30.));
+}
+
+#[test]
+fn a_paint_only_loop_on_a_box_nothing_shows_waits() {
+    // A shader's clock on an element laid out to no size (a fill warmed
+    // where nothing of it draws): the loop waits until the box has a size.
+    // A loop that can move its element keeps running all the while.
+    let mut h = Harness::inline(
+        r##"local on = ui.state("on", false)
+        ui.command { id = "show", run = function() on:set(true) end }
+        local function size() return if on:get() then 10 else 0 end
+        return ui.column { w = 100, h = 100,
+            ui.div { id = "shader", w = size, h = size,
+                on_mount = function(el)
+                    anime.animate(el, { blur = { 0, 4 }, duration = 1000, loop = true, ease = "linear", frameRate = 30 })
+                end },
+            ui.div { id = "mover", w = size, h = size,
+                on_mount = function(el)
+                    anime.animate(el, { x = { 0, 100 }, duration = 1000, loop = true, ease = "linear", frameRate = 30 })
+                end } }"##,
+    );
+    h.frame();
+    h.run_ms(300.);
+    assert_eq!(h.blur("shader"), 0., "drawn nowhere, its clock stands still");
+    let x = h.x("mover");
+    assert_ne!(x, 0., "a track that may show it keeps running: {x}");
+    assert_eq!(h.clock.demanded_rate(120.), Some(30.));
+    assert!(h.host.run_command("show"));
+    h.run_ms(300.);
+    assert!(h.blur("shader") != 0., "given a box, it moves: {}", h.blur("shader"));
 }
 
 #[test]
