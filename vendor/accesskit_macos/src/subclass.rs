@@ -10,9 +10,9 @@ use objc2::{
     declare_class,
     ffi::{
         OBJC_ASSOCIATION_RETAIN_NONATOMIC, objc_getAssociatedObject, objc_setAssociatedObject,
-        object_setClass,
+        object_getClass, object_setClass,
     },
-    msg_send_id,
+    msg_send, msg_send_id,
     mutability::InteriorMutable,
     rc::Id,
     runtime::{AnyClass, Sel},
@@ -38,7 +38,9 @@ struct AssociatedObjectState {
 }
 
 struct AssociatedObjectIvars {
-    state: RefCell<AssociatedObjectState>,
+    // zgx patch: `None` once the adapter is dropped with the view left in
+    // the subclass (see `Drop`): its methods are then the view's own.
+    state: RefCell<Option<AssociatedObjectState>>,
     prev_class: &'static AnyClass,
 }
 
@@ -62,10 +64,10 @@ impl AssociatedObject {
         activation_handler: impl 'static + ActivationHandler,
         prev_class: &'static AnyClass,
     ) -> Id<Self> {
-        let state = RefCell::new(AssociatedObjectState {
+        let state = RefCell::new(Some(AssociatedObjectState {
             adapter,
             activation_handler: Box::new(activation_handler),
-        });
+        }));
         let this = Self::alloc().set_ivars(AssociatedObjectIvars { state, prev_class });
 
         unsafe { msg_send_id![super(this), init] }
@@ -91,27 +93,43 @@ unsafe extern "C" fn superclass(this: &NSView, _cmd: Sel) -> Option<&AnyClass> {
 
 unsafe extern "C" fn children(this: &NSView, _cmd: Sel) -> *mut NSArray<NSObject> {
     let associated = associated_object(this);
-    let mut state = associated.ivars().state.borrow_mut();
-    let state_mut = &mut *state;
-    state_mut
-        .adapter
-        .view_children(&mut *state_mut.activation_handler)
+    if let Some(state) = associated.ivars().state.borrow_mut().as_mut() {
+        return state.adapter.view_children(&mut *state.activation_handler);
+    }
+    unsafe {
+        msg_send![
+            super(this, associated.ivars().prev_class),
+            accessibilityChildren
+        ]
+    }
 }
 
 unsafe extern "C" fn focus(this: &NSView, _cmd: Sel) -> *mut NSObject {
     let associated = associated_object(this);
-    let mut state = associated.ivars().state.borrow_mut();
-    let state_mut = &mut *state;
-    state_mut.adapter.focus(&mut *state_mut.activation_handler)
+    if let Some(state) = associated.ivars().state.borrow_mut().as_mut() {
+        return state.adapter.focus(&mut *state.activation_handler);
+    }
+    unsafe {
+        msg_send![
+            super(this, associated.ivars().prev_class),
+            accessibilityFocusedUIElement
+        ]
+    }
 }
 
 unsafe extern "C" fn hit_test(this: &NSView, _cmd: Sel, point: NSPoint) -> *mut NSObject {
     let associated = associated_object(this);
-    let mut state = associated.ivars().state.borrow_mut();
-    let state_mut = &mut *state;
-    state_mut
-        .adapter
-        .hit_test(point, &mut *state_mut.activation_handler)
+    if let Some(state) = associated.ivars().state.borrow_mut().as_mut() {
+        return state
+            .adapter
+            .hit_test(point, &mut *state.activation_handler);
+    }
+    unsafe {
+        msg_send![
+            super(this, associated.ivars().prev_class),
+            accessibilityHitTest: point
+        ]
+    }
 }
 
 /// Uses dynamic Objective-C subclassing to implement the `NSView`
@@ -119,6 +137,7 @@ unsafe extern "C" fn hit_test(this: &NSView, _cmd: Sel, point: NSPoint) -> *mut 
 pub struct SubclassingAdapter {
     view: Id<NSView>,
     associated: Id<AssociatedObject>,
+    subclass: &'static AnyClass,
 }
 
 impl SubclassingAdapter {
@@ -204,6 +223,7 @@ impl SubclassingAdapter {
         Self {
             view: retained_view,
             associated,
+            subclass,
         }
     }
 
@@ -243,6 +263,7 @@ impl SubclassingAdapter {
         update_factory: impl FnOnce() -> TreeUpdate,
     ) -> Option<QueuedEvents> {
         let mut state = self.associated.ivars().state.borrow_mut();
+        let state = state.as_mut().unwrap();
         state.adapter.update_if_active(update_factory)
     }
 
@@ -252,6 +273,7 @@ impl SubclassingAdapter {
     /// [`QueuedEvents::raise`] on it.
     pub fn update_view_focus_state(&mut self, is_focused: bool) -> Option<QueuedEvents> {
         let mut state = self.associated.ivars().state.borrow_mut();
+        let state = state.as_mut().unwrap();
         state.adapter.update_view_focus_state(is_focused)
     }
 }
@@ -260,6 +282,19 @@ impl Drop for SubclassingAdapter {
     fn drop(&mut self) {
         let prev_class = self.associated.ivars().prev_class;
         let view = Id::as_ptr(&self.view) as *mut NSView;
+        // zgx patch: Key-value observing swaps an observed object's class
+        // for one of its own (`NSKVONotifying_…`), and the Touch Bar observes
+        // the key window's responder chain. Setting the class back under
+        // that observation loses it: AppKit's next attempt to remove it
+        // raises NSRangeException ("Cannot remove an observer … because it
+        // is not registered") and ends the app. So the class is restored
+        // only while it is still the subclass; otherwise the view keeps it,
+        // with the adapter gone and the view's own methods behind it.
+        let current = unsafe { object_getClass(view as *const _) };
+        if !std::ptr::eq(current.cast::<AnyClass>(), self.subclass) {
+            self.associated.ivars().state.borrow_mut().take();
+            return;
+        }
         unsafe { object_setClass(view as *mut _, (prev_class as *const AnyClass).cast()) };
         unsafe {
             objc_setAssociatedObject(

@@ -35,4 +35,15 @@ their `AXValue`, which VoiceOver reads ("heading level 2").
    accesskit_consumer's `is_invalid` and `error_message`
    (vendor/accesskit_consumer/ZGX_PATCH.md).
 
+5. Dropping a `SubclassingAdapter` sets the view's class back only while it
+   is still AccessKit's subclass (`src/subclass.rs`, `Drop`). Key-value
+   observing swaps an observed object's class for its own, and the Touch
+   Bar observes `nextResponder` along the key window's responder chain:
+   setting the class back under that observation lost it, and AppKit's
+   next removal raised NSRangeException ("Cannot remove an observer
+   <_NSTouchBarFinderObservation> for the key path "nextResponder" from
+   <WinitView>") and ended the app, on Touch Bar Macs only, after a
+   window closed. Otherwise the view keeps the subclass, whose methods
+   then call the view's own.
+
 Drop the patch when an upstream release does the same.
