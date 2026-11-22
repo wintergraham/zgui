@@ -36,3 +36,22 @@ their `AXValue`, which VoiceOver reads ("heading level 2").
    (vendor/accesskit_consumer/ZGX_PATCH.md).
 
 Drop the patch when an upstream release does the same.
+
+## No class change
+
+`SubclassingAdapter` made a subclass of the view's class at run time
+(`AccessKitSubclassOfWinitView`), set the view to it (`object_setClass`), and
+set the view back to its first class when the adapter dropped. Key-value
+observing keys an observation by the object's class, and makes a class of its
+own over it: AppKit's Touch Bar finder observes `nextResponder` on every
+responder of the key window, so on a Mac with a Touch Bar a window that
+closed while observed had its view's class set back under the observation,
+and the finder's next update raised `NSRangeException` ("Cannot remove an
+observer <_NSTouchBarFinderObservation> for the key path "nextResponder" from
+<WinitView> because it is not registered as an observer"), which ends the
+app.
+
+5. The view's class is never changed (`src/subclass.rs`). The three
+   accessibility methods go on the view's own class, once per class, and a
+   view with no adapter (never given one, or after its adapter dropped)
+   answers with what the class answered before.

@@ -5,12 +5,11 @@
 
 use accesskit::{ActionHandler, ActivationHandler, TreeUpdate};
 use objc2::{
-    ClassType, DeclaredClass,
-    declare::ClassBuilder,
-    declare_class,
+    ClassType, DeclaredClass, declare_class,
     ffi::{
-        OBJC_ASSOCIATION_RETAIN_NONATOMIC, objc_getAssociatedObject, objc_setAssociatedObject,
-        object_setClass,
+        IMP, OBJC_ASSOCIATION_RETAIN_NONATOMIC, class_getInstanceMethod, class_getSuperclass,
+        class_replaceMethod, method_getImplementation, method_getTypeEncoding, objc_class,
+        objc_getAssociatedObject, objc_setAssociatedObject, object_getClass,
     },
     msg_send_id,
     mutability::InteriorMutable,
@@ -20,11 +19,27 @@ use objc2::{
 };
 use objc2_app_kit::{NSView, NSWindow};
 use objc2_foundation::{NSArray, NSObject, NSPoint};
-use std::{cell::RefCell, ffi::c_void, sync::Mutex};
+use std::{
+    cell::RefCell,
+    ffi::{CStr, c_void},
+    sync::Mutex,
+};
 
 use crate::{Adapter, event::QueuedEvents};
 
-static SUBCLASSES: Mutex<Vec<(&'static AnyClass, &'static AnyClass)>> = Mutex::new(Vec::new());
+// zgx patch: the view's class is never changed (ZGX_PATCH.md, "No class
+// change"). The accessibility methods go on the view's own class instead,
+// once, and a view without an adapter answers as its class did before.
+
+/// A class given the accessibility methods, and what it answered before.
+struct Patched {
+    class: usize,
+    children: IMP,
+    focus: IMP,
+    hit_test: IMP,
+}
+
+static PATCHED: Mutex<Vec<Patched>> = Mutex::new(Vec::new());
 
 static ASSOCIATED_OBJECT_KEY: u8 = 0;
 
@@ -39,7 +54,6 @@ struct AssociatedObjectState {
 
 struct AssociatedObjectIvars {
     state: RefCell<AssociatedObjectState>,
-    prev_class: &'static AnyClass,
 }
 
 declare_class!(
@@ -57,40 +71,49 @@ declare_class!(
 );
 
 impl AssociatedObject {
-    fn new(
-        adapter: Adapter,
-        activation_handler: impl 'static + ActivationHandler,
-        prev_class: &'static AnyClass,
-    ) -> Id<Self> {
+    fn new(adapter: Adapter, activation_handler: impl 'static + ActivationHandler) -> Id<Self> {
         let state = RefCell::new(AssociatedObjectState {
             adapter,
             activation_handler: Box::new(activation_handler),
         });
-        let this = Self::alloc().set_ivars(AssociatedObjectIvars { state, prev_class });
+        let this = Self::alloc().set_ivars(AssociatedObjectIvars { state });
 
         unsafe { msg_send_id![super(this), init] }
     }
 }
 
-fn associated_object(view: &NSView) -> &AssociatedObject {
+/// The view's adapter: none for a view of a patched class that has no
+/// adapter (it never had one, or its adapter was dropped).
+fn associated_object(view: &NSView) -> Option<&AssociatedObject> {
     unsafe {
         (objc_getAssociatedObject(view as *const NSView as *const _, associated_object_key())
             as *const AssociatedObject)
             .as_ref()
     }
-    .unwrap()
 }
 
-// Some view classes, like the one in winit 0.27, assume that they are the
-// lowest subclass, and call [self superclass] to get their superclass.
-// Give them the answer they need.
-unsafe extern "C" fn superclass(this: &NSView, _cmd: Sel) -> Option<&AnyClass> {
-    let associated = associated_object(this);
-    associated.ivars().prev_class.superclass()
+/// What the view's class answered before it was patched.
+fn original(view: &NSView, pick: fn(&Patched) -> IMP) -> IMP {
+    let patched = PATCHED.lock().unwrap();
+    let mut class = unsafe { object_getClass(view as *const NSView as *const _) };
+    while !class.is_null() {
+        if let Some(entry) = patched.iter().find(|entry| entry.class == class as usize) {
+            return pick(entry);
+        }
+        class = unsafe { class_getSuperclass(class) };
+    }
+    None
 }
 
-unsafe extern "C" fn children(this: &NSView, _cmd: Sel) -> *mut NSArray<NSObject> {
-    let associated = associated_object(this);
+unsafe extern "C" fn children(this: &NSView, cmd: Sel) -> *mut NSArray<NSObject> {
+    let Some(associated) = associated_object(this) else {
+        let Some(imp) = original(this, |entry| entry.children) else {
+            return std::ptr::null_mut();
+        };
+        let imp: unsafe extern "C" fn(&NSView, Sel) -> *mut NSArray<NSObject> =
+            unsafe { std::mem::transmute(imp) };
+        return unsafe { imp(this, cmd) };
+    };
     let mut state = associated.ivars().state.borrow_mut();
     let state_mut = &mut *state;
     state_mut
@@ -98,15 +121,29 @@ unsafe extern "C" fn children(this: &NSView, _cmd: Sel) -> *mut NSArray<NSObject
         .view_children(&mut *state_mut.activation_handler)
 }
 
-unsafe extern "C" fn focus(this: &NSView, _cmd: Sel) -> *mut NSObject {
-    let associated = associated_object(this);
+unsafe extern "C" fn focus(this: &NSView, cmd: Sel) -> *mut NSObject {
+    let Some(associated) = associated_object(this) else {
+        let Some(imp) = original(this, |entry| entry.focus) else {
+            return std::ptr::null_mut();
+        };
+        let imp: unsafe extern "C" fn(&NSView, Sel) -> *mut NSObject =
+            unsafe { std::mem::transmute(imp) };
+        return unsafe { imp(this, cmd) };
+    };
     let mut state = associated.ivars().state.borrow_mut();
     let state_mut = &mut *state;
     state_mut.adapter.focus(&mut *state_mut.activation_handler)
 }
 
-unsafe extern "C" fn hit_test(this: &NSView, _cmd: Sel, point: NSPoint) -> *mut NSObject {
-    let associated = associated_object(this);
+unsafe extern "C" fn hit_test(this: &NSView, cmd: Sel, point: NSPoint) -> *mut NSObject {
+    let Some(associated) = associated_object(this) else {
+        let Some(imp) = original(this, |entry| entry.hit_test) else {
+            return std::ptr::null_mut();
+        };
+        let imp: unsafe extern "C" fn(&NSView, Sel, NSPoint) -> *mut NSObject =
+            unsafe { std::mem::transmute(imp) };
+        return unsafe { imp(this, cmd, point) };
+    };
     let mut state = associated.ivars().state.borrow_mut();
     let state_mut = &mut *state;
     state_mut
@@ -114,17 +151,92 @@ unsafe extern "C" fn hit_test(this: &NSView, _cmd: Sel, point: NSPoint) -> *mut 
         .hit_test(point, &mut *state_mut.activation_handler)
 }
 
-/// Uses dynamic Objective-C subclassing to implement the `NSView`
-/// accessibility methods when normal subclassing isn't an option.
+/// Puts `imp` on `class` for `sel`, and returns what the class answered
+/// before (its own method or the one it inherited).
+unsafe fn replace(class: *const objc_class, sel: Sel, imp: IMP, types: &CStr) -> IMP {
+    unsafe {
+        let method = class_getInstanceMethod(class, sel.as_ptr());
+        let (original, types) = if method.is_null() {
+            (None, types.as_ptr())
+        } else {
+            (
+                method_getImplementation(method),
+                method_getTypeEncoding(method),
+            )
+        };
+        class_replaceMethod(class as *mut objc_class, sel.as_ptr(), imp, types);
+        original
+    }
+}
+
+/// Gives the view's class the accessibility methods, once per class.
+fn patch_class(view: &NSView) {
+    let mut class = unsafe { object_getClass(view as *const NSView as *const _) };
+    // A class key-value observing made for this object goes when its
+    // observers do: the class under it is the view's own.
+    while !class.is_null()
+        && unsafe { &*(class as *const AnyClass) }
+            .name()
+            .starts_with("NSKVONotifying_")
+    {
+        class = unsafe { class_getSuperclass(class) };
+    }
+    if class.is_null() {
+        return;
+    }
+    let mut patched = PATCHED.lock().unwrap();
+    // A subclass of a patched class inherits the methods.
+    let mut ancestor = class;
+    while !ancestor.is_null() {
+        if patched.iter().any(|entry| entry.class == ancestor as usize) {
+            return;
+        }
+        ancestor = unsafe { class_getSuperclass(ancestor) };
+    }
+    let entry = unsafe {
+        Patched {
+            class: class as usize,
+            children: replace(
+                class,
+                sel!(accessibilityChildren),
+                std::mem::transmute::<
+                    unsafe extern "C" fn(&NSView, Sel) -> *mut NSArray<NSObject>,
+                    IMP,
+                >(children),
+                c"@@:",
+            ),
+            focus: replace(
+                class,
+                sel!(accessibilityFocusedUIElement),
+                std::mem::transmute::<unsafe extern "C" fn(&NSView, Sel) -> *mut NSObject, IMP>(
+                    focus,
+                ),
+                c"@@:",
+            ),
+            hit_test: replace(
+                class,
+                sel!(accessibilityHitTest:),
+                std::mem::transmute::<
+                    unsafe extern "C" fn(&NSView, Sel, NSPoint) -> *mut NSObject,
+                    IMP,
+                >(hit_test),
+                c"@@:{CGPoint=dd}",
+            ),
+        }
+    };
+    patched.push(entry);
+}
+
+/// Implements the `NSView` accessibility methods on the view's class when
+/// normal subclassing isn't an option (zgx patch: without changing the
+/// class of the view).
 pub struct SubclassingAdapter {
     view: Id<NSView>,
     associated: Id<AssociatedObject>,
 }
 
 impl SubclassingAdapter {
-    /// Create an adapter that dynamically subclasses the specified view.
-    /// This must be done before the view is shown or focused for
-    /// the first time.
+    /// Create an adapter for the specified view.
     ///
     /// The action handler will always be called on the main thread.
     ///
@@ -155,11 +267,7 @@ impl SubclassingAdapter {
             panic!("subclassing adapter already instantiated on view {view:?}");
         }
         let adapter = unsafe { Adapter::new(view as *mut c_void, false, action_handler) };
-        // Cast to a pointer and back to force the lifetime to 'static
-        // SAFETY: We know the class will live as long as the instance,
-        // and we only use this reference while the instance is alive.
-        let prev_class = unsafe { &*((*view).class() as *const AnyClass) };
-        let associated = AssociatedObject::new(adapter, activation_handler, prev_class);
+        let associated = AssociatedObject::new(adapter, activation_handler);
         unsafe {
             objc_setAssociatedObject(
                 view as *mut _,
@@ -168,47 +276,15 @@ impl SubclassingAdapter {
                 OBJC_ASSOCIATION_RETAIN_NONATOMIC,
             )
         };
-        let mut subclasses = SUBCLASSES.lock().unwrap();
-        let subclass = match subclasses.iter().find(|entry| entry.0 == prev_class) {
-            Some(entry) => entry.1,
-            None => {
-                let name = format!("AccessKitSubclassOf{}", prev_class.name());
-                let mut builder = ClassBuilder::new(&name, prev_class).unwrap();
-                unsafe {
-                    builder.add_method(
-                        sel!(superclass),
-                        superclass as unsafe extern "C" fn(_, _) -> _,
-                    );
-                    builder.add_method(
-                        sel!(accessibilityChildren),
-                        children as unsafe extern "C" fn(_, _) -> _,
-                    );
-                    builder.add_method(
-                        sel!(accessibilityFocusedUIElement),
-                        focus as unsafe extern "C" fn(_, _) -> _,
-                    );
-                    builder.add_method(
-                        sel!(accessibilityHitTest:),
-                        hit_test as unsafe extern "C" fn(_, _, _) -> _,
-                    );
-                }
-                let class = builder.register();
-                subclasses.push((prev_class, class));
-                class
-            }
-        };
-        // SAFETY: Changing the view's class is only safe because
-        // the subclass doesn't add any instance variables;
-        // it uses an associated object instead.
-        unsafe { object_setClass(view as *mut _, (subclass as *const AnyClass).cast()) };
+        // zgx patch: the methods go on the view's class; the view keeps it.
+        patch_class(&retained_view);
         Self {
             view: retained_view,
             associated,
         }
     }
 
-    /// Create an adapter that dynamically subclasses the content view
-    /// of the specified window.
+    /// Create an adapter for the content view of the specified window.
     ///
     /// The action handler will always be called on the main thread.
     ///
@@ -258,9 +334,9 @@ impl SubclassingAdapter {
 
 impl Drop for SubclassingAdapter {
     fn drop(&mut self) {
-        let prev_class = self.associated.ivars().prev_class;
+        // zgx patch: the view keeps its class, which AppKit may be observing
+        // it under; without its adapter it answers as its class did before.
         let view = Id::as_ptr(&self.view) as *mut NSView;
-        unsafe { object_setClass(view as *mut _, (prev_class as *const AnyClass).cast()) };
         unsafe {
             objc_setAssociatedObject(
                 view as *mut _,
