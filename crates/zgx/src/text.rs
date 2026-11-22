@@ -67,8 +67,12 @@ fn cut(text: &str) -> Vec<Chunk> {
             end -= 1;
         }
         // A line break in the last quarter, if there is one: end after it.
-        if let Some(at) = rest[CHUNK * 3 / 4..end].rfind('\n') {
-            end = CHUNK * 3 / 4 + at + 1;
+        let mut quarter = CHUNK * 3 / 4;
+        while !rest.is_char_boundary(quarter) {
+            quarter -= 1;
+        }
+        if let Some(at) = rest[quarter..end].rfind('\n') {
+            end = quarter + at + 1;
         }
         chunks.push(Chunk::new(&rest[..end]));
         rest = &rest[end..];
@@ -576,6 +580,29 @@ mod tests {
         (0..n)
             .map(|i| format!("line {i} {}\n", "x".repeat(i % 50)))
             .collect()
+    }
+
+    /// A character lying across where a chunk's last quarter starts, or
+    /// across where the chunk ends, stays whole: the text is cut beside it.
+    #[test]
+    fn a_long_text_is_cut_between_characters() {
+        for at in [CHUNK * 3 / 4, CHUNK] {
+            for back in 1..4 {
+                for ch in ["£", "€", "😀"] {
+                    let plain = format!("{}{}", "x".repeat(at - back), ch.repeat(CHUNK));
+                    let text = Text::new(&plain);
+                    assert!(text.0.chunks.len() > 1);
+                    assert!(text == *plain, "{ch} from byte {}", at - back);
+                    // The same text reached by an edit, as typing or a paste makes it.
+                    let mut edited = Text::new(&plain[..at - back]);
+                    edited.replace_range(at - back..at - back, &plain[at - back..]);
+                    assert!(edited == *plain, "{ch} inserted at byte {}", at - back);
+                    let mut lined = plain.clone();
+                    lined.insert(at - back + 4 * ch.len(), '\n');
+                    assert!(Text::new(&lined) == *lined);
+                }
+            }
+        }
     }
 
     /// Lines, slices and edits read as the same string's do, across chunks.
