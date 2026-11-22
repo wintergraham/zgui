@@ -257,12 +257,17 @@ impl Surfaces {
         split.natives() != previous.natives()
     }
     /// Note the overlay boxes that take the pointer: cut out of native views
-    /// at the next `apply`. Returns whether they changed.
+    /// at the next `apply`. Returns whether they changed. A box the pointer
+    /// passes through (`pointer_events = "none"`, as `PlaneSplit::route` reads
+    /// it) stays on the overlay plane, blended over the view: cut out, a
+    /// translucent layer across a page (a working agent's fog) took the whole
+    /// page with it.
     pub fn cut_outs(&mut self, scene: &Scene, input: &InputDispatcher, split: &PlaneSplit) -> bool {
         let holes: Vec<Hole> = split
             .overlay_boxes()
             .iter()
             .filter(|(node, ..)| input.try_receives_pointer(scene, *node) == Some(true))
+            .filter(|(node, ..)| split.passes_pointer(scene, input, *node) == Some(false))
             .map(|(node, round, clip)| {
                 let inside = split
                     .natives()
