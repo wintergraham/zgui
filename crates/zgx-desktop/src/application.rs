@@ -846,6 +846,10 @@ impl Application {
     /// return once the application quits.
     pub fn run(self, build: impl FnOnce(&mut WindowContext)) -> Result<(), Box<dyn Error>> {
         zgx::profile::mark("run");
+        // A view whose layout feeds back on itself is a bug to find in development, where frame preparation
+        // reports it (and `Ui::prepare_frame` panics); a released app logs it and keeps the last allocation, still
+        // drawing and taking input.
+        zgx::widgets::keep_unsettled_layouts(!cfg!(debug_assertions));
         // The GPU device, its pipelines and the fonts are made beside the
         // launch and the first window, which hold the main thread
         // meanwhile. Metal's adapter draws to any window, and Windows takes
@@ -6177,6 +6181,20 @@ impl WindowManager {
             return;
         }
         eprintln!("zgx: contained a panic ({message}); the app keeps running");
+        // Something kept a node's id past its removal and used it (a view rebuilt under an interaction): the turn
+        // that did is dropped, as an input event to a removed node is, and the next one finds the scene as it is.
+        // A bug to see in development; nothing a released app's user can act on, so no banner there.
+        if message == zgx::scene::STALE_NODE && !cfg!(debug_assertions) {
+            for (key, host) in self.hosts.iter_mut() {
+                if token.is_none_or(|token| token == *key) {
+                    host.force = true;
+                    if let Some(window) = &host.window {
+                        window.request_redraw();
+                    }
+                }
+            }
+            return;
+        }
         for (key, host) in self.hosts.iter_mut() {
             if token.is_none_or(|token| token == *key) {
                 host.show_error(&message);
