@@ -2088,6 +2088,9 @@ struct Slot {
     dead: bool,
     node: Option<Node>,
 }
+/// What using a node id no longer in the scene panics with (`Scene::node`, `stale`): hosts recognise it, as they do
+/// [`crate::widgets::LAYOUT_FEEDBACK`], and a released app drops the turn that did it without telling its user.
+pub const STALE_NODE: &str = "stale scene node";
 /// A node id no longer in the scene was used (`Scene::tree_node`).
 #[cold]
 #[inline(never)]

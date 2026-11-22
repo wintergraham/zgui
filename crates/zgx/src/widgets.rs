@@ -646,6 +646,40 @@ impl std::fmt::Display for LayoutFeedbackError {
     }
 }
 impl std::error::Error for LayoutFeedbackError {}
+thread_local! {
+    static KEEP_UNSETTLED: Cell<bool> = const { Cell::new(false) };
+    /// Whether the last frame preparation was kept unsettled: the next gives up sooner (`UNSETTLED_PASSES`), so a
+    /// view that feeds back on every frame costs a quarter of the passes while it does.
+    static WAS_UNSETTLED: Cell<bool> = const { Cell::new(false) };
+}
+/// How many passes a preparation gets after one kept unsettled: past `SETTLE_PASSES`, so rounding noise still settles.
+const UNSETTLED_PASSES: usize = 16;
+/// Whether a layout that does not settle is carried on from rather than reported: frame preparation keeps the last
+/// pass's allocation, says so on stderr (at most every few seconds, naming what was still changing) and returns `Ok`,
+/// so frames are drawn, input is delivered and [`Ui::prepare_frame`] does not panic. Off by default, so tests and
+/// development see the error; `zgx-desktop` turns it on in release builds, where one view's feedback loop must not
+/// take the app down. For every `Ui` of the calling thread (the UI thread).
+pub fn keep_unsettled_layouts(keep: bool) {
+    KEEP_UNSETTLED.with(|k| k.set(keep));
+}
+fn keeps_unsettled() -> bool {
+    KEEP_UNSETTLED.with(|k| k.get())
+}
+/// Say that a layout did not settle and what was still changing, at most every five seconds.
+fn report_unsettled(error: &LayoutFeedbackError, changing: &str) {
+    thread_local! {
+        static SAID: Cell<Option<Instant>> = const { Cell::new(None) };
+    }
+    let now = Instant::now();
+    let due = SAID.with(|said| {
+        said.get()
+            .is_none_or(|at| now.duration_since(at) >= Duration::from_secs(5))
+    });
+    if due {
+        SAID.with(|said| said.set(Some(now)));
+        eprintln!("zgx: {error}; keeping the last allocation{changing}");
+    }
+}
 struct FramePreparationGuard<'a>(&'a Cell<bool>);
 impl Drop for FramePreparationGuard<'_> {
     fn drop(&mut self) {
@@ -2540,6 +2574,8 @@ impl Ui {
     }
     /// Settle geometry, reporting cyclic or unbounded allocation feedback instead
     /// of hanging the UI thread. At most 64 layout/notification passes are allowed.
+    /// Under [`keep_unsettled_layouts`] feedback is logged instead and this returns
+    /// `Ok` with the last pass's allocation.
     /// Reentrant calls defer notifications to the active outer preparation.
     /// An error does not roll back application mutations; correct the dependency
     /// and call again. Native window hosts propagate this error to `Application::run`.
@@ -2568,7 +2604,14 @@ impl Ui {
         } else {
             self.reclaim(RECLAIM_BUDGET);
         }
-        for pass in 0..64 {
+        // What the last pass still changed, for `report_unsettled`.
+        let mut changing = String::new();
+        let passes = if keeps_unsettled() && WAS_UNSETTLED.with(|was| was.get()) {
+            UNSETTLED_PASSES
+        } else {
+            64
+        };
+        for pass in 0..passes {
             self.scene.borrow_mut().prepare_layout();
             self.input.validate_drag(&self.scene);
             let (layout_revision, geometry_revision) = {
@@ -2580,6 +2623,7 @@ impl Ui {
                 self.storage.bounds_geometry_revision.get() != Some(geometry_revision);
             if !layout_changed && !geometry_changed {
                 if !self.run_after_layout() && !self.run_after_settled() {
+                    WAS_UNSETTLED.with(|was| was.set(false));
                     self.finish_settling();
                     return Ok(());
                 }
@@ -2654,8 +2698,34 @@ impl Ui {
                 self.storage
                     .bounds_geometry_revision
                     .set(Some(geometry_revision));
+                WAS_UNSETTLED.with(|was| was.set(false));
                 self.finish_settling();
                 return Ok(());
+            }
+            if pass + 1 == passes && keeps_unsettled() {
+                use std::fmt::Write;
+                let scene = self.scene.borrow();
+                for (node, signal, now) in sizes.iter().take(256) {
+                    let was = signal.with_untracked(|was| *was);
+                    if was == *now {
+                        continue;
+                    }
+                    let at = scene.bounds(*node);
+                    let _ = write!(
+                        changing,
+                        "; @{} at ({:.0}, {:.0}) went {}x{} -> {}x{}",
+                        node.number(),
+                        at.x,
+                        at.y,
+                        was.0,
+                        was.1,
+                        now.0,
+                        now.1
+                    );
+                    if changing.len() > 400 {
+                        break;
+                    }
+                }
             }
             let visibility: Vec<_> = if geometry_changed {
                 let scene = self.scene.borrow();
@@ -2701,7 +2771,15 @@ impl Ui {
             // Internal geometry bindings are constrained by their viewport.
             // A second pass also prepares editors mounted by virtual rows.
         }
-        Err(LayoutFeedbackError { passes: 64 })
+        let error = LayoutFeedbackError { passes };
+        if keeps_unsettled() {
+            WAS_UNSETTLED.with(|was| was.set(true));
+            // The scene is laid out as of the last pass: frames draw and input routes with that.
+            report_unsettled(&error, &changing);
+            self.finish_settling();
+            return Ok(());
+        }
+        Err(error)
     }
     /// Settled: a removed focused node's focus falls to its ancestor, unless something (a list revealing a row) focused
     /// since.
@@ -5916,6 +5994,15 @@ mod layout_feedback_tests {
         ui.scene.borrow_mut().set_style(node, fixed(101., 40.));
         assert!(ui.try_prepare_frame().is_err());
         assert!(updates.get() > 1);
+        // Kept (a released app): the same feedback is carried on from, and the next frame gives up sooner.
+        keep_unsettled_layouts(true);
+        let kept = ui.try_prepare_frame();
+        let before = updates.get();
+        ui.prepare_frame();
+        keep_unsettled_layouts(false);
+        WAS_UNSETTLED.with(|was| was.set(false));
+        assert!(kept.is_ok());
+        assert!(updates.get() - before <= UNSETTLED_PASSES);
         enabled.set(false);
         ui.scene.borrow_mut().set_style(node, fixed(150., 40.));
         ui.try_prepare_frame().unwrap();
