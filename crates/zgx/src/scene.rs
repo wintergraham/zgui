@@ -45,6 +45,19 @@ struct Scratch {
 /// node touches several such maps.
 pub(crate) type NodeMap<V> =
     std::collections::HashMap<NodeId, V, std::hash::BuildHasherDefault<NodeHasher>>;
+/// What `Scene::bounds_among` has learned of the ancestors it passed: for
+/// each, the nearest translated node from it up and whether one from it up
+/// is not translated. Good while the scene is as it was; `clear` between.
+#[derive(Default)]
+pub(crate) struct Translated {
+    from: NodeMap<(Option<NodeId>, bool)>,
+    walked: Vec<NodeId>,
+}
+impl Translated {
+    pub(crate) fn clear(&mut self) {
+        self.from.clear();
+    }
+}
 #[derive(Default, Clone, Copy)]
 pub(crate) struct NodeHasher(u64);
 impl std::hash::Hasher for NodeHasher {
@@ -2849,6 +2862,56 @@ impl Scene {
             parent = ancestor.parent;
         }
         node.bounds.translated(transform)
+    }
+    /// `bounds`, for many nodes of a scene nothing changes meanwhile: each
+    /// ancestor is looked at once for them all (`seen` says which of them
+    /// are translated), not once for every node under it. The sum is
+    /// `bounds`'s to the bit: the same translations added in the same
+    /// order, the untranslated ones' zeros added once after.
+    pub(crate) fn bounds_among(&self, id: NodeId, seen: &mut Translated) -> Rect {
+        let node = self.node(id);
+        let mut transform = node.transform;
+        let (mut next, untranslated) = match node.parent {
+            Some(parent) => self.translated_from(parent, seen),
+            None => (None, false),
+        };
+        while let Some(id) = next {
+            let ancestor = self.tree_node(id);
+            transform.x += ancestor.transform.x;
+            transform.y += ancestor.transform.y;
+            next = ancestor
+                .parent
+                .and_then(|parent| seen.from.get(&parent).and_then(|from| from.0));
+        }
+        if untranslated {
+            transform.x += 0.;
+            transform.y += 0.;
+        }
+        node.bounds.translated(transform)
+    }
+    /// The nearest translated node from `id` up, and whether one from `id`
+    /// up is not translated.
+    fn translated_from(&self, id: NodeId, seen: &mut Translated) -> (Option<NodeId>, bool) {
+        let mut from = (None, false);
+        let mut current = Some(id);
+        while let Some(id) = current {
+            if let Some(known) = seen.from.get(&id) {
+                from = *known;
+                break;
+            }
+            seen.walked.push(id);
+            current = self.tree_node(id).parent;
+        }
+        while let Some(id) = seen.walked.pop() {
+            let transform = self.tree_node(id).transform;
+            // Positive zero, which adding leaves a sum as it was.
+            from = match transform.x.to_bits() | transform.y.to_bits() {
+                0 => (from.0, true),
+                _ => (Some(id), from.1),
+            };
+            seen.from.insert(id, from);
+        }
+        from
     }
     /// Where layout put `id`, in window coordinates, before any translation
     /// (its own or its ancestors', scrolling included): what moves only when
@@ -10311,6 +10374,50 @@ mod absolute_layout_tests {
         assert_eq!(scene.bounds(pinned), Rect::new(0., 0., 10., 10.));
         assert!(scene.escaped.is_empty() && scene.placed_escaped.is_empty());
         assert_eq!(scene.relative_count, 0);
+    }
+    /// `bounds_among` gives what `bounds` gives, to the bit, whichever of
+    /// a node's ancestors are translated, by fractions or by a negative zero.
+    #[test]
+    fn bounds_among_many_are_each_node_s_bounds() {
+        let mut scene = Scene::new(300., 300.);
+        let column = NodeKind::Container(Layout::Column);
+        let steps = [0., 0.1, -0., 0.7, 0., 1e-7, 33.3, -0., 0., 0.2];
+        let mut nodes = Vec::new();
+        for first in [-0., 0., 0.3] {
+            let mut parent = scene.append(scene.root(), column.clone(), Style::default());
+            scene.set_transform(
+                parent,
+                Transform {
+                    x: first,
+                    y: -first,
+                },
+            );
+            for (index, step) in steps.iter().enumerate() {
+                let node = scene.append(parent, column.clone(), Style::default());
+                scene.set_transform(
+                    node,
+                    Transform {
+                        x: *step,
+                        y: steps[(index + 3) % steps.len()],
+                    },
+                );
+                nodes.push(node);
+                let leaf = scene.append(parent, column.clone(), Style::default());
+                nodes.push(leaf);
+                parent = node;
+            }
+        }
+        scene.flush();
+        let mut seen = Translated::default();
+        for node in nodes.iter().chain(nodes.iter().rev()) {
+            let (one, among) = (scene.bounds(*node), scene.bounds_among(*node, &mut seen));
+            assert_eq!(
+                [one.x, one.y, one.width, one.height].map(f32::to_bits),
+                [among.x, among.y, among.width, among.height].map(f32::to_bits),
+                "{one:?} {among:?}"
+            );
+        }
+        assert!(seen.from.len() <= nodes.len() + 1);
     }
     /// An escaped node keeps its place through a layout pass that touches
     /// nothing placing it, and is placed again by one that moves or resizes

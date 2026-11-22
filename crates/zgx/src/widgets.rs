@@ -1011,6 +1011,8 @@ pub(crate) struct UiStorage {
     /// Nodes' laid-out sizes (`observe_size`): read only when layout runs.
     observed_sizes: RefCell<crate::scene::NodeMap<Signal<(f32, f32)>>>,
     observed_bounds: RefCell<crate::scene::NodeMap<Signal<Rect>>>,
+    /// `Scene::bounds_among`'s, kept for its room between frames.
+    translated: RefCell<crate::scene::Translated>,
     observed_visibility: RefCell<crate::scene::NodeMap<Signal<bool>>>,
     /// Run once after the next frame preparation's layout.
     after_layout: RefCell<Vec<Box<dyn FnOnce()>>>,
@@ -1283,6 +1285,7 @@ impl Ui {
             content_sizes: RefCell::default(),
             observed_sizes: RefCell::default(),
             observed_bounds: RefCell::default(),
+            translated: RefCell::default(),
             observed_visibility: RefCell::default(),
             after_layout: RefCell::new(Vec::new()),
             after_settled: RefCell::new(Vec::new()),
@@ -2608,25 +2611,35 @@ impl Ui {
                         .iter()
                         .filter(|(node, _)| scene.contains(**node))
                         .map(|(node, signal)| {
-                            (*node, signal.clone(), allocated_content_size(&scene, *node))
+                            (*node, signal, allocated_content_size(&scene, *node))
                         })
                         .chain(own.iter().filter(|(node, _)| scene.contains(**node)).map(
                             |(node, signal)| {
                                 let b = scene.layout_bounds(*node);
-                                (*node, signal.clone(), (b.width, b.height))
+                                (*node, signal, (b.width, b.height))
                             },
                         ))
+                        // One the size it was tells nobody: `set` finds it so too.
+                        .filter(|(_, signal, size)| signal.with_untracked(|was| was != size))
+                        .map(|(node, signal, size)| (node, signal.clone(), size))
                         .collect()
                 } else {
                     Vec::new()
                 };
                 let bounds = if geometry_changed {
+                    let mut translated = self.storage.translated.borrow_mut();
+                    translated.clear();
                     self.storage
                         .observed_bounds
                         .borrow()
                         .iter()
                         .filter(|(node, _)| scene.contains(**node))
-                        .map(|(node, signal)| (*node, signal.clone(), scene.bounds(*node)))
+                        .map(|(node, signal)| {
+                            (*node, signal, scene.bounds_among(*node, &mut translated))
+                        })
+                        // One where it was tells nobody: `set` finds it so too.
+                        .filter(|(_, signal, bounds)| signal.with_untracked(|was| was != bounds))
+                        .map(|(node, signal, bounds)| (node, signal.clone(), bounds))
                         .collect()
                 } else {
                     Vec::new()
@@ -5933,7 +5946,11 @@ mod layout_feedback_tests {
         let scene = ui.scene.clone();
         ui.bind(node, move || {
             let width = size.get().0;
-            let next = if width == 100.0001 { 100.0002 } else { 100.0001 };
+            let next = if width == 100.0001 {
+                100.0002
+            } else {
+                100.0001
+            };
             scene.borrow_mut().set_style(node, fixed(next, 40.));
         });
         assert!(ui.try_prepare_frame().is_ok());
