@@ -1541,6 +1541,7 @@ fn paints_only(old: &NodeKind, new: &NodeKind) -> bool {
         _ => false,
     }
 }
+const ARRANGE_DIRTY: u8 = 1;
 const BOUNDS_VALID: u8 = 1;
 const HIT_DIRECTION: u8 = 2;
 const HIT_CHECKED: u8 = 32;
@@ -1586,7 +1587,12 @@ struct Node {
     /// Damage fills it too (see `text_ink`), for text whose box is fixed.
     text_size: TextSizeCache,
     advanced_layout: Option<Box<advanced_layout::AdvancedLayoutCache>>,
-    arrange_dirty: bool,
+    /// `ARRANGE_DIRTY`: it holds a measurement `arrange` has not placed its
+    /// children from. Above that bit, the layout pass (its low bits) that
+    /// last placed it anew, `arrange` going past it being where and as it
+    /// was: what `place_escaped` asks of the nodes an escaped one is placed
+    /// by. One byte for both: every node's size costs each tree walk.
+    arrange: u8,
     /// Whether its size can depend on the available width and height it is
     /// measured under (`Scene::reads_available`): `READS_KNOWN` once worked
     /// out, cleared with its layout.
@@ -2430,8 +2436,13 @@ pub struct Scene {
     contents_count: usize,
     /// Absolute nodes whose containing block is an ancestor above their
     /// parent: their parents leave them out, and `place_escaped` positions
-    /// them once the block is laid out. May hold duplicates and stale ids.
+    /// them once the block is laid out. Those found since it last placed
+    /// any: may hold duplicates and stale ids.
     escaped: Vec<NodeId>,
+    /// Those `place_escaped` has placed, each with the block it was placed
+    /// in: placed again only once a layout pass touches what places them
+    /// (`escaped_block`). May hold stale ids.
+    placed_escaped: Vec<(NodeId, NodeId)>,
     /// `measure` calls, for tests of how much work layout does.
     #[cfg(test)]
     measure_calls: u64,
@@ -2547,7 +2558,7 @@ impl Scene {
                     bounds_valid: std::cell::Cell::new(0),
                     text_size: Default::default(),
                     advanced_layout: None,
-                    arrange_dirty: true,
+                    arrange: ARRANGE_DIRTY,
                     reads: std::cell::Cell::new(0),
                     isolated: false,
                     local: None,
@@ -2618,6 +2629,7 @@ impl Scene {
             relative_count: 0,
             contents_count: 0,
             escaped: Vec::new(),
+            placed_escaped: Vec::new(),
             #[cfg(test)]
             measure_calls: 0,
             geometry_revision: 0,
@@ -3618,7 +3630,7 @@ impl Scene {
         }
         self.damage_subtree(id);
         self.invalidate_layout(id);
-        self.node_mut(id).arrange_dirty = true;
+        self.node_mut(id).arrange |= ARRANGE_DIRTY;
     }
     /// A contents node's own style; the default (most have it) is not kept.
     fn keep_contents_style(&mut self, id: NodeId, own: Style) {
@@ -4588,7 +4600,7 @@ impl Scene {
             bounds_valid: std::cell::Cell::new(0),
             text_size: Default::default(),
             advanced_layout: None,
-            arrange_dirty: true,
+            arrange: ARRANGE_DIRTY,
             reads: std::cell::Cell::new(0),
             isolated: false,
             local: None,
@@ -6300,6 +6312,46 @@ impl Scene {
         }
         None
     }
+    /// `Node::arrange` of a node the layout pass in progress placed anew. A
+    /// node placed so many passes ago that its bits match reads as placed
+    /// in this one: `place_escaped` then places again one it need not have.
+    fn arrange_pass(&self) -> u8 {
+        (self.layout_pass as u8) << 1
+    }
+    /// `containing_block`, and whether the layout pass in progress left
+    /// alone everything `place_escaped` places `id` by: `id` itself, its
+    /// block and each node between them, none laid out again or moved. Its
+    /// place is then what the last pass that placed it gave it.
+    fn escaped_block(&self, id: NodeId) -> Option<(NodeId, bool)> {
+        let node = self.node(id);
+        if self.relative_count == 0 || !node.style.absolute {
+            return None;
+        }
+        // Neither waiting to be placed nor placed anew in this pass.
+        let pass = self.arrange_pass();
+        let still = |node: &Node| {
+            node.dirty & LAYOUT == 0 && node.arrange & ARRANGE_DIRTY == 0 && node.arrange != pass
+        };
+        let mut untouched = still(node);
+        let parent = self.node(node.parent?);
+        if parent.style.relative || parent.style.absolute {
+            return None;
+        }
+        untouched &= still(parent);
+        let mut current = parent.parent;
+        while let Some(ancestor) = current {
+            let node = self.node(ancestor);
+            untouched &= still(node);
+            if node.style.relative {
+                return Some((ancestor, untouched));
+            }
+            if node.style.absolute {
+                return None;
+            }
+            current = node.parent;
+        }
+        None
+    }
     /// Whether `id`'s parent leaves it out of its own layout, for its
     /// containing block to place (`place_escaped`).
     fn escapes(&mut self, id: NodeId) -> bool {
@@ -6475,7 +6527,7 @@ impl Scene {
             // Promote it: `arrange` places children from the current result.
             let node = self.node_mut(id);
             let size = promote_measurement(&mut node.measurement, &mut node.alternates, index);
-            node.arrange_dirty = true;
+            node.arrange |= ARRANGE_DIRTY;
             return size;
         }
         if !full
@@ -7086,7 +7138,7 @@ impl Scene {
             last.size = size;
             last.pass = pass;
             last.children.clear();
-            node.arrange_dirty = true;
+            node.arrange |= ARRANGE_DIRTY;
             return Some(size);
         }
         let mut children = match &mut node.measurement {
@@ -7263,7 +7315,7 @@ impl Scene {
             keep_sizes(&mut node.sizes, evicted);
         }
         let overfull = node.alternates.len() == MEASUREMENT_ALTERNATES + 1;
-        node.arrange_dirty = true;
+        node.arrange |= ARRANGE_DIRTY;
         node.measurement = Some(Measurement {
             constraints,
             size,
@@ -7302,8 +7354,11 @@ impl Scene {
         let node = self.tree_node(id);
         let cache = node.measurement.as_ref().unwrap();
         let bounds = Rect::new(x, y, cache.size.0, cache.size.1);
-        let (arrange_dirty, rtl, childless) =
-            (node.arrange_dirty, node.rtl, node.children.is_empty());
+        let (arrange_dirty, rtl, childless) = (
+            node.arrange & ARRANGE_DIRTY != 0,
+            node.rtl,
+            node.children.is_empty(),
+        );
         if !arrange_dirty && node.bounds == bounds {
             return;
         }
@@ -7393,9 +7448,11 @@ impl Scene {
         if damage && !leaf && !resized {
             self.damage_subtree_with(id, context);
         }
+        let pass = self.arrange_pass();
         let node = self.tree_node_mut(id);
         node.dirty &= !LAYOUT;
-        node.arrange_dirty = false;
+        // Placed, in this pass.
+        node.arrange = pass;
     }
     /// A `snap` node placed at `x`, `y`: its edges on whole points, laid
     /// out again at the size between them if that differs.
@@ -7424,25 +7481,77 @@ impl Scene {
     /// a parent's own absolute children; without any on an axis it sits at
     /// its parent's content origin. Only scenes with `relative` nodes get
     /// here, and only their escaping nodes are visited.
+    ///
+    /// One placed by an earlier pass is placed again only when this pass
+    /// touched what places it (`escaped_block`): a tree of thousands of them
+    /// costs a pass the few it moved, not a walk to the root from each.
     fn place_escaped(&mut self, report: &mut FrameReport) {
+        // Those this pass left alone keep their places.
+        let mut kept = std::mem::take(&mut self.placed_escaped);
+        kept.retain(|(id, block)| {
+            if !self.contains(*id) {
+                return false;
+            }
+            match self.escaped_block(*id) {
+                Some((now, true)) if now == *block => return true,
+                Some(_) => self.escaped.push(*id),
+                // No longer escaping: its parent places it.
+                None => {}
+            }
+            false
+        });
+        let mut placed = Vec::new();
+        let before = report.layout_nodes;
+        self.place_escaped_found(&mut placed, report);
+        // Placing those laid out a subtree holding one left alone (an escaped
+        // node inside another): all of them, outermost first, each after
+        // what it is placed by. Placing one where it is changes nothing.
+        let nested = report.layout_nodes != before
+            && kept.iter().any(|(id, block)| {
+                !self.contains(*id) || self.escaped_block(*id) != Some((*block, true))
+            });
+        if nested {
+            self.escaped
+                .extend(kept.drain(..).chain(placed.drain(..)).map(|(id, _)| id));
+            self.place_escaped_found(&mut placed, report);
+        }
+        if !placed.is_empty() && !kept.is_empty() {
+            // One left alone that a subtree laid out found again: once, as placed.
+            placed.append(&mut kept);
+            placed.sort_by_key(|(id, _)| (id.index, id.generation));
+            placed.dedup_by_key(|(id, _)| *id);
+        } else {
+            placed.append(&mut kept);
+        }
+        self.placed_escaped = placed;
+    }
+    /// Places the nodes in `escaped`, and those placing them finds, adding
+    /// each to `placed` with its block.
+    fn place_escaped_found(
+        &mut self,
+        placed: &mut Vec<(NodeId, NodeId)>,
+        report: &mut FrameReport,
+    ) {
         use crate::layout::Length;
-        let mut placed: Vec<NodeId> = Vec::new();
         loop {
             // Placing one lays its subtree out, which can find more.
             let mut batch = std::mem::take(&mut self.escaped);
             batch.retain(|id| {
-                self.contains(*id) && !placed.contains(id) && self.containing_block(*id).is_some()
+                self.contains(*id)
+                    && !placed.iter().any(|(placed, _)| placed == id)
+                    && self.containing_block(*id).is_some()
             });
             if batch.is_empty() {
                 break;
             }
-            batch.sort_by_key(|id| (self.depth(*id), id.index, id.generation));
+            // Each one's depth worked out once, not at every comparison.
+            batch.sort_by_cached_key(|id| (self.depth(*id), id.index, id.generation));
             batch.dedup();
             for id in batch {
-                placed.push(id);
                 let Some(block) = self.containing_block(id) else {
                     continue;
                 };
+                placed.push((id, block));
                 let parent = self.node(id).parent.expect("absolute nodes have parents");
                 // Under a node laid out hidden, it was placed hidden with it.
                 let mut current = Some(parent);
@@ -7550,7 +7659,6 @@ impl Scene {
                 self.arrange_from(id, x, y, report);
             }
         }
-        self.escaped = placed;
     }
     /// `arrange` from `id` at `x`, `y`, a layout walk's start: moved leaves'
     /// damage goes to the grid as cells if it takes them now
@@ -7617,7 +7725,7 @@ impl Scene {
             self.measure_full(self.root, Constraints::default());
             self.arrange_from(self.root, 0.0, 0.0, &mut report);
         }
-        if !self.escaped.is_empty() {
+        if !self.escaped.is_empty() || !self.placed_escaped.is_empty() {
             self.place_escaped(&mut report);
         }
         // Probes this pass answered stay only as the next pass's few.
@@ -10190,7 +10298,7 @@ mod absolute_layout_tests {
         assert_eq!(scene.bounds(pinned), Rect::new(0., 0., 10., 10.));
         assert_eq!(scene.relative_count, 0);
         let (mut scene, _, pinned, calls) = escaping(true);
-        assert_eq!(scene.escaped, vec![pinned]);
+        assert_eq!(scene.placed_escaped, vec![(pinned, block)]);
         assert_eq!(scene.bounds(pinned), Rect::new(240., 90., 10., 10.));
         // Placing it is a measure of its own, not a second pass of the rest.
         assert!(calls <= plain_calls + 1, "{calls} vs {plain_calls}");
@@ -10201,8 +10309,108 @@ mod absolute_layout_tests {
         scene.set_style(block, style);
         scene.flush();
         assert_eq!(scene.bounds(pinned), Rect::new(0., 0., 10., 10.));
-        assert!(scene.escaped.is_empty());
+        assert!(scene.escaped.is_empty() && scene.placed_escaped.is_empty());
         assert_eq!(scene.relative_count, 0);
+    }
+    /// An escaped node keeps its place through a layout pass that touches
+    /// nothing placing it, and is placed again by one that moves or resizes
+    /// its block, changes its own insets, or moves an escaped node it is in.
+    #[test]
+    fn escaped_nodes_are_placed_again_only_when_what_places_them_changed() {
+        use crate::layout::{EdgeLengths, LayoutOptions, Length};
+        let pin = |right: f32| Style {
+            absolute: true,
+            width: Some(10.),
+            height: Some(10.),
+            layout_options: Some(Arc::new(LayoutOptions {
+                inset: EdgeLengths {
+                    right: Some(Length::Px(right)),
+                    bottom: Some(Length::Px(0.)),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })),
+            ..Style::default()
+        };
+        let sized = |relative: bool, width: f32, height: f32| Style {
+            relative,
+            width: Some(width),
+            height: Some(height),
+            ..Style::default()
+        };
+        let column = NodeKind::Container(Layout::Column);
+        let mut scene = Scene::new(300., 4000.);
+        let page = scene.append(scene.root(), column.clone(), Style::default());
+        let list = scene.append(page, column.clone(), Style::default());
+        let mut pins = Vec::new();
+        for _ in 0..40 {
+            let block = scene.append(list, column.clone(), sized(true, 200., 50.));
+            let middle = scene.append(block, column.clone(), Style::default());
+            let pinned = scene.append(middle, column.clone(), pin(0.));
+            pins.push((block, pinned, 0.));
+        }
+        // One escaped node inside another: a block and its pin in the first.
+        let outer = pins[0].1;
+        let mut style = scene.style(outer);
+        (style.width, style.height) = (Some(40.), Some(40.));
+        scene.set_style(outer, style);
+        let inner_block = scene.append(outer, column.clone(), sized(true, 30., 30.));
+        let middle = scene.append(inner_block, column.clone(), Style::default());
+        let inner = scene.append(middle, NodeKind::Rect(Color(0, 0, 0, 255)), pin(0.));
+        pins.push((inner_block, inner, 0.));
+        let last = scene.append(
+            page,
+            NodeKind::Rect(Color(0, 0, 0, 255)),
+            sized(false, 10., 10.),
+        );
+        scene.flush();
+        let check = |scene: &Scene, pins: &[(NodeId, NodeId, f32)], what: &str| {
+            for (index, (block, pinned, right)) in pins.iter().enumerate() {
+                let (block, pinned) = (scene.bounds(*block), scene.bounds(*pinned));
+                assert_eq!(
+                    pinned.x + pinned.width,
+                    block.x + block.width - right,
+                    "{what}: {index}"
+                );
+                assert_eq!(
+                    pinned.y + pinned.height,
+                    block.y + block.height,
+                    "{what}: {index}"
+                );
+            }
+            assert_eq!(scene.placed_escaped.len(), pins.len(), "{what}");
+        };
+        check(&scene, &pins, "first");
+        // A node after them all grows: none is measured or placed again.
+        let before = scene.measure_calls;
+        scene.set_style(last, sized(false, 10., 20.));
+        assert!(scene.flush().layout_nodes > 0);
+        assert!(
+            scene.measure_calls - before < 10,
+            "{}",
+            scene.measure_calls - before
+        );
+        check(&scene, &pins, "another node grew");
+        // A block in the middle shrinks: its pin and those of the blocks after it move.
+        let top = scene.bounds(pins[30].1).y;
+        scene.set_style(pins[20].0, sized(true, 150., 30.));
+        scene.flush();
+        assert_eq!(scene.bounds(pins[30].1).y, top - 20.);
+        check(&scene, &pins, "a block shrank");
+        // One's own inset.
+        scene.set_style(pins[5].1, pin(20.));
+        pins[5].2 = 20.;
+        scene.flush();
+        check(&scene, &pins, "an inset changed");
+        // The outer of the nested pair moves: the block in it, and that block's pin, with it.
+        let mut style = pin(60.);
+        (style.width, style.height) = (Some(40.), Some(40.));
+        let left = scene.bounds(inner).x;
+        scene.set_style(outer, style);
+        pins[0].2 = 60.;
+        scene.flush();
+        assert_eq!(scene.bounds(inner).x, left - 60.);
+        check(&scene, &pins, "the outer one moved");
     }
     /// Every node holds a `Style`: the box-model flags (`relative`,
     /// `intrinsic_width`, `intrinsic_height`) live in its padding.
