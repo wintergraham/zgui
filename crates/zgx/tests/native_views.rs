@@ -760,3 +760,65 @@ fn a_layer_away_from_the_page_stays_on_the_base_plane() {
         "the pressed button's layer left the base plane"
     );
 }
+
+#[test]
+fn paint_the_pointer_passes_through_is_not_cut_out_of_a_page() {
+    use zgx::native_view::NativeContent;
+    // A translucent layer across a page that lets the pointer by (a working
+    // agent's fog), and a bar on it that takes presses: Windows cuts only the
+    // bar out of the page, so the fog blends over it on the overlay plane.
+    let mut ui = Ui::new(800., 600.);
+    let natives = supported();
+    let view = ui.mount(provide(
+        natives.clone(),
+        overlay()
+            .w(800.)
+            .h(600.)
+            .child(
+                zgx::web_view::native_view(NativeContent::Platform(Rc::new(())))
+                    .id("page")
+                    .w(800.)
+                    .h(600.),
+            )
+            .child(
+                div()
+                    .id("fog")
+                    .absolute()
+                    .left(0.)
+                    .top(0.)
+                    .w(800.)
+                    .h(600.)
+                    .bg(rgba(0x8E6C_F040))
+                    .pointer_events(false),
+            )
+            .child(
+                div()
+                    .id("bar")
+                    .absolute()
+                    .left(170.)
+                    .top(520.)
+                    .w(460.)
+                    .h(52.)
+                    .bg(rgba(0x2020_20FF))
+                    .on_click(|| {}),
+            ),
+    ));
+    ui.prepare_frame();
+    let (fog, bar) = (view.find("fog").unwrap(), view.find("bar").unwrap());
+    let split = {
+        let scene = ui.scene.borrow();
+        PlaneSplit::compute(&scene, &natives.nodes(), &PlaneSplit::default()).0
+    };
+    let scene = ui.scene.borrow();
+    let boxes: Vec<_> = split
+        .overlay_boxes()
+        .iter()
+        .map(|(node, ..)| *node)
+        .collect();
+    assert!(
+        boxes.contains(&fog) && boxes.contains(&bar),
+        "both paint over the page"
+    );
+    assert_eq!(split.passes_pointer(&scene, &ui.input, fog), Some(true));
+    assert_eq!(split.passes_pointer(&scene, &ui.input, bar), Some(false));
+}
