@@ -42,7 +42,7 @@ use objc2_app_kit::{
 use objc2_core_foundation::{CFRetained, CGFloat, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{CGColor, CGMutablePath};
 use objc2_foundation::{NSArray, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSUInteger};
-use objc2_quartz_core::{CALayer, CAShapeLayer, CATransaction};
+use objc2_quartz_core::{CAGradientLayer, CALayer, CAShapeLayer, CATransaction};
 use std::{
     cell::{Cell, RefCell},
     ffi::c_void,
@@ -789,6 +789,31 @@ fn black() -> CFRetained<CGColor> {
     CGColor::new_srgb(0., 0., 0., 1.)
 }
 /// Changes to `layer` never animate implicitly.
+/// A backdrop ramp's gradient stops: alpha rising from 0 at each end to 1
+/// `fraction` of the height in, quadratically (as blur.wgsl ramps sigma), and
+/// full between. `fraction` past a half meets in the middle.
+fn ramp_stops(
+    fraction: f32,
+) -> (
+    Vec<CFRetained<CGColor>>,
+    Vec<Retained<objc2_foundation::NSNumber>>,
+) {
+    const STEPS: usize = 6;
+    let fraction = fraction.clamp(0., 0.5) as f64;
+    let mut colors = Vec::with_capacity(2 * (STEPS + 1));
+    let mut locations = Vec::with_capacity(2 * (STEPS + 1));
+    for at in 0..=STEPS {
+        let t = at as f64 / STEPS as f64;
+        colors.push(CGColor::new_srgb(0., 0., 0., t * t));
+        locations.push(objc2_foundation::NSNumber::new_f64(fraction * t));
+    }
+    for at in (0..=STEPS).rev() {
+        let t = at as f64 / STEPS as f64;
+        colors.push(CGColor::new_srgb(0., 0., 0., t * t));
+        locations.push(objc2_foundation::NSNumber::new_f64(1. - fraction * t));
+    }
+    (colors, locations)
+}
 fn no_actions(layer: &CALayer) {
     // SAFETY: `setActions:` takes an NSDictionary of NSString keys to
     // CAAction objects; NSNull is the documented "no action" value.
@@ -807,6 +832,8 @@ fn no_actions(layer: &CALayer) {
             "filters",
             "contents",
             "sublayers",
+            "colors",
+            "locations",
         ];
         let keys: Vec<Retained<NSString>> =
             keys.iter().map(|key| NSString::from_str(key)).collect();
@@ -935,6 +962,9 @@ struct Backdrop {
     cuts: Vec<Cut>,
     view: Retained<BackdropView>,
     own: Option<Retained<CALayer>>,
+    /// The vertical ramp masking the blur in from its top and bottom edges
+    /// (`BackdropPlacement::fade`), kept while it has one.
+    ramp: Option<Retained<CAGradientLayer>>,
     placed: Option<BackdropPlacement>,
 }
 
@@ -1507,6 +1537,7 @@ impl Surfaces {
                 cuts,
                 view,
                 own: None,
+                ramp: None,
                 placed: None,
             });
         }
@@ -1564,11 +1595,45 @@ impl Surfaces {
                     let _: () = msg_send![&*layer, setFilters: &*filters];
                 }
             }
+            // Its edge ramp: a vertical gradient masking the blur in from
+            // nothing at the top and bottom edges over `fade` points, as the
+            // GPU's own backdrop filter ramps its sigma (blur.wgsl), so the
+            // band has no visible edge. Set as the layer's mask, or as the
+            // shape mask's own mask when the corners need one.
+            let size = layer.bounds().size;
+            let ramp = if placement.fade > 0. && placement.rect.height > 0. {
+                let ramp = backdrop.ramp.get_or_insert_with(|| {
+                    let ramp = CAGradientLayer::new();
+                    no_actions(&ramp);
+                    ramp.setStartPoint(CGPoint::new(0.5, 0.));
+                    ramp.setEndPoint(CGPoint::new(0.5, 1.));
+                    ramp
+                });
+                ramp.setFrame(CGRect::new(CGPoint::new(0., 0.), size));
+                let (colors, locations) = ramp_stops(placement.fade / placement.rect.height);
+                let colors: Vec<&AnyObject> = colors
+                    .iter()
+                    .map(|color| {
+                        let color: &objc2_core_foundation::CFType = color;
+                        color.as_ref()
+                    })
+                    .collect();
+                // SAFETY: `colors` takes an NSArray of CGColors (toll-free
+                // bridged objects).
+                unsafe { ramp.setColors(Some(&NSArray::from_slice(&colors))) };
+                ramp.setLocations(Some(&NSArray::from_retained_slice(&locations)));
+                Some(ramp.clone())
+            } else {
+                backdrop.ramp = None;
+                None
+            };
+            let ramp: Option<&CALayer> = ramp.as_deref().map(|ramp| &**ramp);
             // Its own corners: its layer's radius, or a shape when uneven.
             let radii = placement.radii;
             if radii.iter().all(|r| (r - radii[0]).abs() < 0.01) {
-                // SAFETY: removing a mask has no precondition.
-                unsafe { layer.setMask(None) };
+                // SAFETY: a mask must have no superlayer: the ramp is only
+                // ever a mask here.
+                unsafe { layer.setMask(ramp) };
                 backdrop.own = None;
                 layer.setCornerRadius(radii[0] as CGFloat);
                 layer.setMasksToBounds(true);
@@ -1580,16 +1645,19 @@ impl Surfaces {
                     mask
                 });
                 let down = top_down(&layer);
-                mask.setFrame(CGRect::new(CGPoint::new(0., 0.), layer.bounds().size));
+                mask.setFrame(CGRect::new(CGPoint::new(0., 0.), size));
                 let shape = mask.downcast_ref::<CAShapeLayer>().expect("a shape");
                 shape.setPath(Some(&rounded_path(
                     (placement.rect.width, placement.rect.height),
                     radii,
                     down,
                 )));
-                // SAFETY: a mask must have no superlayer: this one is only
-                // ever this layer's mask (set again, it is unchanged).
-                unsafe { layer.setMask(Some(mask)) };
+                // SAFETY: as above; the ramp masks the shape, which masks
+                // the layer.
+                unsafe {
+                    shape.setMask(ramp);
+                    layer.setMask(Some(mask));
+                }
             }
             backdrop.placed = Some(placement.clone());
         }

@@ -315,6 +315,10 @@ pub struct BackdropPlacement {
     pub sigma: f32,
     /// Its effective opacity (ancestors' included).
     pub opacity: f32,
+    /// The blur ramps in from nothing at the box's top and bottom edges over
+    /// this many window points (`Effects::edge_fade`, scaled as `sigma` is);
+    /// 0 is a hard edge.
+    pub fade: f32,
 }
 impl BackdropPlacement {
     /// The part of `rect` its clip leaves visible, if any.
@@ -766,6 +770,7 @@ impl Walk<'_> {
                         rounded: rounded.clone(),
                         sigma: item.effects.blur_radius * magnification(context.matrix),
                         opacity,
+                        fade: item.effects.edge_fade * magnification(context.matrix),
                     });
                 }
                 self.split.overlay.insert(item.id, painted);
