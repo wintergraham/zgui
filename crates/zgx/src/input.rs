@@ -712,6 +712,13 @@ struct State {
     /// `EventContext::capture_pointer_on_move`'s node, until the press moves.
     capture_on_move: Option<NodeId>,
     capture_button: Option<PointerButton>,
+    /// Where the last press landed, as hovering resolves the cursor there:
+    /// the node its cursor came from (`hover_hit`) and the hit target its
+    /// role came from. A press shows these until the release, so it shows
+    /// what hovering the same control showed even when the node that
+    /// captures is an ancestor of them, or a child sets its own cursor.
+    press_hit: Option<NodeId>,
+    press_target: Option<NodeId>,
     /// The hovered node (the pointer's hit target) and its ancestors, up to
     /// the active modal root: each has had its enter, none its leave yet.
     hover: Vec<NodeId>,
@@ -2187,15 +2194,42 @@ impl InputDispatcher {
     /// the cursor pressing it does. `None` leaves it to the control's role.
     pub fn cursor_at(&self, scene: &Scene, x: f32, y: f32) -> Option<crate::cursor::Cursor> {
         if let Some(pressed) = self.captured().filter(|id| scene.contains(*id)) {
-            return scene.cursor_for(pressed);
+            let hit = self.state.borrow().press_hit;
+            return match hit.filter(|hit| scene.contains(*hit) && scene.is_within(*hit, pressed)) {
+                // Resolved as hovering it did, re-read so a grip's cursor
+                // still turns to the closed hand as it drags.
+                Some(hit) if scene.shows_cursors() => scene.cursor_over(hit),
+                Some(_) => None,
+                None => scene.cursor_for(pressed),
+            };
         }
         self.hover_cursor_at(scene, x, y)
+    }
+    /// The node whose role picks the cursor when no node states one: the
+    /// press's hit target while a press holds the pointer (as hovering it
+    /// was), else the hovered node.
+    pub fn cursor_role_node(&self, scene: &Scene) -> Option<NodeId> {
+        let Some(pressed) = self.captured().filter(|id| scene.contains(*id)) else {
+            return self.hovered();
+        };
+        let target = self.state.borrow().press_target;
+        Some(
+            target
+                .filter(|target| scene.contains(*target) && scene.is_within(*target, pressed))
+                .unwrap_or(pressed),
+        )
     }
     /// `cursor_at` with no press held: what is under the pointer alone.
     pub fn hover_cursor_at(&self, scene: &Scene, x: f32, y: f32) -> Option<crate::cursor::Cursor> {
         if !scene.shows_cursors() {
             return None;
         }
+        self.hover_hit(scene, x, y)
+            .and_then(|hit| scene.cursor_over(hit))
+    }
+    /// The node hovering at `x`, `y` takes its cursor from: the topmost hit
+    /// that dispatch would reach.
+    fn hover_hit(&self, scene: &Scene, x: f32, y: f32) -> Option<NodeId> {
         'hits: for hit in scene.hit_test_all(x, y) {
             if !self.receives_pointer(scene, hit) {
                 continue;
@@ -2213,7 +2247,7 @@ impl InputDispatcher {
                 }
                 node = scene.parent(id);
             }
-            return scene.cursor_over(hit);
+            return Some(hit);
         }
         None
     }
@@ -2331,6 +2365,16 @@ impl InputDispatcher {
                 InputEvent::PointerLeave => state.pointer = None,
                 _ => {}
             }
+        }
+        if let InputEvent::PointerDown { x, y, .. } = &event
+            && self.captured().is_none()
+        {
+            let scene = scene.borrow();
+            let hit = self.hover_hit(&scene, *x, *y);
+            let target = self.hit_target(&scene, *x, *y);
+            let mut state = self.state.borrow_mut();
+            state.press_hit = hit;
+            state.press_target = target;
         }
         let previous = self.state.borrow().clicks.0.map(|click| click.target);
         if previous.is_some_and(|target| !self.enabled(&scene.borrow(), target)) {
