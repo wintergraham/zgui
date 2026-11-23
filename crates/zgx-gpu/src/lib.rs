@@ -2326,8 +2326,18 @@ impl GpuContext {
         // are): a frame then needs no staging copy, and no command list for
         // it, each of which costs NVIDIA's driver some 30 K cycles. Measured
         // on an RTX 4090: 0.7 to 3.3% fewer cycles a frame, the GPU's time
-        // the same. Textures and uniforms keep their copies.
-        let vertex_ring = mappable && (mapped_uploads || info.backend == wgpu::Backend::Dx12);
+        // the same. Textures and uniforms keep their copies. Only on NVIDIA,
+        // where it was measured and is known good: the CPU writes memory the
+        // GPU reads behind wgpu's tracking. Other drivers (an AMD RX 9070 XT
+        // showed stray quads, wrong glyphs and a driver timeout with it on,
+        // cause unconfirmed) take wgpu's staging copy, as every other
+        // discrete GPU does. `ZGX_DX12_VERTEX_RING=1` or `0` decides instead.
+        let dx12_ring = match zgx::env::var_os("ZGX_DX12_VERTEX_RING") {
+            Some(value) => value != "0",
+            None => info.vendor == 0x10DE,
+        };
+        let vertex_ring =
+            mappable && (mapped_uploads || (info.backend == wgpu::Backend::Dx12 && dx12_ring));
         zgx::profile::mark("GPU adapter");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("zgx shared device"),
@@ -3485,10 +3495,11 @@ impl GpuRenderer {
             self.idle = false;
         }
         let presented = std::mem::take(&mut self.present_stats);
-        let mut stats = {
+        let rendered = {
             let _span = zgx::profile::span(zgx::profile::Phase::Paint);
-            self.render_inner(scene, damage)?
+            self.render_inner(scene, damage)
         };
+        let mut stats = rendered.map_err(|error| self.failed(error))?;
         if stats.shaped_nodes > 0 {
             // Words shaped by measurement or this frame are reused by the next
             // shaping frames (streaming text repeats nearly all of them, and a
@@ -3532,6 +3543,15 @@ impl GpuRenderer {
                         && self.atlas_size < MAX_ATLAS =>
                 {
                     self.reset_atlas((self.atlas_size * 2).min(MAX_ATLAS))
+                }
+                // More glyphs than the largest atlas holds in one frame: that
+                // frame is skipped (the next recycles the atlas first), not
+                // the app closed.
+                Err(error)
+                    if error.0 == "glyph atlas capacity exceeded in one frame"
+                        || error.0 == "glyph metadata exceeds 8192 entries in one frame" =>
+                {
+                    return Err(GpuError::over_texture_budget(&error.0));
                 }
                 result => return result,
             }
@@ -9182,7 +9202,41 @@ impl GpuRenderer {
         if self.presents() {
             zgx::profile::frame();
         }
-        status
+        status.map_err(|error| {
+            // A surface of its own whose present failed holds a frame no
+            // record says it does: the next is drawn whole.
+            #[cfg(own_surfaces)]
+            if self.layer_present.is_some() {
+                self.fresh = true;
+            }
+            self.failed(error)
+        })
+    }
+    /// A frame that failed with `error`. A frame left part drawn in a surface
+    /// of its own (its regions counted as changed and its catch-up taken,
+    /// `render_flat`) is drawn whole next. A lost device is reported as one
+    /// even before wgpu's callback says so: a removal (a driver timeout)
+    /// shows first as some other failure, which would close the app.
+    fn failed(&mut self, error: GpuError) -> GpuError {
+        #[cfg(own_surfaces)]
+        if self
+            .layer_present
+            .as_ref()
+            .is_some_and(|present| present.current.is_some())
+        {
+            self.fresh = true;
+        }
+        if error.is_device_lost() {
+            return error;
+        }
+        if let Some(reason) = self.context.lost() {
+            return GpuError::device_lost(&format!("{reason} ({})", error.0));
+        }
+        #[cfg(windows)]
+        if let Some(reason) = dxgi_present::removed(&self.device) {
+            return GpuError::device_lost(&format!("{reason} ({})", error.0));
+        }
+        error
     }
     fn present_frame(
         &mut self,

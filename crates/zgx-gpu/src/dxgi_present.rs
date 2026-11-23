@@ -35,8 +35,9 @@ use windows::{
                     DXGI_ALPHA_MODE_IGNORE, DXGI_ALPHA_MODE_PREMULTIPLIED,
                     DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
                 },
-                CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_ERROR_DEVICE_REMOVED,
-                DXGI_ERROR_DEVICE_RESET, DXGI_PRESENT,
+                CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_ERROR_DEVICE_HUNG,
+                DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET,
+                DXGI_ERROR_DRIVER_INTERNAL_ERROR, DXGI_PRESENT,
                 DXGI_PRESENT_PARAMETERS, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
                 DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
                 DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT,
@@ -60,6 +61,40 @@ const LATENCY: u32 = 2;
 static WHOLE: std::sync::LazyLock<bool> =
     std::sync::LazyLock::new(|| zgx::env::var_os("ZGX_DXGI_PRESENT_WHOLE").is_some());
 
+/// `what` failed with `error`: a lost device when Direct3D says `raw` was
+/// removed (a driver timeout, TDR, or reset), or the error is one a removal
+/// returns, so the host makes a new renderer rather than closing the app.
+/// The swap chain sees a removal first: wgpu's own device-lost callback
+/// fires only at its next fence check.
+fn failure(raw: &ID3D12Device, what: &str, error: windows::core::Error) -> GpuError {
+    // SAFETY: Reads the device's removal state.
+    let removed = unsafe { raw.GetDeviceRemovedReason() }.is_err();
+    let code = error.code();
+    if removed
+        || [
+            DXGI_ERROR_DEVICE_REMOVED,
+            DXGI_ERROR_DEVICE_RESET,
+            DXGI_ERROR_DEVICE_HUNG,
+            DXGI_ERROR_DRIVER_INTERNAL_ERROR,
+        ]
+        .contains(&code)
+    {
+        GpuError::device_lost(&format!("{what}: {error}"))
+    } else {
+        GpuError(format!("{what}: {error}"))
+    }
+}
+
+/// Why Direct3D removed `device`'s device, if it did (None off Direct3D 12).
+pub(crate) fn removed(device: &wgpu::Device) -> Option<String> {
+    // SAFETY: Reads the raw device's removal state only; the guard is
+    // dropped before wgpu is called again.
+    let hal = unsafe { device.as_hal::<wgpu::hal::api::Dx12>() }?;
+    unsafe { hal.raw_device().GetDeviceRemovedReason() }
+        .err()
+        .map(|error| error.to_string())
+}
+
 /// A buffer of the swap chain, as wgpu draws into and reads it.
 pub(crate) struct Buffer {
     pub texture: wgpu::Texture,
@@ -79,8 +114,8 @@ pub(crate) struct Chain {
     /// Signalled when a frame may start without queueing more than
     /// `LATENCY` frames ahead of the compositor.
     waitable: HANDLE,
-    /// No buffer presented since it was made or resized: a present must
-    /// cover all of it.
+    /// No buffer presented since it was made or resized, or the last present
+    /// was occluded or failed: a present must cover all of it.
     whole: bool,
     /// Its buffers were handed out (`buffers`): a new size needs `resize`.
     wrapped: bool,
@@ -100,7 +135,6 @@ impl Chain {
         height: u32,
         transparent: bool,
     ) -> Result<Self, GpuError> {
-        let fail = |what: &str, error: windows::core::Error| GpuError(format!("{what}: {error}"));
         // SAFETY: Reads the raw queue and device only; the guard is dropped before wgpu is
         // called again.
         let (queue, raw) = {
@@ -108,6 +142,7 @@ impl Chain {
                 .ok_or_else(|| GpuError("not a Direct3D 12 device".into()))?;
             (hal.raw_queue().clone(), hal.raw_device().clone())
         };
+        let fail = |what: &str, error: windows::core::Error| failure(&raw, what, error);
         let desc = DXGI_SWAP_CHAIN_DESC1 {
             Width: width,
             Height: height,
@@ -189,7 +224,7 @@ impl Chain {
             // SAFETY: A buffer of the swap chain, which outlives the wrapper:
             // its owner releases the wrappers before `resize` and the chain.
             let resource: ID3D12Resource = unsafe { self.swap_chain.GetBuffer(index) }
-                .map_err(|e| GpuError(format!("swap chain buffer {index}: {e}")))?;
+                .map_err(|e| failure(&self.raw, &format!("swap chain buffer {index}"), e))?;
             // SAFETY: The swap chain made this texture in `FORMAT`, this size,
             // one mip level and sample, usable as a render target and read by
             // shaders (`DXGI_USAGE_SHADER_INPUT`) and copies. wgpu takes it as
@@ -262,7 +297,7 @@ impl Chain {
                 DXGI_SWAP_CHAIN_FLAG(DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0),
             )
         }
-        .map_err(|e| GpuError(format!("ResizeBuffers: {e}")))?;
+        .map_err(|e| failure(&self.raw, "ResizeBuffers", e))?;
         self.whole = true;
         Ok(())
     }
@@ -310,15 +345,18 @@ impl Chain {
         // SAFETY: `params` points at `rects`, alive across the call; sync
         // interval 0: a present replaces one the compositor has not taken.
         let result = unsafe { self.swap_chain.Present1(0, DXGI_PRESENT(0), &params) };
-        result.ok().map_err(|e| {
-            if e.code() == DXGI_ERROR_DEVICE_REMOVED || e.code() == DXGI_ERROR_DEVICE_RESET {
-                GpuError::device_lost(&format!("Present1: {e}"))
-            } else {
-                GpuError(format!("Present1: {e}"))
-            }
-        })?;
-        self.whole = false;
-        Ok(result != DXGI_STATUS_OCCLUDED)
+        if let Err(error) = result.ok() {
+            // Whatever the compositor took of it, the next present is whole.
+            self.whole = true;
+            return Err(failure(&self.raw, "Present1", error));
+        }
+        let occluded = result == DXGI_STATUS_OCCLUDED;
+        // Occluded, the compositor may not have taken this present's dirty
+        // rectangles (a minimized or covered window, a display asleep): the
+        // first present seen again is whole, so nothing it holds of the
+        // window is left from before.
+        self.whole = occluded;
+        Ok(!occluded)
     }
     /// The chain made again, opaque unless `transparent`, the size it was,
     /// once every wrapper of its buffers was `release`d. The old one, and
@@ -327,7 +365,7 @@ impl Chain {
         let (device, hwnd) = (self.device.clone(), self.hwnd);
         // SAFETY: Reads the swap chain's description.
         let desc = unsafe { self.swap_chain.GetDesc1() }
-            .map_err(|e| GpuError(format!("GetDesc1: {e}")))?;
+            .map_err(|e| failure(&self.raw, "GetDesc1", e))?;
         drop(self);
         Self::new(&device, hwnd, desc.Width, desc.Height, transparent)
     }
