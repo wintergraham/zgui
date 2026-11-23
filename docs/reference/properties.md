@@ -84,6 +84,7 @@ The types: `Color` is `"#rgb"`, `"#rrggbb"`, `"#rrggbbaa"`, `"rgb(…)"`, `"rgba
 | `brightness`, `contrast`, `saturate` | `number` | `1` | CSS filter functions over the node and its subtree |
 | `blur` | `number` | `0` | blurs the node's content (CSS `filter: blur()`) |
 | `backdrop_blur` | `number` | `0` | blurs what is behind it: frosted glass |
+| `backdrop_fade` | `number` | `0` | the backdrop blur (and the node's own paint) ramps in from nothing at the top and bottom edges over this many points: a progressive blur with no visible edge |
 | `fade` | `Pair` | | a clipping view's top and bottom edges fade over those widths |
 | `fade_x` | `Pair` | | its left and right edges |
 | `fade_sides` | `Sides` | | each edge: `{ top, right, bottom, left }` |
