@@ -1069,29 +1069,16 @@ impl PlaneSplit {
             return PointerRoute::Ui;
         }
         let root = scene.root();
-        'hits: for hit in scene.hit_test_all(x, y) {
+        for hit in scene.hit_test_all(x, y) {
             match input.try_receives_pointer(scene, hit) {
                 None => return PointerRoute::Ui,
                 Some(false) => continue,
                 Some(true) => {}
             }
-            // Content the pointer passes through (`pointer_events = "none"`,
-            // up to the first node with listeners) is not there for input,
-            // even painted over the native view.
-            let mut node = Some(hit);
-            while let Some(id) = node {
-                match input.try_options(id) {
-                    None => return PointerRoute::Ui,
-                    Some(Some(options)) if options.passes(scene, id) => continue 'hits,
-                    _ => {}
-                }
-                if id == root || self.native_nodes.contains(&id) {
-                    break;
-                }
-                match input.try_has_listeners(id) {
-                    Some(false) => node = scene.parent(id),
-                    _ => break,
-                }
+            match self.passes_pointer(scene, input, hit) {
+                None => return PointerRoute::Ui,
+                Some(true) => continue,
+                Some(false) => {}
             }
             if self.overlay.contains_key(&hit) {
                 return PointerRoute::Ui;
@@ -1121,6 +1108,34 @@ impl PlaneSplit {
             }
         }
         PointerRoute::Ui
+    }
+    /// Whether the pointer passes through `node`: content set to let it by
+    /// (`pointer_events = "none"`), up to the first node with listeners, is
+    /// not there for input, even painted over a native view. `None` while zgx
+    /// state is borrowed.
+    pub fn passes_pointer(
+        &self,
+        scene: &Scene,
+        input: &InputDispatcher,
+        node: NodeId,
+    ) -> Option<bool> {
+        let root = scene.root();
+        let mut at = Some(node);
+        while let Some(id) = at {
+            match input.try_options(id) {
+                None => return None,
+                Some(Some(options)) if options.passes(scene, id) => return Some(true),
+                _ => {}
+            }
+            if id == root || self.native_nodes.contains(&id) {
+                break;
+            }
+            match input.try_has_listeners(id) {
+                Some(false) => at = scene.parent(id),
+                _ => break,
+            }
+        }
+        Some(false)
     }
     /// The native view shown at window point `(x, y)`: the front-most hit
     /// in a native node, unless overlay paint is drawn there first. Unlike
