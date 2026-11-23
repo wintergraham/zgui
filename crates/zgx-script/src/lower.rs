@@ -5457,6 +5457,7 @@ fn apply<S: Styled>(s: S, prop: Prop, lit: &Lit) -> S {
         (Opacity, Lit::Num(v)) => s.opacity(v.clamp(0., 1.)),
         (Blur, Lit::Num(v)) => s.filter_blur(v.max(0.)),
         (BackdropBlur, Lit::Num(v)) => s.blur(v.max(0.)),
+        (BackdropFade, Lit::Num(v)) => s.edge_fade(v.max(0.)),
         (Brightness, Lit::Num(v)) => s.brightness(*v),
         (Contrast, Lit::Num(v)) => s.contrast(*v),
         (Saturate, Lit::Num(v)) => s.saturate(*v),

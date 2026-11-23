@@ -107,7 +107,7 @@ objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["std
 # Answers custom-scheme requests on the main queue, from whatever thread served them.
 dispatch2 = "0.3"
 block2 = "0.6"
-objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer", "CAShapeLayer", "CATransaction", "objc2-core-foundation", "objc2-core-graphics"] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer", "CAShapeLayer", "CAGradientLayer", "CATransaction", "objc2-core-foundation", "objc2-core-graphics"] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes"] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGPath", "CGColor", "CGAffineTransform"] }
 
