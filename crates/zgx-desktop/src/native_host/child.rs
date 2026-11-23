@@ -162,6 +162,23 @@ fn round_region(round: &RoundRect, scale: f32, origin: (i32, i32)) -> HRGN {
     region
 }
 
+/// Keep `WS_CLIPCHILDREN` off the zgx window. With it, the compositor cuts
+/// the window's own composition (the base plane) out of every shown child
+/// window, so where a child draws nothing (a page's window not yet painted,
+/// or hidden inside its container) the glass showed the desktop. Without it,
+/// zgx's paint under the native view (the node's background, the card round
+/// it) shows there until the child draws over it. winit sets the style by
+/// default and again with each style change of its own (a maximize), so
+/// every `apply` checks.
+fn unclip_children(parent: HWND) {
+    unsafe {
+        let style = GetWindowLongPtrW(parent, GWL_STYLE);
+        if style & WS_CLIPCHILDREN.0 as isize != 0 {
+            SetWindowLongPtrW(parent, GWL_STYLE, style & !(WS_CLIPCHILDREN.0 as isize));
+        }
+    }
+}
+
 impl Surfaces {
     pub fn new(window: &winit::window::Window) -> Result<Self, String> {
         use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -170,11 +187,7 @@ impl Surfaces {
             return Err("not a Win32 window".into());
         };
         let parent = HWND(handle.hwnd.get() as *mut c_void);
-        // Child windows keep their pixels out of the window's own.
-        unsafe {
-            let style = GetWindowLongPtrW(parent, GWL_STYLE);
-            SetWindowLongPtrW(parent, GWL_STYLE, style | WS_CLIPCHILDREN.0 as isize);
-        }
+        unclip_children(parent);
         let composition = match Self::composition(parent) {
             Ok(composition) => Some(composition),
             Err(error) => {
@@ -320,6 +333,7 @@ impl Surfaces {
     }
     /// Move native views to `split`'s placements.
     pub fn apply(&mut self, natives: &NativeViews, split: &PlaneSplit) {
+        unclip_children(self.parent);
         let scale = self.scale();
         let views = natives.views();
         // Windows retired at the last apply are hidden now, unless shown again since.
@@ -454,8 +468,8 @@ impl Surfaces {
             .and_then(|placement| placement.visible());
         let (Some(placement), Some(visible)) = (placement, visible) else {
             if clip.shown {
-                // Out of sight once the frame that replaces it is on screen: hidden now, the window showed what
-                // was under it (zgx paints nothing under a native view) until that frame arrived.
+                // Out of sight once the frame that replaces it is on screen: hidden now, the window showed the
+                // last frame's paint under it (the empty card, not what replaces the view) until that frame arrived.
                 retiring.push(clip.hwnd);
                 clip.shown = false;
             }
