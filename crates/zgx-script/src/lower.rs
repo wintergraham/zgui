@@ -3002,6 +3002,10 @@ fn remote_status(vm: &Rc<Vm>, low: &Lowering, src: &str, svg: bool) -> u8 {
     ready.get()
 }
 fn load_image(vm: &Rc<Vm>, low: &Lowering, src: &str) -> Option<Arc<ImageData>> {
+    // No path is no picture (a field a script left empty), not the script's folder read as a file.
+    if src.is_empty() {
+        return None;
+    }
     // The host's own images, followed as it replaces them.
     if src.starts_with("host:") {
         low.assets.hosted(src, &low.runtime).get();
@@ -3053,6 +3057,8 @@ fn load_svg(vm: &Rc<Vm>, low: &Lowering, src: &str) -> Arc<SvgData> {
     }
     let bytes = match src.strip_prefix("code:") {
         Some(code) => Ok(code.as_bytes().to_vec()),
+        // No path draws nothing, as an image's does.
+        None if src.is_empty() => Ok(b"<svg xmlns='http://www.w3.org/2000/svg'/>".to_vec()),
         None => resolve_path(vm, src).and_then(|path| {
             low.assets
                 .read(src, &path)
