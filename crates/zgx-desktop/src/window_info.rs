@@ -307,6 +307,10 @@ pub(crate) fn attributes(
         // a surface Windows keeps for the window, which would sit under the
         // visual, opaque, where zgx paints nothing.
         attrs = attrs.with_no_redirection_bitmap(true);
+        // Native views' child windows show that visual under them wherever
+        // they draw nothing; clipped out of them, the glass showed the
+        // desktop there (native_host/child.rs `unclip_children`).
+        attrs = attrs.with_clip_children(false);
     }
     if let Some((w, h)) = options.min_size {
         if !w.is_finite() || !h.is_finite() || w <= 0. || h <= 0. {
