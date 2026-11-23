@@ -219,6 +219,9 @@ thread_local! {
 /// editor convention. This does not read font-specific GDEF ligature caret tables.
 pub struct ShapedText {
     buffer: Buffer,
+    /// The source text. `buffer` may shape a different string — a clamped
+    /// rich text's truncated content, with an ellipsis — so glyph byte
+    /// ranges can run past its end, and every slice of it clamps.
     text: Arc<str>,
     line_offsets: Vec<usize>,
     line_height: f32,
@@ -328,6 +331,28 @@ impl ShapedText {
     pub fn text(&self) -> &str {
         &self.text
     }
+    /// `start..end` of a glyph's cluster in the text, clamped into it and
+    /// snapped inward to char boundaries. Glyph ranges come from the shaped
+    /// buffer; where it disagrees with the text (a layout kept past a text
+    /// change, a stale cache) they may run past its end or land mid-scalar,
+    /// and slicing unclamped panics.
+    fn clamped_range(&self, start: usize, end: usize) -> Range<usize> {
+        let len = self.text.len();
+        let mut start = start.min(len);
+        let mut end = end.min(len);
+        while start > 0 && !self.text.is_char_boundary(start) {
+            start -= 1;
+        }
+        while end > 0 && !self.text.is_char_boundary(end) {
+            end -= 1;
+        }
+        start..end
+    }
+    /// `self.text` at `start..end`, clamped as `clamped_range`.
+    fn slice(&self, start: usize, end: usize) -> &str {
+        let range = self.clamped_range(start, end);
+        &self.text[range]
+    }
     /// Its width and height.
     pub fn size(&self) -> (f32, f32) {
         self.buffer
@@ -340,7 +365,7 @@ impl ShapedText {
     pub fn hit_test(&self, x: f32, y: f32) -> Option<TextCursor> {
         let cursor = self.buffer.hit(x, y)?;
         Some(TextCursor {
-            byte_index: self.line_offsets.get(cursor.line)? + cursor.index,
+            byte_index: (self.line_offsets.get(cursor.line)? + cursor.index).min(self.text.len()),
             affinity: cursor.affinity,
         })
     }
@@ -362,7 +387,7 @@ impl ShapedText {
                 if cursor.byte_index < start || cursor.byte_index > end {
                     continue;
                 }
-                let cluster = &self.text[start..end];
+                let cluster = self.slice(start, end);
                 let count = cluster.graphemes(true).count().max(1);
                 let before = cluster
                     .grapheme_indices(true)
@@ -406,7 +431,7 @@ impl ShapedText {
                 if cluster_start >= end || cluster_end <= start {
                     continue;
                 }
-                let cluster = &self.text[cluster_start..cluster_end];
+                let cluster = self.slice(cluster_start, cluster_end);
                 let count = cluster.graphemes(true).count().max(1);
                 for (index, (local, grapheme)) in cluster.grapheme_indices(true).enumerate() {
                     if cluster_start + local >= end
@@ -545,6 +570,7 @@ impl zgx::text_layout::TextLayout for ShapedText {
             clusters.sort_by_key(|c| c.0);
             let Some(start) = clusters.first().map(|c| c.0) else {
                 // An empty line: its caret at its start.
+                let offset = offset.min(self.text.len());
                 lines.push(zgx::text_layout::LineCarets {
                     range: offset..offset,
                     top: run.line_top,
@@ -554,13 +580,14 @@ impl zgx::text_layout::TextLayout for ShapedText {
                 continue;
             };
             let end = clusters.iter().map(|c| c.1).max().unwrap_or(start);
+            let range = self.clamped_range(start, end);
             let mut carets = Vec::new();
-            for (i, _) in self.text[start..end].grapheme_indices(true) {
-                let at = start + i;
+            for (i, _) in self.text[range.clone()].grapheme_indices(true) {
+                let at = range.start + i;
                 let k = clusters.partition_point(|c| c.0 <= at);
                 let x = match k.checked_sub(1).map(|k| clusters[k]) {
                     Some((s, e, x, w, rtl)) if at < e => {
-                        let cluster = &self.text[s..e];
+                        let cluster = self.slice(s, e);
                         let count = cluster.graphemes(true).count().max(1);
                         let before = cluster
                             .grapheme_indices(true)
@@ -585,7 +612,7 @@ impl zgx::text_layout::TextLayout for ShapedText {
                 None => 0.,
             });
             lines.push(zgx::text_layout::LineCarets {
-                range: start..end,
+                range,
                 top: run.line_top,
                 height: run.line_height,
                 carets,
@@ -621,7 +648,7 @@ impl zgx::text_layout::TextLayout for ShapedText {
                 let i = clusters.partition_point(|c| c.0 <= at);
                 match i.checked_sub(1).map(|i| clusters[i]) {
                     Some((start, end, x, w, rtl)) if at < end || (at == start && start == end) => {
-                        let cluster = &self.text[start..end];
+                        let cluster = self.slice(start, end);
                         let count = cluster.graphemes(true).count().max(1);
                         let before = cluster
                             .grapheme_indices(true)
@@ -2131,6 +2158,54 @@ mod rich_tests {
                 .any(|g| g.font_size == 28.)
         );
         assert_eq!(narrow.text(), content);
+    }
+
+    /// A clamped layout's buffer shapes the truncated content — a prefix,
+    /// plus an ellipsis whose glyph cluster can end past the source's last
+    /// byte — while `text` stays the source (accessibility reads it whole).
+    /// Slicing `text` by those glyph ranges clamps, never panics.
+    #[test]
+    fn an_ellipsized_layouts_slicing_clamps_past_the_text_end() {
+        use zgx::text_layout::{TextLayout, TextOptions, TextOverflow};
+        let mut fonts = bundled_test_fonts();
+        let text = "0123456789";
+        let rich = RichText::new(
+            text,
+            vec![TextRun {
+                range: 0..text.len(),
+                font_size: 18.,
+                ..Default::default()
+            }],
+        )
+        .unwrap()
+        .with_options(TextOptions {
+            overflow: TextOverflow::Ellipsis,
+            line_clamp: std::num::NonZeroU32::new(1),
+        });
+        let layout = ShapedText::with_runs(&mut fonts, &rich, Some(110.));
+        // The one row shown is "01234567…" — the '…' glyph's cluster ends at
+        // 11, a byte past the 10-byte source. Slicing the text by it was
+        // the reported panic ("end byte index 11 ... string of length 10").
+        assert!(
+            layout
+                .buffer
+                .lines
+                .iter()
+                .any(|line| line.text() == "01234567…"),
+            "the ellipsis glyph must reach past the text"
+        );
+        let lines = layout.line_carets(text).expect("its own text");
+        for line in &lines {
+            assert!(line.range.end <= text.len());
+            assert!(line.carets.iter().all(|x| x.is_finite()));
+        }
+        TextLayout::selection(&layout, 0..text.len());
+        layout.carets_x(&[0, 8, 10]);
+        layout.caret(TextCursor {
+            byte_index: 10,
+            affinity: Affinity::Before,
+        });
+        layout.hit_test(110., 5.);
     }
 }
 
