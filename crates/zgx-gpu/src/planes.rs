@@ -52,7 +52,7 @@ impl GpuRenderer {
             ..Default::default()
         });
         // A surface of the layer's is the target (`begin_layer_frame`).
-        renderer.target = crate::texture(&renderer.device, 1, 1, "retained output placeholder");
+        renderer.target = crate::texture(&renderer.device, 1, 1, 1, "retained output placeholder");
         renderer.view = renderer.target.create_view(&Default::default());
         renderer.blit = None;
         renderer.blit_bind = None;
