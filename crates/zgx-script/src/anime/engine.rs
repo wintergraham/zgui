@@ -1154,6 +1154,7 @@ impl Engine {
                 }
             }
             let mut last: Option<Instant> = None;
+            let mut stalled = false;
             while self.is_active() {
                 let rate = match (self.fps.get(), self.needed_rate()) {
                     (Some(a), Some(b)) => Some(a.min(b)),
@@ -1168,9 +1169,12 @@ impl Engine {
                 // Lag smoothing: a frame far later than the rate asked for (the main thread held by a native view
                 // attaching, a long layout) moves animations on by one ordinary frame, so they pause through the
                 // stall instead of skipping to where they'd be after it. An entrance that started just before one
-                // had otherwise finished before a frame of it drew.
+                // had otherwise finished before a frame of it drew. Only one stall in a row: frames that stay slow
+                // are the rate the app runs at, and animations keep real time through them rather than crawling.
                 let limit = rate.map_or(LAG_MS, |hz| (2000. / hz).max(LAG_MS));
-                let dt = if dt > limit { LAG_STEP_MS } else { dt };
+                let stall = dt > limit && !stalled;
+                stalled = dt > limit;
+                let dt = if stall { LAG_STEP_MS } else { dt };
                 self.tick(dt);
             }
         }
