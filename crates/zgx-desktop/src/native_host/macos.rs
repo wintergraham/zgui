@@ -825,7 +825,7 @@ fn ramp_stops(
     Vec<CFRetained<CGColor>>,
     Vec<Retained<objc2_foundation::NSNumber>>,
 ) {
-    const STEPS: usize = 6;
+    const STEPS: usize = 12;
     let fraction = fraction.clamp(0., 0.5) as f64;
     let mut colors = Vec::with_capacity(2 * (STEPS + 1));
     let mut locations = Vec::with_capacity(2 * (STEPS + 1));
@@ -992,6 +992,9 @@ struct Backdrop {
     /// The vertical ramp masking the blur in from its top and bottom edges
     /// (`BackdropPlacement::fade`), kept while it has one.
     ramp: Option<Retained<CAGradientLayer>>,
+    /// The horizontal ramp masking the vertical one, so the blur fades in from
+    /// all four edges as the GPU's does.
+    ramp_x: Option<Retained<CAGradientLayer>>,
     placed: Option<BackdropPlacement>,
 }
 
@@ -1564,6 +1567,7 @@ impl Surfaces {
                 view,
                 own: None,
                 ramp: None,
+                ramp_x: None,
                 placed: None,
             });
         }
@@ -1648,9 +1652,35 @@ impl Surfaces {
                 // bridged objects).
                 unsafe { ramp.setColors(Some(&NSArray::from_slice(&colors))) };
                 ramp.setLocations(Some(&NSArray::from_retained_slice(&locations)));
+                // Across too: a mask's own mask multiplies it.
+                if placement.rect.width > 0. {
+                    let ramp_x = backdrop.ramp_x.get_or_insert_with(|| {
+                        let ramp = CAGradientLayer::new();
+                        no_actions(&ramp);
+                        ramp.setStartPoint(CGPoint::new(0., 0.5));
+                        ramp.setEndPoint(CGPoint::new(1., 0.5));
+                        ramp
+                    });
+                    ramp_x.setFrame(CGRect::new(CGPoint::new(0., 0.), size));
+                    let (colors, locations) = ramp_stops(placement.fade / placement.rect.width);
+                    let colors: Vec<&AnyObject> = colors
+                        .iter()
+                        .map(|color| {
+                            let color: &objc2_core_foundation::CFType = color;
+                            color.as_ref()
+                        })
+                        .collect();
+                    // SAFETY: as above.
+                    unsafe { ramp_x.setColors(Some(&NSArray::from_slice(&colors))) };
+                    ramp_x.setLocations(Some(&NSArray::from_retained_slice(&locations)));
+                    // SAFETY: a mask must have no superlayer: this one is only
+                    // ever the ramp's mask.
+                    unsafe { ramp.setMask(Some(ramp_x)) };
+                }
                 Some(ramp.clone())
             } else {
                 backdrop.ramp = None;
+                backdrop.ramp_x = None;
                 None
             };
             let ramp: Option<&CALayer> = ramp.as_deref().map(|ramp| &**ramp);
