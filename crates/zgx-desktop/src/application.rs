@@ -2311,10 +2311,11 @@ impl Host {
             window.request_redraw();
         }
         let ui = &self.context.ui;
+        // While pressed, the node hovering the press point found, so the
+        // role's cursor doesn't change when an ancestor captures.
         let pointer = ui
             .input
-            .captured()
-            .or(ui.input.hovered())
+            .cursor_role_node(&ui.scene.borrow())
             .filter(|id| ui.input.is_enabled(&ui.scene.borrow(), *id));
         let role = pointer.and_then(|id| ui.semantics.borrow().get(id).map(|node| node.role));
         let scene = ui.scene.borrow();
@@ -2332,10 +2333,12 @@ impl Host {
                     .hover_cursor_at(&scene, self.cursor.0, self.cursor.1),
             ));
         }
-        // A press keeps the pressed node's cursor (`InputDispatcher::cursor_at`).
-        let explicit = match ui.input.captured().filter(|id| scene.contains(*id)) {
-            Some(pressed) => scene.cursor_for(pressed),
-            None => self.cursor_query.and_then(|(_, _, cursor)| cursor),
+        // A press keeps the cursor hovering its point showed, until the
+        // release (`InputDispatcher::cursor_at`).
+        let explicit = if ui.input.captured().is_some_and(|id| scene.contains(id)) {
+            ui.input.cursor_at(&scene, self.cursor.0, self.cursor.1)
+        } else {
+            self.cursor_query.and_then(|(_, _, cursor)| cursor)
         };
         drop(scene);
         let cursor = explicit

@@ -140,3 +140,43 @@ fn a_press_keeps_the_hover_cursor_dragged_off_let_go_and_through_re_renders() {
     assert_eq!(step(&mut ui, up, outside), None);
     view.unmount();
 }
+
+#[test]
+fn a_press_shows_the_cursor_of_what_hovering_resolved_not_the_capturing_ancestor() {
+    // A row states the hand; the label filling it states the arrow. Hovering
+    // shows the label's arrow, so pressing the row must too.
+    let mut ui = Ui::new(200., 100.);
+    let view = ui.mount(
+        column().size(200., 100.).child(
+            button()
+                .id("row")
+                .size(100., 40.)
+                .cursor(Cursor::Pointer)
+                .on_click(|| {})
+                .child(div().size(100., 40.).cursor(Cursor::Default)),
+        ),
+    );
+    ui.prepare_frame();
+    ui.scene.borrow_mut().flush();
+    let (x, y) = (50., 20.);
+    ui.dispatch(InputEvent::PointerMove { x, y });
+    let hover = ui.input.cursor_at(&ui.scene.borrow(), x, y);
+    assert_eq!(hover, Some(Cursor::Default));
+    ui.dispatch(InputEvent::PointerDown {
+        x,
+        y,
+        button: PointerButton::Primary,
+    });
+    assert_eq!(ui.input.captured(), view.find("row"), "the row captures");
+    assert_eq!(
+        ui.input.cursor_at(&ui.scene.borrow(), x, y),
+        hover,
+        "pressed"
+    );
+    assert_eq!(
+        ui.input.cursor_at(&ui.scene.borrow(), 190., 90.),
+        hover,
+        "dragged off it"
+    );
+    view.unmount();
+}
