@@ -39,7 +39,7 @@ use objc2_app_kit::{
     NSPasteboardTypeString, NSPasteboardTypeTIFF, NSPasteboardTypeURL, NSView,
     NSWindowOrderingMode,
 };
-use objc2_core_foundation::{CFRetained, CGFloat, CGPoint, CGRect, CGSize};
+use objc2_core_foundation::{CFRetained, CGAffineTransform, CGFloat, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{CGColor, CGMutablePath};
 use objc2_foundation::{NSArray, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSUInteger};
 use objc2_quartz_core::{CALayer, CAShapeLayer, CATransaction};
@@ -704,6 +704,33 @@ fn cg(rect: Rect) -> CGRect {
             rect.height.max(0.) as CGFloat,
         ),
     )
+}
+/// Places `content` at `placement`: at its laid-out size, drawn scaled about its
+/// centre when an ancestor scales it, so the page inside keeps its size (a
+/// scale-in doesn't re-lay out a web page every frame).
+fn draw_scaled(content: &NSView, placement: &NativePlacement) {
+    let frame = placement.frame;
+    let (w, h) = placement.size;
+    let (sx, sy) = if w > 0. && h > 0. { (frame.width / w, frame.height / h) } else { (1., 1.) };
+    let scaled = (sx - 1.).abs() > 1e-3 || (sy - 1.).abs() > 1e-3;
+    let rect = if scaled {
+        let (cx, cy) = (frame.x + frame.width / 2., frame.y + frame.height / 2.);
+        Rect { x: cx - w / 2., y: cy - h / 2., width: w, height: h }
+    } else {
+        frame
+    };
+    // Origin and size together, in the cut's (flipped) space.
+    content.setFrame(ns(rect));
+    let Some(layer) = content.layer() else { return };
+    let transform = if scaled {
+        // The layer scales about its anchor point; the shift keeps its centre still.
+        let a = layer.anchorPoint();
+        let (sx, sy, w, h) = (sx as CGFloat, sy as CGFloat, w as CGFloat, h as CGFloat);
+        CGAffineTransform { a: sx, b: 0., c: 0., d: sy, tx: (1. - sx) * (0.5 - a.x) * w, ty: (1. - sy) * (0.5 - a.y) * h }
+    } else {
+        CGAffineTransform { a: 1., b: 0., c: 0., d: 1., tx: 0., ty: 0. }
+    };
+    layer.setAffineTransform(transform);
 }
 fn ns(rect: Rect) -> NSRect {
     NSRect::new(
@@ -1460,8 +1487,7 @@ impl Surfaces {
         }
         if clip.placed.as_ref() != Some(&placement) {
             if let Some(content) = &clip.content {
-                // Origin and size together, in the cut's (flipped) space.
-                content.setFrame(ns(placement.frame));
+                draw_scaled(content, &placement);
             }
             clip.outer().setAlphaValue(placement.opacity as f64);
         }
