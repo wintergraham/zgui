@@ -46,7 +46,9 @@ fn sigma(b:Blur, p:vec2<f32>)->f32{
 // area pixel read once; bilinear samples between pixels average four at a
 // time. At factor 1, a copy.
 @fragment fn fs_reduce(v:Vertex)->@location(0) vec4<f32>{
- let s=slots[v.index];let b=blurs[s.owner.x];let f=i32(s.region.z);
+ // Factors are 1 to 8 (`plan_blur`): held there, so no record can make a
+ // loop run long enough to hang the GPU.
+ let s=slots[v.index];let b=blurs[s.owner.x];let f=clamp(i32(s.region.z),1,8);
  let start=vec2<i32>(s.region.xy)+(vec2<i32>(v.p.xy)-vec2<i32>(s.atlas.xy))*f;
  let end=min(start+vec2(f),vec2<i32>(b.area.zw));
  var sum=vec4(0.);
@@ -70,7 +72,8 @@ fn mirror(x:i32, n:i32)->i32{
 fn along(v:Vertex, step:vec2<i32>)->vec4<f32>{
  let s=slots[v.index];let o=vec2<i32>(s.atlas.xy);let n=vec2<i32>(s.atlas.zw);
  let l=vec2<i32>(v.p.xy)-o;let st=s.region.w;
- let r=i32(ceil(3.*st));let q=exp(-.5/(st*st));
+ // Sigma is at most 8 texels (24 taps a side): held at 32.
+ let r=clamp(i32(ceil(3.*st)),0,32);let q=exp(-.5/(st*st));
  let at=dot(l,step);let extent=dot(n,step);
  let size=vec2<f32>(textureDimensions(source));let axis=vec2<f32>(step);
  var ratio=q;var w=1.;var sum=textureLoad(source,o+l,0);var total=1.;

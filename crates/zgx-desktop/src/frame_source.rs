@@ -662,9 +662,13 @@ mod compositor_clock {
         subscribers: Vec<Arc<Subscriber>>,
         next_id: u64,
         started: bool,
+        /// Moves whenever a subscriber starts or its cap changes: a sleep
+        /// through capped refreshes (`until_due`) ends early on it.
+        changes: u64,
     }
     static CLOCK: Mutex<Option<Clock>> = Mutex::new(None);
-    /// Wakes the parked thread when a subscriber starts.
+    /// Wakes the parked thread when a subscriber starts, or what the
+    /// subscribers want changes while it sleeps through capped refreshes.
     static WAKE: Condvar = Condvar::new();
     fn clock() -> MutexGuard<'static, Option<Clock>> {
         CLOCK.lock().unwrap_or_else(PoisonError::into_inner)
@@ -675,6 +679,66 @@ mod compositor_clock {
                 .iter()
                 .any(|s| s.active.load(Ordering::Acquire))
         })
+    }
+    fn changes(clock: &Option<Clock>) -> u64 {
+        clock.as_ref().map_or(0, |c| c.changes)
+    }
+    /// What the subscribers want changed: the thread looks again, parked
+    /// or sleeping. Under the lock, so it cannot miss it between checking
+    /// and waiting.
+    fn replan() {
+        let mut guard = clock();
+        if let Some(clock) = guard.as_mut() {
+            clock.changes += 1;
+        }
+        WAKE.notify_all();
+    }
+    /// How far ahead of the refresh a subscriber next takes a sleep through
+    /// the ones before it ends: the condition variable's timeout can come
+    /// late by the system's timer tick (15.6 ms at its coarsest), and a
+    /// wake past that refresh would drop the frame. The refreshes left
+    /// over are waited out one by one, as before.
+    const DUE_MARGIN: Duration = Duration::from_millis(16);
+    /// The first refresh index at or after `from` a subscriber paced to
+    /// every `every`th refresh takes (`zgx::frame::divisor`).
+    fn next_due(from: u64, every: u64) -> u64 {
+        let every = every.max(1);
+        from.div_ceil(every) * every
+    }
+    /// How long the thread may sleep before it next waits for a tick:
+    /// while every active subscriber is capped (a 12 fps dither, the few
+    /// times a second an unseen loop looks again), up to a refresh and
+    /// `DUE_MARGIN` before the first refresh one of them takes, rather than
+    /// waking at every refresh none of them takes. None when one takes
+    /// every refresh, or the next due is too near to sleep towards.
+    fn until_due(clock: &Option<Clock>) -> Option<Duration> {
+        let clock = clock.as_ref()?;
+        let (vblank, period) = timing()?;
+        let (now, frequency) = qpc();
+        let nanos = |ticks: i64| (ticks as u128 * 1_000_000_000 / frequency as u128) as u64;
+        // As `run` reckons it, so both pick the same divisor.
+        let rate = 1. / Duration::from_nanos(nanos(period)).as_secs_f64();
+        let phase = vblank.rem_euclid(period);
+        // The tick the thread waits for next; tick `t` delivers refresh
+        // `t + 1` (`run`).
+        let next_tick = (now - phase).div_euclid(period) + 1;
+        let mut due: Option<i64> = None;
+        for subscriber in clock
+            .subscribers
+            .iter()
+            .filter(|s| s.active.load(Ordering::Acquire))
+        {
+            let max_rate = subscriber.max_rate.load(Ordering::Relaxed);
+            if max_rate == 0 {
+                return None;
+            }
+            let every = zgx::frame::divisor(rate, max_rate as f64 / 1000.);
+            let tick = next_due((next_tick + 1).max(0) as u64, every) as i64 - 1;
+            due = Some(due.map_or(tick, |due| due.min(tick)));
+        }
+        let margin = (DUE_MARGIN.as_nanos() * frequency as u128 / 1_000_000_000) as i64;
+        let wake = phase + due? * period - period - margin;
+        (wake > now).then(|| Duration::from_nanos(nanos(wake - now)))
     }
 
     type WaitForCompositorClock = unsafe extern "system" fn(u32, *const HANDLE, u32) -> u32;
@@ -766,6 +830,15 @@ mod compositor_clock {
                 while !wants_frames(&guard) {
                     guard = WAKE.wait(guard).unwrap_or_else(PoisonError::into_inner);
                 }
+                // Every subscriber capped: sleep through the refreshes none
+                // of them takes. A subscriber starting, or a cap changing,
+                // ends it at once.
+                if let Some(wait) = until_due(&guard) {
+                    let seen = changes(&guard);
+                    let _ = WAKE
+                        .wait_timeout_while(guard, wait, |clock| changes(clock) == seen)
+                        .unwrap_or_else(PoisonError::into_inner);
+                }
             }
             wait_for_tick(&timer);
             let Some((vblank, period)) = timing() else {
@@ -783,6 +856,25 @@ mod compositor_clock {
             let ticked = ((now - phase) as f64 / period as f64).round() as i64;
             let index = (ticked + 1) as u64;
             let nanos = |ticks: i64| (ticks as u128 * 1_000_000_000 / frequency as u128) as u64;
+            let interval = Duration::from_nanos(nanos(period));
+            let rate = 1. / interval.as_secs_f64();
+            // The subscribers that take this refresh; with none, the thread
+            // goes straight back to waiting, without the half-refresh sleep.
+            subscribers.clear();
+            if let Some(clock) = clock().as_ref() {
+                subscribers.extend(clock.subscribers.iter().cloned());
+            }
+            subscribers.retain(|subscriber| {
+                if !subscriber.active.load(Ordering::Acquire) {
+                    return false;
+                }
+                let max_rate = subscriber.max_rate.load(Ordering::Relaxed);
+                max_rate == 0
+                    || index.is_multiple_of(zgx::frame::divisor(rate, max_rate as f64 / 1000.))
+            });
+            if subscribers.is_empty() {
+                continue;
+            }
             // Delivered half a refresh on: a frame presented just after the
             // tick meets the compositor taking the last one, and by a hair
             // either way two presents share a refresh (the newest replaces
@@ -795,27 +887,15 @@ mod compositor_clock {
             }
             let now = qpc().0;
             let ahead = (phase + (ticked + 1) * period - now).max(0);
-            let interval = Duration::from_nanos(nanos(period));
             let frame = Frame {
                 index,
                 time: Instant::now() + Duration::from_nanos(nanos(ahead)),
                 interval,
             };
-            let rate = 1. / interval.as_secs_f64();
-            subscribers.clear();
-            if let Some(clock) = clock().as_ref() {
-                subscribers.extend(clock.subscribers.iter().cloned());
-            }
             for subscriber in subscribers.drain(..) {
+                // Stopped during the half-refresh sleep.
                 if !subscriber.active.load(Ordering::Acquire) {
                     continue;
-                }
-                let max_rate = subscriber.max_rate.load(Ordering::Relaxed);
-                if max_rate > 0 {
-                    let divisor = zgx::frame::divisor(rate, max_rate as f64 / 1000.);
-                    if !index.is_multiple_of(divisor) {
-                        continue;
-                    }
                 }
                 if !subscriber.pending.swap(true, Ordering::AcqRel) {
                     (subscriber.deliver)(frame);
@@ -862,10 +942,8 @@ mod compositor_clock {
             if self.subscriber.active.swap(running, Ordering::AcqRel) != running {
                 self.subscriber.pending.store(false, Ordering::Release);
                 if running {
-                    // Under the lock, so the thread cannot miss it between
-                    // checking and parking.
-                    let _guard = clock();
-                    WAKE.notify_all();
+                    // Parked, or asleep until a capped subscriber's refresh.
+                    replan();
                 }
             }
         }
@@ -879,7 +957,13 @@ mod compositor_clock {
             let rate = hz
                 .filter(|hz| hz.is_finite() && *hz > 0.)
                 .map_or(0, |hz| (hz * 1000.) as u64);
-            self.subscriber.max_rate.store(rate, Ordering::Relaxed);
+            // A faster rate (input taking every refresh) must not wait out
+            // a sleep planned for the slower one.
+            if self.subscriber.max_rate.swap(rate, Ordering::Relaxed) != rate
+                && self.subscriber.active.load(Ordering::Acquire)
+            {
+                replan();
+            }
         }
     }
     impl Drop for DisplayLink {
@@ -894,6 +978,17 @@ mod compositor_clock {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        /// A capped subscriber's next refresh is the first multiple of its
+        /// divisor from where the clock is, that refresh itself included.
+        #[test]
+        fn a_capped_subscriber_is_due_on_its_next_multiple() {
+            assert_eq!(next_due(101, 5), 105);
+            assert_eq!(next_due(105, 5), 105);
+            assert_eq!(next_due(106, 5), 110);
+            assert_eq!(next_due(7, 1), 7);
+            assert_eq!(next_due(7, 0), 7, "no divisor takes every refresh");
+        }
 
         /// The clock's sleeps last what they are given, each on the one
         /// high-resolution timer, re-armed.
