@@ -56,12 +56,13 @@ use windows::{
             WindowsAndMessaging::{
                 CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, GA_ROOT,
                 GW_HWNDNEXT, GWL_EXSTYLE, GWLP_HWNDPARENT, GWLP_USERDATA, GetAncestor,
-                GetClientRect, GetCursorPos, GetWindow, GetWindowLongPtrW, GetWindowRect, HTCLIENT,
+                GetClientRect, GetCursorPos, GetWindow, GetWindowDisplayAffinity,
+                GetWindowLongPtrW, GetWindowRect, HTCLIENT,
                 HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDC_ARROW, IsWindowVisible, KillTimer,
                 LoadCursorW, MA_NOACTIVATE, RegisterClassExW, SPI_SETWORKAREA, SW_HIDE,
                 SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
-                SWP_NOZORDER, SWP_SHOWWINDOW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPos,
-                ShowWindow, WINDOWPOS, WM_ACTIVATEAPP, WM_DISPLAYCHANGE, WM_LBUTTONDBLCLK,
+                SWP_NOZORDER, SWP_SHOWWINDOW, SetCursor, SetTimer, SetWindowDisplayAffinity,
+                SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOW_DISPLAY_AFFINITY, WINDOWPOS, WM_ACTIVATEAPP, WM_DISPLAYCHANGE, WM_LBUTTONDBLCLK,
                 WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MBUTTONUP,
                 WM_MOUSEACTIVATE, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY,
                 WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCMBUTTONDOWN, WM_NCRBUTTONDOWN,
@@ -496,6 +497,16 @@ impl Panel {
         // SAFETY: our window; its owner is a live window of this thread.
         unsafe {
             SetWindowLongPtrW(self.hwnd, GWLP_HWNDPARENT, parent.0 as isize);
+            // Display affinity covers a window's children, not the windows it
+            // owns: a popup over a window left out of screenshots and screen
+            // sharing is left out too, from its first frame on screen.
+            let (mut wanted, mut current) = (0, 0);
+            if GetWindowDisplayAffinity(parent, &mut wanted).is_ok()
+                && GetWindowDisplayAffinity(self.hwnd, &mut current).is_ok()
+                && wanted != current
+            {
+                let _ = SetWindowDisplayAffinity(self.hwnd, WINDOW_DISPLAY_AFFINITY(wanted));
+            }
             let _ = EnableWindow(self.hwnd, !preview);
             let _ = SetWindowPos(
                 self.hwnd,
