@@ -1420,3 +1420,67 @@ fn a_selection_drags_into_a_field_and_a_press_on_it_let_go_clicks() {
     release(&mut ui, 50., 10.);
     assert_eq!(ui.selected_text(), "", "a click collapses it");
 }
+
+#[test]
+fn a_press_on_a_control_ends_with_its_release_wherever_the_control_went() {
+    // A control in the text (an expand toggle) taken away during its press,
+    // its release landing outside the region; or one that removes itself on
+    // click. Neither leaves the press behind for a hover to select with.
+    for removed_during_press in [true, false] {
+        let mut ui = Ui::new(400., 300.);
+        let shown = ui.signal(true);
+        let visible = shown.clone();
+        let hide = shown.clone();
+        let view = ui.mount(
+            column()
+                .w(400.)
+                .text_size(10.)
+                .line_height(20.)
+                .child(
+                    column()
+                        .w(300.)
+                        .selectable(true)
+                        .child(text("First line"))
+                        .child(switch(
+                            move || visible.get(),
+                            move |shown, _| {
+                                let hide = hide.clone();
+                                if shown {
+                                    button()
+                                        .child(text("Expand"))
+                                        .on_click(move || {
+                                            hide.set(false);
+                                        })
+                                        .into()
+                                } else {
+                                    column().child(text("Details")).into()
+                                }
+                            },
+                        ))
+                        .child(text("Last line")),
+                )
+                .child(text("Outside").id("outside")),
+        );
+        ui.prepare_frame();
+        let label = ui.scene.borrow().bounds(texts(&ui)[1]);
+        let (x, y) = (label.x + 1., label.y + label.height / 2.);
+        let outside = ui.scene.borrow().bounds(view.find("outside").unwrap());
+        press(&mut ui, x, y, false);
+        if removed_during_press {
+            shown.set(false);
+            ui.prepare_frame();
+            release(&mut ui, outside.x + 2., outside.y + 5.);
+        } else {
+            release(&mut ui, x, y);
+            ui.prepare_frame();
+        }
+        move_to(&mut ui, 250., 5.);
+        move_to(&mut ui, 250., 60.);
+        ui.prepare_frame();
+        assert!(
+            !ui.has_text_selection(),
+            "removed during press: {removed_during_press}: {:?}",
+            ui.selected_text()
+        );
+    }
+}

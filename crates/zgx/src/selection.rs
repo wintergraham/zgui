@@ -2009,6 +2009,23 @@ impl Ui {
                     result.default_prevented = true;
                 }
             }
+            // A press ends with its release, wherever that lands. The region
+            // hears it through its capture, but a control in the text that
+            // held the press (`pending`) can be moved or removed under it (an
+            // expand, a panel resizing), so the release goes to whatever is
+            // there instead, outside the region: what the press began must
+            // not live on, or the next move with no button down would select
+            // from where it was to wherever the pointer goes.
+            SelectionEvent::Release => {
+                let mut state = self.selection_state().borrow_mut();
+                state.pending = None;
+                state.text_press = None;
+                state.take_from = None;
+                if state.gesture.take().is_some() {
+                    state.layouts.clear();
+                    state.scroll = None;
+                }
+            }
             SelectionEvent::Press => {
                 {
                     let mut state = self.selection_state().borrow_mut();
@@ -2148,6 +2165,8 @@ pub(crate) enum SelectionEvent {
     None,
     SelectAll,
     Press,
+    /// The primary button let go, or the window gave up the pointer.
+    Release,
     /// Shift with an arrow, Home or End: move the focus.
     Extend(Step),
 }
@@ -2183,6 +2202,11 @@ impl SelectionEvent {
                 button: PointerButton::Primary,
                 ..
             } if !context_click(modifiers) => Self::Press,
+            InputEvent::PointerUp {
+                button: PointerButton::Primary,
+                ..
+            }
+            | InputEvent::Blur => Self::Release,
             InputEvent::KeyDown { key, modifiers, .. } if modifiers.shift => {
                 let mac = cfg!(target_os = "macos");
                 let step = match key {
