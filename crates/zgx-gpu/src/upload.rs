@@ -524,6 +524,7 @@ pub(crate) fn shared_texture(
     device: &wgpu::Device,
     width: u32,
     height: u32,
+    mip_levels: u32,
     label: &str,
 ) -> wgpu::Texture {
     use objc2_metal::{
@@ -539,7 +540,7 @@ pub(crate) fn shared_texture(
             MTLPixelFormat::BGRA8Unorm,
             width as usize,
             height as usize,
-            false,
+            mip_levels > 1,
         )
     };
     descriptor.setUsage(MTLTextureUsage::ShaderRead);
@@ -550,16 +551,16 @@ pub(crate) fn shared_texture(
         .expect("a shared texture");
     drop(hal);
     // SAFETY: Metal made this texture on this device, in `FORMAT`, this size,
-    // one mip level and layer, readable by shaders as the descriptor says;
-    // wgpu takes ownership of it. It takes it as initialized too: texels not
-    // yet written are only ever read as pixels.
+    // `mip_levels` levels and one layer, readable by shaders as the descriptor
+    // says; wgpu takes ownership of it. It takes it as initialized too: texels
+    // not yet written are only ever read as pixels.
     unsafe {
         let raw = wgpu::hal::metal::Device::texture_from_raw(
             metal,
             crate::FORMAT,
             MTLTextureType::Type2D,
             1,
-            1,
+            mip_levels,
             wgpu::hal::CopyExtent {
                 width,
                 height,
@@ -575,7 +576,7 @@ pub(crate) fn shared_texture(
                     height,
                     depth_or_array_layers: 1,
                 },
-                mip_level_count: 1,
+                mip_level_count: mip_levels,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: crate::FORMAT,
@@ -587,22 +588,23 @@ pub(crate) fn shared_texture(
 }
 
 /// Write premultiplied RGBA texels (reordered in place to the texture's
-/// BGRA) to `(x, y, width, height)` of a `shared_texture`. No submission may
-/// still read that region: the caller writes only cells no submitted frame
-/// samples.
+/// BGRA) to `(x, y, width, height)` of mip `level` of a `shared_texture`. No
+/// submission may still read that region: the caller writes only cells no
+/// submitted frame samples.
 #[cfg(target_os = "macos")]
 pub(crate) fn write_texels(
     texture: &wgpu::Texture,
     (x, y, width, height): (u32, u32, u32, u32),
+    level: u32,
     rgba: &mut [u8],
 ) {
     use objc2_metal::{MTLOrigin, MTLRegion, MTLSize, MTLTexture};
     // Metal copies on the CPU, unchecked: these keep it in both buffers.
     assert_eq!(rgba.len() as u64, u64::from(width) * u64::from(height) * 4);
     assert!(
-        u64::from(x) + u64::from(width) <= u64::from(texture.width())
-            && u64::from(y) + u64::from(height) <= u64::from(texture.height()),
-        "texels within the texture"
+        u64::from(x) + u64::from(width) <= u64::from((texture.width() >> level).max(1))
+            && u64::from(y) + u64::from(height) <= u64::from((texture.height() >> level).max(1)),
+        "texels within the mip level"
     );
     for pixel in rgba.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
@@ -629,7 +631,7 @@ pub(crate) fn write_texels(
         hal.raw_handle()
             .replaceRegion_mipmapLevel_withBytes_bytesPerRow(
                 region,
-                0,
+                level as usize,
                 std::ptr::NonNull::from(&mut *rgba).cast(),
                 (width * 4) as usize,
             )
