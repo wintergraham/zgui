@@ -3398,6 +3398,22 @@ impl Host {
         self.force = true;
     }
     fn window_event(&mut self, event: WindowEvent) -> Result<(), Box<dyn Error>> {
+        // Windows never reports `Occluded`: a minimized window is resized to
+        // nothing (and back to its size as it is restored), which stands in
+        // for it, so a minimized window presents and animates nothing (its
+        // frame source parks) instead of ticking every refresh unseen.
+        #[cfg(windows)]
+        if let WindowEvent::Resized(size) = &event {
+            let minimized = (size.width == 0 && size.height == 0)
+                || self
+                    .window
+                    .as_ref()
+                    .and_then(|window| window.is_minimized())
+                    .unwrap_or(false);
+            if minimized != self.native_occluded {
+                self.window_event(WindowEvent::Occluded(minimized))?;
+            }
+        }
         // The GPU wakes while the frame the input makes is built, or while a
         // scroll waits for the refresh it starts on.
         if acts(&event)

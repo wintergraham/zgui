@@ -5,19 +5,23 @@ use super::Placed;
 use windows::{
     Win32::{
         Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-        Graphics::Gdi::{ClientToScreen, MONITOR_DEFAULTTONULL, MonitorFromRect},
+        Graphics::Gdi::{
+            ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL,
+            MONITORINFO, MonitorFromRect,
+        },
         System::Registry::{
             HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SAM_FLAGS,
             REG_SZ, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW, RegGetValueW, RegSetValueExW,
         },
         UI::{
-            HiDpi::GetDpiForWindow,
+            HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI},
             Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
             WindowsAndMessaging::{
-                GetCursorPos, GetWindowPlacement, GetWindowRect, SW_HIDE, SW_SHOWMAXIMIZED,
-                SW_SHOWMINIMIZED, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPlacement,
-                SetWindowPos, WINDOWPLACEMENT, WM_DESTROY, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE,
-                WM_NCDESTROY, WM_WINDOWPOSCHANGED, WPF_RESTORETOMAXIMIZED,
+                GWL_STYLE, GetCursorPos, GetWindowLongW, GetWindowPlacement, GetWindowRect,
+                SW_HIDE, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_NOACTIVATE, SWP_NOSIZE,
+                SWP_NOZORDER, SetWindowPlacement, SetWindowPos, WINDOWPLACEMENT, WM_DESTROY,
+                WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_NCDESTROY, WM_WINDOWPOSCHANGED,
+                WPF_RESTORETOMAXIMIZED, WS_CAPTION,
             },
         },
     },
@@ -30,23 +34,32 @@ const SUBCLASS_ID: usize = 0x7a67_7066; // "zgpf"
 const TITLE: i32 = 32;
 
 /// A saved frame: the window's restored frame (workspace coordinates, as
-/// `WINDOWPLACEMENT` keeps them) and whether it was maximized.
+/// `WINDOWPLACEMENT` keeps them: the screen's pixels), whether it was
+/// maximized, and the DPI it was saved at (0 for a frame saved before it
+/// was kept).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Frame {
     rect: (i32, i32, i32, i32),
     maximized: bool,
+    dpi: u32,
 }
 impl Frame {
     fn encode(self) -> String {
         let (left, top, right, bottom) = self.rect;
-        format!("{left} {top} {right} {bottom} {}", u8::from(self.maximized))
+        let maximized = u8::from(self.maximized);
+        format!("{left} {top} {right} {bottom} {maximized} {}", self.dpi)
     }
     fn decode(text: &str) -> Option<Self> {
         let mut numbers = text.split_whitespace().map(str::parse::<i32>);
         let mut next = || numbers.next()?.ok();
         let rect = (next()?, next()?, next()?, next()?);
         let maximized = next()? != 0;
-        (rect.2 > rect.0 && rect.3 > rect.1).then_some(Self { rect, maximized })
+        let dpi = next().and_then(|dpi| u32::try_from(dpi).ok()).unwrap_or(0);
+        (rect.2 > rect.0 && rect.3 > rect.1).then_some(Self {
+            rect,
+            maximized,
+            dpi,
+        })
     }
     /// Its title bar, which a monitor must still show.
     fn title(self) -> RECT {
@@ -138,8 +151,17 @@ fn store(name: &str, frame: Frame) {
         let _ = RegCloseKey(key);
     }
 }
-/// The window's frame as it is now.
+/// The window's frame as it is now: its restored frame, minimized or
+/// maximized; none while it is fullscreen, whose frame is the monitor's (the
+/// frame saved before stands).
 fn frame(hwnd: HWND) -> Option<Frame> {
+    // Fullscreen (borderless or exclusive), winit takes the overlapped
+    // window's styles away, which its windows otherwise always have,
+    // decorated or not; minimized from fullscreen, it keeps them off.
+    // SAFETY: reads our own window's style.
+    if unsafe { GetWindowLongW(hwnd, GWL_STYLE) } as u32 & WS_CAPTION.0 == 0 {
+        return None;
+    }
     let mut placement = WINDOWPLACEMENT {
         length: size_of::<WINDOWPLACEMENT>() as u32,
         ..Default::default()
@@ -153,16 +175,70 @@ fn frame(hwnd: HWND) -> Option<Frame> {
     Some(Frame {
         rect: (rect.left, rect.top, rect.right, rect.bottom),
         maximized,
+        // SAFETY: our own window's DPI.
+        dpi: unsafe { GetDpiForWindow(hwnd) },
     })
 }
-/// Put the hidden window back at `frame`, if a monitor still shows its
-/// title bar: whether it did.
-fn restore(hwnd: HWND, frame: Frame) -> bool {
-    // SAFETY: asks which monitor shows a rectangle.
-    if unsafe { MonitorFromRect(&frame.title(), MONITOR_DEFAULTTONULL) }.is_invalid() {
-        return false;
-    }
+/// Where `frame` reopens, given the work area (`area`, workspace
+/// coordinates as the frame's) and DPI of the monitor showing the most of
+/// it or nearest it, and whether a monitor still shows its title bar
+/// (`shown`): as it was saved, where it is shown and fits; shown but bigger
+/// than the work area (a monitor's resolution lowered), shrunk to fit and
+/// kept inside; shown nowhere (its monitor disconnected, or moved), as big
+/// as it looked where it was saved, at this monitor's DPI, and fully inside
+/// the work area.
+fn fit(frame: Frame, area: RECT, dpi: u32, shown: bool) -> (i32, i32, i32, i32) {
     let (left, top, right, bottom) = frame.rect;
+    let (mut width, mut height) = (right - left, bottom - top);
+    let (room_width, room_height) = (area.right - area.left, area.bottom - area.top);
+    if shown && width <= room_width && height <= room_height {
+        return frame.rect;
+    }
+    if !shown && frame.dpi > 0 && dpi > 0 && frame.dpi != dpi {
+        let scale = |pixels: i32| (i64::from(pixels) * i64::from(dpi) / i64::from(frame.dpi)) as i32;
+        (width, height) = (scale(width), scale(height));
+    }
+    let (width, height) = (width.min(room_width).max(0), height.min(room_height).max(0));
+    let left = left.clamp(area.left, (area.right - width).max(area.left));
+    let top = top.clamp(area.top, (area.bottom - height).max(area.top));
+    (left, top, left + width, top + height)
+}
+/// Put the hidden window back at `frame`, fitted to a monitor (`fit`):
+/// whether it went.
+fn restore(hwnd: HWND, frame: Frame) -> bool {
+    let (left, top, right, bottom) = frame.rect;
+    let saved = RECT {
+        left,
+        top,
+        right,
+        bottom,
+    };
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    let (mut dpi, mut dpi_y) = (0, 0);
+    // SAFETY: asks which monitors show rectangles, and reads one's geometry
+    // and DPI into locals.
+    let shown = unsafe {
+        let shown = !MonitorFromRect(&frame.title(), MONITOR_DEFAULTTONULL).is_invalid();
+        let monitor = MonitorFromRect(&saved, MONITOR_DEFAULTTONEAREST);
+        if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+            return false;
+        }
+        let _ = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi, &mut dpi_y);
+        shown
+    };
+    // The work area in workspace coordinates: those run from the work
+    // area's top-left, put at the monitor's.
+    let (work, screen) = (info.rcWork, info.rcMonitor);
+    let area = RECT {
+        left: screen.left,
+        top: screen.top,
+        right: screen.left + (work.right - work.left),
+        bottom: screen.top + (work.bottom - work.top),
+    };
+    let (left, top, right, bottom) = fit(frame, area, dpi, shown);
     let placement = WINDOWPLACEMENT {
         length: size_of::<WINDOWPLACEMENT>() as u32,
         // Still hidden: it shows (maximized, if it was) as it would.
@@ -175,8 +251,14 @@ fn restore(hwnd: HWND, frame: Frame) -> bool {
         },
         ..Default::default()
     };
+    // Moved onto a monitor of another DPI than the one it was made on, the
+    // window hears `WM_DPICHANGED`, and winit resizes it to keep its
+    // logical size: placed again, now on that monitor, it keeps the frame's.
     // SAFETY: places our own (hidden) window.
-    unsafe { SetWindowPlacement(hwnd, &placement) }.is_ok()
+    unsafe {
+        SetWindowPlacement(hwnd, &placement).is_ok()
+            && SetWindowPlacement(hwnd, &placement).is_ok()
+    }
 }
 
 /// The autosave subclass's state: the name, and whether a move or resize
@@ -354,10 +436,53 @@ mod tests {
         let frame = Frame {
             rect: (-1200, 40, -300, 640),
             maximized: true,
+            dpi: 144,
         };
         assert_eq!(Frame::decode(&frame.encode()), Some(frame));
+        assert_eq!(
+            Frame::decode("-1200 40 -300 640 1"),
+            Some(Frame { dpi: 0, ..frame }),
+            "a frame saved before its DPI was"
+        );
         assert_eq!(Frame::decode("10 20 5 30 0"), None, "an empty frame");
         assert_eq!(Frame::decode("10 20"), None);
         assert_eq!(Frame::decode("garbage"), None);
+    }
+
+    #[test]
+    fn a_saved_frame_fits_the_monitor_it_reopens_on() {
+        // A 1080p monitor at 100% with a 48-pixel taskbar, right of a 4K
+        // one at 150% the frame was saved on.
+        let area = RECT {
+            left: 3840,
+            top: 0,
+            right: 5760,
+            bottom: 1032,
+        };
+        let frame = Frame {
+            rect: (400, 200, 2380, 1520),
+            maximized: false,
+            dpi: 144,
+        };
+        let big = RECT {
+            left: 0,
+            top: 0,
+            right: 3840,
+            bottom: 2088,
+        };
+        assert_eq!(fit(frame, big, 144, true), frame.rect, "shown and fits: as saved");
+        // Its monitor gone: as big as it looked (1980 × 1320 at 150% is
+        // 1320 × 880 at 100%), fully inside the work area.
+        assert_eq!(fit(frame, area, 96, false), (3840, 152, 5160, 1032));
+        // Shown, on a monitor now too small for it: shrunk, kept inside.
+        let small = Frame {
+            rect: (3900, 100, 6000, 1300),
+            dpi: 96,
+            ..frame
+        };
+        assert_eq!(fit(small, area, 96, true), (3840, 0, 5760, 1032));
+        // Saved before its DPI was: its pixels, moved inside.
+        let old = Frame { dpi: 0, ..frame };
+        assert_eq!(fit(old, area, 96, false), (3840, 0, 5760, 1032));
     }
 }
