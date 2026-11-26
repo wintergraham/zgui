@@ -2287,6 +2287,56 @@ struct GpuContextInner {
     vertex_ring: bool,
     /// For dual-output (single-pass presentation) pipelines.
     quad_layout: wgpu::PipelineLayout,
+    /// Shader fills' pipelines by their source, compiled ahead by
+    /// `compile_made_fills` or in the frame that first needs one.
+    fills: Arc<FillCache>,
+}
+/// Shader fill pipelines on one device, by source (`None`: it doesn't
+/// compile). A pipeline is the same for every window and every shader made
+/// from the same source: the scripts loaded again make the same fills.
+#[derive(Default)]
+struct FillCache(std::sync::Mutex<FxHashMap<Arc<str>, Option<wgpu::RenderPipeline>>>);
+impl FillCache {
+    fn get(&self, source: &str) -> Option<Option<wgpu::RenderPipeline>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).get(source).cloned()
+    }
+    fn insert(&self, source: Arc<str>, pipeline: Option<wgpu::RenderPipeline>) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).insert(source, pipeline);
+    }
+}
+/// A shader fill's pipeline from its source, if it compiles.
+fn compile_fill(device: &wgpu::Device, layout: &wgpu::PipelineLayout, user: &str) -> Option<wgpu::RenderPipeline> {
+    let source = fill_source(user);
+    fill_validates(&source).then(|| {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("shader fill"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        fill_pipeline(device, &module, layout, "zgx_fill")
+    })
+}
+/// Compile every shader fill the scripts make, as they make them, on a thread
+/// of its own: a fill's first frame then finds its pipeline ready instead of
+/// compiling it (70 to 450 ms on Direct3D 12) while the window waits. Ends
+/// once the context is gone.
+fn compile_made_fills(device: wgpu::Device, layout: wgpu::PipelineLayout, cache: std::sync::Weak<FillCache>) {
+    let _ = std::thread::Builder::new().name("zgx shader fills".into()).spawn(move || {
+        let mut seen = 0;
+        loop {
+            let made = zgx::decoration::made_shaders::after(seen, std::time::Duration::from_secs(5));
+            seen += made.len();
+            for source in made {
+                let Some(cache) = cache.upgrade() else { return };
+                if cache.get(&source).is_none() {
+                    let pipeline = compile_fill(&device, &layout, &source);
+                    cache.insert(source, pipeline);
+                }
+            }
+            if cache.strong_count() == 0 {
+                return;
+            }
+        }
+    });
 }
 impl GpuContext {
     /// A context on the system's GPU, found without a window.
@@ -2540,6 +2590,8 @@ impl GpuContext {
             viewport_layout: viewport_layout.clone(),
             polylines: Default::default(),
         };
+        let fills = Arc::new(FillCache::default());
+        compile_made_fills(device.clone(), quad_layout.clone(), Arc::downgrade(&fills));
         Self {
             inner: Rc::new(GpuContextInner {
                 lost,
@@ -2556,6 +2608,7 @@ impl GpuContext {
                 quad_layout,
                 mapped_uploads,
                 vertex_ring,
+                fills,
             }),
         }
     }
@@ -4172,20 +4225,13 @@ impl GpuRenderer {
         if let Some(compiled) = self.fill_pipelines.get(&shader.id()) {
             return compiled.is_some();
         }
-        let source = fill_source(shader.source());
-        let pipeline = fill_validates(&source).then(|| {
-            let module = self
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("shader fill"),
-                    source: wgpu::ShaderSource::Wgsl(source.into()),
-                });
-            fill_pipeline(
-                &self.device,
-                &module,
-                &self.context.inner.quad_layout,
-                "zgx_fill",
-            )
+        // Compiled ahead (`compile_made_fills`), or by another window or an
+        // earlier shader with the same source; else now.
+        let fills = &self.context.inner.fills;
+        let pipeline = fills.get(shader.source()).unwrap_or_else(|| {
+            let pipeline = compile_fill(&self.device, &self.context.inner.quad_layout, shader.source());
+            fills.insert(shader.source().into(), pipeline.clone());
+            pipeline
         });
         self.fill_shaders.insert(shader.id(), shader.clone());
         self.fill_pipelines.insert(shader.id(), pipeline);
