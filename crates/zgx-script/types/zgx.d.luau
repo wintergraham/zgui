@@ -1587,6 +1587,8 @@ export type NodeProps = {
 	on_key_up: (((key: string) -> ...unknown) | Action)?,
 	on_focus: (Handler | Action)?,
 	on_blur: (Handler | Action)?,
+	-- An input: an input method starts (true) or stops (false) composing in it, text its value doesn't hold yet.
+	on_composing: (((composing: boolean) -> ...unknown) | Action)?,
 	-- Return true to take the gesture from the scroll views around it.
 	on_wheel: (((e: WheelEvent) -> ...boolean?) | Action)?,
 	on_pinch: (((e: PinchEvent) -> ...boolean?) | Action)?,
@@ -1924,6 +1926,7 @@ export type Props = {
 	on_key_up: Props_on_key_up,
 	on_focus: Props_on_focus,
 	on_blur: Props_on_blur,
+	on_composing: Props_on_composing,
 	-- Return true to take the gesture from the scroll views around it.
 	on_wheel: Props_on_wheel,
 	on_pinch: Props_on_pinch,
@@ -2170,6 +2173,7 @@ export type Props_on_key = (((e: KeyEvent) -> ...boolean?) | Action)?
 export type Props_on_key_up = (((key: string) -> ...unknown) | Action)?
 export type Props_on_focus = (Handler | Action)?
 export type Props_on_blur = (Handler | Action)?
+export type Props_on_composing = (((composing: boolean) -> ...unknown) | Action)?
 export type Props_on_wheel = (((e: WheelEvent) -> ...boolean?) | Action)?
 export type Props_on_pinch = (((e: PinchEvent) -> ...boolean?) | Action)?
 export type Props_on_mount = ((element: Element) -> ...unknown)?

@@ -603,6 +603,17 @@ impl EditorHandle {
         }
         text
     }
+    /// Keep what an input method is composing in it, committed to its value
+    /// (focus leaving it does this); the host resets the input method.
+    /// Whether the text changed.
+    pub fn finish_composition(&self) -> bool {
+        if self.is_read_only() || !self.editor.borrow_mut().finish_preedit() {
+            return false;
+        }
+        self.hint.value.write(&self.editor);
+        self.refresh();
+        true
+    }
     /// Replace the selection with `text`, as the person pasting it would. A
     /// single-line editor joins its lines; a read-only one ignores it.
     pub fn paste(&self, text: &str) {
