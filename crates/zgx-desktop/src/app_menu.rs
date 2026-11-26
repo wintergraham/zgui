@@ -87,6 +87,50 @@ pub struct AppMenu {
     /// Its items, in order.
     pub entries: Vec<AppMenuEntry>,
 }
+thread_local! {
+    static LOCALIZER: std::cell::RefCell<Option<std::rc::Rc<dyn Fn(&str) -> Option<String>>>> =
+        const { std::cell::RefCell::new(None) };
+    /// Bumped by each `set_menu_localizer`: a menu bar built before it is
+    /// built again rather than updated in place.
+    static LOCALIZER_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+/// Translates the text zgx's menus show that the app didn't write: menu
+/// titles (an [`AppMenu`]'s `label` stays the English it is matched by, as
+/// "Window" and "Help" are), the platform's items (Services, Hide {app},
+/// Hide Others, Show All, Quit {app}, Minimize, Zoom, Bring All to Front),
+/// the standard edit items, Find's and the zoom items, and the window
+/// buttons' accessible labels. `localize` gets the English (with `{app}`
+/// standing for the app's name) and returns the text to show, or `None` to
+/// keep the English. Set it before the menu bar is built; a later menu bar
+/// uses the new one.
+pub fn set_menu_localizer(localize: impl Fn(&str) -> Option<String> + 'static) {
+    LOCALIZER.with_borrow_mut(|l| *l = Some(std::rc::Rc::new(localize)));
+    LOCALIZER_GENERATION.set(LOCALIZER_GENERATION.get() + 1);
+}
+/// `english` as the app's localizer has it (or as it is).
+pub(crate) fn localized(english: &str) -> String {
+    LOCALIZER
+        .with_borrow(|l| l.clone())
+        .and_then(|l| l(english))
+        .unwrap_or_else(|| english.to_owned())
+}
+/// A platform item's title with the app's name, when the app localizes it
+/// (`None` leaves muda's own English).
+#[cfg(target_os = "macos")]
+fn localized_with_app(english: &str) -> Option<String> {
+    let l = LOCALIZER.with_borrow(|l| l.clone())?;
+    let text = l(english)?;
+    // The running application's name, as muda reads it.
+    let name = objc2_app_kit::NSRunningApplication::currentApplication()
+        .localizedName()
+        .map(|n| n.to_string())
+        .unwrap_or_default();
+    Some(text.replace("{app}", &name).trim().to_owned())
+}
+#[cfg(target_os = "macos")]
+fn localized_some(english: &str) -> Option<String> {
+    LOCALIZER.with_borrow(|l| l.clone()).and_then(|l| l(english))
+}
 impl AppMenu {
     /// The label of the application menu's own items: a menu so titled is
     /// not a menu of its own on macOS, its entries lead the application
@@ -331,11 +375,11 @@ pub fn app_menu_bar(
                 let anchor = compose::button()
                     .h(30.)
                     .p(6.)
-                    .child(menu.label.clone())
+                    .child(localized(&menu.label))
                     .on_click(move || {
                         toggle.set(!toggle.get());
                     });
-                compose::menu(menu.label, open, anchor).children(entries(
+                compose::menu(localized(&menu.label), open, anchor).children(entries(
                     cx,
                     menu.entries,
                     dispatch.clone(),
@@ -386,14 +430,14 @@ fn entries(
                     .disabled(!enabled)
                     .on_click(move || dispatch(action.clone()))
             }
-            AppMenuEntry::Submenu(menu) => compose::submenu(menu.label, cx.state(false))
+            AppMenuEntry::Submenu(menu) => compose::submenu(localized(&menu.label), cx.state(false))
                 .children(self::entries(cx, menu.entries, dispatch.clone())),
             AppMenuEntry::Separator => compose::row()
                 .h(1.)
                 .bg(zgx::scene::Color(100, 100, 100, 255)),
             AppMenuEntry::Standard(item) => {
                 let dispatch = dispatch.clone();
-                compose::menu_item(item.label())
+                compose::menu_item(localized(item.label()))
                     .h(30.)
                     .p(6.)
                     .on_click(move || dispatch(item.action()))
@@ -531,8 +575,9 @@ fn binds_find_keys(menus: &[AppMenu]) -> bool {
 /// Find in page's submenu, as AppKit apps' Edit menus have it.
 #[cfg(target_os = "macos")]
 fn find_submenu() -> Result<muda::Submenu, AppMenuError> {
-    let menu = muda::Submenu::new("Find", true);
+    let menu = muda::Submenu::new(localized("Find"), true);
     for (id, label, shortcut, _) in FIND_ITEMS {
+        let label = localized(label);
         let accelerator = shortcut
             .parse::<muda::accelerator::KeyAccelerator>()
             .map_err(|e| AppMenuError(e.to_string()))?;
@@ -593,7 +638,7 @@ fn binds_zoom_keys(menus: &[AppMenu]) -> bool {
 /// standard edit items and nested submenus.
 #[cfg(target_os = "macos")]
 fn native_submenu(model: &AppMenu) -> Result<muda::Submenu, AppMenuError> {
-    let menu = muda::Submenu::new(&model.label, true);
+    let menu = muda::Submenu::new(localized(&model.label), true);
     append_entries(&menu, &model.entries)?;
     Ok(menu)
 }
@@ -637,17 +682,21 @@ fn append_entries(menu: &muda::Submenu, entries: &[AppMenuEntry]) -> Result<(), 
             }
             AppMenuEntry::Submenu(child) => menu.append(&native_submenu(child)?),
             AppMenuEntry::Separator => menu.append(&muda::PredefinedMenuItem::separator()),
-            AppMenuEntry::Standard(item) => menu.append(&match item {
-                StandardItem::Undo => muda::PredefinedMenuItem::undo(None),
-                StandardItem::Redo => muda::PredefinedMenuItem::redo(None),
-                StandardItem::Cut => muda::PredefinedMenuItem::cut(None),
-                StandardItem::Copy => muda::PredefinedMenuItem::copy(None),
-                StandardItem::Paste => muda::PredefinedMenuItem::paste(None),
-                StandardItem::SelectAll => muda::PredefinedMenuItem::select_all(None),
-                StandardItem::ToggleFullScreen => {
-                    muda::PredefinedMenuItem::fullscreen(Some(item.label()))
-                }
-            }),
+            AppMenuEntry::Standard(item) => {
+                let title = localized_some(item.label());
+                let title = title.as_deref();
+                menu.append(&match item {
+                    StandardItem::Undo => muda::PredefinedMenuItem::undo(title),
+                    StandardItem::Redo => muda::PredefinedMenuItem::redo(title),
+                    StandardItem::Cut => muda::PredefinedMenuItem::cut(title),
+                    StandardItem::Copy => muda::PredefinedMenuItem::copy(title),
+                    StandardItem::Paste => muda::PredefinedMenuItem::paste(title),
+                    StandardItem::SelectAll => muda::PredefinedMenuItem::select_all(title),
+                    StandardItem::ToggleFullScreen => {
+                        muda::PredefinedMenuItem::fullscreen(Some(title.unwrap_or(item.label())))
+                    }
+                })
+            }
         };
         result.map_err(|e| AppMenuError(e.to_string()))?;
     }
@@ -696,6 +745,8 @@ pub(crate) struct NativeMenu {
     standard: Vec<StandardItem>,
     /// The model it shows.
     model: Vec<AppMenu>,
+    /// The localizer's generation it was built with (`set_menu_localizer`).
+    generation: u64,
 }
 /// `menus` with every item untitled, enabled and unchecked: two models of one
 /// shape differ only in their items' titles and states.
@@ -736,7 +787,7 @@ impl NativeMenu {
     /// makes AppKit draw the whole bar again, a flash across it. Whether it
     /// could.
     pub(crate) fn update_states(&mut self, menus: &[AppMenu]) -> bool {
-        if shape(&self.model) != shape(menus) {
+        if shape(&self.model) != shape(menus) || self.generation != LOCALIZER_GENERATION.get() {
             return false;
         }
         type Wanted = std::collections::HashMap<String, (String, bool, Option<bool>)>;
@@ -819,13 +870,13 @@ impl NativeMenu {
                 // AppKit fills the menu it was told is the Services menu
                 // (`install`). muda's own item tells it of a copy made
                 // here, not the menu bar's, which then stays empty.
-                &muda::Submenu::new("Services", true),
+                &muda::Submenu::new(localized("Services"), true),
                 &muda::PredefinedMenuItem::separator(),
-                &muda::PredefinedMenuItem::hide(None),
-                &muda::PredefinedMenuItem::hide_others(None),
-                &muda::PredefinedMenuItem::show_all(None),
+                &muda::PredefinedMenuItem::hide(localized_with_app("Hide {app}").as_deref()),
+                &muda::PredefinedMenuItem::hide_others(localized_some("Hide Others").as_deref()),
+                &muda::PredefinedMenuItem::show_all(localized_some("Show All").as_deref()),
                 &muda::PredefinedMenuItem::separator(),
-                &muda::PredefinedMenuItem::quit(None),
+                &muda::PredefinedMenuItem::quit(localized_with_app("Quit {app}").as_deref()),
             ])
             .map_err(|e| AppMenuError(e.to_string()))?;
         menu.append(&application)
@@ -839,11 +890,11 @@ impl NativeMenu {
             let submenu = if model.label == "Window" {
                 // The app's Window menu keeps the standard items around its
                 // own: Minimize and Zoom above, Bring All to Front below.
-                let submenu = muda::Submenu::new("Window", true);
+                let submenu = muda::Submenu::new(localized("Window"), true);
                 submenu
                     .append_items(&[
-                        &muda::PredefinedMenuItem::minimize(None),
-                        &muda::PredefinedMenuItem::maximize(Some("Zoom")),
+                        &muda::PredefinedMenuItem::minimize(localized_some("Minimize").as_deref()),
+                        &muda::PredefinedMenuItem::maximize(Some(&localized("Zoom"))),
                         &muda::PredefinedMenuItem::separator(),
                     ])
                     .map_err(|e| AppMenuError(e.to_string()))?;
@@ -851,7 +902,7 @@ impl NativeMenu {
                 submenu
                     .append_items(&[
                         &muda::PredefinedMenuItem::separator(),
-                        &muda::PredefinedMenuItem::bring_all_to_front(None),
+                        &muda::PredefinedMenuItem::bring_all_to_front(localized_some("Bring All to Front").as_deref()),
                     ])
                     .map_err(|e| AppMenuError(e.to_string()))?;
                 submenu
@@ -870,6 +921,7 @@ impl NativeMenu {
                     .append(&muda::PredefinedMenuItem::separator())
                     .map_err(|e| AppMenuError(e.to_string()))?;
                 for (id, label, shortcut, _) in ZOOM_ITEMS {
+                    let label = localized(label);
                     let accelerator = shortcut
                         .parse::<muda::accelerator::KeyAccelerator>()
                         .map_err(|e| AppMenuError(e.to_string()))?;
@@ -892,13 +944,13 @@ impl NativeMenu {
         // Every Mac app has a Window menu: AppKit lists the app's windows in
         // it (with its tabs' commands, and tiling), and ⌘` cycles them.
         if window.is_none() {
-            let standard = muda::Submenu::new("Window", true);
+            let standard = muda::Submenu::new(localized("Window"), true);
             standard
                 .append_items(&[
-                    &muda::PredefinedMenuItem::minimize(None),
-                    &muda::PredefinedMenuItem::maximize(Some("Zoom")),
+                    &muda::PredefinedMenuItem::minimize(localized_some("Minimize").as_deref()),
+                    &muda::PredefinedMenuItem::maximize(Some(&localized("Zoom"))),
                     &muda::PredefinedMenuItem::separator(),
-                    &muda::PredefinedMenuItem::bring_all_to_front(None),
+                    &muda::PredefinedMenuItem::bring_all_to_front(localized_some("Bring All to Front").as_deref()),
                 ])
                 .map_err(|e| AppMenuError(e.to_string()))?;
             menu.append(&standard)
@@ -924,6 +976,7 @@ impl NativeMenu {
             help,
             standard,
             model: menus.to_vec(),
+            generation: LOCALIZER_GENERATION.get(),
         })
     }
     pub(crate) fn install(&self) {
@@ -1002,7 +1055,7 @@ fn menu_bar_services_item() -> Option<objc2::rc::Retained<objc2_app_kit::NSMenuI
         .submenu()?;
     // `NativeMenu::new`'s: the app's own items (`AppMenu::APPLICATION`) may
     // come before it.
-    application.itemWithTitle(&objc2_foundation::NSString::from_str("Services"))
+    application.itemWithTitle(&objc2_foundation::NSString::from_str(&localized("Services")))
 }
 /// Offer the key AppKit is dispatching to the menu bar, as AppKit offers
 /// every key before the window has it: whether an item took it.

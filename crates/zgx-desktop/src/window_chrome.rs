@@ -1572,11 +1572,11 @@ mod linux {
                 .token_mix(Field::Background, tok::BACKGROUND, tok::TEXT_PRIMARY, 0.1)
                 .hover(fill(0.15))
                 .active(fill(0.3))
-                .accessible_label(match kind {
+                .accessible_label(crate::app_menu::localized(match kind {
                     WindowButton::Minimize => "Minimize",
                     WindowButton::Maximize => "Maximize",
                     WindowButton::Close => "Close",
-                })
+                }))
                 .on_click(move || {
                     let Some(window) = window.upgrade() else {
                         return;
