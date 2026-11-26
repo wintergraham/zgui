@@ -1951,6 +1951,12 @@ impl Host {
         if let Some(window) = &self.window
             && target != self.ime_target
         {
+            crate::native_ime::trace(|| {
+                format!(
+                    "host target {:?} -> {target:?} active={}",
+                    self.ime_target, self.ime_active
+                )
+            });
             self.ime_restart
                 .target_changed(self.ime_target, target, self.ime_active);
             self.ime_active = false;
@@ -1977,6 +1983,9 @@ impl Host {
             &mut self.ime_restart,
             &mut self.ime_active,
         ) {
+            crate::native_ime::trace(|| {
+                "host: editor cancelled composition, native discarded".into()
+            });
             self.ime_geometry = None;
             if let Some(window) = &self.window {
                 window.set_ime_allowed(false);
@@ -3328,6 +3337,7 @@ impl Host {
         self.context.ui.cancel_interactions();
     }
     fn deactivate(&mut self) {
+        crate::native_ime::trace(|| "host window deactivated".into());
         self.context.ui.cancel_interactions();
         self.context.ui.set_window_active(false);
         // A window at the back hears no pointer moves: what it hovered
@@ -3861,6 +3871,7 @@ impl Host {
                 }
             }
             WindowEvent::Focused(false) => {
+                crate::native_ime::trace(|| "host Focused(false)".into());
                 zgx_gpu::present_log::log(|| "window-focus false".into());
                 #[cfg(target_os = "linux")]
                 if let Some(caption) = &mut self.caption {
@@ -3888,6 +3899,7 @@ impl Host {
                 }
             }
             WindowEvent::Focused(true) => {
+                crate::native_ime::trace(|| "host Focused(true)".into());
                 // The user may have changed the accent while it was at the back.
                 crate::system_colors::sync(&self.context.ui);
                 crate::scrollers::sync(&self.context.ui);
@@ -3904,6 +3916,12 @@ impl Host {
                 }
             }
             WindowEvent::Ime(event) => {
+                crate::native_ime::trace(|| {
+                    format!(
+                        "host {event:?} target={:?} active={} focused={}",
+                        self.ime_target, self.ime_active, self.native_focused
+                    )
+                });
                 if self.ime_restart.accepts(&event)
                     && let Some(composing) = crate::native_ime::dispatch(
                         &mut self.context.ui,
@@ -3913,6 +3931,9 @@ impl Host {
                     )?
                 {
                     self.ime_active = composing;
+                    crate::native_ime::trace(|| format!("host composing={composing}"));
+                } else {
+                    crate::native_ime::trace(|| "host dropped it".into());
                 }
             }
             // Winit synthesizes held-key presses/releases on X11 focus changes.
@@ -3934,6 +3955,12 @@ impl Host {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                crate::native_ime::trace(|| {
+                    format!(
+                        "host key {:?} {:?} active={}",
+                        event.logical_key, event.state, self.ime_active
+                    )
+                });
                 let key = map_key(&event.logical_key)
                     .map(|key| shortcut_key(key, event.physical_key, self.modifiers));
                 let mut prevented = false;

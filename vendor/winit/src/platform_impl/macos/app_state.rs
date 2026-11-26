@@ -262,6 +262,12 @@ impl ApplicationDelegate {
         self.ivars().control_flow.get()
     }
 
+    /// zgx patch: whether the app's handler is running now, so an event
+    /// would be queued rather than handled at once.
+    pub fn handler_in_use(&self) -> bool {
+        self.ivars().event_handler.in_use()
+    }
+
     pub fn maybe_queue_window_event(&self, window_id: WindowId, event: WindowEvent) {
         self.maybe_queue_event(Event::WindowEvent { window_id: RootWindowId(window_id), event });
     }

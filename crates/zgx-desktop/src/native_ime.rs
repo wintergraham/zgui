@@ -37,6 +37,14 @@ pub(crate) fn discard_native_composition(window: &winit::window::Window) {
     let _ = window;
 }
 
+/// `ZGX_TRACE_IME=1` logs composition as the host routes it, to stderr.
+pub(crate) fn trace(line: impl FnOnce() -> String) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| zgx::env::var_os("ZGX_TRACE_IME").is_some()) {
+        eprintln!("[ime] {}", line());
+    }
+}
+
 /// Native composition permission follows editability, not logical focus.
 pub(crate) fn editable_editor(ui: &Ui, native_focused: bool) -> Option<zgx::widgets::EditorHandle> {
     native_focused
@@ -168,6 +176,22 @@ pub(crate) fn dispatch(
             text,
         },
         Ime::Commit(text) => InputEvent::ImeCommit(text),
+        // Text the input method put in place of some before the caret: that
+        // selected, then committed over it.
+        #[cfg(zgx_winit_patched)]
+        Ime::Replace(range, text) => {
+            let (start, end) = {
+                let editor = editable_editor(ui, true).expect("checked above");
+                let model = editor.editor.borrow();
+                let len = model.len();
+                (range.start.min(len), range.end.min(len))
+            };
+            ui.try_dispatch(InputEvent::SetTextSelection {
+                anchor: start,
+                focus: end,
+            })?;
+            InputEvent::ImeCommit(text)
+        }
     };
     let result = ui.try_dispatch(event)?;
     // Custom handlers may reject or replace preedit. Keyboard suppression must

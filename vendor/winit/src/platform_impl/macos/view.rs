@@ -134,6 +134,15 @@ pub struct ViewState {
     marked_text: RefCell<Retained<NSMutableAttributedString>>,
     accepts_first_mouse: bool,
 
+    /// zgx patch: while `keyDown:` has the input method interpret a key,
+    /// the text the key types (`insertText:` of just that is the key's to
+    /// carry, as `KeyboardInput`'s text).
+    key_text: RefCell<Option<String>>,
+    /// zgx patch: the input method made text of the key in flight without
+    /// marked text: its own text must not be typed as well, but a command
+    /// it sends after (Korean's Return) still goes to the app.
+    ime_took_key: Cell<bool>,
+
     // Weak reference because the window keeps a strong reference to the view
     _ns_window: WeakId<WinitWindow>,
 
@@ -154,6 +163,82 @@ pub(crate) fn set_selection_services(
 }
 fn selection_services() -> Option<std::rc::Rc<dyn crate::platform::macos::SelectionServices>> {
     SELECTION_SERVICES.with(|cell| cell.borrow().clone())
+}
+
+// zgx patch: the focused field's text for input methods
+// (`platform::macos::set_text_input_services`).
+thread_local! {
+    static TEXT_INPUT_SERVICES: RefCell<Option<std::rc::Rc<dyn crate::platform::macos::TextInputServices>>> =
+        const { RefCell::new(None) };
+}
+pub(crate) fn set_text_input_services(
+    services: Option<std::rc::Rc<dyn crate::platform::macos::TextInputServices>>,
+) {
+    TEXT_INPUT_SERVICES.with(|cell| *cell.borrow_mut() = services);
+}
+
+/// UTF-16 code units (AppKit's text positions) of `text[..byte]`.
+fn utf16_len(text: &str, byte: usize) -> usize {
+    let mut byte = byte.min(text.len());
+    while !text.is_char_boundary(byte) {
+        byte -= 1;
+    }
+    text[..byte].encode_utf16().count()
+}
+/// The UTF-8 byte of `text` at UTF-16 position `units`, clamped to the text
+/// and back to a character's start (never inside a surrogate pair).
+fn utf8_at(text: &str, units: usize) -> usize {
+    let mut seen = 0;
+    for (byte, c) in text.char_indices() {
+        if seen + c.len_utf16() > units {
+            return byte;
+        }
+        seen += c.len_utf16();
+    }
+    text.len()
+}
+fn ns_range(text: &str, range: &std::ops::Range<usize>) -> NSRange {
+    let start = utf16_len(text, range.start);
+    NSRange::new(start, utf16_len(text, range.end).saturating_sub(start))
+}
+fn byte_range(text: &str, range: NSRange) -> std::ops::Range<usize> {
+    let start = utf8_at(text, range.location);
+    start..utf8_at(text, range.location.saturating_add(range.length)).max(start)
+}
+/// `range` (AppKit's, in `state`'s text) in the committed text, the
+/// composition taken out (what `Ime::Replace` reports).
+fn committed_range(
+    state: &crate::platform::macos::TextInputState,
+    range: NSRange,
+) -> std::ops::Range<usize> {
+    let range = byte_range(&state.text, range);
+    let Some(marked) = state.marked.clone() else {
+        return range;
+    };
+    let out = |at: usize| {
+        if at <= marked.start {
+            at
+        } else if at < marked.end {
+            marked.start
+        } else {
+            at - (marked.end - marked.start)
+        }
+    };
+    out(range.start)..out(range.end)
+}
+
+// zgx patch: `ZGX_TRACE_IME=1` logs what input methods ask the view and
+// what it does with each key, to stderr.
+pub(crate) fn ime_trace_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("ZGX_TRACE_IME").is_some())
+}
+macro_rules! ime_trace {
+    ($($arg:tt)*) => {
+        if ime_trace_on() {
+            eprintln!("[ime] {}", format_args!($($arg)*));
+        }
+    };
 }
 
 declare_class!(
@@ -266,6 +351,11 @@ declare_class!(
         fn marked_range(&self) -> NSRange {
             trace_scope!("markedRange");
             let length = self.ivars().marked_text.borrow().length();
+            // zgx patch: where the composition is in the field's text.
+            if let Some(state) = (length > 0).then(|| self.text_input_state()).flatten() {
+                let start = utf16_len(&state.text, state.marked.map_or(state.selection.start, |m| m.start));
+                return NSRange::new(start, length);
+            }
             if length > 0 {
                 NSRange::new(0, length)
             } else {
@@ -277,6 +367,11 @@ declare_class!(
         #[method(selectedRange)]
         fn selected_range(&self) -> NSRange {
             trace_scope!("selectedRange");
+            // zgx patch: the field's selection, so an input method knows the
+            // text it edits (Korean composes into the syllable before it).
+            if let Some(state) = self.text_input_state() {
+                return ns_range(&state.text, &state.selection);
+            }
             // Documented to return `{NSNotFound, 0}` if there is no selection.
             NSRange::new(NSNotFound as NSUInteger, 0)
         }
@@ -309,6 +404,15 @@ declare_class!(
                     string.copy(),
                 )
             };
+
+            // zgx patch: marked text over a range of the field's (a
+            // reconversion) replaces that range first.
+            if let Some(state) = self.replacing(_replacement_range) {
+                let range = committed_range(&state, _replacement_range);
+                self.ensure_ime_enabled();
+                self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
+                self.queue_event(WindowEvent::Ime(Ime::Replace(range, String::new())));
+            }
 
             // Update marked text.
             *self.ivars().marked_text.borrow_mut() = marked_text;
@@ -345,6 +449,7 @@ declare_class!(
                 Some((lowerbound_utf8, upperbound_utf8))
             };
 
+            ime_trace!("setMarkedText {:?} sel={:?} repl={:?}", string.to_string(), selected_range, _replacement_range);
             // Send WindowEvent for updating marked text
             self.queue_event(WindowEvent::Ime(Ime::Preedit(string.to_string(), cursor_range)));
         }
@@ -352,12 +457,23 @@ declare_class!(
         #[method(unmarkText)]
         fn unmark_text(&self) {
             trace_scope!("unmarkText");
-            *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
+            ime_trace!("unmarkText");
+            // zgx patch: unmarking keeps the marked text, committed, as
+            // AppKit's text views do (it was dropped).
+            let marked = std::mem::replace(
+                &mut *self.ivars().marked_text.borrow_mut(),
+                NSMutableAttributedString::new(),
+            )
+            .string()
+            .to_string();
 
             let input_context = self.inputContext().expect("input context");
             input_context.discardMarkedText();
 
             self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
+            if !marked.is_empty() && self.is_ime_enabled() {
+                self.queue_event(WindowEvent::Ime(Ime::Commit(marked)));
+            }
             if self.is_ime_enabled() {
                 // Leave the Preedit self.ivars()
                 self.ivars().ime_state.set(ImeState::Ground);
@@ -379,13 +495,23 @@ declare_class!(
             _actual_range: *mut NSRange,
         ) -> Option<Retained<NSAttributedString>> {
             trace_scope!("attributedSubstringForProposedRange:actualRange:");
-            None
+            // zgx patch: the field's text, as an input method reads it to
+            // compose with what is before the caret.
+            self.text_input_state().map(|state| {
+                let range = byte_range(&state.text, _range);
+                if !_actual_range.is_null() {
+                    // SAFETY: AppKit passes a valid pointer or null.
+                    unsafe { *_actual_range = ns_range(&state.text, &range) };
+                }
+                NSAttributedString::from_nsstring(&NSString::from_str(&state.text[range]))
+            })
         }
 
         #[method(characterIndexForPoint:)]
         fn character_index_for_point(&self, _point: NSPoint) -> NSUInteger {
             trace_scope!("characterIndexForPoint:");
-            0
+            // zgx patch: not known here; AppKit's answer for that.
+            NSNotFound as NSUInteger
         }
 
         #[method(firstRectForCharacterRange:actualRange:)]
@@ -395,6 +521,11 @@ declare_class!(
             _actual_range: *mut NSRange,
         ) -> NSRect {
             trace_scope!("firstRectForCharacterRange:actualRange:");
+            // zgx patch: the area is the composition's (or the caret's) whole.
+            if !_actual_range.is_null() {
+                // SAFETY: AppKit passes a valid pointer or null.
+                unsafe { *_actual_range = _range };
+            }
             let rect = NSRect::new(
                 self.ivars().ime_position.get(),
                 self.ivars().ime_size.get()
@@ -421,12 +552,40 @@ declare_class!(
             };
 
             let is_control = string.chars().next().is_some_and(|c| c.is_control());
+            ime_trace!("insertText {string:?} repl={_replacement_range:?} marked={} state={:?}", unsafe { self.hasMarkedText() }, self.ivars().ime_state.get());
 
+            let marked = unsafe { self.hasMarkedText() };
+            if is_control {
+                return;
+            }
+            // zgx patch: text replacing a range of the field's (Korean
+            // composing into the syllable before the caret, Vietnamese tone
+            // marks, a press-and-hold accent) replaces it.
+            if let Some(state) = self.replacing(_replacement_range) {
+                let range = committed_range(&state, _replacement_range);
+                self.ensure_ime_enabled();
+                *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
+                self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
+                self.queue_event(WindowEvent::Ime(Ime::Replace(range, string)));
+                self.ivars().ime_took_key.set(self.ivars().key_text.borrow().is_some());
+                return;
+            }
             // Commit only if we have marked text.
-            if unsafe { self.hasMarkedText() } && self.is_ime_enabled() && !is_control {
+            if marked && self.is_ime_enabled() {
                 self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
                 self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
                 self.ivars().ime_state.set(ImeState::Committed);
+                return;
+            }
+            // zgx patch: text no key typed as itself is committed: the
+            // Character Viewer's and Emoji picker's (no key at all), or a key
+            // an input method turned into other text. A key's own text goes
+            // with its `KeyboardInput`, as before.
+            let own_text = self.ivars().key_text.borrow().as_deref() == Some(string.as_str());
+            if !own_text && self.ivars().ime_allowed.get() {
+                self.ensure_ime_enabled();
+                self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
+                self.ivars().ime_took_key.set(self.ivars().key_text.borrow().is_some());
             }
         }
 
@@ -435,6 +594,7 @@ declare_class!(
         #[method(doCommandBySelector:)]
         fn do_command_by_selector(&self, _command: Sel) {
             trace_scope!("doCommandBySelector:");
+            ime_trace!("doCommandBySelector {_command:?} state={:?}", self.ivars().ime_state.get());
             // We shouldn't forward any character from just committed text, since we'll end up sending
             // it twice with some IMEs like Korean one. We'll also always send `Enter` in that case,
             // which is not desired given it was used to confirm IME input.
@@ -530,6 +690,7 @@ declare_class!(
             // Get the characters from the event.
             let old_ime_state = self.ivars().ime_state.get();
             self.ivars().forward_key_to_app.set(false);
+            self.ivars().ime_took_key.set(false);
             let event = replace_event(event, self.option_as_alt());
 
             // The `interpretKeyEvents` function might call
@@ -540,7 +701,10 @@ declare_class!(
             // is not handled by IME and should be handled by the application)
             if self.ivars().ime_allowed.get() {
                 let events_for_nsview = NSArray::from_slice(&[&*event]);
+                *self.ivars().key_text.borrow_mut() =
+                    Some(unsafe { event.characters() }.map(|c| c.to_string()).unwrap_or_default());
                 unsafe { self.interpretKeyEvents(&events_for_nsview) };
+                *self.ivars().key_text.borrow_mut() = None;
 
                 // If the text was committed we must treat the next keyboard event as IME related.
                 if self.ivars().ime_state.get() == ImeState::Committed {
@@ -551,7 +715,7 @@ declare_class!(
 
             self.update_modifiers(&event, false);
 
-            let had_ime_input = match self.ivars().ime_state.get() {
+            let had_ime_input = self.ivars().ime_took_key.get() || match self.ivars().ime_state.get() {
                 ImeState::Committed => {
                     // Allow normal input after the commit.
                     self.ivars().ime_state.set(ImeState::Ground);
@@ -562,6 +726,7 @@ declare_class!(
                 _ => old_ime_state != self.ivars().ime_state.get(),
             };
 
+            ime_trace!("keyDown {:?} had_ime_input={had_ime_input} forward={} allowed={}", unsafe { event.characters() }.map(|c| c.to_string()), self.ivars().forward_key_to_app.get(), self.ivars().ime_allowed.get());
             if !had_ime_input || self.ivars().forward_key_to_app.get() {
                 let key_event = create_key_event(&event, true, unsafe { event.isARepeat() });
                 self.queue_event(WindowEvent::KeyboardInput {
@@ -878,6 +1043,8 @@ impl WinitView {
             input_source: Default::default(),
             ime_allowed: Default::default(),
             forward_key_to_app: Default::default(),
+            key_text: Default::default(),
+            ime_took_key: Default::default(),
             marked_text: Default::default(),
             accepts_first_mouse,
             _ns_window: WeakId::new(&window.retain()),
@@ -918,6 +1085,40 @@ impl WinitView {
         self.window().backingScaleFactor() as f64
     }
 
+    /// zgx patch: the focused field's text for input methods, while the
+    /// app takes text input and its handler is free to answer at once (an
+    /// edit queued behind a running handler would leave the answer stale).
+    fn text_input_state(&self) -> Option<crate::platform::macos::TextInputState> {
+        if !self.ivars().ime_allowed.get() || self.ivars().app_delegate.handler_in_use() {
+            return None;
+        }
+        let services = TEXT_INPUT_SERVICES.with(|cell| cell.borrow().clone())?;
+        let window = crate::window::WindowId(self.window().id());
+        let state = services.text_input_state(window)?;
+        let ok = |at: usize| at <= state.text.len() && state.text.is_char_boundary(at);
+        let fits = |r: &std::ops::Range<usize>| r.start <= r.end && ok(r.start) && ok(r.end);
+        (fits(&state.selection) && state.marked.as_ref().is_none_or(fits)).then_some(state)
+    }
+
+    /// zgx patch: the field's text when an input method names a range of it
+    /// to replace.
+    fn replacing(&self, range: NSRange) -> Option<crate::platform::macos::TextInputState> {
+        if range.location == NSNotFound as NSUInteger {
+            return None;
+        }
+        self.text_input_state()
+    }
+
+    /// zgx patch: tell the app input arrives from the input method, as the
+    /// first marked text does, before text that comes without any.
+    fn ensure_ime_enabled(&self) {
+        if self.ivars().ime_state.get() == ImeState::Disabled {
+            *self.ivars().input_source.borrow_mut() = self.current_input_source();
+            self.queue_event(WindowEvent::Ime(Ime::Enabled));
+            self.ivars().ime_state.set(ImeState::Ground);
+        }
+    }
+
     fn is_ime_enabled(&self) -> bool {
         !matches!(self.ivars().ime_state.get(), ImeState::Disabled)
     }
@@ -953,6 +1154,7 @@ impl WinitView {
     }
 
     pub(super) fn set_ime_allowed(&self, ime_allowed: bool) {
+        ime_trace!("set_ime_allowed {ime_allowed}");
         if self.ivars().ime_allowed.get() == ime_allowed {
             return;
         }

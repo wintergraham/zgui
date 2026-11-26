@@ -21,6 +21,7 @@ pub(crate) fn add(window: WindowId, ui: &zgx::widgets::Ui) {
     });
     if first {
         winit::platform::macos::set_selection_services(Some(std::rc::Rc::new(Windows)));
+        winit::platform::macos::set_text_input_services(Some(std::rc::Rc::new(Windows)));
         register_types();
     }
 }
@@ -60,6 +61,49 @@ impl winit::platform::macos::SelectionServices for Windows {
         }
         editor.paste(text);
         true
+    }
+}
+
+/// What input methods read of the focused field: its text with the
+/// composition in place, as AppKit's text views show them theirs.
+impl winit::platform::macos::TextInputServices for Windows {
+    fn text_input_state(&self, window: WindowId) -> Option<winit::platform::macos::TextInputState> {
+        let editor = ui(window)?.focused_editor()?;
+        if editor.is_read_only() || editor.is_secure() {
+            return None;
+        }
+        // Asked while the editor is being changed (never expected): no answer.
+        let model = editor.editor.try_borrow().ok()?;
+        Some(text_input_state(&model))
+    }
+}
+
+pub(crate) fn text_input_state(
+    model: &zgx::text_edit::TextEditor,
+) -> winit::platform::macos::TextInputState {
+    let text = model.text();
+    let selection = model.selection().range();
+    let Some(preedit) = model.preedit() else {
+        return winit::platform::macos::TextInputState {
+            text: text.into_owned(),
+            selection,
+            marked: None,
+        };
+    };
+    let start = selection.start;
+    let marked = start..start + preedit.text.len();
+    let (from, to) = preedit
+        .cursor
+        .unwrap_or((preedit.text.len(), preedit.text.len()));
+    winit::platform::macos::TextInputState {
+        text: format!(
+            "{}{}{}",
+            &text[..start],
+            preedit.text,
+            &text[selection.end..]
+        ),
+        selection: start + from..start + to,
+        marked: Some(marked),
     }
 }
 
