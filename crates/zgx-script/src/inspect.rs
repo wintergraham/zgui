@@ -347,8 +347,10 @@ const HELP: &str = "commands (one JSON object a line, `cmd` and its fields):
   set     name value                             set a named state (value is JSON)
   click   target                                 press and release at its middle
   type    target text                            click it, then type text
-  key     keys                                   e.g. \"Enter\", \"cmd+k\", \"alt+ArrowDown\"
+  key     keys [phase=down|up]                   e.g. \"Enter\", \"cmd+k\", \"alt+ArrowDown\"; down or up alone
   scroll  target dy                              scroll the viewport under it
+  pointer to [x y | target] [button]             the pointer: to = move, down, up, leave; at x, y in
+                                                 points or a target's middle (a hover, a drag's steps)
   snapshot target [width=4096]                   its pixels as the window last drew them: a PNG, user-only
   record  [stop]                                 record the window's wheel input; stop answers the tape
   replay  target tape [repeat=1] [every]         play a tape back through the window's input path: its
@@ -585,7 +587,16 @@ impl Session {
             "key" => (|| {
                 let keys = text("keys").ok_or("key takes `keys` (\"Enter\", \"cmd+k\")")?;
                 let (key, modifiers) = driver::parse_keys(&keys)?;
-                driver::press(&mut ui, key, modifiers);
+                // `phase`: down or up alone (a key held, then let go); both by default.
+                match text("phase").as_deref() {
+                    Some("down") => {
+                        ui.dispatch(zgx::input::InputEvent::KeyDown { key, modifiers, repeat: false });
+                    }
+                    Some("up") => {
+                        ui.dispatch(zgx::input::InputEvent::KeyUp { key, modifiers });
+                    }
+                    _ => driver::press(&mut ui, key, modifiers),
+                }
                 Ok((format!("pressed {keys}"), Value::Nil))
             })(),
             "snapshot" => (|| {
@@ -615,6 +626,30 @@ impl Session {
                 let node = target(&ui)?;
                 driver::scroll(&mut ui, node, number("dy").unwrap_or(100.) as f32);
                 Ok((format!("scrolled @{}", driver::number(node)), Value::Nil))
+            })(),
+            "pointer" => (|| {
+                let to = text("to").unwrap_or_else(|| "move".into());
+                let (x, y) = match (number("x"), number("y")) {
+                    (Some(x), Some(y)) => (x as f32, y as f32),
+                    _ if to == "leave" => (0., 0.),
+                    _ => {
+                        let b = ui.scene.borrow().bounds(target(&ui)?);
+                        (b.x + b.width / 2., b.y + b.height / 2.)
+                    }
+                };
+                let button = match text("button").as_deref() {
+                    Some("secondary" | "right") => zgx::input::PointerButton::Secondary,
+                    _ => zgx::input::PointerButton::Primary,
+                };
+                use zgx::input::InputEvent as E;
+                ui.dispatch(match to.as_str() {
+                    "move" => E::PointerMove { x, y },
+                    "down" => E::PointerDown { x, y, button },
+                    "up" => E::PointerUp { x, y, button },
+                    "leave" => E::PointerLeave,
+                    other => return Err(format!("pointer to is move, down, up or leave, not `{other}`")),
+                });
+                Ok((format!("pointer {to} at {x:.0},{y:.0}"), Value::Nil))
             })(),
             "command" => (|| {
                 let id = text("id").ok_or("command takes an `id`")?;
