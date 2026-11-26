@@ -688,6 +688,7 @@ declare extern type Element with
 	-- scrolls into view, focused or not.
 	function set_selection_bytes(self, a: number, b: number?): boolean
 	function selection_bytes(self): (number?, number?)
+	function composing(self): boolean
 	-- The selection replaced by `text`, as typing it would (one step of
 	-- undo): a search's Replace.
 	function replace_selection(self, text: string): boolean
