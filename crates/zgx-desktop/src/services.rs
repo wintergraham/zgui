@@ -124,6 +124,24 @@ mod tests {
     use winit::platform::macos::SelectionServices;
     use zgx::compose::prelude::*;
 
+    /// Input methods see the composition in place of the selection, the
+    /// caret inside it where the input method put it.
+    #[test]
+    fn input_methods_read_the_text_with_the_composition_in_place() {
+        let mut model = zgx::text_edit::TextEditor::new("안 하세요");
+        model.set_selection(3, 3);
+        let plain = text_input_state(&model);
+        assert_eq!(
+            (plain.text.as_str(), plain.selection, plain.marked),
+            ("안 하세요", 3..3, None)
+        );
+        model.set_preedit("녕", Some((0, 3)));
+        let composing = text_input_state(&model);
+        assert_eq!(composing.text, "안녕 하세요");
+        assert_eq!(composing.marked, Some(3..6));
+        assert_eq!(composing.selection, 3..6);
+    }
+
     #[test]
     fn services_take_the_selection_and_put_their_text_in_a_fields_place() {
         let mut ui = zgx::widgets::Ui::new(400., 300.);

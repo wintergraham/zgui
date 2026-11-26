@@ -197,4 +197,10 @@ threw the marked text away.
     key's own text still goes with its `KeyboardInput`. Such a key's command
     after it (Korean's Return, `insertNewline:`) still reaches the app.
 11. `unmarkText` commits the marked text.
+13. `attributedString` (the whole text) and `windowLevel` answer, as
+    Vietnamese input methods read the word they edit through the first.
+14. A key whose own text the input method inserts is delivered
+    (`KeyboardInput`) at that `insertText:`, not after
+    `interpretKeyEvents:` returns, so the field holds it when the input
+    method reads the field again within the same key.
 12. `ZGX_TRACE_IME=1` logs what input methods ask and how each key went.

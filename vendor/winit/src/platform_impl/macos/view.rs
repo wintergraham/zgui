@@ -142,6 +142,11 @@ pub struct ViewState {
     /// marked text: its own text must not be typed as well, but a command
     /// it sends after (Korean's Return) still goes to the app.
     ime_took_key: Cell<bool>,
+    /// zgx patch: the key in flight, delivered (`KeyboardInput`) when the
+    /// input method inserts its own text, so the field holds it before the
+    /// input method reads the field again (Vietnamese reads it each key).
+    key_event: RefCell<Option<Retained<NSEvent>>>,
+    key_delivered: Cell<bool>,
 
     // Weak reference because the window keeps a strong reference to the view
     _ns_window: WeakId<WinitWindow>,
@@ -370,6 +375,7 @@ declare_class!(
             // zgx patch: the field's selection, so an input method knows the
             // text it edits (Korean composes into the syllable before it).
             if let Some(state) = self.text_input_state() {
+                ime_trace!("selectedRange {:?}", ns_range(&state.text, &state.selection));
                 return ns_range(&state.text, &state.selection);
             }
             // Documented to return `{NSNotFound, 0}` if there is no selection.
@@ -495,6 +501,7 @@ declare_class!(
             _actual_range: *mut NSRange,
         ) -> Option<Retained<NSAttributedString>> {
             trace_scope!("attributedSubstringForProposedRange:actualRange:");
+            ime_trace!("attributedSubstring {_range:?}");
             // zgx patch: the field's text, as an input method reads it to
             // compose with what is before the caret.
             self.text_input_state().map(|state| {
@@ -582,7 +589,21 @@ declare_class!(
             // an input method turned into other text. A key's own text goes
             // with its `KeyboardInput`, as before.
             let own_text = self.ivars().key_text.borrow().as_deref() == Some(string.as_str());
-            if !own_text && self.ivars().ime_allowed.get() {
+            if own_text {
+                let event = self.ivars().key_event.borrow_mut().take();
+                if let Some(event) = event {
+                    self.update_modifiers(&event, false);
+                    let key_event = create_key_event(&event, true, unsafe { event.isARepeat() });
+                    self.queue_event(WindowEvent::KeyboardInput {
+                        device_id: DEVICE_ID,
+                        event: key_event,
+                        is_synthetic: false,
+                    });
+                    self.ivars().key_delivered.set(true);
+                }
+                return;
+            }
+            if self.ivars().ime_allowed.get() {
                 self.ensure_ime_enabled();
                 self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
                 self.ivars().ime_took_key.set(self.ivars().key_text.borrow().is_some());
@@ -609,6 +630,24 @@ declare_class!(
                 // Leave preedit so that we also report the key-up for this key.
                 self.ivars().ime_state.set(ImeState::Ground);
             }
+        }
+    }
+
+    // zgx patch: NSTextInputClient's optional methods input methods ask for.
+    unsafe impl WinitView {
+        /// The whole text, as Vietnamese input methods read the word they
+        /// edit (with no answer they type plain letters).
+        #[method_id(attributedString)]
+        fn attributed_string(&self) -> Retained<NSAttributedString> {
+            let text = self.text_input_state().map(|state| state.text).unwrap_or_default();
+            ime_trace!("attributedString ({} bytes)", text.len());
+            NSAttributedString::from_nsstring(&NSString::from_str(&text))
+        }
+
+        /// Where candidate windows go above: the window's own level.
+        #[method(windowLevel)]
+        fn window_level(&self) -> isize {
+            unsafe { self.window().level() }
         }
     }
 
@@ -703,8 +742,11 @@ declare_class!(
                 let events_for_nsview = NSArray::from_slice(&[&*event]);
                 *self.ivars().key_text.borrow_mut() =
                     Some(unsafe { event.characters() }.map(|c| c.to_string()).unwrap_or_default());
+                *self.ivars().key_event.borrow_mut() = Some(event.clone());
+                self.ivars().key_delivered.set(false);
                 unsafe { self.interpretKeyEvents(&events_for_nsview) };
                 *self.ivars().key_text.borrow_mut() = None;
+                *self.ivars().key_event.borrow_mut() = None;
 
                 // If the text was committed we must treat the next keyboard event as IME related.
                 if self.ivars().ime_state.get() == ImeState::Committed {
@@ -726,8 +768,17 @@ declare_class!(
                 _ => old_ime_state != self.ivars().ime_state.get(),
             };
 
-            ime_trace!("keyDown {:?} had_ime_input={had_ime_input} forward={} allowed={}", unsafe { event.characters() }.map(|c| c.to_string()), self.ivars().forward_key_to_app.get(), self.ivars().ime_allowed.get());
-            if !had_ime_input || self.ivars().forward_key_to_app.get() {
+            ime_trace!(
+                "keyDown {:?} had_ime_input={had_ime_input} forward={} allowed={} busy={} source={}",
+                unsafe { event.characters() }.map(|c| c.to_string()),
+                self.ivars().forward_key_to_app.get(),
+                self.ivars().ime_allowed.get(),
+                self.ivars().app_delegate.handler_in_use(),
+                self.current_input_source()
+            );
+            if (!had_ime_input || self.ivars().forward_key_to_app.get())
+                && !self.ivars().key_delivered.replace(false)
+            {
                 let key_event = create_key_event(&event, true, unsafe { event.isARepeat() });
                 self.queue_event(WindowEvent::KeyboardInput {
                     device_id: DEVICE_ID,
@@ -1045,6 +1096,8 @@ impl WinitView {
             forward_key_to_app: Default::default(),
             key_text: Default::default(),
             ime_took_key: Default::default(),
+            key_event: Default::default(),
+            key_delivered: Default::default(),
             marked_text: Default::default(),
             accepts_first_mouse,
             _ns_window: WeakId::new(&window.retain()),
@@ -1092,9 +1145,15 @@ impl WinitView {
         if !self.ivars().ime_allowed.get() || self.ivars().app_delegate.handler_in_use() {
             return None;
         }
-        let services = TEXT_INPUT_SERVICES.with(|cell| cell.borrow().clone())?;
+        let Some(services) = TEXT_INPUT_SERVICES.with(|cell| cell.borrow().clone()) else {
+            ime_trace!("text state: no services");
+            return None;
+        };
         let window = crate::window::WindowId(self.window().id());
-        let state = services.text_input_state(window)?;
+        let Some(state) = services.text_input_state(window) else {
+            ime_trace!("text state: no field");
+            return None;
+        };
         let ok = |at: usize| at <= state.text.len() && state.text.is_char_boundary(at);
         let fits = |r: &std::ops::Range<usize>| r.start <= r.end && ok(r.start) && ok(r.end);
         (fits(&state.selection) && state.marked.as_ref().is_none_or(fits)).then_some(state)
