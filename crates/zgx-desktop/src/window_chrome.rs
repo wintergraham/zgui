@@ -194,7 +194,7 @@ pub(crate) fn titlebar_area(
 }
 
 #[cfg(windows)]
-pub(crate) use win::{CaptionHost, fit_work_area, in_size_move, menu_theme};
+pub(crate) use win::{CaptionHost, fit_work_area, in_front, in_size_move, menu_theme};
 
 #[cfg(windows)]
 mod win {
@@ -755,6 +755,16 @@ mod win {
     /// timer wakes it every frame (`subclass`).
     pub(crate) fn in_size_move() -> bool {
         SIZE_MOVE.with(|count| count.get() > 0)
+    }
+
+    /// Whether `window` is the foreground window: as it "loses focus",
+    /// still in front means its keyboard focus went to a window of its own
+    /// (a child window, a web page's), not to another app or window.
+    pub(crate) fn in_front(window: &Window) -> bool {
+        // SAFETY: reads which window is in front.
+        hwnd(window).is_some_and(|hwnd| unsafe {
+            windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() == hwnd
+        })
     }
 
     fn scale(hwnd: HWND) -> f64 {
