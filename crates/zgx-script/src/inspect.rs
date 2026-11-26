@@ -105,6 +105,15 @@ fn save_png(image: &zgx::image::ImageData) -> Result<std::path::PathBuf, String>
 const NOT_PRESENTING: &str = "the window isn't presenting (hidden, minimized or covered): it \
      draws no frames, and input waits for it until it shows";
 
+/// Lays the window out before a request reads or drives it. A layout that won't settle (size-dependent feedback) is
+/// reported and the request goes on with the last pass's allocation, as the window's own frames do: a panic here
+/// unwound through the inspect server's task and ended it, so every later request on the socket hung unanswered.
+fn settle(ui: &Ui) {
+    if let Err(error) = ui.try_prepare_frame() {
+        eprintln!("zgx inspect: {error}");
+    }
+}
+
 /// How frames since `from` (`trace::now_ms`) were paced: how many, the
 /// time between them, and the work in each.
 fn pacing(from: f64) -> (String, Value) {
@@ -409,7 +418,7 @@ impl Session {
         let Some(cmd) = text("cmd") else {
             return Reply::Now(failed("a request names its `cmd` (`help` lists them)"));
         };
-        ui.prepare_frame();
+        settle(&ui);
         let target = |ui: &Ui| -> Result<zgx::scene::NodeId, String> {
             let target = text("target").ok_or("this command takes a `target`")?;
             driver::find(ui, &self.0.handle, &target)
@@ -945,7 +954,7 @@ impl Session {
             other => Err(format!("no command `{other}` (`help` lists them)")),
         };
         // What an action changed, laid out before the next request reads it.
-        ui.prepare_frame();
+        settle(&ui);
         Reply::Now(match answer {
             Ok((text, data)) => ok(text, data),
             Err(error) => failed(error),
@@ -1313,7 +1322,7 @@ impl Session {
             let Some(ui) = self.0.ui.upgrade() else {
                 return failed("the window has closed");
             };
-            ui.prepare_frame();
+            settle(&ui);
             let found = driver::find(&ui, &self.0.handle, &target);
             let met = match (&found, gone) {
                 (Err(_), true) => true,
