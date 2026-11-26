@@ -3667,6 +3667,20 @@ impl Ui {
             if !s.contains(root) {
                 return;
             }
+            // A field mounting empty, never laid out: laying the scene out
+            // now, half built, only to read this box is a pass the frame's
+            // layout does again (each field a page mounts with was one more).
+            // That layout refreshes it instead (`refresh_if_resized`: its
+            // geometry is unset until it draws), in the same frame. Its first
+            // draw leaves nothing behind (no scroll to its caret, no glide),
+            // so drawing it then is drawing it now; a field mounted with text
+            // scrolls to its caret from the box it draws in first, and keeps
+            // doing so.
+            if display_len == 0 && !s.was_laid_out(root) {
+                // As drawn: its first draw is no edit to glide the caret for.
+                draw_glide_revision.set(Some(e.revision()));
+                return;
+            }
             s.prepare_layout();
             let bounds = s.bounds(root);
             let root_style = s.style(root);

@@ -2847,6 +2847,11 @@ impl Scene {
     pub fn layout_bounds(&self, id: NodeId) -> Rect {
         self.node(id).bounds
     }
+    /// Whether `id` was ever laid out: it holds a measurement (a node just
+    /// mounted holds none until the next layout pass).
+    pub(crate) fn was_laid_out(&self, id: NodeId) -> bool {
+        self.node(id).measurement.is_some()
+    }
     /// Whether `id` itself (not its ancestors) takes part in layout.
     pub(crate) fn shown_in_layout(&self, id: NodeId) -> bool {
         self.contains(id) && own_visible(&self.node(id).style)
