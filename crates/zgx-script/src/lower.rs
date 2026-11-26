@@ -1093,6 +1093,7 @@ fn kind_view(
             horizontal,
             follow,
             scrollbar,
+            stretch,
         } => {
             let offset = match offset {
                 Some(offset) => bridge(need(&mut cx), offset, number, |x| Value::Num(x as f64)),
@@ -1107,6 +1108,23 @@ fn kind_view(
                 scroll(offset)
             };
             let view = view.follow_end(*follow);
+            // Told only: nothing the script sets moves the stretch.
+            let view = match stretch {
+                Some(out) => {
+                    let cx = need(&mut cx);
+                    let shown = cx.state(0_f32);
+                    let (out, read) = (out.clone(), shown.clone());
+                    let runtime = cx.runtime();
+                    cx.retain(runtime.effect(move || {
+                        let now = read.get() as f64;
+                        if out.with_untracked(|was| !matches!(was, Value::Num(n) if *n == now)) {
+                            out.set(Value::Num(now));
+                        }
+                    }));
+                    view.report_stretch(shown)
+                }
+                None => view,
+            };
             if *scrollbar {
                 view.scrollbar(true)
             } else {

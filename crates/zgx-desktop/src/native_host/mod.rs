@@ -448,6 +448,13 @@ impl NativeHost {
         self.overlay_drawn = false;
         Ok(())
     }
+    /// The overlay plane's last frame while it shows, with its rect (points)
+    /// and scale: what a picture of the window lays over the base plane's.
+    #[cfg(target_os = "macos")]
+    pub fn overlay_shown(&self) -> Option<(zgx_gpu::ShownFrame, Rect, f32)> {
+        let overlay = self.overlay.as_ref().filter(|_| self.overlay_live)?;
+        Some((overlay.shown_frame()?, overlay.plane_rect()?, self.overlay_scale))
+    }
     /// Within the frame's transaction: move native views and backdrops to
     /// this frame's placements.
     pub fn apply(&mut self) {

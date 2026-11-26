@@ -1363,7 +1363,7 @@ struct Host {
     display_scale: f64,
     /// What the window last showed, and its scale, for `Ui::snapshot`.
     #[cfg(target_os = "macos")]
-    shown: std::rc::Rc<std::cell::RefCell<Option<(zgx_gpu::ShownFrame, f64)>>>,
+    shown: std::rc::Rc<std::cell::RefCell<Option<Shown>>>,
     force: bool,
     presentation: Presentation,
     native_occluded: bool,
@@ -1598,16 +1598,22 @@ impl Host {
         // Pictures of what the window showed (`Ui::snapshot`): a region of
         // its last frame, read when asked.
         #[cfg(target_os = "macos")]
-        let shown: std::rc::Rc<std::cell::RefCell<Option<(zgx_gpu::ShownFrame, f64)>>> =
-            std::rc::Rc::default();
+        let shown: std::rc::Rc<std::cell::RefCell<Option<Shown>>> = std::rc::Rc::default();
         #[cfg(target_os = "macos")]
         {
             let shown = shown.clone();
             ui.on_snapshot(move |rect, max_width| {
                 let shown = shown.borrow();
-                let (frame, scale) = shown.as_ref()?;
-                let (x, y, w, h) = snapshot_region(rect, *scale);
-                let (w, h, bgra) = frame.read(x, y, w, h)?;
+                let shown = shown.as_ref()?;
+                let (x, y, w, h) = snapshot_region(rect, shown.scale);
+                let (w, h, mut bgra) = shown.frame.read(x, y, w, h)?;
+                // What paints over native views shows on the overlay plane:
+                // laid over the base's pixels, as the window shows them.
+                if let Some((overlay, plane, scale)) = &shown.overlay
+                    && (f64::from(*scale) - shown.scale).abs() < 0.01
+                {
+                    over_plane(&mut bgra, (x, y, w, h), overlay, *plane, f64::from(*scale));
+                }
                 let (w, h) = (w as usize, h as usize);
                 crate::thumbnail::image(&bgra, w, h, w * 4, max_width as usize)
             });
@@ -2255,9 +2261,11 @@ impl Host {
                     }
                     // What it shows now, for `Ui::snapshot` (the last frame's
                     // surface is the renderer's to reuse again).
-                    *self.shown.borrow_mut() = renderer
-                        .shown_frame()
-                        .map(|frame| (frame, self.scale_factor));
+                    *self.shown.borrow_mut() = renderer.shown_frame().map(|frame| Shown {
+                        frame,
+                        scale: self.scale_factor,
+                        overlay: self.native.overlay_shown(),
+                    });
                     if let Some(gpu) = renderer.take_gpu_time() {
                         zgx::profile::gpu_time(gpu);
                         if grid.is_some() {
@@ -6710,6 +6718,66 @@ fn first_mark(once: &std::sync::Once, what: &str) {
 /// `(x, y, width, height)`, less any part off its left or top edge (the
 /// frame's reader cuts the right and bottom).
 #[cfg(any(target_os = "macos", test))]
+/// What the window last showed (`Ui::snapshot`): the base plane's frame at
+/// its scale, and the overlay plane's over native views, with the plane's
+/// rect (points) and scale, while it shows.
+#[cfg(target_os = "macos")]
+struct Shown {
+    frame: zgx_gpu::ShownFrame,
+    scale: f64,
+    overlay: Option<(zgx_gpu::ShownFrame, zgx::scene::Rect, f32)>,
+}
+
+/// The overlay plane's pixels over `base`, the window's region `x, y, w, h`
+/// (pixels), both premultiplied BGRA: source over.
+#[cfg(target_os = "macos")]
+fn over_plane(
+    base: &mut [u8],
+    (x, y, w, h): (u32, u32, u32, u32),
+    overlay: &zgx_gpu::ShownFrame,
+    plane: zgx::scene::Rect,
+    scale: f64,
+) {
+    // The plane's first pixel in the window's (its rect is snapped to them).
+    let px = (f64::from(plane.x) * scale).round() as i64;
+    let py = (f64::from(plane.y) * scale).round() as i64;
+    let pw = (f64::from(plane.width) * scale).round() as i64;
+    let ph = (f64::from(plane.height) * scale).round() as i64;
+    let (x0, y0) = (i64::from(x).max(px), i64::from(y).max(py));
+    let x1 = (i64::from(x) + i64::from(w)).min(px + pw);
+    let y1 = (i64::from(y) + i64::from(h)).min(py + ph);
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    let Some((ow, oh, top)) = overlay.read(
+        (x0 - px) as u32,
+        (y0 - py) as u32,
+        (x1 - x0) as u32,
+        (y1 - y0) as u32,
+    ) else {
+        return;
+    };
+    let (ow, oh, w) = (ow as usize, oh as usize, w as usize);
+    let (dx, dy) = ((x0 - i64::from(x)) as usize, (y0 - i64::from(y)) as usize);
+    for row in 0..oh {
+        for col in 0..ow {
+            let s = (row * ow + col) * 4;
+            let alpha = top[s + 3];
+            if alpha == 0 {
+                continue;
+            }
+            let d = ((dy + row) * w + dx + col) * 4;
+            let Some(px) = base.get_mut(d..d + 4) else {
+                continue;
+            };
+            let keep = 255 - u16::from(alpha);
+            for c in 0..4 {
+                px[c] = (u16::from(top[s + c]) + (u16::from(px[c]) * keep + 127) / 255).min(255) as u8;
+            }
+        }
+    }
+}
+
 fn snapshot_region(rect: zgx::scene::Rect, scale: f64) -> (u32, u32, u32, u32) {
     let span = |from: f32, length: f32| {
         let start = (f64::from(from) * scale).round();

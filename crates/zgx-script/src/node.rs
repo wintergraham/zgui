@@ -782,6 +782,9 @@ pub(crate) enum Kind {
         follow: bool,
         /// `scrollbar = true`: an interactive scrollbar over its edge.
         scrollbar: bool,
+        /// `stretch`: state told how far a trackpad stretches it past an
+        /// edge (negative before the start, positive past the end).
+        stretch: Option<Signal<Value>>,
     },
     Text(Text),
     /// `ui.markdown_view { text }`: markdown drawn, parsed as the text
@@ -2138,6 +2141,7 @@ const WIDGET_FIELDS: &[&str] = &[
     "offset",
     "follow",
     "scrollbar",
+    "stretch",
     "keyboard",
     "src",
     "code",
@@ -3231,6 +3235,13 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
                     Some(t) => t.get::<Option<bool>>("follow")?.unwrap_or(false),
                     None => false,
                 };
+                let stretch = match &table {
+                    Some(t) => t.get::<mlua::Value>("stretch")?,
+                    None => mlua::Value::Nil,
+                };
+                let stretch = (!stretch.is_nil())
+                    .then(|| expect_state(&stretch, "`stretch`"))
+                    .transpose()?;
                 let scrollbar = match &table {
                     Some(t) => t.get::<Option<bool>>("scrollbar")?.unwrap_or(false),
                     None => false,
@@ -3244,6 +3255,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
                             horizontal,
                             follow,
                             scrollbar,
+                            stretch,
                         },
                     ),
                     table.as_ref(),
