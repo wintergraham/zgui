@@ -2372,6 +2372,9 @@ impl ScriptHost {
                 Some(None) => return Err(fail("a require cycle".into())),
                 None => {}
             }
+            // A module loaded after startup is read, compiled and run in the
+            // middle of whatever needed it: with ZGX_PROFILE, slow ones say so.
+            let loading = zgx::profile::enabled().then(std::time::Instant::now);
             let code = files
                 .read(&path)
                 .map_err(|e| fail(format!("{}: {e}", path.display())))?;
@@ -2396,6 +2399,9 @@ impl ScriptHost {
                 }
             };
             modules.borrow_mut().insert(path, Some(value.clone()));
+            if let Some(took) = loading.map(|at| at.elapsed()).filter(|t| t.as_millis() >= 5) {
+                eprintln!("profile require {chunk}: {:.1} ms (its own requires included)", took.as_secs_f64() * 1e3);
+            }
             Ok(value)
         })?;
         lua.globals().set("require", require)
