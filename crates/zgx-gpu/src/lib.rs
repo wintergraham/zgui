@@ -957,6 +957,46 @@ fn place_text_quads(
         mask: NO_MASK,
     }));
 }
+/// What a glyph's coverage becomes in the atlas. On Windows, the curve
+/// DirectWrite's text has, as Chrome and the rest of the system draw it:
+/// coverage through a display gamma, then its enhanced contrast. zgx blends
+/// in sRGB space with plain coverage, which left its text thinner, lighter
+/// and softer than the same font at the same size beside it in a web page
+/// (ASK-2): light text on a dark ground most of all. Elsewhere coverage is
+/// kept as it is: macOS draws its own text that way, and its displays'
+/// scale hides the difference.
+///
+/// `ZGX_TEXT_GAMMA` and `ZGX_TEXT_CONTRAST` override the two on Windows, to
+/// compare against another app's text on a given display.
+fn mask_curve() -> &'static [u8; 256] {
+    static CURVE: std::sync::OnceLock<[u8; 256]> = std::sync::OnceLock::new();
+    CURVE.get_or_init(|| {
+        let (gamma, contrast) = if cfg!(windows) {
+            let env = |name: &str, default: f32| {
+                std::env::var(name)
+                    .ok()
+                    .and_then(|v| v.parse::<f32>().ok())
+                    .filter(|v| v.is_finite() && *v > 0.)
+                    .unwrap_or(default)
+            };
+            (
+                env("ZGX_TEXT_GAMMA", TEXT_GAMMA),
+                env("ZGX_TEXT_CONTRAST", TEXT_CONTRAST),
+            )
+        } else {
+            (1., 0.)
+        };
+        std::array::from_fn(|i| {
+            let a = (i as f32 / 255.).powf(1. / gamma);
+            let a = a * (contrast + 1.) / (a * contrast + 1.);
+            (a * 255.).round().clamp(0., 255.) as u8
+        })
+    })
+}
+/// Windows' text curve (`mask_curve`): matched by eye and by stem darkness
+/// to Chromium's DirectWrite text of the same font and size.
+const TEXT_GAMMA: f32 = 1.5;
+const TEXT_CONTRAST: f32 = 0.7;
 struct Shaped {
     rich: Option<Arc<zgx::rich_text::RichText>>,
     text_options: zgx::text_layout::TextOptions,
@@ -2247,6 +2287,56 @@ struct GpuContextInner {
     vertex_ring: bool,
     /// For dual-output (single-pass presentation) pipelines.
     quad_layout: wgpu::PipelineLayout,
+    /// Shader fills' pipelines by their source, compiled ahead by
+    /// `compile_made_fills` or in the frame that first needs one.
+    fills: Arc<FillCache>,
+}
+/// Shader fill pipelines on one device, by source (`None`: it doesn't
+/// compile). A pipeline is the same for every window and every shader made
+/// from the same source: the scripts loaded again make the same fills.
+#[derive(Default)]
+struct FillCache(std::sync::Mutex<FxHashMap<Arc<str>, Option<wgpu::RenderPipeline>>>);
+impl FillCache {
+    fn get(&self, source: &str) -> Option<Option<wgpu::RenderPipeline>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).get(source).cloned()
+    }
+    fn insert(&self, source: Arc<str>, pipeline: Option<wgpu::RenderPipeline>) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).insert(source, pipeline);
+    }
+}
+/// A shader fill's pipeline from its source, if it compiles.
+fn compile_fill(device: &wgpu::Device, layout: &wgpu::PipelineLayout, user: &str) -> Option<wgpu::RenderPipeline> {
+    let source = fill_source(user);
+    fill_validates(&source).then(|| {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("shader fill"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        fill_pipeline(device, &module, layout, "zgx_fill")
+    })
+}
+/// Compile every shader fill the scripts make, as they make them, on a thread
+/// of its own: a fill's first frame then finds its pipeline ready instead of
+/// compiling it (70 to 450 ms on Direct3D 12) while the window waits. Ends
+/// once the context is gone.
+fn compile_made_fills(device: wgpu::Device, layout: wgpu::PipelineLayout, cache: std::sync::Weak<FillCache>) {
+    let _ = std::thread::Builder::new().name("zgx shader fills".into()).spawn(move || {
+        let mut seen = 0;
+        loop {
+            let made = zgx::decoration::made_shaders::after(seen, std::time::Duration::from_secs(5));
+            seen += made.len();
+            for source in made {
+                let Some(cache) = cache.upgrade() else { return };
+                if cache.get(&source).is_none() {
+                    let pipeline = compile_fill(&device, &layout, &source);
+                    cache.insert(source, pipeline);
+                }
+            }
+            if cache.strong_count() == 0 {
+                return;
+            }
+        }
+    });
 }
 impl GpuContext {
     /// A context on the system's GPU, found without a window.
@@ -2500,6 +2590,8 @@ impl GpuContext {
             viewport_layout: viewport_layout.clone(),
             polylines: Default::default(),
         };
+        let fills = Arc::new(FillCache::default());
+        compile_made_fills(device.clone(), quad_layout.clone(), Arc::downgrade(&fills));
         Self {
             inner: Rc::new(GpuContextInner {
                 lost,
@@ -2516,6 +2608,7 @@ impl GpuContext {
                 quad_layout,
                 mapped_uploads,
                 vertex_ring,
+                fills,
             }),
         }
     }
@@ -4132,20 +4225,13 @@ impl GpuRenderer {
         if let Some(compiled) = self.fill_pipelines.get(&shader.id()) {
             return compiled.is_some();
         }
-        let source = fill_source(shader.source());
-        let pipeline = fill_validates(&source).then(|| {
-            let module = self
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("shader fill"),
-                    source: wgpu::ShaderSource::Wgsl(source.into()),
-                });
-            fill_pipeline(
-                &self.device,
-                &module,
-                &self.context.inner.quad_layout,
-                "zgx_fill",
-            )
+        // Compiled ahead (`compile_made_fills`), or by another window or an
+        // earlier shader with the same source; else now.
+        let fills = &self.context.inner.fills;
+        let pipeline = fills.get(shader.source()).unwrap_or_else(|| {
+            let pipeline = compile_fill(&self.device, &self.context.inner.quad_layout, shader.source());
+            fills.insert(shader.source().into(), pipeline.clone());
+            pipeline
         });
         self.fill_shaders.insert(shader.id(), shader.clone());
         self.fill_pipelines.insert(shader.id(), pipeline);
@@ -8638,12 +8724,13 @@ impl GpuRenderer {
             let row_start = |row: u32| ((row + 1) * cell_width + 1) as usize * 4;
             match image.content {
                 SwashContent::Mask => {
+                    let curve = mask_curve();
                     for (row, alphas) in image.data.chunks_exact(p.width as usize).enumerate() {
                         let start = row_start(row as u32);
                         for (texel, alpha) in
                             rgba[start..].as_chunks_mut::<4>().0.iter_mut().zip(alphas)
                         {
-                            texel.copy_from_slice(&[255, 255, 255, *alpha]);
+                            texel.copy_from_slice(&[255, 255, 255, curve[*alpha as usize]]);
                         }
                     }
                 }

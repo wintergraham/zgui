@@ -2168,6 +2168,14 @@ impl Host {
                 }
                 self.force = false;
             }
+        } else {
+            // Nothing on screen changed (an animation of something out of
+            // sight, layout that moved nothing): no frame is drawn, but what
+            // this turn did is its own frame to the profiler, not added to
+            // whichever frame draws next. Thirty such turns between two drawn
+            // frames read as one 40 ms frame.
+            zgx::profile::note(|| "nothing on screen changed: not drawn".into());
+            zgx::profile::frame();
         }
         if self.presentation.ready(std::time::Instant::now()) && self.renderer.is_some() {
             if self.frame_paced && !self.present_ready {
@@ -3336,15 +3344,25 @@ impl Host {
         self.context.ui.cancel_interactions();
     }
     fn deactivate(&mut self) {
-        self.context.ui.cancel_interactions();
+        self.deactivate_with(true);
+    }
+    /// `cancel_pointer` false: the window is still in front and only its
+    /// keyboard focus went (to one of its own native views), so a press
+    /// held, and what the pointer hovers, go on.
+    fn deactivate_with(&mut self, cancel_pointer: bool) {
+        if cancel_pointer {
+            self.context.ui.cancel_interactions();
+        }
         self.context.ui.set_window_active(false);
         // A window at the back hears no pointer moves: what it hovered
         // has its leave now, not when the pointer next moves over it.
-        self.native.pointer_left();
-        self.context
-            .ui
-            .input
-            .dispatch(&self.context.ui.scene, InputEvent::PointerLeave);
+        if cancel_pointer {
+            self.native.pointer_left();
+            self.context
+                .ui
+                .input
+                .dispatch(&self.context.ui.scene, InputEvent::PointerLeave);
+        }
         self.native_focused = false;
         self.ime_active = false;
         self.ime_restart = Default::default();
@@ -3357,7 +3375,11 @@ impl Host {
         }
         self.ime_geometry = None;
         self.modifiers = Modifiers::default();
-        self.focus_memory.deactivate(&self.context.ui);
+        if cancel_pointer {
+            self.focus_memory.deactivate(&self.context.ui);
+        } else {
+            self.focus_memory.deactivate_keeping_pointer(&self.context.ui);
+        }
     }
     fn unregister_file_surface(&mut self) {
         #[cfg(target_os = "linux")]
@@ -3877,10 +3899,22 @@ impl Host {
                 // Menus and popovers close as their window or the app
                 // loses focus, as AppKit's do.
                 self.context.ui.dismiss_popups();
+                // On Windows the window "loses focus" too when the keyboard
+                // goes to one of its own child windows (a web page, focused
+                // as its tab is selected by a press), though it stays in
+                // front: the press goes on, so a tab pressed to select it can
+                // still be dragged (it was cancelled at once).
+                #[cfg(windows)]
+                let in_front = self
+                    .window
+                    .as_ref()
+                    .is_some_and(|window| crate::window_chrome::in_front(window));
+                #[cfg(not(windows))]
+                let in_front = false;
                 // A drag the platform has goes on: it deactivates as that
                 // ends (`Handoff`).
                 if self.native_drag.deactivate() {
-                    self.deactivate()
+                    self.deactivate_with(!in_front)
                 }
             }
             WindowEvent::ThemeChanged(appearance) => {
@@ -6180,6 +6214,15 @@ impl ApplicationHandler<Event> for WindowManager {
         self.contain(event_loop, None, |this| {
             this.user_event_turn(event_loop, event)
         });
+        // A window moved or sized: the system's loop never comes back to
+        // winit's for `about_to_wait`, so the turn runs here, on the wakes
+        // its timer sends (window_chrome `in_size_move`). Without it, tasks
+        // (an app's own loop among them), timers and frames stopped for the
+        // whole drag.
+        #[cfg(windows)]
+        if crate::window_chrome::in_size_move() {
+            self.contain(event_loop, None, |this| this.about_to_wait_turn(event_loop));
+        }
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let token = self.native.get(&id).copied();

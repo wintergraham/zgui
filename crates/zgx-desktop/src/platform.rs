@@ -58,7 +58,7 @@ impl Platform for Desktop {
             .window()
             .is_some_and(|window| crate::look_up::show(&window, text, baseline, size))
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     fn window_snapshot(&self) -> Pending<Option<zgx::image::ImageData>> {
         match self.dialogs.window() {
             Some(window) => crate::window_snapshot::take(&window),
