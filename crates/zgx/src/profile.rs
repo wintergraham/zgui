@@ -14,7 +14,9 @@
 //! ```
 //!
 //! Instructions are the calling thread's (macOS `thread_selfcounts`, Linux
-//! `perf_event_open`); elsewhere only time is kept. The counter's own cost is measured once and taken off.
+//! `perf_event_open`); on Windows, which has no user-mode instruction
+//! counter, the thread's CPU cycles (`QueryThreadCycleTime`) stand in;
+//! elsewhere only time is kept. The counter's own cost is measured once and taken off.
 //! On macOS each top-level span is also an `os_signpost` interval
 //! (subsystem `dev.zgx`, category `phases`), so Instruments' os_signpost
 //! track shows the phases on the timeline.
@@ -623,9 +625,33 @@ mod counter {
         (count, first.elapsed().as_secs_f64() * 1e3)
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    /// Windows has no user-mode instruction counter: the calling thread's
+    /// CPU cycles (`QueryThreadCycleTime`, user and kernel time on the
+    /// processor's time-stamp clock) stand in, so "instructions" there are
+    /// cycles the thread ran.
+    #[cfg(windows)]
     pub struct Counter;
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(windows)]
+    impl Counter {
+        pub fn new() -> Self {
+            Self
+        }
+        pub fn read(&self) -> u64 {
+            #[link(name = "kernel32")]
+            unsafe extern "system" {
+                fn GetCurrentThread() -> *mut std::ffi::c_void;
+                fn QueryThreadCycleTime(thread: *mut std::ffi::c_void, cycles: *mut u64) -> i32;
+            }
+            let mut cycles = 0u64;
+            // SAFETY: The current thread's pseudo-handle and one u64 out.
+            unsafe { QueryThreadCycleTime(GetCurrentThread(), &mut cycles) };
+            cycles
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    pub struct Counter;
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     impl Counter {
         pub fn new() -> Self {
             Self
