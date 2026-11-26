@@ -2162,6 +2162,14 @@ impl Host {
                 }
                 self.force = false;
             }
+        } else {
+            // Nothing on screen changed (an animation of something out of
+            // sight, layout that moved nothing): no frame is drawn, but what
+            // this turn did is its own frame to the profiler, not added to
+            // whichever frame draws next. Thirty such turns between two drawn
+            // frames read as one 40 ms frame.
+            zgx::profile::note(|| "nothing on screen changed: not drawn".into());
+            zgx::profile::frame();
         }
         if self.presentation.ready(std::time::Instant::now()) && self.renderer.is_some() {
             if self.frame_paced && !self.present_ready {
