@@ -957,6 +957,46 @@ fn place_text_quads(
         mask: NO_MASK,
     }));
 }
+/// What a glyph's coverage becomes in the atlas. On Windows, the curve
+/// DirectWrite's text has, as Chrome and the rest of the system draw it:
+/// coverage through a display gamma, then its enhanced contrast. zgx blends
+/// in sRGB space with plain coverage, which left its text thinner, lighter
+/// and softer than the same font at the same size beside it in a web page
+/// (ASK-2): light text on a dark ground most of all. Elsewhere coverage is
+/// kept as it is: macOS draws its own text that way, and its displays'
+/// scale hides the difference.
+///
+/// `ZGX_TEXT_GAMMA` and `ZGX_TEXT_CONTRAST` override the two on Windows, to
+/// compare against another app's text on a given display.
+fn mask_curve() -> &'static [u8; 256] {
+    static CURVE: std::sync::OnceLock<[u8; 256]> = std::sync::OnceLock::new();
+    CURVE.get_or_init(|| {
+        let (gamma, contrast) = if cfg!(windows) {
+            let env = |name: &str, default: f32| {
+                std::env::var(name)
+                    .ok()
+                    .and_then(|v| v.parse::<f32>().ok())
+                    .filter(|v| v.is_finite() && *v > 0.)
+                    .unwrap_or(default)
+            };
+            (
+                env("ZGX_TEXT_GAMMA", TEXT_GAMMA),
+                env("ZGX_TEXT_CONTRAST", TEXT_CONTRAST),
+            )
+        } else {
+            (1., 0.)
+        };
+        std::array::from_fn(|i| {
+            let a = (i as f32 / 255.).powf(1. / gamma);
+            let a = a * (contrast + 1.) / (a * contrast + 1.);
+            (a * 255.).round().clamp(0., 255.) as u8
+        })
+    })
+}
+/// Windows' text curve (`mask_curve`): matched by eye and by stem darkness
+/// to Chromium's DirectWrite text of the same font and size.
+const TEXT_GAMMA: f32 = 1.5;
+const TEXT_CONTRAST: f32 = 0.7;
 struct Shaped {
     rich: Option<Arc<zgx::rich_text::RichText>>,
     text_options: zgx::text_layout::TextOptions,
@@ -8638,12 +8678,13 @@ impl GpuRenderer {
             let row_start = |row: u32| ((row + 1) * cell_width + 1) as usize * 4;
             match image.content {
                 SwashContent::Mask => {
+                    let curve = mask_curve();
                     for (row, alphas) in image.data.chunks_exact(p.width as usize).enumerate() {
                         let start = row_start(row as u32);
                         for (texel, alpha) in
                             rgba[start..].as_chunks_mut::<4>().0.iter_mut().zip(alphas)
                         {
-                            texel.copy_from_slice(&[255, 255, 255, *alpha]);
+                            texel.copy_from_slice(&[255, 255, 255, curve[*alpha as usize]]);
                         }
                     }
                 }
