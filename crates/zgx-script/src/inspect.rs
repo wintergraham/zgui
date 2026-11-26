@@ -346,7 +346,7 @@ const HELP: &str = "commands (one JSON object a line, `cmd` and its fields):
   state   [name] [full]                          named states and their values
   set     name value                             set a named state (value is JSON)
   click   target                                 press and release at its middle
-  type    target text                            click it, then type text
+  type    [target] text                          click it, then type text (no target: where focus is)
   key     keys                                   e.g. \"Enter\", \"cmd+k\", \"alt+ArrowDown\"
   scroll  target dy                              scroll the viewport under it
   pointer action=down|move|up target|x,y [dx dy]  one pointer event (a drag, paced by the caller)
@@ -578,8 +578,13 @@ impl Session {
                 (format!("clicked @{}", driver::number(node)), Value::Nil)
             }),
             "type" => (|| {
-                let node = target(&ui)?;
                 let typed = text("text").ok_or("type takes a `text`")?;
+                // Without a target, where focus is (as a keystroke: a selection is replaced).
+                if field("target").is_none() {
+                    ui.dispatch(zgx::input::InputEvent::Text(typed.into()));
+                    return Ok(("typed where focus is".to_string(), Value::Nil));
+                }
+                let node = target(&ui)?;
                 driver::type_into(&mut ui, node, &typed);
                 Ok((format!("typed into @{}", driver::number(node)), Value::Nil))
             })(),
