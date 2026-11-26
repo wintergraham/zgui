@@ -474,6 +474,24 @@ impl<'a> FontFallbackIter<'a> {
                         }
                     }
                 }
+                // zgx patch: a script's own family without a face at this
+                // weight still draws it, at its nearest weight (the keys
+                // are in order of weight difference), as CSS matches a
+                // weight. Passing it over left the script to whichever face
+                // of exactly this weight covers each character: Chinese at
+                // 500 in Apple SD Gothic Neo and Arial Unicode within one
+                // word (Hiragino Sans GB has 300 and 600), Han widths
+                // varying with the faces chosen.
+                let nearest = self
+                    .font_match_keys
+                    .iter()
+                    .find(|m_key| faces.contains(&m_key.id))
+                    .map(|m_key| m_key.id);
+                if let Some(id) = nearest {
+                    if let Some(font) = self.font_system.get_font_at(id, self.ideal_weight, self.optical) {
+                        return Some(font);
+                    }
+                }
                 log::debug!(
                     "failed to find family '{}' for script {:?} and locale '{}'",
                     script_family,

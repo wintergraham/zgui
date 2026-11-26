@@ -49,11 +49,15 @@ fn han_unification(locale: &str) -> &'static [&'static str] {
         // Korea
         "ko" => &["Apple SD Gothic Neo"],
         // Hong Kong
-        "zh-HK" => &["PingFang HK"],
+        // zgx patch: macOS 11 and later keep PingFang among FontServices'
+        // reserved fonts, in outlines (`hvgl`) a font database neither
+        // lists nor can draw; the Hiragino and Heiti faces after it ship
+        // with the system as ordinary fonts.
+        "zh-HK" => &["PingFang HK", "Heiti TC"],
         // Taiwan
-        "zh-TW" => &["PingFang TC"],
+        "zh-TW" => &["PingFang TC", "Heiti TC"],
         // Simplified Chinese is the default (also catches "zh-CN" for China)
-        _ => &["PingFang SC"],
+        _ => &["PingFang SC", "Hiragino Sans GB", "Heiti SC"],
     }
 }
 
