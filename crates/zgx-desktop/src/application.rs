@@ -6172,6 +6172,15 @@ impl ApplicationHandler<Event> for WindowManager {
         self.contain(event_loop, None, |this| {
             this.user_event_turn(event_loop, event)
         });
+        // A window moved or sized: the system's loop never comes back to
+        // winit's for `about_to_wait`, so the turn runs here, on the wakes
+        // its timer sends (window_chrome `in_size_move`). Without it, tasks
+        // (an app's own loop among them), timers and frames stopped for the
+        // whole drag.
+        #[cfg(windows)]
+        if crate::window_chrome::in_size_move() {
+            self.contain(event_loop, None, |this| this.about_to_wait_turn(event_loop));
+        }
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let token = self.native.get(&id).copied();
