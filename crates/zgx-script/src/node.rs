@@ -4375,7 +4375,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
                 shaders
                     .borrow_mut()
                     .entry(key.clone())
-                    .or_insert_with(|| zgx::decoration::FillShader::new(key.0.clone(), fps))
+                    .or_insert_with(|| zgx::decoration::FillShader::new_layer(key.0.clone(), fps))
                     .clone()
             });
             Ok(LayerShaderUd(shader))

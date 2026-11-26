@@ -2247,6 +2247,114 @@ struct GpuContextInner {
     vertex_ring: bool,
     /// For dual-output (single-pass presentation) pipelines.
     quad_layout: wgpu::PipelineLayout,
+    /// Shader fills' and layer shaders' pipelines by source, compiled ahead
+    /// by `compile_made_shaders` or in the frame that first needs one.
+    shaders: Arc<ShaderPipelines>,
+}
+/// Which pipeline a script shader's source compiles into.
+type ShaderKind = zgx::decoration::made_shaders::Kind;
+/// A script shader's pipeline in `ShaderPipelines`: being compiled (by the
+/// thread ahead or a frame), or compiled (`None`: it doesn't compile).
+enum ShaderSlot {
+    Compiling,
+    Ready(Option<wgpu::RenderPipeline>),
+}
+/// Shader fill and layer shader pipelines on one device, by kind and source.
+/// A pipeline is the same for every window and every shader made from the
+/// same source (the scripts loaded again make the same shaders), so each
+/// compiles once, wherever it is first needed.
+#[derive(Default)]
+struct ShaderPipelines {
+    slots: std::sync::Mutex<FxHashMap<(ShaderKind, Arc<str>), ShaderSlot>>,
+    done: std::sync::Condvar,
+}
+impl ShaderPipelines {
+    /// `source`'s pipeline: compiled already, or waited for while another
+    /// thread compiles it (only that one), or compiled now by `compile`.
+    fn get(
+        &self,
+        kind: ShaderKind,
+        source: &Arc<str>,
+        compile: impl FnOnce() -> Option<wgpu::RenderPipeline>,
+    ) -> Option<wgpu::RenderPipeline> {
+        let key = (kind, source.clone());
+        let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            match slots.get(&key) {
+                Some(ShaderSlot::Ready(pipeline)) => return pipeline.clone(),
+                Some(ShaderSlot::Compiling) => {
+                    slots = self.done.wait(slots).unwrap_or_else(|e| e.into_inner());
+                }
+                None => break,
+            }
+        }
+        slots.insert(key.clone(), ShaderSlot::Compiling);
+        drop(slots);
+        // Settles the slot even if `compile` panics, so nothing waits on it
+        // forever: no pipeline, as for a source that doesn't compile.
+        struct Settle<'a>(&'a ShaderPipelines, Option<(ShaderKind, Arc<str>)>, Option<wgpu::RenderPipeline>);
+        impl Drop for Settle<'_> {
+            fn drop(&mut self) {
+                if let Some(key) = self.1.take() {
+                    let mut slots = self.0.slots.lock().unwrap_or_else(|e| e.into_inner());
+                    slots.insert(key, ShaderSlot::Ready(self.2.take()));
+                    self.0.done.notify_all();
+                }
+            }
+        }
+        let mut settle = Settle(self, Some(key), None);
+        let pipeline = compile();
+        settle.2 = pipeline.clone();
+        pipeline
+    }
+}
+/// A script shader's pipeline from its source, if it compiles: a fill's
+/// (`fill_source`, `zgx_fill`) or a layer shader's (`filter_source`,
+/// `zgx_filter`).
+fn compile_shader(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    kind: ShaderKind,
+    user: &str,
+) -> Option<wgpu::RenderPipeline> {
+    let (source, label, entry) = match kind {
+        ShaderKind::Fill => (fill_source(user), "shader fill", "zgx_fill"),
+        ShaderKind::Layer => (filter_source(user), "layer shader", "zgx_filter"),
+    };
+    fill_validates(&source).then(|| {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(label),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        fill_pipeline(device, &module, layout, entry)
+    })
+}
+/// Compile every shader fill and layer shader the scripts make, as they make
+/// them, on a thread of its own: a shader's first frame then finds its
+/// pipeline ready instead of compiling it (200 ms and more each on a
+/// virtual GPU, 70 to 450 ms on Direct3D 12) while the window waits. Ends
+/// once the context is gone.
+fn compile_made_shaders(
+    device: wgpu::Device,
+    layout: wgpu::PipelineLayout,
+    pipelines: std::sync::Weak<ShaderPipelines>,
+) {
+    let _ = std::thread::Builder::new()
+        .name("zgx shaders".into())
+        .spawn(move || {
+            let mut seen = 0;
+            loop {
+                let made = zgx::decoration::made_shaders::after(seen, std::time::Duration::from_secs(5));
+                seen += made.len();
+                for (kind, source) in made {
+                    let Some(pipelines) = pipelines.upgrade() else { return };
+                    pipelines.get(kind, &source, || compile_shader(&device, &layout, kind, &source));
+                }
+                if pipelines.strong_count() == 0 {
+                    return;
+                }
+            }
+        });
 }
 impl GpuContext {
     /// A context on the system's GPU, found without a window.
@@ -2500,6 +2608,8 @@ impl GpuContext {
             viewport_layout: viewport_layout.clone(),
             polylines: Default::default(),
         };
+        let shaders = Arc::new(ShaderPipelines::default());
+        compile_made_shaders(device.clone(), quad_layout.clone(), Arc::downgrade(&shaders));
         Self {
             inner: Rc::new(GpuContextInner {
                 lost,
@@ -2516,6 +2626,7 @@ impl GpuContext {
                 quad_layout,
                 mapped_uploads,
                 vertex_ring,
+                shaders,
             }),
         }
     }
@@ -4132,21 +4243,7 @@ impl GpuRenderer {
         if let Some(compiled) = self.fill_pipelines.get(&shader.id()) {
             return compiled.is_some();
         }
-        let source = fill_source(shader.source());
-        let pipeline = fill_validates(&source).then(|| {
-            let module = self
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("shader fill"),
-                    source: wgpu::ShaderSource::Wgsl(source.into()),
-                });
-            fill_pipeline(
-                &self.device,
-                &module,
-                &self.context.inner.quad_layout,
-                "zgx_fill",
-            )
-        });
+        let pipeline = self.shader_pipeline(ShaderKind::Fill, shader);
         self.fill_shaders.insert(shader.id(), shader.clone());
         self.fill_pipelines.insert(shader.id(), pipeline);
         self.fill_pipelines[&shader.id()].is_some()
@@ -4156,23 +4253,23 @@ impl GpuRenderer {
         if let Some(compiled) = self.filter_pipelines.get(&shader.id()) {
             return compiled.is_some();
         }
-        let source = filter_source(shader.source());
-        let pipeline = fill_validates(&source).then(|| {
-            let module = self
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("layer shader"),
-                    source: wgpu::ShaderSource::Wgsl(source.into()),
-                });
-            fill_pipeline(
-                &self.device,
-                &module,
-                &self.context.inner.quad_layout,
-                "zgx_filter",
-            )
-        });
+        let pipeline = self.shader_pipeline(ShaderKind::Layer, shader);
         self.filter_pipelines.insert(shader.id(), pipeline);
         self.filter_pipelines[&shader.id()].is_some()
+    }
+    /// A script shader's pipeline from the device's: compiled ahead
+    /// (`compile_made_shaders`), or by another window or an earlier shader
+    /// with the same source; waited for if being compiled; else compiled now.
+    fn shader_pipeline(
+        &self,
+        kind: ShaderKind,
+        shader: &zgx::decoration::FillShader,
+    ) -> Option<wgpu::RenderPipeline> {
+        let inner = &self.context.inner;
+        let source: Arc<str> = shader.source().into();
+        inner.shaders.get(kind, &source, || {
+            compile_shader(&self.device, &inner.quad_layout, kind, &source)
+        })
     }
     /// The blended layers' group 2 (the backdrop) and pipeline layout.
     fn blend_layouts(&self) -> &(wgpu::BindGroupLayout, wgpu::PipelineLayout) {

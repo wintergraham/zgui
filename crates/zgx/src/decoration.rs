@@ -81,6 +81,37 @@ pub enum Background {
         image: Arc<crate::image::ImageData>,
     },
 }
+/// The sources of every shader made ([`FillShader::new`],
+/// [`FillShader::new_layer`]), in order, so a renderer can compile their
+/// pipelines on a thread of its own, ahead of their first draw, instead of in
+/// the frame that first shows one (tens to hundreds of milliseconds each).
+pub mod made_shaders {
+    use std::sync::{Arc, Condvar, Mutex};
+    /// What a made shader is: which pipeline its source compiles into.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub enum Kind {
+        /// A box's fill (`bg_shader`).
+        Fill,
+        /// A layer shader (`layer_shader`), compositing a cached layer.
+        Layer,
+    }
+    static SOURCES: Mutex<Vec<(Kind, Arc<str>)>> = Mutex::new(Vec::new());
+    static MORE: Condvar = Condvar::new();
+    pub(super) fn add(kind: Kind, source: &Arc<str>) {
+        let mut sources = SOURCES.lock().unwrap_or_else(|e| e.into_inner());
+        sources.push((kind, source.clone()));
+        MORE.notify_all();
+    }
+    /// The shaders made after the first `seen`, waiting up to `wait` for one
+    /// when there are none yet.
+    pub fn after(seen: usize, wait: std::time::Duration) -> Vec<(Kind, Arc<str>)> {
+        let sources = SOURCES.lock().unwrap_or_else(|e| e.into_inner());
+        let (sources, _) = MORE
+            .wait_timeout_while(sources, wait, |s| s.len() <= seen)
+            .unwrap_or_else(|e| e.into_inner());
+        sources.get(seen..).map(<[_]>::to_vec).unwrap_or_default()
+    }
+}
 /// A fill written as a WGSL function the GPU runs for every pixel of a box:
 ///
 /// ```wgsl
@@ -104,10 +135,19 @@ impl FillShader {
     /// `source`, its time advancing at most `fps` times a second (a dither
     /// drifting at 30 fps redraws at 30 fps): `None` for every frame.
     pub fn new(source: impl Into<Arc<str>>, fps: Option<f32>) -> Arc<Self> {
+        Self::made(made_shaders::Kind::Fill, source.into(), fps)
+    }
+    /// As `new`, for a layer shader (`Scene::set_layer_shader`): the same
+    /// shader, but a renderer compiling ahead compiles it as a layer's.
+    pub fn new_layer(source: impl Into<Arc<str>>, fps: Option<f32>) -> Arc<Self> {
+        Self::made(made_shaders::Kind::Layer, source.into(), fps)
+    }
+    fn made(kind: made_shaders::Kind, source: Arc<str>, fps: Option<f32>) -> Arc<Self> {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        made_shaders::add(kind, &source);
         Arc::new(Self {
             id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            source: source.into(),
+            source,
             fps: fps.filter(|fps| fps.is_finite() && *fps > 0.),
         })
     }
