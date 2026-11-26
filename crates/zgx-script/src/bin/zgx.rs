@@ -184,6 +184,7 @@ ZGX_INSPECT_SOCKET=1): with one running, --app is not needed.
   state [name] [--full]                  set <name> <json>
   click <target>       type <target> <text>      key <keys>
   scroll <target> <dy> command <id>
+  pointer <down|move|up> [target] [--x X --y Y] [--dx DX] [--dy DY]
   errors               lint
   frames [n] [--runs N] [--all] [--since MARK|FRAME] [--keep N]
   mark [name]          switch [name] [on|off]
@@ -237,7 +238,7 @@ fn inspect(args: Vec<String>) -> ExitCode {
                 }
             },
             "--depth" | "--budget" | "--text" | "--timeout" | "--width" | "--runs" | "--since"
-            | "--keep" | "--repeat" | "--every" => {
+            | "--keep" | "--repeat" | "--every" | "--x" | "--y" | "--dx" | "--dy" => {
                 flags.push((arg[2..].to_string(), args.next()));
             }
             _ => words.push(arg),
@@ -297,6 +298,10 @@ fn inspect(args: Vec<String>) -> ExitCode {
         "scroll" => {
             put("target", arg(1));
             put("dy", arg(2));
+        }
+        "pointer" => {
+            put("action", arg(1));
+            put("target", arg(2));
         }
         "key" => put("keys", arg(1)),
         "command" => put("id", arg(1)),

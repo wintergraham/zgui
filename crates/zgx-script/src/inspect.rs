@@ -349,6 +349,7 @@ const HELP: &str = "commands (one JSON object a line, `cmd` and its fields):
   type    target text                            click it, then type text
   key     keys                                   e.g. \"Enter\", \"cmd+k\", \"alt+ArrowDown\"
   scroll  target dy                              scroll the viewport under it
+  pointer action=down|move|up target|x,y [dx dy]  one pointer event (a drag, paced by the caller)
   snapshot target [width=4096]                   its pixels as the window last drew them: a PNG, user-only
   record  [stop]                                 record the window's wheel input; stop answers the tape
   replay  target tape [repeat=1] [every]         play a tape back through the window's input path: its
@@ -615,6 +616,37 @@ impl Session {
                 let node = target(&ui)?;
                 driver::scroll(&mut ui, node, number("dy").unwrap_or(100.) as f32);
                 Ok((format!("scrolled @{}", driver::number(node)), Value::Nil))
+            })(),
+            "pointer" => (|| {
+                // A drag a step at a time: the caller paces the moves, a
+                // frame or more apart, as a hand would.
+                let (x, y) = match (number("x"), number("y")) {
+                    (Some(x), Some(y)) => (x as f32, y as f32),
+                    _ => {
+                        let b = ui.scene.borrow().bounds(target(&ui)?);
+                        (b.x + b.width / 2., b.y + b.height / 2.)
+                    }
+                };
+                let (x, y) = (
+                    x + number("dx").unwrap_or(0.) as f32,
+                    y + number("dy").unwrap_or(0.) as f32,
+                );
+                let button = zgx::input::PointerButton::Primary;
+                let action = text("action").unwrap_or_else(|| "move".into());
+                ui.dispatch(match action.as_str() {
+                    "down" => zgx::input::InputEvent::PointerDown { x, y, button },
+                    "up" => zgx::input::InputEvent::PointerUp { x, y, button },
+                    "move" => zgx::input::InputEvent::PointerMove { x, y },
+                    other => {
+                        return Err(format!(
+                            "pointer `action` is down, move or up, not `{other}`"
+                        ));
+                    }
+                });
+                Ok((
+                    format!("pointer {action} at {x:.0},{y:.0}"),
+                    Value::record([("x", Value::Num(x as f64)), ("y", Value::Num(y as f64))]),
+                ))
             })(),
             "command" => (|| {
                 let id = text("id").ok_or("command takes an `id`")?;
