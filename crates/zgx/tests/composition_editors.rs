@@ -401,3 +401,35 @@ fn reactive_editor_text_color_only_damages_paint() {
     ui.prepare_frame();
     assert!(ui.scene.borrow_mut().flush().is_idle());
 }
+
+/// Focus leaving a field keeps what an input method was composing (the
+/// last Korean syllable typed before Tab or a click elsewhere), committed
+/// to its value, as native fields do; the host is told to reset the input
+/// method, which still holds it.
+#[test]
+fn focus_leaving_keeps_the_composition() {
+    let mut ui = Ui::new(500., 400.);
+    let value = ui.signal(String::from("안"));
+    let other = ui.signal(String::new());
+    let mounted = ui.mount(column().children([
+        text_input("Name", value.clone()).id("name").w(240.),
+        text_input("Other", other).id("other").w(240.),
+    ]));
+    let name = mounted.find("name").unwrap();
+    assert!(ui.input.focus(&ui.scene, Some(name)));
+    let editor = ui.focused_editor().unwrap();
+    editor.editor.borrow_mut().set_selection(3, 3);
+    ui.dispatch(InputEvent::ImePreedit {
+        text: "녕".into(),
+        cursor: Some((3, 3)),
+    });
+    let revision = editor.editor.borrow().composition_cancel_revision();
+    assert_eq!(value.get(), "안");
+    assert!(ui.input.focus(&ui.scene, mounted.find("other")));
+    assert_eq!(value.get(), "안녕");
+    assert!(editor.editor.borrow().preedit().is_none());
+    assert_ne!(
+        editor.editor.borrow().composition_cancel_revision(),
+        revision
+    );
+}
