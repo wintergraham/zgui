@@ -43,7 +43,8 @@ fn forbidden_fallback() -> &'static [&'static str] {
 }
 
 fn han_unification(locale: &str) -> &'static [&'static str] {
-    match locale {
+    // zgx patch: by the tag's language and region (`han_region`), not the bare tag alone.
+    match super::han_region(locale) {
         // Japan
         "ja" => &["Hiragino Sans"],
         // Korea

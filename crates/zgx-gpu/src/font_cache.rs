@@ -88,6 +88,15 @@ pub fn set_desktop_sans_serif(family: Option<String>) {
     let _ = family;
 }
 
+/// The app's interface language (a BCP 47 tag: "ja", "zh-Hant"), which picks
+/// the fallback faces for text the UI's own face lacks, over the system's
+/// language: on an English Windows, Japanese took its kanji from the Chinese
+/// font. Takes effect in text shaped from then on, so a change of language
+/// applies without a relaunch. `None` goes back to the system's.
+pub fn set_text_locale(locale: Option<String>) {
+    cosmic_text::set_locale_override(locale);
+}
+
 fn cached_system_fonts() -> FontSystem {
     let Some(cache) = cache_file() else {
         return FontSystem::new();

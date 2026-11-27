@@ -146,6 +146,26 @@ impl FontCachedCodepointSupportInfo {
     }
 }
 
+/// zgx patch: the locale fallback fonts are chosen for, when the app sets one (its interface language) over the
+/// system's: Japanese text on an English Windows otherwise takes its Han characters from the Chinese font. Read when a
+/// font system is made, and by [`FontSystem::sync_locale`] as text is shaped, so a change of language applies at once.
+static LOCALE_OVERRIDE: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+static LOCALE_GENERATION: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// zgx patch: choose fallback fonts for `locale` (a BCP 47 tag such as "ja" or "zh-Hant"); `None` goes back to the
+/// system's.
+pub fn set_locale_override(locale: Option<String>) {
+    let mut slot = LOCALE_OVERRIDE.write().unwrap_or_else(|e| e.into_inner());
+    if *slot != locale {
+        *slot = locale;
+        LOCALE_GENERATION.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+fn locale_override() -> Option<String> {
+    LOCALE_OVERRIDE.read().ok().and_then(|slot| slot.clone())
+}
+
 /// Access to the system fonts.
 pub struct FontSystem {
     /// The locale of the system.
@@ -204,6 +224,9 @@ pub struct FontSystem {
 
     /// List of fallbacks
     pub(crate) fallbacks: Fallbacks,
+
+    /// zgx patch: the `LOCALE_GENERATION` `locale` was chosen at.
+    locale_generation: u64,
 }
 
 impl fmt::Debug for FontSystem {
@@ -349,6 +372,28 @@ impl FontSystem {
             shape_buffer: ShapeBuffer::default(),
             dyn_fallback: Box::new(impl_fallback),
             fallbacks,
+            locale_generation: LOCALE_GENERATION.load(core::sync::atomic::Ordering::Relaxed),
+        }
+    }
+
+    /// zgx patch: follow the app's locale (`set_locale_override`) if it changed since this font system chose its
+    /// fallbacks, choosing them again.
+    pub fn sync_locale(&mut self) {
+        let generation = LOCALE_GENERATION.load(core::sync::atomic::Ordering::Relaxed);
+        if generation == self.locale_generation {
+            return;
+        }
+        self.locale_generation = generation;
+        let wanted = locale_override().unwrap_or_else(Self::get_locale);
+        if wanted != self.locale {
+            self.locale = wanted;
+            self.fallbacks = Fallbacks::new(self.dyn_fallback.as_ref(), &[], &self.locale);
+            self.font_matches_cache.clear();
+            self.first_font.clear();
+            #[cfg(feature = "shape-run-cache")]
+            {
+                self.shape_run_cache = crate::ShapeRunCache::default();
+            }
         }
     }
 
@@ -594,6 +639,9 @@ impl FontSystem {
 
     #[cfg(feature = "std")]
     fn get_locale() -> String {
+        if let Some(locale) = locale_override() {
+            return locale;
+        }
         sys_locale::get_locale().unwrap_or_else(|| {
             log::warn!("failed to get system locale, falling back to en-US");
             String::from("en-US")

@@ -28,7 +28,7 @@ mod planes;
 pub mod present_log;
 mod surface;
 mod upload;
-pub use font_cache::set_desktop_sans_serif;
+pub use font_cache::{set_desktop_sans_serif, set_text_locale};
 pub use surface::PresentationStatus;
 
 /// The corner radius of find's marks behind text.

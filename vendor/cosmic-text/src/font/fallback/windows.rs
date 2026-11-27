@@ -44,10 +44,10 @@ fn forbidden_fallback() -> &'static [&'static str] {
 }
 
 fn han_unification(locale: &str) -> &'static [&'static str] {
-    //TODO!
-    match locale {
+    // zgx patch: by the tag's language and region (`han_region`), not the bare tag alone.
+    match super::han_region(locale) {
         // Japan
-        "ja" => &["Yu Gothic"],
+        "ja" => &["Yu Gothic UI", "Yu Gothic", "Meiryo UI", "Meiryo"],
         // Korea
         "ko" => &["Malgun Gothic"],
         // Hong Kong"

@@ -76,6 +76,28 @@ pub trait Fallback: Send + Sync {
     fn script_fallback(&self, script: Script, locale: &str) -> &[&'static str];
 }
 
+/// zgx patch: which Han forms a locale reads ("ja", "ko", "zh-HK", "zh-TW", else "zh-CN"), from a whole tag: the
+/// lists matched the bare language only, so "ja-JP", "zh-Hant" or "ko-KR" all took the Simplified Chinese font.
+pub(crate) fn han_region(locale: &str) -> &'static str {
+    let lower = locale.to_ascii_lowercase().replace('_', "-");
+    let mut parts = lower.split('-');
+    match parts.next().unwrap_or_default() {
+        "ja" => "ja",
+        "ko" => "ko",
+        "zh" => {
+            let rest: Vec<&str> = parts.collect();
+            if rest.contains(&"hk") || rest.contains(&"mo") {
+                "zh-HK"
+            } else if rest.contains(&"hant") || rest.contains(&"tw") {
+                "zh-TW"
+            } else {
+                "zh-CN"
+            }
+        }
+        _ => "zh-CN",
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Fallbacks {
     lists: Vec<&'static str>,
@@ -208,6 +230,7 @@ impl<'a> FontFallbackIter<'a> {
         ideal_weight: fontdb::Weight,
         optical: u16,
     ) -> Self {
+        font_system.sync_locale();
         font_system
             .fallbacks
             .extend(font_system.dyn_fallback.as_ref(), scripts);

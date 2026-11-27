@@ -144,6 +144,8 @@ mod presentation_retry;
 mod window_control_examples {}
 
 pub use zgx_gpu::text::FontData;
+/// The interface language that picks fallback faces for text (`zgx_gpu::set_text_locale`).
+pub use zgx_gpu::set_text_locale;
 
 mod file_drop;
 mod gpu_stats;
