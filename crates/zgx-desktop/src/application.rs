@@ -764,6 +764,9 @@ pub struct Application {
     // Read on Linux only.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     desktop_id: Option<String>,
+    /// Linux: open X11 windows even where Wayland is available.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    x11: bool,
     application_event: Option<ApplicationEventHandler>,
     quit_on_last_window_close: bool,
 }
@@ -780,6 +783,7 @@ impl Application {
             menus: Vec::new(),
             application_id: None,
             desktop_id: None,
+            x11: false,
             application_event: None,
             quit_on_last_window_close: true,
         }
@@ -827,6 +831,15 @@ impl Application {
         self.desktop_id = Some(id.into());
         self
     }
+    /// On Linux, open X11 windows (XWayland under a Wayland session) even
+    /// where Wayland is available: for an app whose windows hold other
+    /// processes' X11 windows (native views), which a Wayland window can't.
+    /// The environment alone can't say so once a library in the process has
+    /// set `WAYLAND_DISPLAY` again. Elsewhere it does nothing.
+    pub fn prefer_x11(mut self) -> Self {
+        self.x11 = true;
+        self
+    }
     /// Call `handler` for each URL or reopen request the system delivers
     /// (requires [`Application::application_id`]).
     pub fn on_application_event(
@@ -866,6 +879,10 @@ impl Application {
         // take AppKit's Services menu meanwhile.
         #[cfg(target_os = "macos")]
         winit::platform::macos::EventLoopBuilderExtMacOS::with_default_menu(&mut event_loop, false);
+        #[cfg(target_os = "linux")]
+        if self.x11 && std::env::var_os("DISPLAY").is_some_and(|display| !display.is_empty()) {
+            winit::platform::x11::EventLoopBuilderExtX11::with_x11(&mut event_loop);
+        }
         let event_loop = event_loop.build()?;
         zgx::profile::mark("event loop");
         let proxy = event_loop.create_proxy();

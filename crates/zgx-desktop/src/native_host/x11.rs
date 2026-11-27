@@ -90,7 +90,11 @@ impl Surfaces {
         let parent = match handle.as_raw() {
             RawWindowHandle::Xlib(handle) => handle.window as Window,
             RawWindowHandle::Xcb(handle) => handle.window.get(),
-            _ => return Err("native views need an X11 window (XWayland under Wayland)".into()),
+            other => {
+                return Err(format!(
+                    "native views need an X11 window (XWayland under Wayland), not {other:?}"
+                ));
+            }
         };
         let (connection, screen) = x11rb::connect(None).map_err(|error| error.to_string())?;
         let root = connection.setup().roots[screen].root;
