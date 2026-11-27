@@ -21,6 +21,8 @@ pub(crate) use ghostty::processes_changed;
 mod macos;
 #[cfg(target_os = "macos")]
 mod webkit;
+#[cfg(target_os = "linux")]
+mod x11;
 #[cfg(all(windows, feature = "webview2"))]
 mod webview2;
 
@@ -61,7 +63,7 @@ pub(crate) struct NativeHost {
     #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
     placed: Rc<PlaneSplit>,
     /// The window's zoom (`Ui::zoom`) at the last plan.
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     zoom: f32,
     /// The window's DirectComposition tree, made with its renderer.
     #[cfg(all(windows, feature = "webview2"))]
@@ -70,6 +72,8 @@ pub(crate) struct NativeHost {
     surfaces: Option<platform::Surfaces>,
     #[cfg(all(windows, not(feature = "webview2")))]
     surfaces: Option<child::Surfaces>,
+    #[cfg(target_os = "linux")]
+    surfaces: Option<x11::Surfaces>,
     #[cfg(any(target_os = "macos", windows))]
     overlay: Option<zgx_gpu::GpuRenderer>,
     /// The overlay renderer drew this frame (present it).
@@ -113,7 +117,8 @@ impl NativeHost {
                 backends.contains("dx12") || backends.contains("d3d12")
             });
         #[cfg(not(all(windows, feature = "webview2")))]
-        let supported = cfg!(any(target_os = "macos", windows));
+        // Linux: X11 windows (XWayland included); a Wayland window turns it off at its first plan.
+        let supported = cfg!(any(target_os = "macos", windows, target_os = "linux"));
         natives.set_supported(supported);
         Self {
             natives,
@@ -121,11 +126,11 @@ impl NativeHost {
             split: Rc::new(PlaneSplit::default()),
             #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
             placed: Rc::new(PlaneSplit::default()),
-            #[cfg(any(target_os = "macos", windows))]
+            #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
             zoom: 1.,
             #[cfg(all(windows, feature = "webview2"))]
             composition: None,
-            #[cfg(any(target_os = "macos", windows))]
+            #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
             surfaces: None,
             #[cfg(any(target_os = "macos", windows))]
             overlay: None,
@@ -235,7 +240,7 @@ impl NativeHost {
     /// native view for the window (AppKit and the composition hosts move it
     /// themselves).
     pub fn pointer_down(&mut self) {
-        #[cfg(all(windows, not(feature = "webview2")))]
+        #[cfg(any(all(windows, not(feature = "webview2")), target_os = "linux"))]
         if let Some(surfaces) = &mut self.surfaces {
             surfaces.pointer_down();
         }
@@ -252,6 +257,10 @@ impl NativeHost {
         #[cfg(all(windows, feature = "webview2"))]
         {
             self.composition = None;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.surfaces = None;
         }
         self.split = Rc::new(PlaneSplit::default());
         #[cfg(any(target_os = "macos", all(windows, feature = "webview2")))]
@@ -624,7 +633,83 @@ impl NativeHost {
     }
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+/// Linux under X11: native views are child windows of the zgx window
+/// (`x11.rs`). No overlay plane: the window's renderer draws everything,
+/// under the child windows, whose shapes leave out overlay boxes that take
+/// the pointer.
+#[cfg(target_os = "linux")]
+impl NativeHost {
+    pub fn plan(
+        &mut self,
+        scene: &Scene,
+        window: &winit::window::Window,
+        renderer: &mut zgx_gpu::GpuRenderer,
+        _scale: f32,
+        zoom: f32,
+    ) -> Result<Vec<Rect>, zgx_gpu::GpuError> {
+        if !self.active() || !self.natives.supported() {
+            return Ok(Vec::new());
+        }
+        if self.surfaces.is_none() {
+            match x11::Surfaces::new(window) {
+                Ok(surfaces) => self.surfaces = Some(surfaces),
+                Err(error) => {
+                    eprintln!("zgx: native views unavailable: {error}");
+                    self.natives.set_supported(false);
+                    return Ok(Vec::new());
+                }
+            }
+        }
+        let (split, damage) = PlaneSplit::compute(scene, &self.natives.nodes(), &self.split);
+        let split = Rc::new(split);
+        let surfaces = self.surfaces.as_mut().expect("made above");
+        let rezoomed = self.zoom != zoom;
+        if rezoomed {
+            self.zoom = zoom;
+            surfaces.set_zoom(zoom);
+        }
+        let rescaled = surfaces.set_window_scale(window.scale_factor() as f32);
+        if surfaces.differs(&split, &self.split) || rezoomed || rescaled {
+            self.pending = true;
+        }
+        if surfaces.cut_outs(scene, &self.input, &split) {
+            self.pending = true;
+        }
+        renderer.clear_plane();
+        self.split = split.clone();
+        self.natives.set_split(split);
+        Ok(damage)
+    }
+    pub fn render(&mut self, _: &Scene, _: &[Rect]) -> Result<(), zgx_gpu::GpuError> {
+        Ok(())
+    }
+    /// Child windows move as they are told: there is no transaction to open.
+    pub fn begin(&self) -> Option<x11::Transaction> {
+        None
+    }
+    pub fn present_overlay(&mut self) -> Result<(), zgx_gpu::GpuError> {
+        Ok(())
+    }
+    pub fn apply(&mut self) {
+        if let Some(surfaces) = &mut self.surfaces {
+            surfaces.apply(&self.natives, &self.split);
+        }
+        self.pending = false;
+    }
+    pub fn flush(&mut self) {
+        if self.pending {
+            self.apply();
+        }
+    }
+    pub fn sync_focus(&mut self, ui: &Ui) {
+        if let Some(surfaces) = &mut self.surfaces {
+            surfaces.sync_focus(ui, &self.natives);
+        }
+    }
+    pub fn trim(&mut self) {}
+}
+
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 impl NativeHost {
     pub fn plan(
         &mut self,
