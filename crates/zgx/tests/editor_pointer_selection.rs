@@ -178,7 +178,7 @@ fn a_shift_click_extends_by_the_units_the_selection_was_made_in() {
 }
 
 #[test]
-fn pointer_selection_is_read_only_safe_cancels_composition_and_preserves_history() {
+fn pointer_selection_is_read_only_safe_commits_composition_and_preserves_history() {
     let (mut ui, editor) = fixture("one two", 200., false);
     editor.paste("prefix ");
     editor.editor.borrow_mut().set_selection(0, 0);
@@ -190,7 +190,22 @@ fn pointer_selection_is_read_only_safe_cancels_composition_and_preserves_history
     let epoch = editor.editor.borrow().composition_cancel_revision();
     click(&mut ui, 16., 20., false);
     assert!(editor.editor.borrow().preedit().is_none());
+    // The press keeps what was composed (a native field does), and the
+    // host is told to reset the input method, which still holds it.
+    assert_eq!(editor.value().get(), "中prefix one two");
     assert_ne!(editor.editor.borrow().composition_cancel_revision(), epoch);
+    // Undone, as typing is.
+    ui.dispatch(InputEvent::KeyDown {
+        key: zgx::input::Key::Character("z".into()),
+        repeat: false,
+        modifiers: Modifiers {
+            control: !cfg!(target_os = "macos"),
+            meta: cfg!(target_os = "macos"),
+            ..Default::default()
+        },
+    });
+    assert_eq!(editor.value().get(), "prefix one two");
+    ui.prepare_frame();
     editor.set_read_only(true);
     click(&mut ui, 16., 20., false);
     assert_eq!(editor.copy(), "prefix");

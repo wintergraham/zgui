@@ -3148,9 +3148,26 @@ fn with_events(
     // A press that follows the pointer (a divider, a slider of the
     // script's own) keeps it until release, wherever it goes.
     let captures = press.is_some() && (moved.is_some() || release.is_some());
+    let composing = events.composing.clone();
+    let was_composing = Rc::new(std::cell::Cell::new(false));
     let (vm, actions) = (vm.clone(), low.actions.clone());
     view.on_event(move |event| {
         let lua = &vm.lua;
+        // Composing or not, from the input method's own events.
+        if let Some(h) = &composing
+            && event.phase == EventPhase::Target
+        {
+            let now = match &event.event {
+                InputEvent::ImePreedit { text, .. } => Some(!text.is_empty()),
+                InputEvent::ImeCommit(_) | InputEvent::Blur => Some(false),
+                _ => None,
+            };
+            if let Some(now) = now
+                && was_composing.replace(now) != now
+            {
+                run(h, &vm, &actions, now);
+            }
+        }
         let local = |x: f32, y: f32| {
             let origin = handle
                 .get()
@@ -3271,6 +3288,11 @@ fn with_events(
             }
             InputEvent::Blur => {
                 if let Some(h) = &blur {
+                    // What was being composed is the field's before the
+                    // script hears it left (a rename commits on blur).
+                    if let Some(editor) = handle.get().and_then(NodeHandle::editor) {
+                        editor.finish_composition();
+                    }
                     run(h, &vm, &actions, ());
                 }
             }

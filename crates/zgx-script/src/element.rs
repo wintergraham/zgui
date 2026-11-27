@@ -1230,6 +1230,16 @@ impl UserData for ElementUd {
                 Ok(true)
             },
         );
+        // Whether an input method is composing in it (a Korean syllable,
+        // Japanese before conversion): text it shows that the value does
+        // not hold yet. Leave its text and selection alone meanwhile.
+        methods.add_method("composing", |_, e, ()| {
+            Ok(e.0
+                .handle
+                .get()
+                .and_then(NodeHandle::editor)
+                .is_some_and(|editor| editor.editor.borrow().preedit().is_some()))
+        });
         methods.add_method("selection_bytes", |lua, e, ()| {
             settle(lua);
             let Some(editor) = e.0.handle.get().and_then(NodeHandle::editor) else {

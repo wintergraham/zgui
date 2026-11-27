@@ -560,3 +560,35 @@ pub trait SelectionServices {
 pub fn set_selection_services(services: Option<std::rc::Rc<dyn SelectionServices>>) {
     crate::platform_impl::set_selection_services(services);
 }
+
+/// zgx patch: what an input method may read of the field with the keyboard
+/// focus, as AppKit's text views answer `NSTextInputClient`: its text with
+/// any composition in place, and the selection and composition in it, in
+/// UTF-8 bytes of `text`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TextInputState {
+    /// The field's text, the composition in place of the selection.
+    pub text: String,
+    /// The selection (or caret) in `text`; inside the composition while
+    /// there is one, where the input method's caret is.
+    pub selection: std::ops::Range<usize>,
+    /// The composition in `text`, if any.
+    pub marked: Option<std::ops::Range<usize>>,
+}
+
+/// zgx patch: the app's answers to input methods ([`set_text_input_services`]).
+pub trait TextInputServices {
+    /// The editable field with the keyboard focus in `window`, if any (a
+    /// password field's text is no input method's to read: none).
+    fn text_input_state(&self, window: crate::window::WindowId) -> Option<TextInputState>;
+}
+
+/// zgx patch: give windows' views `services`, so input methods read the
+/// focused field's text, selection and composition
+/// (`selectedRange`, `markedRange`, `attributedSubstringForProposedRange:`)
+/// and may replace text before the caret ([`crate::event::Ime::Replace`]),
+/// as they do in AppKit's text views. Main thread only; with none, a view
+/// reports no text, as winit's does.
+pub fn set_text_input_services(services: Option<std::rc::Rc<dyn TextInputServices>>) {
+    crate::platform_impl::set_text_input_services(services);
+}

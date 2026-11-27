@@ -636,6 +636,9 @@ pub(crate) struct Events {
     pub key_up: Option<Handler>,
     pub focus: Option<Handler>,
     pub blur: Option<Handler>,
+    /// `fn(composing)` as an input method starts composing in an input
+    /// (text it shows that its value doesn't hold yet) and as it stops.
+    pub composing: Option<Handler>,
     /// `fn({ dx, dy, x, y, local_x, local_y, shift, ctrl, alt, meta })`.
     pub wheel: Option<Handler>,
     /// `fn({ scale, x, y, local_x, local_y, … })`: a trackpad pinch.
@@ -727,6 +730,7 @@ impl Events {
         key_up: None,
         focus: None,
         blur: None,
+        composing: None,
         wheel: None,
         pinch: None,
         mount: None,
@@ -2277,6 +2281,7 @@ fn set_handler(
         "on_key_up" => &mut events.key_up,
         "on_focus" => &mut events.focus,
         "on_blur" => &mut events.blur,
+        "on_composing" => &mut events.composing,
         "on_wheel" => &mut events.wheel,
         "on_pinch" => &mut events.pinch,
         "on_mount" => {
