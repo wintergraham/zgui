@@ -492,9 +492,9 @@ impl GpuRenderer {
     }
     /// A new effect atlas of `width` × `height`, bound for composites.
     fn effect_atlas(&mut self, width: u32, height: u32) -> EffectAtlas {
-        let output = crate::texture(&self.device, width, height, "effect atlas");
-        let scratch = crate::texture(&self.device, width, height, "effect scratch");
-        let blank = crate::texture(&self.device, 1, 1, "effect blank mask");
+        let output = crate::texture(&self.device, width, height, 1, "effect atlas");
+        let scratch = crate::texture(&self.device, width, height, 1, "effect scratch");
+        let blank = crate::texture(&self.device, 1, 1, 1, "effect blank mask");
         let view = |texture: &wgpu::Texture| texture.create_view(&Default::default());
         // Frames drawn with Metal directly write these behind wgpu's back.
         #[cfg(target_os = "macos")]

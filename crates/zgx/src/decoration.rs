@@ -81,6 +81,29 @@ pub enum Background {
         image: Arc<crate::image::ImageData>,
     },
 }
+/// The sources of every shader made ([`FillShader::new`]), in order, so a
+/// renderer can compile them ahead of their first draw (compiling one takes
+/// tens of milliseconds, and more on Direct3D 12) instead of in the frame
+/// that first shows it.
+pub mod made_shaders {
+    use std::sync::{Arc, Condvar, Mutex};
+    static SOURCES: Mutex<Vec<Arc<str>>> = Mutex::new(Vec::new());
+    static MORE: Condvar = Condvar::new();
+    pub(super) fn add(source: &Arc<str>) {
+        let mut sources = SOURCES.lock().unwrap_or_else(|e| e.into_inner());
+        sources.push(source.clone());
+        MORE.notify_all();
+    }
+    /// The sources made after the first `seen`, waiting up to `wait` for one
+    /// when there are none yet.
+    pub fn after(seen: usize, wait: std::time::Duration) -> Vec<Arc<str>> {
+        let sources = SOURCES.lock().unwrap_or_else(|e| e.into_inner());
+        let (sources, _) = MORE
+            .wait_timeout_while(sources, wait, |s| s.len() <= seen)
+            .unwrap_or_else(|e| e.into_inner());
+        sources.get(seen..).map(<[_]>::to_vec).unwrap_or_default()
+    }
+}
 /// A fill written as a WGSL function the GPU runs for every pixel of a box:
 ///
 /// ```wgsl
@@ -105,9 +128,11 @@ impl FillShader {
     /// drifting at 30 fps redraws at 30 fps): `None` for every frame.
     pub fn new(source: impl Into<Arc<str>>, fps: Option<f32>) -> Arc<Self> {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let source = source.into();
+        made_shaders::add(&source);
         Arc::new(Self {
             id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            source: source.into(),
+            source,
             fps: fps.filter(|fps| fps.is_finite() && *fps > 0.),
         })
     }

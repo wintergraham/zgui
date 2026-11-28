@@ -38,8 +38,9 @@ use zgx::{
 /// The macOS host's frame transaction has no counterpart here (`NativeHost::begin`).
 pub(crate) struct Transaction;
 
-/// An overlay box taking the pointer: its rounded box and its ancestors' clip (window points).
-type Hole = (RoundRect, Option<Rect>);
+/// An overlay box taking the pointer: its rounded box, its ancestors' clip (window points) and the native views inside
+/// it, which it isn't cut out of (an extension's popup in its popover).
+type Hole = (RoundRect, Option<Rect>, Vec<NodeId>);
 
 /// A native view's child window and how it was last placed.
 struct Clip {
@@ -66,6 +67,8 @@ pub(crate) struct Surfaces {
     clips: Vec<(NodeId, Clip)>,
     /// Overlay boxes taking the pointer, from `cut_outs`.
     holes: Vec<Hole>,
+    /// Windows that went out of sight in the last `apply`, hidden at the next (`retire`).
+    retiring: Vec<HWND>,
     /// The view whose window held keyboard focus at the last check.
     focus: Option<NodeId>,
     /// zgx's keyboard focus at the last check.
@@ -111,7 +114,10 @@ fn pixels(rect: Rect, scale: f32, origin: (i32, i32)) -> (i32, i32, i32, i32) {
 /// through that antialiased edge as a 1-pixel seam.
 fn inner_pixels(rect: Rect, scale: f32, origin: (i32, i32)) -> (i32, i32, i32, i32) {
     // A hair of tolerance: an edge on a pixel boundary, off only by f32 error, keeps that pixel.
-    let (ceil, floor) = (|v: f32| (v * scale - 0.01).ceil() as i32, |v: f32| (v * scale + 0.01).floor() as i32);
+    let (ceil, floor) = (
+        |v: f32| (v * scale - 0.01).ceil() as i32,
+        |v: f32| (v * scale + 0.01).floor() as i32,
+    );
     (
         ceil(rect.x) - origin.0,
         ceil(rect.y) - origin.1,
@@ -156,6 +162,23 @@ fn round_region(round: &RoundRect, scale: f32, origin: (i32, i32)) -> HRGN {
     region
 }
 
+/// Keep `WS_CLIPCHILDREN` off the zgx window. With it, the compositor cuts
+/// the window's own composition (the base plane) out of every shown child
+/// window, so where a child draws nothing (a page's window not yet painted,
+/// or hidden inside its container) the glass showed the desktop. Without it,
+/// zgx's paint under the native view (the node's background, the card round
+/// it) shows there until the child draws over it. winit sets the style by
+/// default and again with each style change of its own (a maximize), so
+/// every `apply` checks.
+fn unclip_children(parent: HWND) {
+    unsafe {
+        let style = GetWindowLongPtrW(parent, GWL_STYLE);
+        if style & WS_CLIPCHILDREN.0 as isize != 0 {
+            SetWindowLongPtrW(parent, GWL_STYLE, style & !(WS_CLIPCHILDREN.0 as isize));
+        }
+    }
+}
+
 impl Surfaces {
     pub fn new(window: &winit::window::Window) -> Result<Self, String> {
         use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -164,11 +187,7 @@ impl Surfaces {
             return Err("not a Win32 window".into());
         };
         let parent = HWND(handle.hwnd.get() as *mut c_void);
-        // Child windows keep their pixels out of the window's own.
-        unsafe {
-            let style = GetWindowLongPtrW(parent, GWL_STYLE);
-            SetWindowLongPtrW(parent, GWL_STYLE, style | WS_CLIPCHILDREN.0 as isize);
-        }
+        unclip_children(parent);
         let composition = match Self::composition(parent) {
             Ok(composition) => Some(composition),
             Err(error) => {
@@ -181,6 +200,7 @@ impl Surfaces {
             composition,
             clips: Vec::new(),
             holes: Vec::new(),
+            retiring: Vec::new(),
             focus: None,
             zgx_focus: None,
             zoom: 1.,
@@ -241,18 +261,35 @@ impl Surfaces {
     pub fn has_overlay_plane(&self) -> bool {
         self.composition.is_some()
     }
+    /// Windows waiting to be hidden at the next `apply`: the host asks for another frame.
+    pub fn retiring(&self) -> bool {
+        !self.retiring.is_empty()
+    }
     /// Whether `split` moves anything native relative to `previous`.
     pub fn differs(&self, split: &PlaneSplit, previous: &PlaneSplit) -> bool {
         split.natives() != previous.natives()
     }
     /// Note the overlay boxes that take the pointer: cut out of native views
-    /// at the next `apply`. Returns whether they changed.
+    /// at the next `apply`. Returns whether they changed. A box the pointer
+    /// passes through (`pointer_events = "none"`, as `PlaneSplit::route` reads
+    /// it) stays on the overlay plane, blended over the view: cut out, a
+    /// translucent layer across a page (a working agent's fog) took the whole
+    /// page with it.
     pub fn cut_outs(&mut self, scene: &Scene, input: &InputDispatcher, split: &PlaneSplit) -> bool {
         let holes: Vec<Hole> = split
             .overlay_boxes()
             .iter()
             .filter(|(node, ..)| input.try_receives_pointer(scene, *node) == Some(true))
-            .map(|(_, round, clip)| (*round, *clip))
+            .filter(|(node, ..)| split.passes_pointer(scene, input, *node) == Some(false))
+            .map(|(node, round, clip)| {
+                let inside = split
+                    .natives()
+                    .iter()
+                    .filter(|placement| scene.ancestors(placement.node).any(|a| a == *node))
+                    .map(|placement| placement.node)
+                    .collect();
+                (*round, *clip, inside)
+            })
             .collect();
         let changed = holes != self.holes;
         self.holes = holes;
@@ -296,23 +333,17 @@ impl Surfaces {
     }
     /// Move native views to `split`'s placements.
     pub fn apply(&mut self, natives: &NativeViews, split: &PlaneSplit) {
+        unclip_children(self.parent);
         let scale = self.scale();
         let views = natives.views();
-        // Unmounted: hidden, left with their owners.
+        // Windows retired at the last apply are hidden now, unless shown again since.
+        let previous = std::mem::take(&mut self.retiring);
+        // Unmounted: hidden (at the next apply), left with their owners.
+        let retiring = &mut self.retiring;
         self.clips.retain(|(node, clip)| {
             let kept = views.iter().any(|(other, _)| other == node);
             if !kept && clip.shown {
-                unsafe {
-                    let _ = SetWindowPos(
-                        clip.hwnd,
-                        None,
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                    );
-                }
+                retiring.push(clip.hwnd);
             }
             kept
         });
@@ -364,7 +395,14 @@ impl Surfaces {
                 .placed
                 .as_ref()
                 .map(|(placement, _, _)| placement.order);
-            Self::place(clip, split.native(*node).cloned(), &self.holes, scale);
+            Self::place(
+                clip,
+                *node,
+                split.native(*node).cloned(),
+                &self.holes,
+                scale,
+                &mut self.retiring,
+            );
             if clip
                 .placed
                 .as_ref()
@@ -396,17 +434,15 @@ impl Surfaces {
                 }
             }
         }
-    }
-    fn place(clip: &mut Clip, placement: Option<NativePlacement>, holes: &[Hole], scale: f32) {
-        let visible = placement
-            .as_ref()
-            .filter(|placement| placement.opacity > 0.01)
-            .and_then(|placement| placement.visible());
-        let (Some(placement), Some(visible)) = (placement, visible) else {
-            if clip.shown {
+        for hwnd in previous {
+            let shown = self
+                .clips
+                .iter()
+                .any(|(_, clip)| clip.hwnd == hwnd && clip.shown);
+            if !shown && !self.retiring.contains(&hwnd) {
                 unsafe {
                     let _ = SetWindowPos(
-                        clip.hwnd,
+                        hwnd,
                         None,
                         0,
                         0,
@@ -415,6 +451,26 @@ impl Surfaces {
                         SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
                     );
                 }
+            }
+        }
+    }
+    fn place(
+        clip: &mut Clip,
+        node: NodeId,
+        placement: Option<NativePlacement>,
+        holes: &[Hole],
+        scale: f32,
+        retiring: &mut Vec<HWND>,
+    ) {
+        let visible = placement
+            .as_ref()
+            .filter(|placement| placement.opacity > 0.01)
+            .and_then(|placement| placement.visible());
+        let (Some(placement), Some(visible)) = (placement, visible) else {
+            if clip.shown {
+                // Out of sight once the frame that replaces it is on screen: hidden now, the window showed the
+                // last frame's paint under it (the empty card, not what replaces the view) until that frame arrived.
+                retiring.push(clip.hwnd);
                 clip.shown = false;
             }
             clip.placed = None;
@@ -422,11 +478,11 @@ impl Surfaces {
         };
         let holes: Vec<Hole> = holes
             .iter()
-            .filter(|(round, clip)| {
+            .filter(|(round, clip, inside)| {
                 let reach = clip.map_or(Some(round.rect), |clip| round.rect.intersection(clip));
-                reach.is_some_and(|reach| reach.intersects(visible))
+                !inside.contains(&node) && reach.is_some_and(|reach| reach.intersects(visible))
             })
-            .copied()
+            .cloned()
             .collect();
         let moved = !clip.shown
             || clip
@@ -451,7 +507,7 @@ impl Surfaces {
                 for round in &placement.rounded {
                     intersect(region, round_region(round, scale, origin));
                 }
-                for (round, within) in &holes {
+                for (round, within, _) in &holes {
                     // A device pixel in from its edge: the box's antialiased rim and border blend over the page.
                     let inset = 1. / scale;
                     let rect = round.rect;

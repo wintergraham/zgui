@@ -9,10 +9,14 @@
 //! Windows (`win32`): placed nowhere in particular, a window opens where
 //! Windows puts it (`CW_USEDEFAULT`: each new window a step on from the last,
 //! as Notepad's). A saved frame is its placement (`GetWindowPlacement`: the
-//! restored frame, and whether it was maximized), kept in the registry under
-//! `HKCU\Software\zgx\<executable>\Frames`, and reopened only where a monitor
-//! still shows its title bar. AppKit's window tabs have no Windows
-//! counterpart: `Tabbing` does nothing there.
+//! restored frame in the screen's pixels, whether it was maximized, and the
+//! DPI it was saved at), kept in the registry under
+//! `HKCU\Software\zgx\<executable>\Frames` as it changes (never while
+//! fullscreen). It reopens where it was where a monitor still shows its
+//! title bar, shrunk to the work area if it no longer fits; shown by none
+//! (its monitor disconnected), it reopens fully inside the nearest monitor's
+//! work area, as big as it looked at that monitor's DPI. AppKit's window
+//! tabs have no Windows counterpart: `Tabbing` does nothing there.
 //!
 //! Linux (`linux`): on X11 a window goes under the pointer: the pointer is
 //! the server's (`XQueryPointer`), and the window's frame the window

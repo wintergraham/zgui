@@ -145,7 +145,7 @@ pub struct FileDialogs {
 }
 impl FileDialogs {
     /// The window they belong to, while it is open.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(crate) fn window(&self) -> Option<std::sync::Arc<Window>> {
         self.native.borrow().as_ref()?.upgrade()
     }

@@ -270,7 +270,8 @@ impl TextEditor {
     pub fn preedit(&self) -> Option<&Preedit> {
         self.preedit.as_ref()
     }
-    /// Changes only when a local editor operation cancels nonempty preedit.
+    /// Changes only when a local editor operation cancels or finishes
+    /// (`finish_preedit`) nonempty preedit.
     /// This is not a model revision or native session epoch; it wraps at u64::MAX.
     /// Native empty-preedit updates and commits do not increment this revision.
     /// Hosts can use it to reset the native input context after external edits.
@@ -987,6 +988,18 @@ impl TextEditor {
         self.preedit = None;
         self.insert(text)
     }
+    /// End a composition the editor itself must end (its field lost focus,
+    /// or a press moves the caret): what was composed stays, committed as
+    /// typing, as AppKit's, Windows' and browsers' fields keep it.
+    /// `composition_cancel_revision` advances, so the host resets the input
+    /// method, which still holds it. False when no text changed.
+    pub fn finish_preedit(&mut self) -> bool {
+        let Some(preedit) = self.preedit.take() else {
+            return false;
+        };
+        self.composition_cancel_revision = self.composition_cancel_revision.wrapping_add(1);
+        self.insert(&preedit.text)
+    }
     /// Drop any preedit, advancing `composition_cancel_revision` if there
     /// was one.
     pub fn cancel_preedit(&mut self) {
@@ -1004,6 +1017,22 @@ mod tests {
         let end = editor.selection().focus;
         editor.set_selection(end, end);
         editor.insert(text);
+    }
+    /// Finishing a composition commits it as typing and tells the host;
+    /// with none it changes nothing.
+    #[test]
+    fn finishing_a_composition_keeps_it() {
+        let mut editor = TextEditor::new("안");
+        editor.set_selection(3, 3);
+        assert!(!editor.finish_preedit());
+        let revision = editor.composition_cancel_revision();
+        editor.set_preedit("녕", Some((3, 3)));
+        assert!(editor.finish_preedit());
+        assert_eq!(editor.text(), "안녕");
+        assert!(editor.preedit().is_none());
+        assert_eq!(editor.composition_cancel_revision(), revision + 1);
+        assert!(editor.undo());
+        assert_eq!(editor.text(), "안");
     }
     /// A long text, held in chunks, edits, undoes and finds what a new
     /// value changed as a string does.

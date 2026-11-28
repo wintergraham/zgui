@@ -43,6 +43,48 @@ const ATLAS_THRASH_FRAMES: u64 = 600;
 const WIDE_DRAWABLES: std::time::Duration = std::time::Duration::from_secs(2);
 /// SVG rasters up to this size (physical pixels) share the glyph atlas.
 const ATLAS_IMAGE_MAX: u32 = 128;
+/// Images up to this size get a mip chain (`mip_chain`): icons and avatars,
+/// where a bilinear sample of the source alone reads soft drawn small.
+const MIP_IMAGE_MAX: u32 = 512;
+/// `pixels`'s mip chain as `(width, height, texels)` levels down to 1x1, each
+/// a 2x2 box average of the one above (premultiplied RGBA in, so averaging
+/// stays correct).
+fn mip_chain(width: u32, height: u32, pixels: &[u8]) -> Vec<(u32, u32, Vec<u8>)> {
+    let mut levels = vec![(width, height, pixels.to_vec())];
+    loop {
+        let &(width, height, ref source) = levels.last().unwrap();
+        if width == 1 && height == 1 {
+            break;
+        }
+        let (narrow, short) = ((width / 2).max(1), (height / 2).max(1));
+        let mut texels = vec![0; (narrow * short * 4) as usize];
+        for y in 0..short {
+            // An odd size's levels floor its span: partition the texels so an
+            // edge column or row still lands in the last output pixel.
+            let (sy0, sy1) = (y * height / short, (y + 1) * height / short);
+            for x in 0..narrow {
+                let (sx0, sx1) = (x * width / narrow, (x + 1) * width / narrow);
+                let mut sum = [0u32; 4];
+                for sy in sy0..sy1 {
+                    for sx in sx0..sx1 {
+                        let i = ((sy * width + sx) * 4) as usize;
+                        for channel in 0..4 {
+                            sum[channel] += u32::from(source[i + channel]);
+                        }
+                    }
+                }
+                let n = (sx1 - sx0) * (sy1 - sy0);
+                let o = ((y * narrow + x) * 4) as usize;
+                for channel in 0..4 {
+                    texels[o + channel] = (sum[channel] / n) as u8;
+                }
+            }
+        }
+        levels.push((narrow, short, texels));
+    }
+    levels.remove(0);
+    levels
+}
 /// Write straight-alpha `pixels` premultiplied (as `upload_image` does) into
 /// the interior of a bordered atlas cell `width` + 2 texels wide.
 fn premultiply_into_cell(cell: &mut [u8], pixels: &[u8], width: u32) {
@@ -915,6 +957,46 @@ fn place_text_quads(
         mask: NO_MASK,
     }));
 }
+/// What a glyph's coverage becomes in the atlas. On Windows, the curve
+/// DirectWrite's text has, as Chrome and the rest of the system draw it:
+/// coverage through a display gamma, then its enhanced contrast. zgx blends
+/// in sRGB space with plain coverage, which left its text thinner, lighter
+/// and softer than the same font at the same size beside it in a web page
+/// (ASK-2): light text on a dark ground most of all. Elsewhere coverage is
+/// kept as it is: macOS draws its own text that way, and its displays'
+/// scale hides the difference.
+///
+/// `ZGX_TEXT_GAMMA` and `ZGX_TEXT_CONTRAST` override the two on Windows, to
+/// compare against another app's text on a given display.
+fn mask_curve() -> &'static [u8; 256] {
+    static CURVE: std::sync::OnceLock<[u8; 256]> = std::sync::OnceLock::new();
+    CURVE.get_or_init(|| {
+        let (gamma, contrast) = if cfg!(windows) {
+            let env = |name: &str, default: f32| {
+                std::env::var(name)
+                    .ok()
+                    .and_then(|v| v.parse::<f32>().ok())
+                    .filter(|v| v.is_finite() && *v > 0.)
+                    .unwrap_or(default)
+            };
+            (
+                env("ZGX_TEXT_GAMMA", TEXT_GAMMA),
+                env("ZGX_TEXT_CONTRAST", TEXT_CONTRAST),
+            )
+        } else {
+            (1., 0.)
+        };
+        std::array::from_fn(|i| {
+            let a = (i as f32 / 255.).powf(1. / gamma);
+            let a = a * (contrast + 1.) / (a * contrast + 1.);
+            (a * 255.).round().clamp(0., 255.) as u8
+        })
+    })
+}
+/// Windows' text curve (`mask_curve`): matched by eye and by stem darkness
+/// to Chromium's DirectWrite text of the same font and size.
+const TEXT_GAMMA: f32 = 1.5;
+const TEXT_CONTRAST: f32 = 0.7;
 struct Shaped {
     rich: Option<Arc<zgx::rich_text::RichText>>,
     text_options: zgx::text_layout::TextOptions,
@@ -2205,6 +2287,56 @@ struct GpuContextInner {
     vertex_ring: bool,
     /// For dual-output (single-pass presentation) pipelines.
     quad_layout: wgpu::PipelineLayout,
+    /// Shader fills' pipelines by their source, compiled ahead by
+    /// `compile_made_fills` or in the frame that first needs one.
+    fills: Arc<FillCache>,
+}
+/// Shader fill pipelines on one device, by source (`None`: it doesn't
+/// compile). A pipeline is the same for every window and every shader made
+/// from the same source: the scripts loaded again make the same fills.
+#[derive(Default)]
+struct FillCache(std::sync::Mutex<FxHashMap<Arc<str>, Option<wgpu::RenderPipeline>>>);
+impl FillCache {
+    fn get(&self, source: &str) -> Option<Option<wgpu::RenderPipeline>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).get(source).cloned()
+    }
+    fn insert(&self, source: Arc<str>, pipeline: Option<wgpu::RenderPipeline>) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).insert(source, pipeline);
+    }
+}
+/// A shader fill's pipeline from its source, if it compiles.
+fn compile_fill(device: &wgpu::Device, layout: &wgpu::PipelineLayout, user: &str) -> Option<wgpu::RenderPipeline> {
+    let source = fill_source(user);
+    fill_validates(&source).then(|| {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("shader fill"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        fill_pipeline(device, &module, layout, "zgx_fill")
+    })
+}
+/// Compile every shader fill the scripts make, as they make them, on a thread
+/// of its own: a fill's first frame then finds its pipeline ready instead of
+/// compiling it (70 to 450 ms on Direct3D 12) while the window waits. Ends
+/// once the context is gone.
+fn compile_made_fills(device: wgpu::Device, layout: wgpu::PipelineLayout, cache: std::sync::Weak<FillCache>) {
+    let _ = std::thread::Builder::new().name("zgx shader fills".into()).spawn(move || {
+        let mut seen = 0;
+        loop {
+            let made = zgx::decoration::made_shaders::after(seen, std::time::Duration::from_secs(5));
+            seen += made.len();
+            for source in made {
+                let Some(cache) = cache.upgrade() else { return };
+                if cache.get(&source).is_none() {
+                    let pipeline = compile_fill(&device, &layout, &source);
+                    cache.insert(source, pipeline);
+                }
+            }
+            if cache.strong_count() == 0 {
+                return;
+            }
+        }
+    });
 }
 impl GpuContext {
     /// A context on the system's GPU, found without a window.
@@ -2326,8 +2458,18 @@ impl GpuContext {
         // are): a frame then needs no staging copy, and no command list for
         // it, each of which costs NVIDIA's driver some 30 K cycles. Measured
         // on an RTX 4090: 0.7 to 3.3% fewer cycles a frame, the GPU's time
-        // the same. Textures and uniforms keep their copies.
-        let vertex_ring = mappable && (mapped_uploads || info.backend == wgpu::Backend::Dx12);
+        // the same. Textures and uniforms keep their copies. Only on NVIDIA,
+        // where it was measured and is known good: the CPU writes memory the
+        // GPU reads behind wgpu's tracking. Other drivers (an AMD RX 9070 XT
+        // showed stray quads, wrong glyphs and a driver timeout with it on,
+        // cause unconfirmed) take wgpu's staging copy, as every other
+        // discrete GPU does. `ZGX_DX12_VERTEX_RING=1` or `0` decides instead.
+        let dx12_ring = match zgx::env::var_os("ZGX_DX12_VERTEX_RING") {
+            Some(value) => value != "0",
+            None => info.vendor == 0x10DE,
+        };
+        let vertex_ring =
+            mappable && (mapped_uploads || (info.backend == wgpu::Backend::Dx12 && dx12_ring));
         zgx::profile::mark("GPU adapter");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("zgx shared device"),
@@ -2448,6 +2590,8 @@ impl GpuContext {
             viewport_layout: viewport_layout.clone(),
             polylines: Default::default(),
         };
+        let fills = Arc::new(FillCache::default());
+        compile_made_fills(device.clone(), quad_layout.clone(), Arc::downgrade(&fills));
         Self {
             inner: Rc::new(GpuContextInner {
                 lost,
@@ -2464,6 +2608,7 @@ impl GpuContext {
                 quad_layout,
                 mapped_uploads,
                 vertex_ring,
+                fills,
             }),
         }
     }
@@ -3052,9 +3197,9 @@ impl GpuRenderer {
         // (`begin_layer_frame`): a window-sized target would only be dropped,
         // and the driver keeps the memory it held.
         let target = if layer_presenting {
-            texture(&device, 1, 1, "retained output placeholder")
+            texture(&device, 1, 1, 1, "retained output placeholder")
         } else {
-            texture(&device, width, height, "retained output")
+            texture(&device, width, height, 1, "retained output")
         };
         let view = target.create_view(&Default::default());
         #[cfg(target_os = "macos")]
@@ -3064,6 +3209,7 @@ impl GpuRenderer {
         let atlas = sampled_texture(
             &device,
             context.inner.mapped_uploads,
+            1,
             1,
             1,
             "lazy glyph atlas placeholder",
@@ -3410,7 +3556,13 @@ impl GpuRenderer {
         #[cfg(not(own_surfaces))]
         let layered = false;
         let (target_width, target_height) = if layered { (1, 1) } else { (width, height) };
-        self.target = texture(&self.device, target_width, target_height, "retained output");
+        self.target = texture(
+            &self.device,
+            target_width,
+            target_height,
+            1,
+            "retained output",
+        );
         self.view = self.target.create_view(&Default::default());
         #[cfg(target_os = "macos")]
         if self.layer_present.is_none() {
@@ -3485,10 +3637,11 @@ impl GpuRenderer {
             self.idle = false;
         }
         let presented = std::mem::take(&mut self.present_stats);
-        let mut stats = {
+        let rendered = {
             let _span = zgx::profile::span(zgx::profile::Phase::Paint);
-            self.render_inner(scene, damage)?
+            self.render_inner(scene, damage)
         };
+        let mut stats = rendered.map_err(|error| self.failed(error))?;
         if stats.shaped_nodes > 0 {
             // Words shaped by measurement or this frame are reused by the next
             // shaping frames (streaming text repeats nearly all of them, and a
@@ -3532,6 +3685,15 @@ impl GpuRenderer {
                         && self.atlas_size < MAX_ATLAS =>
                 {
                     self.reset_atlas((self.atlas_size * 2).min(MAX_ATLAS))
+                }
+                // More glyphs than the largest atlas holds in one frame: that
+                // frame is skipped (the next recycles the atlas first), not
+                // the app closed.
+                Err(error)
+                    if error.0 == "glyph atlas capacity exceeded in one frame"
+                        || error.0 == "glyph metadata exceeds 8192 entries in one frame" =>
+                {
+                    return Err(GpuError::over_texture_budget(&error.0));
                 }
                 result => return result,
             }
@@ -3920,7 +4082,7 @@ impl GpuRenderer {
         }) {
             (cache.texture, cache.bind)
         } else {
-            let texture = texture(&self.device, alloc_w, alloc_h, "isolated subtree");
+            let texture = texture(&self.device, alloc_w, alloc_h, 1, "isolated subtree");
             let bind = self.texture_bind(
                 &texture.create_view(&Default::default()),
                 "isolated subtree",
@@ -4063,20 +4225,13 @@ impl GpuRenderer {
         if let Some(compiled) = self.fill_pipelines.get(&shader.id()) {
             return compiled.is_some();
         }
-        let source = fill_source(shader.source());
-        let pipeline = fill_validates(&source).then(|| {
-            let module = self
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("shader fill"),
-                    source: wgpu::ShaderSource::Wgsl(source.into()),
-                });
-            fill_pipeline(
-                &self.device,
-                &module,
-                &self.context.inner.quad_layout,
-                "zgx_fill",
-            )
+        // Compiled ahead (`compile_made_fills`), or by another window or an
+        // earlier shader with the same source; else now.
+        let fills = &self.context.inner.fills;
+        let pipeline = fills.get(shader.source()).unwrap_or_else(|| {
+            let pipeline = compile_fill(&self.device, &self.context.inner.quad_layout, shader.source());
+            fills.insert(shader.source().into(), pipeline.clone());
+            pipeline
         });
         self.fill_shaders.insert(shader.id(), shader.clone());
         self.fill_pipelines.insert(shader.id(), pipeline);
@@ -4166,7 +4321,7 @@ impl GpuRenderer {
     fn backdrop(&mut self) -> &(wgpu::Texture, wgpu::BindGroup) {
         let size = (self.target.width(), self.target.height());
         if !self.backdrops.contains_key(&size) {
-            let texture = texture(&self.device, size.0, size.1, "blend backdrop");
+            let texture = texture(&self.device, size.0, size.1, 1, "blend backdrop");
             let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("blend backdrop"),
                 layout: &self.blend_layouts().0,
@@ -5816,8 +5971,7 @@ impl GpuRenderer {
                             } else {
                                 6
                             };
-                        if bytes + self.images.values().map(|e| e.1).sum::<usize>()
-                            > IMAGE_BUDGET
+                        if bytes + self.images.values().map(|e| e.1).sum::<usize>() > IMAGE_BUDGET
                         {
                             return Err(GpuError::over_texture_budget(
                                 "visible image and native surface textures exceed 160 MiB",
@@ -7201,7 +7355,7 @@ impl GpuRenderer {
             .as_ref()
             .is_none_or(|t| t.texture.width() != self.width || t.texture.height() != self.height)
         {
-            let texture = texture(&self.device, self.width, self.height, "retained output");
+            let texture = texture(&self.device, self.width, self.height, 1, "retained output");
             let view = texture.create_view(&Default::default());
             self.spare = Some(Retained {
                 texture,
@@ -7597,7 +7751,7 @@ impl GpuRenderer {
             .as_ref()
             .is_none_or(|t| t.texture.width() != self.width || t.texture.height() != self.height)
         {
-            let texture = texture(&self.device, self.width, self.height, "retained output");
+            let texture = texture(&self.device, self.width, self.height, 1, "retained output");
             let view = texture.create_view(&Default::default());
             self.spare = Some(Retained {
                 texture,
@@ -8257,29 +8411,11 @@ impl GpuRenderer {
         Ok(found.id)
     }
     fn upload_image(&mut self, image: &zgx::image::ImageData) -> Result<(), GpuError> {
-        let bytes = image.pixels().len();
-        if bytes + self.images.values().map(|entry| entry.1).sum::<usize>() > IMAGE_BUDGET {
-            return Err(GpuError::over_texture_budget(
-                "visible image textures exceed the 160 MiB budget",
-            ));
-        }
-        if self.images.len() >= MAX_IMAGES {
-            return Err(GpuError::over_texture_budget(&format!(
-                "visible images exceed the budget of {MAX_IMAGES}"
-            )));
-        }
         if image.width() > self.device.limits().max_texture_dimension_2d
             || image.height() > self.device.limits().max_texture_dimension_2d
         {
             return Err(GpuError("image exceeds GPU texture dimensions".into()));
         }
-        let texture = sampled_texture(
-            &self.device,
-            self.unified,
-            image.width(),
-            image.height(),
-            "image",
-        );
         let mut pixels = image.pixels().to_vec();
         for pixel in pixels.as_chunks_mut::<4>().0 {
             // Opaque pixels (most of a window's snapshot) are as they are.
@@ -8291,7 +8427,39 @@ impl GpuRenderer {
                 *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
             }
         }
+        // A mip chain costs a third of the texels again, and turns shrinking
+        // past 2x from bilinear blur into trilinear sampling: how a favicon
+        // drawn at 16pt keeps its edge on a 2x screen. Worth it for images
+        // this small; a window snapshot's chain is real memory for mip levels
+        // no draw ever reaches.
+        let mips = if image.width().max(image.height()) <= MIP_IMAGE_MAX {
+            mip_chain(image.width(), image.height(), &pixels)
+        } else {
+            Vec::new()
+        };
+        let bytes = pixels.len() + mips.iter().map(|level| level.2.len()).sum::<usize>();
+        if bytes + self.images.values().map(|entry| entry.1).sum::<usize>() > IMAGE_BUDGET {
+            return Err(GpuError::over_texture_budget(
+                "visible image textures exceed the 160 MiB budget",
+            ));
+        }
+        if self.images.len() >= MAX_IMAGES {
+            return Err(GpuError::over_texture_budget(&format!(
+                "visible images exceed the budget of {MAX_IMAGES}"
+            )));
+        }
+        let texture = sampled_texture(
+            &self.device,
+            self.unified,
+            image.width(),
+            image.height(),
+            1 + mips.len() as u32,
+            "image",
+        );
         self.write_texels(&texture, (0, 0, image.width(), image.height()), &mut pixels);
+        for (index, (width, height, mut texels)) in mips.into_iter().enumerate() {
+            self.write_mip(&texture, index as u32 + 1, width, height, &mut texels);
+        }
         let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("image"),
             layout: &self.context.inner.texture_layout,
@@ -8308,6 +8476,7 @@ impl GpuRenderer {
                         &wgpu::SamplerDescriptor {
                             mag_filter: wgpu::FilterMode::Linear,
                             min_filter: wgpu::FilterMode::Linear,
+                            mipmap_filter: wgpu::MipmapFilterMode::Linear,
                             ..Default::default()
                         },
                     )),
@@ -8327,7 +8496,7 @@ impl GpuRenderer {
     ) {
         #[cfg(target_os = "macos")]
         if self.mapped.is_some() {
-            upload::write_texels(target, (x, y, width, height), rgba);
+            upload::write_texels(target, (x, y, width, height), 0, rgba);
             return;
         }
         if self.unified {
@@ -8360,6 +8529,45 @@ impl GpuRenderer {
             );
         }
     }
+    /// Write premultiplied RGBA texels to mip `level` of a `sampled_texture`:
+    /// the whole level, uploaded fresh like level 0 is.
+    fn write_mip(
+        &mut self,
+        target: &wgpu::Texture,
+        level: u32,
+        width: u32,
+        height: u32,
+        rgba: &mut [u8],
+    ) {
+        #[cfg(target_os = "macos")]
+        if self.mapped.is_some() {
+            upload::write_texels(target, (0, 0, width, height), level, rgba);
+            return;
+        }
+        // A copy keeps bytes as they are: in `FORMAT`'s order, BGRA.
+        for pixel in rgba.as_chunks_mut::<4>().0 {
+            pixel.swap(0, 2);
+        }
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: target,
+                mip_level: level,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
     /// Before reusing atlas cells: the CPU writes them in place (macOS), so
     /// every frame that sampled the old ones must have finished.
     fn release_atlas_cells(&self) {
@@ -8380,7 +8588,7 @@ impl GpuRenderer {
         self.cursor = (0, 0, 0);
     }
     fn reset_atlas(&mut self, size: u32) {
-        self.atlas = sampled_texture(&self.device, self.unified, size, size, "glyph atlas");
+        self.atlas = sampled_texture(&self.device, self.unified, size, size, 1, "glyph atlas");
         self.atlas_size = size;
         self.bind = self.texture_bind(&self.atlas.create_view(&Default::default()), "glyph atlas");
         self.entries.clear();
@@ -8516,12 +8724,13 @@ impl GpuRenderer {
             let row_start = |row: u32| ((row + 1) * cell_width + 1) as usize * 4;
             match image.content {
                 SwashContent::Mask => {
+                    let curve = mask_curve();
                     for (row, alphas) in image.data.chunks_exact(p.width as usize).enumerate() {
                         let start = row_start(row as u32);
                         for (texel, alpha) in
                             rgba[start..].as_chunks_mut::<4>().0.iter_mut().zip(alphas)
                         {
-                            texel.copy_from_slice(&[255, 255, 255, *alpha]);
+                            texel.copy_from_slice(&[255, 255, 255, curve[*alpha as usize]]);
                         }
                     }
                 }
@@ -8980,7 +9189,7 @@ impl GpuRenderer {
             // The first frame, drawn whole: an opaque window whose background
             // lets what is behind show presents with alpha from it. Its
             // buffers may be the target: let go of them first.
-            self.target = texture(&self.device, 1, 1, "retained output placeholder");
+            self.target = texture(&self.device, 1, 1, 1, "retained output placeholder");
             self.view = self.target.create_view(&Default::default());
             self.target_copy_bind = None;
             self.match_background()?;
@@ -8995,7 +9204,7 @@ impl GpuRenderer {
         {
             // Made or resized: buffers of the window's size. The target may
             // be one of the old ones; it lets go first.
-            self.target = texture(&self.device, 1, 1, "retained output placeholder");
+            self.target = texture(&self.device, 1, 1, 1, "retained output placeholder");
             self.view = self.target.create_view(&Default::default());
             self.target_copy_bind = None;
             let present = self.layer_present.as_mut().expect("presenting");
@@ -9182,7 +9391,41 @@ impl GpuRenderer {
         if self.presents() {
             zgx::profile::frame();
         }
-        status
+        status.map_err(|error| {
+            // A surface of its own whose present failed holds a frame no
+            // record says it does: the next is drawn whole.
+            #[cfg(own_surfaces)]
+            if self.layer_present.is_some() {
+                self.fresh = true;
+            }
+            self.failed(error)
+        })
+    }
+    /// A frame that failed with `error`. A frame left part drawn in a surface
+    /// of its own (its regions counted as changed and its catch-up taken,
+    /// `render_flat`) is drawn whole next. A lost device is reported as one
+    /// even before wgpu's callback says so: a removal (a driver timeout)
+    /// shows first as some other failure, which would close the app.
+    fn failed(&mut self, error: GpuError) -> GpuError {
+        #[cfg(own_surfaces)]
+        if self
+            .layer_present
+            .as_ref()
+            .is_some_and(|present| present.current.is_some())
+        {
+            self.fresh = true;
+        }
+        if error.is_device_lost() {
+            return error;
+        }
+        if let Some(reason) = self.context.lost() {
+            return GpuError::device_lost(&format!("{reason} ({})", error.0));
+        }
+        #[cfg(windows)]
+        if let Some(reason) = dxgi_present::removed(&self.device) {
+            return GpuError::device_lost(&format!("{reason} ({})", error.0));
+        }
+        error
     }
     fn present_frame(
         &mut self,
@@ -9774,13 +10017,14 @@ fn sampled_texture(
     #[allow(unused)] cpu_writes: bool,
     width: u32,
     height: u32,
+    mip_levels: u32,
     label: &str,
 ) -> wgpu::Texture {
     #[cfg(target_os = "macos")]
     if cpu_writes {
-        return upload::shared_texture(device, width, height, label);
+        return upload::shared_texture(device, width, height, mip_levels, label);
     }
-    texture(device, width, height, label)
+    texture(device, width, height, mip_levels, label)
 }
 /// Clear a new target through wgpu, so wgpu knows it is written: frames drawn
 /// with Metal directly (`render_direct`) write it behind wgpu's back, and wgpu
@@ -9821,7 +10065,13 @@ fn atlas_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Textur
         view_formats: &[],
     })
 }
-fn texture(device: &wgpu::Device, width: u32, height: u32, label: &str) -> wgpu::Texture {
+fn texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    mip_levels: u32,
+    label: &str,
+) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d {
@@ -9829,7 +10079,7 @@ fn texture(device: &wgpu::Device, width: u32, height: u32, label: &str) -> wgpu:
             height,
             depth_or_array_layers: 1,
         },
-        mip_level_count: 1,
+        mip_level_count: mip_levels,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: FORMAT,

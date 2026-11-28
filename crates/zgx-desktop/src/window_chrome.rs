@@ -194,7 +194,7 @@ pub(crate) fn titlebar_area(
 }
 
 #[cfg(windows)]
-pub(crate) use win::{CaptionHost, fit_work_area, menu_theme};
+pub(crate) use win::{CaptionHost, fit_work_area, in_front, in_size_move, menu_theme};
 
 #[cfg(windows)]
 mod win {
@@ -231,11 +231,12 @@ mod win {
             Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
             WindowsAndMessaging::{
                 GetClientRect, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLOSE, HTLEFT, HTMAXBUTTON,
-                HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IsZoomed, PostMessageW,
-                SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE, SendMessageW, WM_MOUSEMOVE,
-                WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
+                HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IsZoomed, KillTimer,
+                PostMessageW, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE, SendMessageW,
+                SetTimer, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_MOUSEMOVE, WM_NCDESTROY,
+                WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
                 WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_SETTINGCHANGE, WM_SYSCOLORCHANGE,
-                WM_SYSCOMMAND, WM_THEMECHANGED,
+                WM_SYSCOMMAND, WM_THEMECHANGED, WM_TIMER,
             },
         },
     };
@@ -738,6 +739,32 @@ mod win {
     thread_local! {
         /// Each subclassed window's caption, for its host to find.
         static CAPTIONS: RefCell<Vec<(usize, Rc<Caption>)>> = const { RefCell::new(Vec::new()) };
+        /// Windows in the system's move or size loop (a title bar or edge dragged).
+        static SIZE_MOVE: Cell<u32> = const { Cell::new(0) };
+    }
+    /// The timer that keeps the app turning through a move or size loop.
+    const SIZE_MOVE_TIMER: usize = 0x7a67;
+    /// A frame's time: how often the app turns while a window is moved or sized.
+    const SIZE_MOVE_TICK_MS: u32 = 16;
+
+    /// A window is being moved or sized: the system runs its own message loop
+    /// meanwhile, which delivers the window's messages and user events but
+    /// never returns to winit's loop, so the app's `about_to_wait` turn (its
+    /// timers, its tasks, every window's frame) would wait for the release.
+    /// The host runs that turn after each user event while this holds, and a
+    /// timer wakes it every frame (`subclass`).
+    pub(crate) fn in_size_move() -> bool {
+        SIZE_MOVE.with(|count| count.get() > 0)
+    }
+
+    /// Whether `window` is the foreground window: as it "loses focus",
+    /// still in front means its keyboard focus went to a window of its own
+    /// (a child window, a web page's), not to another app or window.
+    pub(crate) fn in_front(window: &Window) -> bool {
+        // SAFETY: reads which window is in front.
+        hwnd(window).is_some_and(|hwnd| unsafe {
+            windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() == hwnd
+        })
     }
 
     fn scale(hwnd: HWND) -> f64 {
@@ -856,6 +883,27 @@ mod win {
                 if let Some(hit) = hit_test(hwnd, caption, x, y) {
                     return LRESULT(hit as isize);
                 }
+            }
+            // The system's move and size loop (`in_size_move`): the app turns
+            // on a timer through it.
+            WM_ENTERSIZEMOVE => {
+                SIZE_MOVE.with(|count| count.set(count.get() + 1));
+                // SAFETY: a timer on our own window, killed as the loop ends.
+                unsafe { SetTimer(Some(hwnd), SIZE_MOVE_TIMER, SIZE_MOVE_TICK_MS, None) };
+            }
+            WM_EXITSIZEMOVE => {
+                SIZE_MOVE.with(|count| count.set(count.get().saturating_sub(1)));
+                // SAFETY: our own window's timer.
+                let _ = unsafe { KillTimer(Some(hwnd), SIZE_MOVE_TIMER) };
+                if let Some(wake) = &*caption.wake.borrow() {
+                    wake();
+                }
+            }
+            WM_TIMER if wparam.0 == SIZE_MOVE_TIMER => {
+                if let Some(wake) = &*caption.wake.borrow() {
+                    wake();
+                }
+                return LRESULT(0);
             }
             // A standard frame's own buttons are the frame's.
             _ if !caption.buttons => {}

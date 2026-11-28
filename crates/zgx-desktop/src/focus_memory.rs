@@ -8,13 +8,24 @@ pub(crate) struct FocusMemory {
 }
 impl FocusMemory {
     pub(crate) fn deactivate(&mut self, ui: &Ui) {
+        self.deactivate_with(ui, true);
+    }
+    /// `deactivate`, but a press held goes on: the keyboard went to one of
+    /// the window's own native views (a web page taking focus as its tab is
+    /// selected) while the pointer is still the window's.
+    pub(crate) fn deactivate_keeping_pointer(&mut self, ui: &Ui) {
+        self.deactivate_with(ui, false);
+    }
+    fn deactivate_with(&mut self, ui: &Ui, cancel_pointer: bool) {
         if self.inactive {
             return;
         }
         self.inactive = true;
         self.remembered = ui.input.focused();
         ui.scene.borrow_mut().prepare_layout();
-        ui.input.dispatch(&ui.scene, InputEvent::PointerCancel);
+        if cancel_pointer {
+            ui.input.dispatch(&ui.scene, InputEvent::PointerCancel);
+        }
         ui.input.dispatch(&ui.scene, InputEvent::Blur);
     }
     pub(crate) fn activate(&mut self, ui: &Ui) {

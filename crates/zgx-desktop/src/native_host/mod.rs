@@ -91,6 +91,9 @@ pub(crate) struct NativeHost {
         allow(dead_code)
     )]
     pending: bool,
+    /// Since when a child window has waited to hide (child.rs `retiring`): it hides a refresh later.
+    #[cfg(all(windows, not(feature = "webview2")))]
+    retire_since: Option<std::time::Instant>,
     /// What clip views' hit tests consult (macOS's clip views).
     #[cfg_attr(
         not(any(target_os = "macos", all(windows, feature = "webview2"))),
@@ -141,6 +144,8 @@ impl NativeHost {
             #[cfg(any(target_os = "macos", windows))]
             overlay_live: false,
             pending: false,
+            #[cfg(all(windows, not(feature = "webview2")))]
+            retire_since: None,
             scene: Rc::downgrade(&ui.scene),
             input: ui.input.clone(),
             _waker: zgx::native_view::set_waker(wake),
@@ -452,6 +457,13 @@ impl NativeHost {
         self.overlay_drawn = false;
         Ok(())
     }
+    /// The overlay plane's last frame while it shows, with its rect (points)
+    /// and scale: what a picture of the window lays over the base plane's.
+    #[cfg(target_os = "macos")]
+    pub fn overlay_shown(&self) -> Option<(zgx_gpu::ShownFrame, Rect, f32)> {
+        let overlay = self.overlay.as_ref().filter(|_| self.overlay_live)?;
+        Some((overlay.shown_frame()?, overlay.plane_rect()?, self.overlay_scale))
+    }
     /// Within the frame's transaction: move native views and backdrops to
     /// this frame's placements.
     pub fn apply(&mut self) {
@@ -459,6 +471,9 @@ impl NativeHost {
             surfaces.apply(&self.natives, &self.placed);
         }
         self.pending = false;
+    }
+    pub fn wants_frame(&self) -> bool {
+        false
     }
     /// Apply geometry that changed in a frame without zgx pixels to show
     /// (a native node moved, painting nothing), in a transaction of its own.
@@ -608,12 +623,26 @@ impl NativeHost {
     pub fn apply(&mut self) {
         if let Some(surfaces) = &mut self.surfaces {
             surfaces.apply(&self.natives, &self.split);
+            // A window out of sight hides at a later apply, once the frame replacing it is on screen.
+            self.retire_since = surfaces
+                .retiring()
+                .then(|| self.retire_since.unwrap_or_else(std::time::Instant::now));
         }
         self.pending = false;
     }
-    /// Apply geometry that changed in a frame without zgx pixels to show.
+    /// Native views wait on another frame to finish (a window to hide).
+    pub fn wants_frame(&self) -> bool {
+        self.retire_since.is_some()
+    }
+    /// Apply geometry that changed in a frame without zgx pixels to show, and
+    /// hide a window whose replacement has had a refresh to reach the screen.
     pub fn flush(&mut self) {
-        if self.pending {
+        const REFRESH: std::time::Duration = std::time::Duration::from_millis(17);
+        if self.pending
+            || self
+                .retire_since
+                .is_some_and(|since| since.elapsed() >= REFRESH)
+        {
             self.apply();
         }
     }
@@ -731,6 +760,9 @@ impl NativeHost {
         Ok(())
     }
     pub fn apply(&mut self) {}
+    pub fn wants_frame(&self) -> bool {
+        false
+    }
     pub fn flush(&mut self) {}
     pub fn sync_focus(&mut self, _: &Ui) {}
     pub fn trim(&mut self) {}

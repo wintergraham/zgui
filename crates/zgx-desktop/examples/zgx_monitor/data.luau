@@ -76,9 +76,16 @@ local function order(sort: state.Sort): (Proc, Proc) -> boolean
 	end
 end
 
--- The processes named `name` and everything under them.
+-- The processes named `name` and everything under them. Attached to by pid
+-- (`--attach-pid`), only that process's tree: another copy of the app (an
+-- installed Ask beside a development one) shares its name, and its processes
+-- would count as the attached app's.
 local function tree_of(list: { Proc }, by_pid: { [number]: Proc }, name: string): { [number]: boolean }
 	local inside: { [number]: boolean } = {}
+	local root = state.attach_pid
+	if not (root and name == state.attach_name and by_pid[root] and by_pid[root].name == name) then
+		root = nil
+	end
 	local function walk(p: Proc): boolean
 		local known = inside[p.pid]
 		if known ~= nil then
@@ -86,7 +93,7 @@ local function tree_of(list: { Proc }, by_pid: { [number]: Proc }, name: string)
 		end
 		inside[p.pid] = false
 		local parent = by_pid[p.ppid or 0]
-		local within = p.name == name or (parent ~= nil and walk(parent))
+		local within = (if root then p.pid == root else p.name == name) or (parent ~= nil and walk(parent))
 		inside[p.pid] = within
 		return within
 	end

@@ -374,7 +374,7 @@ impl EditorHandle {
         self.hint.select_on_focus.set(select);
     }
     /// Whether it is a password's (`set_secure`).
-    pub(crate) fn is_secure(&self) -> bool {
+    pub fn is_secure(&self) -> bool {
         self.hint.secure.get()
     }
     /// A password field: its text shows as a bullet per character (each in
@@ -602,6 +602,17 @@ impl EditorHandle {
             self.refresh();
         }
         text
+    }
+    /// Keep what an input method is composing in it, committed to its value
+    /// (focus leaving it does this); the host resets the input method.
+    /// Whether the text changed.
+    pub fn finish_composition(&self) -> bool {
+        if self.is_read_only() || !self.editor.borrow_mut().finish_preedit() {
+            return false;
+        }
+        self.hint.value.write(&self.editor);
+        self.refresh();
+        true
     }
     /// Replace the selection with `text`, as the person pasting it would. A
     /// single-line editor joins its lines; a read-only one ignores it.
@@ -4794,7 +4805,10 @@ impl Ui {
                     );
                     *focused.borrow_mut() = false;
                     gesture.cancel();
-                    editor.borrow_mut().cancel_preedit();
+                    // What was being composed stays (the last Korean
+                    // syllable, a word before its conversion), as native
+                    // fields keep it when focus leaves.
+                    changed = !read_only.get() && editor.borrow_mut().finish_preedit();
                     // Read-only text gives up its selection with the focus, as a
                     // selectable label does, unless only its window went back.
                     if read_only.get() && !window_blurred.get() {
@@ -4864,6 +4878,11 @@ impl Ui {
                 } => {
                     cx.capture_pointer();
                     gesture.pointer.set((x, y));
+                    // A press while composing keeps what was composed, then
+                    // places the caret, as a native field does.
+                    if editor.borrow_mut().finish_preedit() {
+                        tab_indent.value.write(&editor);
+                    }
                     let s = scene.borrow();
                     let bounds = s.bounds(viewport);
                     let scroll = *scroll.borrow();

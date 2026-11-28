@@ -141,6 +141,27 @@ pub(crate) fn register(
     shown
 }
 
+/// `root`'s scroll view's stretch, followed into `out` (`View::report_stretch`).
+pub(crate) fn report(ui: &mut Ui, root: NodeId, out: Signal<f32>) {
+    let shown = ui
+        .elastic_state()
+        .borrow()
+        .views
+        .iter()
+        .find(|(node, _)| *node == root)
+        .and_then(|(_, view)| view.upgrade())
+        .map(|view| view.shown.clone());
+    let Some(shown) = shown else {
+        return;
+    };
+    ui.bind(root, move || {
+        let now = shown.get();
+        if out.with_untracked(|was| *was != now) {
+            out.set(now);
+        }
+    });
+}
+
 fn active(ui: &Ui) -> Option<Rc<Elastic>> {
     ui.elastic_state().borrow().active.as_ref()?.upgrade()
 }

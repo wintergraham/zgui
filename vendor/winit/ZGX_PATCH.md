@@ -175,3 +175,32 @@ shows no copy badge and every release would look taken.
       `DragEnter`, `DragOver` and `Drop` get is a `POINTL` by value, as COM
       passes it (`definitions.rs` declared a pointer, never read before).
     Wayland's drags reach zgx's own data device, not winit.
+
+## macOS: input methods read and edit the focused field
+
+winit's view told input methods it had no text: `selectedRange` and
+`attributedSubstringForProposedRange:` answered nothing, `insertText:`
+with no marked text was dropped (the Character Viewer's and Emoji
+picker's insertions), its replacement range ignored, and `unmarkText`
+threw the marked text away.
+
+8. `platform::macos::set_text_input_services` gives views the focused
+   field's text, selection and composition (`TextInputState`); the view
+   answers `selectedRange`, `markedRange` and
+   `attributedSubstringForProposedRange:` from it, as AppKit's text views
+   do, while the app's handler is free (`ApplicationDelegate::handler_in_use`).
+9. `insertText:` and `setMarkedText:` over a replacement range send
+   `Ime::Replace(range, text)` (`event.rs`), the range in the field's
+   committed text: Korean composing into the syllable before the caret,
+   Vietnamese tone marks, press-and-hold accents.
+10. `insertText:` of text no key typed as itself is an `Ime::Commit`; a
+    key's own text still goes with its `KeyboardInput`. Such a key's command
+    after it (Korean's Return, `insertNewline:`) still reaches the app.
+11. `unmarkText` commits the marked text.
+13. `attributedString` (the whole text) and `windowLevel` answer, as
+    Vietnamese input methods read the word they edit through the first.
+14. A key whose own text the input method inserts is delivered
+    (`KeyboardInput`) at that `insertText:`, not after
+    `interpretKeyEvents:` returns, so the field holds it when the input
+    method reads the field again within the same key.
+12. `ZGX_TRACE_IME=1` logs what input methods ask and how each key went.

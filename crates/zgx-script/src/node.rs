@@ -636,6 +636,9 @@ pub(crate) struct Events {
     pub key_up: Option<Handler>,
     pub focus: Option<Handler>,
     pub blur: Option<Handler>,
+    /// `fn(composing)` as an input method starts composing in an input
+    /// (text it shows that its value doesn't hold yet) and as it stops.
+    pub composing: Option<Handler>,
     /// `fn({ dx, dy, x, y, local_x, local_y, shift, ctrl, alt, meta })`.
     pub wheel: Option<Handler>,
     /// `fn({ scale, x, y, local_x, local_y, … })`: a trackpad pinch.
@@ -727,6 +730,7 @@ impl Events {
         key_up: None,
         focus: None,
         blur: None,
+        composing: None,
         wheel: None,
         pinch: None,
         mount: None,
@@ -782,6 +786,9 @@ pub(crate) enum Kind {
         follow: bool,
         /// `scrollbar = true`: an interactive scrollbar over its edge.
         scrollbar: bool,
+        /// `stretch`: state told how far a trackpad stretches it past an
+        /// edge (negative before the start, positive past the end).
+        stretch: Option<Signal<Value>>,
     },
     Text(Text),
     /// `ui.markdown_view { text }`: markdown drawn, parsed as the text
@@ -1348,7 +1355,7 @@ props! {
     "outline" => Outline: Num, "outline_color" => OutlineColor: Color, "outline_offset" => OutlineOffset: Num,
     "border_over" => BorderOver: Bool, "border_dash" => BorderDash: Pair,
     "shadow" => Shadow: Shadow, "inset_shadow" => InsetShadow: Shadow, "opacity" => Opacity: Num,
-    "brightness" => Brightness: Num, "contrast" => Contrast: Num, "saturate" => Saturate: Num, "blur" => Blur: Num, "backdrop_blur" => BackdropBlur: Num,
+    "brightness" => Brightness: Num, "contrast" => Contrast: Num, "saturate" => Saturate: Num, "blur" => Blur: Num, "backdrop_blur" => BackdropBlur: Num, "backdrop_fade" => BackdropFade: Num,
     "blend" => Blend: Str,
     "fade" => Fade: Pair, "fade_x" => FadeX: Pair, "fade_sides" => FadeSides: Corners,
     "fade_overflow" => FadeOverflow: Bool, "snap" => Snap: Bool,
@@ -2138,6 +2145,7 @@ const WIDGET_FIELDS: &[&str] = &[
     "offset",
     "follow",
     "scrollbar",
+    "stretch",
     "keyboard",
     "src",
     "code",
@@ -2273,6 +2281,7 @@ fn set_handler(
         "on_key_up" => &mut events.key_up,
         "on_focus" => &mut events.focus,
         "on_blur" => &mut events.blur,
+        "on_composing" => &mut events.composing,
         "on_wheel" => &mut events.wheel,
         "on_pinch" => &mut events.pinch,
         "on_mount" => {
@@ -3231,6 +3240,13 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
                     Some(t) => t.get::<Option<bool>>("follow")?.unwrap_or(false),
                     None => false,
                 };
+                let stretch = match &table {
+                    Some(t) => t.get::<mlua::Value>("stretch")?,
+                    None => mlua::Value::Nil,
+                };
+                let stretch = (!stretch.is_nil())
+                    .then(|| expect_state(&stretch, "`stretch`"))
+                    .transpose()?;
                 let scrollbar = match &table {
                     Some(t) => t.get::<Option<bool>>("scrollbar")?.unwrap_or(false),
                     None => false,
@@ -3244,6 +3260,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
                             horizontal,
                             follow,
                             scrollbar,
+                            stretch,
                         },
                     ),
                     table.as_ref(),

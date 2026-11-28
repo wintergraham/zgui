@@ -1363,7 +1363,7 @@ struct Host {
     primary: Option<String>,
     /// Where a press in a `window_drag` region was, until the pointer moves
     /// far enough from it to move the window, or is let go: a click.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     title_press: Option<(f32, f32)>,
     cursor: (f32, f32),
     pending_file_drops: crate::file_drop::FileDropBatch,
@@ -1380,7 +1380,7 @@ struct Host {
     display_scale: f64,
     /// What the window last showed, and its scale, for `Ui::snapshot`.
     #[cfg(target_os = "macos")]
-    shown: std::rc::Rc<std::cell::RefCell<Option<(zgx_gpu::ShownFrame, f64)>>>,
+    shown: std::rc::Rc<std::cell::RefCell<Option<Shown>>>,
     force: bool,
     presentation: Presentation,
     native_occluded: bool,
@@ -1615,16 +1615,22 @@ impl Host {
         // Pictures of what the window showed (`Ui::snapshot`): a region of
         // its last frame, read when asked.
         #[cfg(target_os = "macos")]
-        let shown: std::rc::Rc<std::cell::RefCell<Option<(zgx_gpu::ShownFrame, f64)>>> =
-            std::rc::Rc::default();
+        let shown: std::rc::Rc<std::cell::RefCell<Option<Shown>>> = std::rc::Rc::default();
         #[cfg(target_os = "macos")]
         {
             let shown = shown.clone();
             ui.on_snapshot(move |rect, max_width| {
                 let shown = shown.borrow();
-                let (frame, scale) = shown.as_ref()?;
-                let (x, y, w, h) = snapshot_region(rect, *scale);
-                let (w, h, bgra) = frame.read(x, y, w, h)?;
+                let shown = shown.as_ref()?;
+                let (x, y, w, h) = snapshot_region(rect, shown.scale);
+                let (w, h, mut bgra) = shown.frame.read(x, y, w, h)?;
+                // What paints over native views shows on the overlay plane:
+                // laid over the base's pixels, as the window shows them.
+                if let Some((overlay, plane, scale)) = &shown.overlay
+                    && (f64::from(*scale) - shown.scale).abs() < 0.01
+                {
+                    over_plane(&mut bgra, (x, y, w, h), overlay, *plane, f64::from(*scale));
+                }
                 let (w, h) = (w as usize, h as usize);
                 crate::thumbnail::image(&bgra, w, h, w * 4, max_width as usize)
             });
@@ -1721,7 +1727,7 @@ impl Host {
             clipboard,
             #[cfg(target_os = "linux")]
             primary: None,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
             title_press: None,
             cursor: (0., 0.),
             scroll: Default::default(),
@@ -1968,6 +1974,12 @@ impl Host {
         if let Some(window) = &self.window
             && target != self.ime_target
         {
+            crate::native_ime::trace(|| {
+                format!(
+                    "host target {:?} -> {target:?} active={}",
+                    self.ime_target, self.ime_active
+                )
+            });
             self.ime_restart
                 .target_changed(self.ime_target, target, self.ime_active);
             self.ime_active = false;
@@ -1994,6 +2006,9 @@ impl Host {
             &mut self.ime_restart,
             &mut self.ime_active,
         ) {
+            crate::native_ime::trace(|| {
+                "host: editor cancelled composition, native discarded".into()
+            });
             self.ime_geometry = None;
             if let Some(window) = &self.window {
                 window.set_ime_allowed(false);
@@ -2179,6 +2194,14 @@ impl Host {
                 }
                 self.force = false;
             }
+        } else {
+            // Nothing on screen changed (an animation of something out of
+            // sight, layout that moved nothing): no frame is drawn, but what
+            // this turn did is its own frame to the profiler, not added to
+            // whichever frame draws next. Thirty such turns between two drawn
+            // frames read as one 40 ms frame.
+            zgx::profile::note(|| "nothing on screen changed: not drawn".into());
+            zgx::profile::frame();
         }
         if self.presentation.ready(std::time::Instant::now()) && self.renderer.is_some() {
             if self.frame_paced && !self.present_ready {
@@ -2272,9 +2295,11 @@ impl Host {
                     }
                     // What it shows now, for `Ui::snapshot` (the last frame's
                     // surface is the renderer's to reuse again).
-                    *self.shown.borrow_mut() = renderer
-                        .shown_frame()
-                        .map(|frame| (frame, self.scale_factor));
+                    *self.shown.borrow_mut() = renderer.shown_frame().map(|frame| Shown {
+                        frame,
+                        scale: self.scale_factor,
+                        overlay: self.native.overlay_shown(),
+                    });
                     if let Some(gpu) = renderer.take_gpu_time() {
                         zgx::profile::gpu_time(gpu);
                         if grid.is_some() {
@@ -2323,6 +2348,10 @@ impl Host {
         drop(scene);
         // Native geometry that changed without zgx pixels to show with it.
         self.native.flush();
+        // A native view's window hides a frame after the frame replacing it (Windows): one more frame.
+        if self.native.wants_frame() {
+            window.request_redraw();
+        }
         let ui = &self.context.ui;
         // While pressed, the node hovering the press point found, so the
         // role's cursor doesn't change when an ancestor captures.
@@ -3127,6 +3156,12 @@ impl Host {
                 if mouse_down::drag(window) {
                     return;
                 }
+                #[cfg(target_os = "windows")]
+                {
+                    let window = window.clone();
+                    self.windows_title_drag(&window);
+                }
+                #[cfg(not(target_os = "windows"))]
                 self.context
                     .window_info
                     .last_request_error
@@ -3262,7 +3297,9 @@ impl Host {
             // move away while held (`title_press_moved`).
             #[cfg(target_os = "linux")]
             WindowGesture::Drag => self.title_press = Some(self.cursor),
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(target_os = "windows")]
+            WindowGesture::Drag => self.windows_title_drag(&window),
+            #[cfg(not(any(target_os = "linux", target_os = "windows")))]
             WindowGesture::Drag => {
                 self.context
                     .window_info
@@ -3291,11 +3328,30 @@ impl Host {
         }
         Ok(())
     }
+    /// A press that moves the window, on Windows. Its move loop takes a
+    /// maximized window out of maximized at once, even for a click that never
+    /// moves, so there the move waits for the pointer to move away while held
+    /// (`title_press_moved`), as dragging a maximized title bar does. A
+    /// fullscreen window has nothing to move: a move would leave fullscreen.
+    #[cfg(target_os = "windows")]
+    fn windows_title_drag(&mut self, window: &winit::window::Window) {
+        if window.fullscreen().is_some() {
+            return;
+        }
+        if window.is_maximized() {
+            self.title_press = Some(self.cursor);
+            return;
+        }
+        self.context
+            .window_info
+            .last_request_error
+            .set(window.drag_window().err().map(|e| e.to_string()));
+    }
     /// The pointer moved, held, from a press in a `window_drag` region: past
     /// the drag threshold (as a drag starts), the window manager moves the
     /// window from here, holding the pointer until it is let go, so zgx's
     /// press ends now.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn title_press_moved(&mut self) {
         let Some((x, y)) = self.title_press else {
             return;
@@ -3314,15 +3370,26 @@ impl Host {
         self.context.ui.cancel_interactions();
     }
     fn deactivate(&mut self) {
-        self.context.ui.cancel_interactions();
+        self.deactivate_with(true);
+    }
+    /// `cancel_pointer` false: the window is still in front and only its
+    /// keyboard focus went (to one of its own native views), so a press
+    /// held, and what the pointer hovers, go on.
+    fn deactivate_with(&mut self, cancel_pointer: bool) {
+        crate::native_ime::trace(|| "host window deactivated".into());
+        if cancel_pointer {
+            self.context.ui.cancel_interactions();
+        }
         self.context.ui.set_window_active(false);
         // A window at the back hears no pointer moves: what it hovered
         // has its leave now, not when the pointer next moves over it.
-        self.native.pointer_left();
-        self.context
-            .ui
-            .input
-            .dispatch(&self.context.ui.scene, InputEvent::PointerLeave);
+        if cancel_pointer {
+            self.native.pointer_left();
+            self.context
+                .ui
+                .input
+                .dispatch(&self.context.ui.scene, InputEvent::PointerLeave);
+        }
         self.native_focused = false;
         self.ime_active = false;
         self.ime_restart = Default::default();
@@ -3335,7 +3402,11 @@ impl Host {
         }
         self.ime_geometry = None;
         self.modifiers = Modifiers::default();
-        self.focus_memory.deactivate(&self.context.ui);
+        if cancel_pointer {
+            self.focus_memory.deactivate(&self.context.ui);
+        } else {
+            self.focus_memory.deactivate_keeping_pointer(&self.context.ui);
+        }
     }
     fn unregister_file_surface(&mut self) {
         #[cfg(target_os = "linux")]
@@ -3384,6 +3455,22 @@ impl Host {
         self.force = true;
     }
     fn window_event(&mut self, event: WindowEvent) -> Result<(), Box<dyn Error>> {
+        // Windows never reports `Occluded`: a minimized window is resized to
+        // nothing (and back to its size as it is restored), which stands in
+        // for it, so a minimized window presents and animates nothing (its
+        // frame source parks) instead of ticking every refresh unseen.
+        #[cfg(windows)]
+        if let WindowEvent::Resized(size) = &event {
+            let minimized = (size.width == 0 && size.height == 0)
+                || self
+                    .window
+                    .as_ref()
+                    .and_then(|window| window.is_minimized())
+                    .unwrap_or(false);
+            if minimized != self.native_occluded {
+                self.window_event(WindowEvent::Occluded(minimized))?;
+            }
+        }
         // The GPU wakes while the frame the input makes is built, or while a
         // scroll waits for the refresh it starts on.
         if acts(&event)
@@ -3577,7 +3664,7 @@ impl Host {
                 if self.resize_band(p.x, p.y)? {
                     return Ok(());
                 }
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
                 if self.title_press.is_some() {
                     self.title_press_moved();
                     return Ok(());
@@ -3660,7 +3747,7 @@ impl Host {
                     MouseButton::Other(n) => PointerButton::Other(n),
                 };
                 // Let go before it moved: a click on the title bar.
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
                 if state == ElementState::Released {
                     self.title_press = None;
                 }
@@ -3831,6 +3918,7 @@ impl Host {
                 }
             }
             WindowEvent::Focused(false) => {
+                crate::native_ime::trace(|| "host Focused(false)".into());
                 zgx_gpu::present_log::log(|| "window-focus false".into());
                 #[cfg(target_os = "linux")]
                 if let Some(caption) = &mut self.caption {
@@ -3839,10 +3927,22 @@ impl Host {
                 // Menus and popovers close as their window or the app
                 // loses focus, as AppKit's do.
                 self.context.ui.dismiss_popups();
+                // On Windows the window "loses focus" too when the keyboard
+                // goes to one of its own child windows (a web page, focused
+                // as its tab is selected by a press), though it stays in
+                // front: the press goes on, so a tab pressed to select it can
+                // still be dragged (it was cancelled at once).
+                #[cfg(windows)]
+                let in_front = self
+                    .window
+                    .as_ref()
+                    .is_some_and(|window| crate::window_chrome::in_front(window));
+                #[cfg(not(windows))]
+                let in_front = false;
                 // A drag the platform has goes on: it deactivates as that
                 // ends (`Handoff`).
                 if self.native_drag.deactivate() {
-                    self.deactivate()
+                    self.deactivate_with(!in_front)
                 }
             }
             WindowEvent::ThemeChanged(appearance) => {
@@ -3858,6 +3958,7 @@ impl Host {
                 }
             }
             WindowEvent::Focused(true) => {
+                crate::native_ime::trace(|| "host Focused(true)".into());
                 // The user may have changed the accent while it was at the back.
                 crate::system_colors::sync(&self.context.ui);
                 crate::scrollers::sync(&self.context.ui);
@@ -3874,6 +3975,12 @@ impl Host {
                 }
             }
             WindowEvent::Ime(event) => {
+                crate::native_ime::trace(|| {
+                    format!(
+                        "host {event:?} target={:?} active={} focused={}",
+                        self.ime_target, self.ime_active, self.native_focused
+                    )
+                });
                 if self.ime_restart.accepts(&event)
                     && let Some(composing) = crate::native_ime::dispatch(
                         &mut self.context.ui,
@@ -3883,6 +3990,9 @@ impl Host {
                     )?
                 {
                     self.ime_active = composing;
+                    crate::native_ime::trace(|| format!("host composing={composing}"));
+                } else {
+                    crate::native_ime::trace(|| "host dropped it".into());
                 }
             }
             // Winit synthesizes held-key presses/releases on X11 focus changes.
@@ -3904,6 +4014,12 @@ impl Host {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                crate::native_ime::trace(|| {
+                    format!(
+                        "host key {:?} {:?} active={}",
+                        event.logical_key, event.state, self.ime_active
+                    )
+                });
                 let key = map_key(&event.logical_key)
                     .map(|key| shortcut_key(key, event.physical_key, self.modifiers));
                 let mut prevented = false;
@@ -6142,6 +6258,15 @@ impl ApplicationHandler<Event> for WindowManager {
         self.contain(event_loop, None, |this| {
             this.user_event_turn(event_loop, event)
         });
+        // A window moved or sized: the system's loop never comes back to
+        // winit's for `about_to_wait`, so the turn runs here, on the wakes
+        // its timer sends (window_chrome `in_size_move`). Without it, tasks
+        // (an app's own loop among them), timers and frames stopped for the
+        // whole drag.
+        #[cfg(windows)]
+        if crate::window_chrome::in_size_move() {
+            self.contain(event_loop, None, |this| this.about_to_wait_turn(event_loop));
+        }
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let token = self.native.get(&id).copied();
@@ -6680,6 +6805,66 @@ fn first_mark(once: &std::sync::Once, what: &str) {
 /// `(x, y, width, height)`, less any part off its left or top edge (the
 /// frame's reader cuts the right and bottom).
 #[cfg(any(target_os = "macos", test))]
+/// What the window last showed (`Ui::snapshot`): the base plane's frame at
+/// its scale, and the overlay plane's over native views, with the plane's
+/// rect (points) and scale, while it shows.
+#[cfg(target_os = "macos")]
+struct Shown {
+    frame: zgx_gpu::ShownFrame,
+    scale: f64,
+    overlay: Option<(zgx_gpu::ShownFrame, zgx::scene::Rect, f32)>,
+}
+
+/// The overlay plane's pixels over `base`, the window's region `x, y, w, h`
+/// (pixels), both premultiplied BGRA: source over.
+#[cfg(target_os = "macos")]
+fn over_plane(
+    base: &mut [u8],
+    (x, y, w, h): (u32, u32, u32, u32),
+    overlay: &zgx_gpu::ShownFrame,
+    plane: zgx::scene::Rect,
+    scale: f64,
+) {
+    // The plane's first pixel in the window's (its rect is snapped to them).
+    let px = (f64::from(plane.x) * scale).round() as i64;
+    let py = (f64::from(plane.y) * scale).round() as i64;
+    let pw = (f64::from(plane.width) * scale).round() as i64;
+    let ph = (f64::from(plane.height) * scale).round() as i64;
+    let (x0, y0) = (i64::from(x).max(px), i64::from(y).max(py));
+    let x1 = (i64::from(x) + i64::from(w)).min(px + pw);
+    let y1 = (i64::from(y) + i64::from(h)).min(py + ph);
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    let Some((ow, oh, top)) = overlay.read(
+        (x0 - px) as u32,
+        (y0 - py) as u32,
+        (x1 - x0) as u32,
+        (y1 - y0) as u32,
+    ) else {
+        return;
+    };
+    let (ow, oh, w) = (ow as usize, oh as usize, w as usize);
+    let (dx, dy) = ((x0 - i64::from(x)) as usize, (y0 - i64::from(y)) as usize);
+    for row in 0..oh {
+        for col in 0..ow {
+            let s = (row * ow + col) * 4;
+            let alpha = top[s + 3];
+            if alpha == 0 {
+                continue;
+            }
+            let d = ((dy + row) * w + dx + col) * 4;
+            let Some(px) = base.get_mut(d..d + 4) else {
+                continue;
+            };
+            let keep = 255 - u16::from(alpha);
+            for c in 0..4 {
+                px[c] = (u16::from(top[s + c]) + (u16::from(px[c]) * keep + 127) / 255).min(255) as u8;
+            }
+        }
+    }
+}
+
 fn snapshot_region(rect: zgx::scene::Rect, scale: f64) -> (u32, u32, u32, u32) {
     let span = |from: f32, length: f32| {
         let start = (f64::from(from) * scale).round();

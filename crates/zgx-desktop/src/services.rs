@@ -21,6 +21,7 @@ pub(crate) fn add(window: WindowId, ui: &zgx::widgets::Ui) {
     });
     if first {
         winit::platform::macos::set_selection_services(Some(std::rc::Rc::new(Windows)));
+        winit::platform::macos::set_text_input_services(Some(std::rc::Rc::new(Windows)));
         register_types();
     }
 }
@@ -63,6 +64,49 @@ impl winit::platform::macos::SelectionServices for Windows {
     }
 }
 
+/// What input methods read of the focused field: its text with the
+/// composition in place, as AppKit's text views show them theirs.
+impl winit::platform::macos::TextInputServices for Windows {
+    fn text_input_state(&self, window: WindowId) -> Option<winit::platform::macos::TextInputState> {
+        let editor = ui(window)?.focused_editor()?;
+        if editor.is_read_only() || editor.is_secure() {
+            return None;
+        }
+        // Asked while the editor is being changed (never expected): no answer.
+        let model = editor.editor.try_borrow().ok()?;
+        Some(text_input_state(&model))
+    }
+}
+
+pub(crate) fn text_input_state(
+    model: &zgx::text_edit::TextEditor,
+) -> winit::platform::macos::TextInputState {
+    let text = model.text();
+    let selection = model.selection().range();
+    let Some(preedit) = model.preedit() else {
+        return winit::platform::macos::TextInputState {
+            text: text.into_owned(),
+            selection,
+            marked: None,
+        };
+    };
+    let start = selection.start;
+    let marked = start..start + preedit.text.len();
+    let (from, to) = preedit
+        .cursor
+        .unwrap_or((preedit.text.len(), preedit.text.len()));
+    winit::platform::macos::TextInputState {
+        text: format!(
+            "{}{}{}",
+            &text[..start],
+            preedit.text,
+            &text[selection.end..]
+        ),
+        selection: start + from..start + to,
+        marked: Some(marked),
+    }
+}
+
 /// The app sends and takes plain text through Services.
 fn register_types() {
     use objc2_app_kit::{NSApplication, NSPasteboardTypeString};
@@ -79,6 +123,24 @@ mod tests {
     use super::*;
     use winit::platform::macos::SelectionServices;
     use zgx::compose::prelude::*;
+
+    /// Input methods see the composition in place of the selection, the
+    /// caret inside it where the input method put it.
+    #[test]
+    fn input_methods_read_the_text_with_the_composition_in_place() {
+        let mut model = zgx::text_edit::TextEditor::new("안 하세요");
+        model.set_selection(3, 3);
+        let plain = text_input_state(&model);
+        assert_eq!(
+            (plain.text.as_str(), plain.selection, plain.marked),
+            ("안 하세요", 3..3, None)
+        );
+        model.set_preedit("녕", Some((0, 3)));
+        let composing = text_input_state(&model);
+        assert_eq!(composing.text, "안녕 하세요");
+        assert_eq!(composing.marked, Some(3..6));
+        assert_eq!(composing.selection, 3..6);
+    }
 
     #[test]
     fn services_take_the_selection_and_put_their_text_in_a_fields_place() {

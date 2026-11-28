@@ -369,6 +369,8 @@ pub(crate) struct Rare {
     hollow: bool,
     scrollbar: Option<bool>,
     follow_end: Option<bool>,
+    /// `View::report_stretch`: where a scroll view reports its stretch.
+    stretch: Option<Signal<f32>>,
     animation: Option<animation::Animated>,
     keyboard_navigation: Option<bool>,
     dismiss_backdrop: Option<bool>,
@@ -435,6 +437,9 @@ impl Rare {
         }
         if self.follow_end.is_some() {
             inner.follow_end = self.follow_end;
+        }
+        if self.stretch.is_some() {
+            inner.stretch = self.stretch;
         }
         if self.drag_preview.is_some() {
             inner.drag_preview = self.drag_preview;
@@ -703,6 +708,14 @@ impl View {
     /// it was at the end (a chat transcript); scrolling away releases it.
     pub fn follow_end(mut self, follow: bool) -> Self {
         self.rare_mut().follow_end = Some(follow);
+        self
+    }
+    /// Report how far a trackpad stretches a scroll view past an edge
+    /// (elastic scrolling) into `stretch`: negative before the start,
+    /// positive past the end, zero at rest. The content shows at the offset
+    /// plus it, while the offset itself never leaves its range.
+    pub fn report_stretch(mut self, stretch: Signal<f32>) -> Self {
+        self.rare_mut().stretch = Some(stretch);
         self
     }
     /// Enable bounded keyboard row navigation on a virtual list.
@@ -3306,6 +3319,11 @@ fn mount_element(
     );
     let scrollbar = rare.as_ref().and_then(|r| r.scrollbar).unwrap_or(false);
     let follow_end = rare.as_ref().and_then(|r| r.follow_end).unwrap_or(false);
+    assert!(
+        rare.as_ref().is_none_or(|r| r.stretch.is_none()) || matches!(kind, Kind::Scroll { .. }),
+        "report_stretch is only supported on scroll and scroll_x views"
+    );
+    let stretch = rare.as_deref_mut().and_then(|r| r.stretch.take());
     let mut opened = open_element(
         ui,
         parent,
@@ -3321,7 +3339,11 @@ fn mount_element(
     for child in std::mem::take(&mut opened.children) {
         mount(ui, opened.child_parent, child, opened.environment.clone());
     }
-    close_element(ui, opened)
+    let root = close_element(ui, opened);
+    if let Some(stretch) = stretch {
+        crate::elastic::report(ui, root, stretch);
+    }
+    root
 }
 /// An element mounted up to its children: what the rest of its mounting
 /// needs once they are in (`mount_element`).

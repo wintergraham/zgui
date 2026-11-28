@@ -31,10 +31,12 @@ fn inside(v:Out)->bool{return all(v.position.xy>=v.fade.xy)&&all(v.position.xy<v
 // texture is transparent, as are the clamped edges.
 @fragment fn fs_across(v:Out)->@location(0) vec4<f32>{
  if !inside(v){return vec4(0.);}
- let f=v.color.z;let s=max(v.color.w,.05);let r=i32(ceil(3.*s));
+ // Factors are at most 16 and sigma 8 slot texels (effects.rs): held
+ // there, so no job can make a loop run long enough to hang the GPU.
+ let f=v.color.z;let s=max(v.color.w,.05);let r=clamp(i32(ceil(3.*s)),0,32);
  let size=vec2<f32>(textureDimensions(source));
  let center=v.color.xy+(v.position.xy-v.rect.xy)*f;
- let n=max(i32(f)/2,1);let first=center-vec2(f*.5)+select(vec2(.5),vec2(1.),f>1.5);
+ let n=clamp(i32(f)/2,1,8);let first=center-vec2(f*.5)+select(vec2(.5),vec2(1.),f>1.5);
  var sum=vec4(0.);var total=0.;
  for(var k=-r;k<=r;k++){
   let w=exp(-.5*f32(k*k)/(s*s));
@@ -49,7 +51,7 @@ fn inside(v:Out)->bool{return all(v.position.xy>=v.fade.xy)&&all(v.position.xy<v
 // Down: the Gaussian down the column, then the mask.
 @fragment fn fs_down(v:Out)->@location(0) vec4<f32>{
  if !inside(v){return vec4(0.);}
- let s=v.color.w;let r=select(0,i32(ceil(3.*s)),s>0.);
+ let s=v.color.w;let r=select(0,clamp(i32(ceil(3.*s)),0,32),s>0.);
  let at=vec2<i32>(floor(v.position.xy-v.rect.xy+v.color.xy));
  let range=vec4<i32>(v.options);
  var sum=vec4(0.);var total=0.;

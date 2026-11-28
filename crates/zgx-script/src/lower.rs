@@ -1093,6 +1093,7 @@ fn kind_view(
             horizontal,
             follow,
             scrollbar,
+            stretch,
         } => {
             let offset = match offset {
                 Some(offset) => bridge(need(&mut cx), offset, number, |x| Value::Num(x as f64)),
@@ -1107,6 +1108,23 @@ fn kind_view(
                 scroll(offset)
             };
             let view = view.follow_end(*follow);
+            // Told only: nothing the script sets moves the stretch.
+            let view = match stretch {
+                Some(out) => {
+                    let cx = need(&mut cx);
+                    let shown = cx.state(0_f32);
+                    let (out, read) = (out.clone(), shown.clone());
+                    let runtime = cx.runtime();
+                    cx.retain(runtime.effect(move || {
+                        let now = read.get() as f64;
+                        if out.with_untracked(|was| !matches!(was, Value::Num(n) if *n == now)) {
+                            out.set(Value::Num(now));
+                        }
+                    }));
+                    view.report_stretch(shown)
+                }
+                None => view,
+            };
             if *scrollbar {
                 view.scrollbar(true)
             } else {
@@ -3002,6 +3020,10 @@ fn remote_status(vm: &Rc<Vm>, low: &Lowering, src: &str, svg: bool) -> u8 {
     ready.get()
 }
 fn load_image(vm: &Rc<Vm>, low: &Lowering, src: &str) -> Option<Arc<ImageData>> {
+    // No path is no picture (a field a script left empty), not the script's folder read as a file.
+    if src.is_empty() {
+        return None;
+    }
     // The host's own images, followed as it replaces them.
     if src.starts_with("host:") {
         low.assets.hosted(src, &low.runtime).get();
@@ -3053,6 +3075,8 @@ fn load_svg(vm: &Rc<Vm>, low: &Lowering, src: &str) -> Arc<SvgData> {
     }
     let bytes = match src.strip_prefix("code:") {
         Some(code) => Ok(code.as_bytes().to_vec()),
+        // No path draws nothing, as an image's does.
+        None if src.is_empty() => Ok(b"<svg xmlns='http://www.w3.org/2000/svg'/>".to_vec()),
         None => resolve_path(vm, src).and_then(|path| {
             low.assets
                 .read(src, &path)
@@ -3124,9 +3148,26 @@ fn with_events(
     // A press that follows the pointer (a divider, a slider of the
     // script's own) keeps it until release, wherever it goes.
     let captures = press.is_some() && (moved.is_some() || release.is_some());
+    let composing = events.composing.clone();
+    let was_composing = Rc::new(std::cell::Cell::new(false));
     let (vm, actions) = (vm.clone(), low.actions.clone());
     view.on_event(move |event| {
         let lua = &vm.lua;
+        // Composing or not, from the input method's own events.
+        if let Some(h) = &composing
+            && event.phase == EventPhase::Target
+        {
+            let now = match &event.event {
+                InputEvent::ImePreedit { text, .. } => Some(!text.is_empty()),
+                InputEvent::ImeCommit(_) | InputEvent::Blur => Some(false),
+                _ => None,
+            };
+            if let Some(now) = now
+                && was_composing.replace(now) != now
+            {
+                run(h, &vm, &actions, now);
+            }
+        }
         let local = |x: f32, y: f32| {
             let origin = handle
                 .get()
@@ -3247,6 +3288,11 @@ fn with_events(
             }
             InputEvent::Blur => {
                 if let Some(h) = &blur {
+                    // What was being composed is the field's before the
+                    // script hears it left (a rename commits on blur).
+                    if let Some(editor) = handle.get().and_then(NodeHandle::editor) {
+                        editor.finish_composition();
+                    }
                     run(h, &vm, &actions, ());
                 }
             }
@@ -5457,6 +5503,7 @@ fn apply<S: Styled>(s: S, prop: Prop, lit: &Lit) -> S {
         (Opacity, Lit::Num(v)) => s.opacity(v.clamp(0., 1.)),
         (Blur, Lit::Num(v)) => s.filter_blur(v.max(0.)),
         (BackdropBlur, Lit::Num(v)) => s.blur(v.max(0.)),
+        (BackdropFade, Lit::Num(v)) => s.edge_fade(v.max(0.)),
         (Brightness, Lit::Num(v)) => s.brightness(*v),
         (Contrast, Lit::Num(v)) => s.contrast(*v),
         (Saturate, Lit::Num(v)) => s.saturate(*v),

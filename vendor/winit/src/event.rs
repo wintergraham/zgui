@@ -793,6 +793,14 @@ pub enum Ime {
     /// Right before this event winit will send empty [`Self::Preedit`] event.
     Commit(String),
 
+    /// zgx patch: an input method replaced `range` of the focused field's
+    /// text with this text, committed (macOS's Korean, Vietnamese and
+    /// press-and-hold accents edit the text before the caret so). The range
+    /// is in UTF-8 bytes of the field's committed text, as the app last reported
+    /// it through `platform::macos::set_text_input_services`, its composition
+    /// taken out. A preceding empty [`Self::Preedit`] clears any composition.
+    Replace(std::ops::Range<usize>, String),
+
     /// Notifies when the IME was disabled.
     ///
     /// After receiving this event you won't get any more [`Preedit`][Self::Preedit] or
