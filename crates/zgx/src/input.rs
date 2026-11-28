@@ -2471,18 +2471,35 @@ impl InputDispatcher {
         // The rest of a wheel gesture goes to the scroll view it latched
         // to, alone, as macOS latches one: it neither chains to the views
         // around it at an edge nor moves to one that slides under the
-        // pointer. A pause ends the gesture.
+        // pointer. A pause ends the gesture. A wheel's gesture (no phases:
+        // a mouse, or any wheel on Windows) also ends when the pointer
+        // leaves the view, so scrolling on over another view moves that
+        // one at once; a trackpad's, momentum included, holds wherever the
+        // pointer goes, as AppKit's does.
         if let InputEvent::Scroll {
-            delta_x, delta_y, ..
+            x,
+            y,
+            delta_x,
+            delta_y,
+            ..
         } = &event
         {
             let now = Instant::now();
             let horizontal = delta_x.abs() > delta_y.abs();
+            let phased = self.state.borrow().hover_frozen.is_some();
             let latched = self.state.borrow().scroll_latch.filter(|(node, axis, at)| {
+                let scene = scene.borrow();
                 *axis == horizontal
                     && now.saturating_duration_since(*at) < SCROLL_LATCH
-                    && scene.borrow().contains(*node)
-                    && self.enabled(&scene.borrow(), *node)
+                    && scene.contains(*node)
+                    && self.enabled(&scene, *node)
+                    && (phased
+                        || scene
+                            .visible_bounds(*node)
+                            .is_some_and(|r| {
+                                (r.x..r.x + r.width).contains(x)
+                                    && (r.y..r.y + r.height).contains(y)
+                            }))
             });
             if let Some((node, ..)) = latched {
                 let ctx =

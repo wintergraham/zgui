@@ -42,6 +42,30 @@ fn a_gesture_stays_with_the_view_it_began_in_until_a_pause() {
 }
 
 #[test]
+fn a_wheel_moved_onto_another_view_scrolls_that_one_at_once() {
+    let mut ui = Ui::new(400., 400.);
+    let (sidebar, content) = (ui.signal(0.), ui.signal(0.));
+    ui.mount(
+        row()
+            .child(
+                scroll(sidebar.clone()).w(100.).h(300.).child(
+                    column().children((0..40).map(|i| text(format!("Side {i}")).h(20.))),
+                ),
+            )
+            .child(
+                scroll(content.clone()).w(200.).h(300.).child(
+                    column().children((0..40).map(|i| text(format!("Main {i}")).h(20.))),
+                ),
+            ),
+    );
+    ui.prepare_frame();
+    wheel(&mut ui, 50., 50., 0., 20.);
+    // No pause: the pointer moved over the content, and the wheel goes on there.
+    wheel(&mut ui, 200., 50., 0., 20.);
+    assert_eq!((sidebar.get(), content.get()), (20., 20.));
+}
+
+#[test]
 fn a_trackpad_gesture_latches_afresh_without_a_pause() {
     use zgx::input::ScrollGesture;
     let mut ui = Ui::new(400., 400.);
