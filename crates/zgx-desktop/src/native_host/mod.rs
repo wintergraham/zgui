@@ -725,6 +725,10 @@ impl NativeHost {
         }
         self.pending = false;
     }
+    /// X11 child windows move and hide as they are told: no frame to wait on.
+    pub fn wants_frame(&self) -> bool {
+        false
+    }
     pub fn flush(&mut self) {
         if self.pending {
             self.apply();
