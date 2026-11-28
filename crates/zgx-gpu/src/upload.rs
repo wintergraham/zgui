@@ -750,7 +750,13 @@ impl TextureUploads {
                     },
                 ],
             });
-            let view = texture.create_view(&Default::default());
+            // Level 0 only: an image's texture has a mip chain (written by
+            // copies), and a render pass can't target a view of several levels.
+            // wgpu rejects the whole encoder then, the glyph atlas's writes too.
+            let view = texture.create_view(&wgpu::TextureViewDescriptor {
+                mip_level_count: Some(1),
+                ..Default::default()
+            });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("texture upload"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
