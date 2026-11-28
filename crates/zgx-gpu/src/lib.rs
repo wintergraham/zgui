@@ -26,6 +26,7 @@ mod metal_frame;
 mod native_surface;
 mod planes;
 pub mod present_log;
+pub mod system;
 mod surface;
 mod upload;
 pub use font_cache::set_desktop_sans_serif;
@@ -1898,6 +1899,21 @@ struct LayerPresent {
 }
 #[cfg(own_surfaces)]
 impl LayerPresent {
+    /// Whether a scroll can copy from the shown surface: there is one, it
+    /// holds the newest frame presented, and it isn't the surface the next
+    /// frame draws into (Windows: the swap chain's back buffer, which a
+    /// present that didn't flip leaves the same). Otherwise what scrolls
+    /// repaints.
+    fn holds_last_shown(&self) -> bool {
+        let Some(shown) = self.shown else {
+            return false;
+        };
+        #[cfg(windows)]
+        if self.chain.as_ref().is_none_or(|chain| chain.current() == shown) {
+            return false;
+        }
+        self.buffers.get(shown).is_some_and(|(_, held)| *held == Some(self.frame))
+    }
     /// What surface `index` lacks of the latest frame before a frame draws
     /// into it: the changes of every frame since the one it holds (all of it
     /// once those are no longer kept); none when the frame repaints
@@ -2470,6 +2486,7 @@ impl GpuContext {
         };
         let vertex_ring =
             mappable && (mapped_uploads || (info.backend == wgpu::Backend::Dx12 && dx12_ring));
+        system::chose(&info, mapped_uploads, vertex_ring);
         zgx::profile::mark("GPU adapter");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("zgx shared device"),
@@ -3106,6 +3123,10 @@ impl GpuRenderer {
             });
         #[cfg(windows)]
         let own_surfaces = own_chain.is_some();
+        #[cfg(windows)]
+        if window.is_some() {
+            system::presenting(own_surfaces);
+        }
         #[cfg(not(windows))]
         let own_surfaces = false;
         let mut translucent_alpha = wgpu::CompositeAlphaMode::Auto;
@@ -7383,7 +7404,7 @@ impl GpuRenderer {
         // only once it was presented.
         #[cfg(own_surfaces)]
         let copyable = match self.layer_present.as_ref() {
-            Some(present) => present.current.is_none(),
+            Some(present) => present.current.is_none() && present.holds_last_shown(),
             None => !cfg!(target_os = "macos"),
         };
         #[cfg(not(own_surfaces))]
@@ -7423,9 +7444,15 @@ impl GpuRenderer {
                     Err(|_| "switched off (zgx inspect switch scroll_copy on)".into())
                 }
                 None => Err(|_| "its view or its move falls between device pixels".into()),
+                Some(_) if !copyable && cfg!(windows) => Err(|_| {
+                    "the shown buffer may not hold the last frame (not presented yet, or the swap \
+                     chain didn't flip)"
+                        .into()
+                }),
                 Some(_) if !copyable => Err(|_| {
                     "the window presents through the system's surface, whose first copy holds \
-                     100 MB of graphics memory (macOS)"
+                     100 MB of graphics memory (macOS), or its shown surface doesn't hold the last \
+                     frame"
                         .into()
                 }),
                 Some(_) if self.fresh => {
@@ -9298,6 +9325,9 @@ impl GpuRenderer {
         });
         let chain = present.chain.as_mut().expect("a swap chain");
         let seen = chain.present(&present.changed)?;
+        if chain.current() == index {
+            present_log::log(|| format!("dxgi present index={index} didn't flip (seen={seen})"));
+        }
         self.dxgi_stats.presented_chain(chain.swap_chain());
         // The buffer holds the frame either way: the swap chain's index says
         // which the next draws into.

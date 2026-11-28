@@ -53,6 +53,11 @@ use windows::{
 const BUFFERS: u32 = 2;
 /// Frames queued ahead of the compositor before a frame waits to start.
 const LATENCY: u32 = 2;
+/// Presents not yet shown whose dirty rectangles are kept (`unseen_rects`);
+/// any more and a present is whole.
+const UNSEEN_KEPT: usize = 8;
+/// Dirty rectangles in one present; any more and it is whole.
+const MAX_DIRTY_RECTS: usize = 256;
 /// `ZGX_DXGI_PRESENT_WHOLE`: each buffer presented whole, without dirty
 /// rectangles. The compositor keeps its own copy of a window and takes only
 /// the dirty rectangles from a present, so a buffer wrongly brought up to
@@ -117,6 +122,10 @@ pub(crate) struct Chain {
     /// No buffer presented since it was made or resized, or the last present
     /// was occluded or failed: a present must cover all of it.
     whole: bool,
+    /// The dirty rectangles of recent presents the compositor may not have
+    /// shown yet, by present count; None for one presented whole
+    /// (`unseen_rects`).
+    unseen: std::collections::VecDeque<(u32, Option<Vec<RECT>>)>,
     /// Its buffers were handed out (`buffers`): a new size needs `resize`.
     wrapped: bool,
     // Kept alive while the swap chain is shown.
@@ -198,6 +207,7 @@ impl Chain {
                 swap_chain,
                 waitable,
                 whole: true,
+                unseen: Default::default(),
                 wrapped: false,
                 _visual: visual,
                 _target: target,
@@ -299,6 +309,7 @@ impl Chain {
         }
         .map_err(|e| failure(&self.raw, "ResizeBuffers", e))?;
         self.whole = true;
+        self.unseen.clear();
         Ok(())
     }
     /// The buffer the next frame draws into.
@@ -316,22 +327,24 @@ impl Chain {
     /// frame changed (all of it before a buffer was first shown). False when
     /// the window can't be seen (minimized, or its display off).
     pub fn present(&mut self, dirty: &[Scissor]) -> Result<bool, GpuError> {
-        let rects: Vec<RECT> = if self.whole || *WHOLE {
-            Vec::new()
-        } else {
-            dirty
-                .iter()
-                .filter(|(_, _, w, h)| *w > 0 && *h > 0)
-                .map(|&(x, y, w, h)| RECT {
-                    left: x as i32,
-                    top: y as i32,
-                    right: (x + w) as i32,
-                    bottom: (y + h) as i32,
-                })
-                .collect()
-        };
+        let own: Vec<RECT> = dirty
+            .iter()
+            .filter(|(_, _, w, h)| *w > 0 && *h > 0)
+            .map(|&(x, y, w, h)| RECT {
+                left: x as i32,
+                top: y as i32,
+                right: (x + w) as i32,
+                bottom: (y + h) as i32,
+            })
+            .collect();
         // Nothing changed: present it whole (an empty list means all of it,
         // and the frame was drawn for a reason; it is rare).
+        let rects = if self.whole || *WHOLE || own.is_empty() {
+            None
+        } else {
+            self.unseen_rects(&own)
+        };
+        let rects = rects.unwrap_or_default();
         let params = DXGI_PRESENT_PARAMETERS {
             DirtyRectsCount: rects.len() as u32,
             pDirtyRects: if rects.is_empty() {
@@ -348,6 +361,7 @@ impl Chain {
         if let Err(error) = result.ok() {
             // Whatever the compositor took of it, the next present is whole.
             self.whole = true;
+            self.unseen.clear();
             return Err(failure(&self.raw, "Present1", error));
         }
         let occluded = result == DXGI_STATUS_OCCLUDED;
@@ -356,7 +370,53 @@ impl Chain {
         // first present seen again is whole, so nothing it holds of the
         // window is left from before.
         self.whole = occluded;
+        // SAFETY: Reads the swap chain's count of presents, this one's.
+        match unsafe { self.swap_chain.GetLastPresentCount() } {
+            Ok(count) if !occluded => {
+                // Its own rectangles (the earlier ones are on record), or
+                // None when it was presented whole.
+                self.unseen
+                    .push_back((count, (!rects.is_empty()).then_some(own)));
+                if self.unseen.len() > UNSEEN_KEPT {
+                    self.unseen.pop_front();
+                }
+            }
+            _ => self.unseen.clear(),
+        }
         Ok(!occluded)
+    }
+    /// The dirty rectangles for a present that changed `own`: those and the
+    /// rectangles of every earlier present the compositor has not shown yet.
+    /// None (present it whole) when that is not known.
+    ///
+    /// At sync interval 0, a present the compositor has not taken by its
+    /// next refresh is replaced by the one after it: scrolling Settings fast
+    /// on an RTX 4070 Ti SUPER, a third of the presents were never shown, up
+    /// to six in a row. A compositor that takes of the window only the shown
+    /// present's dirty rectangles keeps whatever a replaced one changed as
+    /// it last had it; that one showed the window right regardless, but a
+    /// tester's showed rows scrolled away staying on screen and card edges
+    /// repeating down the view while Settings scrolled, as this would.
+    fn unseen_rects(&mut self, own: &[RECT]) -> Option<Vec<RECT>> {
+        let mut stats = windows::Win32::Graphics::Dxgi::DXGI_FRAME_STATISTICS::default();
+        // SAFETY: Reads the swap chain's statistics into a local, and its
+        // count of presents. Both fail until a present has shown.
+        let (shown, last) = unsafe {
+            self.swap_chain.GetFrameStatistics(&mut stats).ok()?;
+            (stats.PresentCount, self.swap_chain.GetLastPresentCount().ok()?)
+        };
+        // Presents after the one last shown: each must be on record.
+        self.unseen
+            .retain(|(count, _)| (count.wrapping_sub(shown) as i32) > 0);
+        let pending = last.wrapping_sub(shown) as usize;
+        if pending > UNSEEN_KEPT || self.unseen.len() != pending {
+            return None;
+        }
+        let mut rects = own.to_vec();
+        for (_, unseen) in &self.unseen {
+            rects.extend_from_slice(unseen.as_deref()?);
+        }
+        (rects.len() <= MAX_DIRTY_RECTS).then_some(rects)
     }
     /// The chain made again, opaque unless `transparent`, the size it was,
     /// once every wrapper of its buffers was `release`d. The old one, and
