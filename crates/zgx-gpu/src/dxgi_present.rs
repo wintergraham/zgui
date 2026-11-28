@@ -128,6 +128,8 @@ pub(crate) struct Chain {
     unseen: std::collections::VecDeque<(u32, Option<Vec<RECT>>)>,
     /// Its buffers were handed out (`buffers`): a new size needs `resize`.
     wrapped: bool,
+    /// Made with alpha (`new`'s `transparent`), to be made again alike.
+    transparent: bool,
     // Kept alive while the swap chain is shown.
     _visual: IDCompositionVisual,
     _target: IDCompositionTarget,
@@ -209,6 +211,7 @@ impl Chain {
                 whole: true,
                 unseen: Default::default(),
                 wrapped: false,
+                transparent,
                 _visual: visual,
                 _target: target,
                 _dcomp: dcomp,
@@ -428,6 +431,24 @@ impl Chain {
             .map_err(|e| failure(&self.raw, "GetDesc1", e))?;
         drop(self);
         Self::new(&device, hwnd, desc.Width, desc.Height, transparent)
+    }
+    /// Resize the buffers as `resize` does, or, when the swap chain refuses
+    /// (DXGI_ERROR_INVALID_CALL: something still holds one of its buffers),
+    /// make it again at the new size, as it was, rather than fail every
+    /// frame after. Seen once leaving fullscreen after the device had been
+    /// lost and the renderer made again (a driver update), which closed the
+    /// app. A lost device still fails.
+    pub fn resized(mut self, width: u32, height: u32) -> Result<Self, GpuError> {
+        match self.resize(width, height) {
+            Ok(()) => Ok(self),
+            Err(error) if !error.is_device_lost() => {
+                eprintln!("zgx: {error}; making the window's swap chain again");
+                let (device, hwnd, transparent) = (self.device.clone(), self.hwnd, self.transparent);
+                drop(self);
+                Self::new(&device, hwnd, width, height, transparent)
+            }
+            Err(error) => Err(error),
+        }
     }
     /// Wait until the queue has run all it was given, presents included:
     /// wgpu waits for its own submissions alone, and a swap chain resized or

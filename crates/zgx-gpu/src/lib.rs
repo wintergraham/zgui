@@ -3595,17 +3595,24 @@ impl GpuRenderer {
         // unconfigured. The target no longer holds an old buffer (above).
         #[cfg(windows)]
         if let Some(present) = &mut self.layer_present
-            && let Some(chain) = &mut present.chain
+            && let Some(chain) = present.chain.take()
         {
             chain.release(present.buffers.drain(..).map(|(buffer, _)| buffer));
             present.shown = None;
             present.history.clear();
-            let resized = chain
-                .resize(width, height)
-                .and_then(|()| chain.buffers(&self.device, width, height));
-            match resized {
-                Ok(buffers) => present.buffers = buffers.into_iter().map(|b| (b, None)).collect(),
-                // The next frame tries again (`begin_layer_frame`).
+            match chain.resized(width, height) {
+                Ok(mut chain) => {
+                    match chain.buffers(&self.device, width, height) {
+                        Ok(buffers) => {
+                            present.buffers = buffers.into_iter().map(|b| (b, None)).collect()
+                        }
+                        // The next frame tries again (`begin_layer_frame`).
+                        Err(error) => eprintln!("zgx: {error}"),
+                    }
+                    present.chain = Some(chain);
+                }
+                // Lost with its device: the next frame fails as lost
+                // (`begin_layer_frame`), and the host makes a new renderer.
                 Err(error) => eprintln!("zgx: {error}"),
             }
         }
@@ -9205,6 +9212,9 @@ impl GpuRenderer {
     /// last frame queued to copy from the shown buffer (none when `whole`).
     #[cfg(windows)]
     fn begin_layer_frame(&mut self, whole: bool) -> Result<(), GpuError> {
+        // No swap chain: it went with its device as the window resized
+        // (`resize`), or couldn't be made again. A new renderer makes one.
+        let gone = || GpuError::device_lost("the window's swap chain is gone");
         let (width, height) = (self.width, self.height);
         let Some(present) = self.layer_present.as_ref() else {
             return Ok(());
@@ -9235,13 +9245,14 @@ impl GpuRenderer {
             self.view = self.target.create_view(&Default::default());
             self.target_copy_bind = None;
             let present = self.layer_present.as_mut().expect("presenting");
-            let chain = present.chain.as_mut().expect("a swap chain");
+            let mut chain = present.chain.take().ok_or_else(gone)?;
             chain.release(present.buffers.drain(..).map(|(buffer, _)| buffer));
             present.shown = None;
             present.history.clear();
             if chain.buffers_made() {
-                chain.resize(width, height)?;
+                chain = chain.resized(width, height)?;
             }
+            let chain = present.chain.insert(chain);
             present.buffers = chain
                 .buffers(&self.device, width, height)?
                 .into_iter()
@@ -9249,7 +9260,7 @@ impl GpuRenderer {
                 .collect();
         }
         let present = self.layer_present.as_mut().expect("presenting");
-        let chain = present.chain.as_ref().expect("a swap chain");
+        let chain = present.chain.as_ref().ok_or_else(gone)?;
         let started = std::time::Instant::now();
         let ready = chain.wait(1000);
         let index = chain.current();
