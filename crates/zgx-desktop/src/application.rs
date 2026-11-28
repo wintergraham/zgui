@@ -3656,7 +3656,23 @@ impl Host {
                 // nothing until the pointer is back (unless a press of
                 // zgx's follows it there).
                 let input = &self.context.ui.input;
-                let held = input.captured().is_some() || input.is_dragging();
+                #[allow(unused_mut)]
+                let mut held = input.captured().is_some() || input.is_dragging();
+                // A press whose release went elsewhere (a web page's child
+                // window, a lost capture) would keep its view holding the
+                // pointer: every move after it, anywhere, would pull that
+                // view (a tab) into a drag. With no button down any more,
+                // the press is over.
+                #[cfg(windows)]
+                if held
+                    && !self.touch_last
+                    && !crate::native_drag::handed_off()
+                    && !crate::window_chrome::any_button_down()
+                {
+                    self.dispatch(InputEvent::PointerCancel)?;
+                    let input = &self.context.ui.input;
+                    held = input.captured().is_some() || input.is_dragging();
+                }
                 match self.native.pointer_moved(p.x, p.y, held) {
                     PointerStep::Move => {
                         self.dispatch(InputEvent::PointerMove { x: p.x, y: p.y })?

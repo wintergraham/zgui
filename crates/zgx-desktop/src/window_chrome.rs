@@ -194,7 +194,7 @@ pub(crate) fn titlebar_area(
 }
 
 #[cfg(windows)]
-pub(crate) use win::{CaptionHost, fit_work_area, in_front, in_size_move, menu_theme};
+pub(crate) use win::{CaptionHost, any_button_down, fit_work_area, in_front, in_size_move, menu_theme};
 
 #[cfg(windows)]
 mod win {
@@ -765,6 +765,18 @@ mod win {
         hwnd(window).is_some_and(|hwnd| unsafe {
             windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() == hwnd
         })
+    }
+
+    /// Whether a mouse button is held now, wherever its messages went
+    /// (the physical state, so swapped buttons don't matter).
+    pub(crate) fn any_button_down() -> bool {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_XBUTTON1, VK_XBUTTON2,
+        };
+        [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]
+            .into_iter()
+            // SAFETY: reads the input state.
+            .any(|key| unsafe { GetAsyncKeyState(i32::from(key.0)) } < 0)
     }
 
     fn scale(hwnd: HWND) -> f64 {
